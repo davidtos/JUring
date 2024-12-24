@@ -172,7 +172,7 @@ public class Main {
     }
 
     public void start() throws Throwable {
-        IoData[] io_data = new IoData[5];
+        IoData[] io_data = new IoData[6500];
 
         Arena arena = Arena.ofConfined();
         MemorySegment ring = arena.allocate(ring_layout);
@@ -228,10 +228,10 @@ public class Main {
             io_data[(int) userData].buffer.set(JAVA_BYTE, res, (byte)0);
 
             String buffString = io_data[(int) userData].buffer.getString(0);
-          //  if (!buffString.equals("hello world\n")) {
+            if (!buffString.equals("hello world\n")) {
             System.out.println("userdata = " + userData);
             System.out.println(buffString);
-           // }
+            }
 
             io_uring_cqe_seen.invokeExact(ring, cqe);
             free.invokeExact(io_data[(int) userData].buffer);
