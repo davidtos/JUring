@@ -20,6 +20,8 @@ public class Main {
     private static final MethodHandle io_uring_wait_cqe;
     private static final MethodHandle io_uring_cqe_seen;
     private static final MethodHandle io_uring_queue_exit;
+    private static final MethodHandle io_uring_sqe_set_data;
+    private static final MethodHandle io_uring_cqe_get_data;
 
 
     private static final GroupLayout ring_layout;
@@ -31,6 +33,8 @@ public class Main {
         Linker linker = Linker.nativeLinker();
 
         SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
+        AddressLayout C_POINTER = ValueLayout.ADDRESS
+                .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
         open = linker.downcallHandle(
                 linker.defaultLookup().find("open").orElseThrow(),
@@ -92,8 +96,16 @@ public class Main {
                 liburing.find("io_uring_queue_exit").orElseThrow(),
                 FunctionDescriptor.ofVoid(ADDRESS)
         );
-        AddressLayout C_POINTER = ValueLayout.ADDRESS
-                .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
+
+        io_uring_sqe_set_data = linker.downcallHandle(
+                liburing.find("io_uring_sqe_set_data").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG)
+        );
+
+        io_uring_cqe_get_data = linker.downcallHandle(
+                liburing.find("io_uring_cqe_get_data").orElseThrow(),
+                FunctionDescriptor.of(C_POINTER, C_POINTER)
+        );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
                 C_POINTER.withName("khead"),
@@ -142,7 +154,8 @@ public class Main {
 
     }
 
-    record IoData(MemorySegment buffer, int fd){}
+    record IoData(MemorySegment buffer, int fd) {
+    }
 
 
     public static void main(String[] args) throws Throwable {
@@ -173,6 +186,9 @@ public class Main {
         MemorySegment buff = ((MemorySegment) malloc.invokeExact(buffSize)).reinterpret(buffSize);
         io_uring_prep_read.invokeExact(sqe, fd, buff, buffSize, 0L);
 
+        io_uring_sqe_set_data.invokeExact(sqe, 15L);
+
+
         ret = (int) io_uring_submit.invokeExact(ring);
         if (ret < 0) {
             System.out.println("Error in submit");
@@ -186,9 +202,11 @@ public class Main {
         }
 
         String buffString = buff.getString(0);
-        if (!buffString.equals("hello world\n")) {
-            System.out.println(buffString);
-        }
+        //  if (!buffString.equals("hello world\n")) {
+        long userdata =  ((MemorySegment)io_uring_cqe_get_data.invokeExact(cqe)).get(JAVA_LONG, 0);
+        System.out.println("userdata = " + userdata);
+        System.out.println(buffString);
+        //   }
 
         io_uring_cqe_seen.invokeExact(ring, cqe);
         free.invokeExact(buff);
