@@ -3,11 +3,12 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 
+import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
 import static java.lang.foreign.ValueLayout.*;
 
 public class Main {
 
-    public static final int buffSize = 1024;
+    public static final int buffSize = 15;
 
     private static final MethodHandle open;
     private static final MethodHandle malloc;
@@ -27,6 +28,7 @@ public class Main {
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
     private static final GroupLayout io_uring_sq_layout;
+    private static final GroupLayout io_uring_cqe_layout;
 
     static {
 
@@ -84,7 +86,7 @@ public class Main {
 
         io_uring_wait_cqe = linker.downcallHandle(
                 liburing.find("io_uring_wait_cqe").orElseThrow(),
-                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS)
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER)
         );
 
         io_uring_cqe_seen = linker.downcallHandle(
@@ -152,11 +154,17 @@ public class Main {
                 ValueLayout.JAVA_INT.withName("pad2")
         ).withName("io_uring");
 
+        io_uring_cqe_layout = MemoryLayout.structLayout(
+                ValueLayout.JAVA_LONG.withName("user_data"),
+                ValueLayout.JAVA_INT.withName("res"),
+                ValueLayout.JAVA_INT.withName("flags"),
+                MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
+        ).withName("io_uring_cqe");
+
     }
 
     record IoData(MemorySegment buffer, int fd) {
     }
-
 
     public static void main(String[] args) throws Throwable {
         Main main = new Main();
@@ -164,29 +172,37 @@ public class Main {
     }
 
     public void start() throws Throwable {
+        IoData[] io_data = new IoData[5];
+
         Arena arena = Arena.ofConfined();
         MemorySegment ring = arena.allocate(ring_layout);
 
-        int ret = (int) io_uring_queue_init.invokeExact(5, ring, 0);
+        int ret = (int) io_uring_queue_init.invokeExact(io_data.length + 10, ring, 0);
         if (ret < 0) {
             System.out.println("Error in io_uring_queue_init");
         }
 
-        MemorySegment filePath = arena.allocateFrom("/home/david/Documents/tmp_file_read");
-        int fd = (int) open.invokeExact(filePath, 0, 0);
-        if (fd < 0) {
-            System.out.println("Error in open");
+        for (int i = 0; i < io_data.length; i++) {
+            //   MemorySegment filePath = arena.allocateFrom("/home/david/Documents/tmp_file_read");
+            MemorySegment filePath = arena.allocateFrom("/home/david/Desktop/tmp_file_read");
+//            MemorySegment filePath = arena.allocateFrom("/media/david/Data2/tmp_file_read");
+            int fd = (int) open.invokeExact(filePath, 0, 0);
+            if (fd < 0) {
+                System.out.println("Error in open");
+            }
+
+            MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
+            if (sqe == null) {
+                System.out.println("Error in get_sqe");
+            }
+
+            MemorySegment buff = ((MemorySegment) malloc.invokeExact(buffSize)).reinterpret(buffSize);
+            io_uring_prep_read.invokeExact(sqe, fd, buff, buffSize, 0L);
+
+            io_data[i] = new IoData(buff, fd);
+
+            io_uring_sqe_set_data.invokeExact(sqe, (long) i);
         }
-
-        MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
-        if (sqe == null) {
-            System.out.println("Error in get_sqe");
-        }
-
-        MemorySegment buff = ((MemorySegment) malloc.invokeExact(buffSize)).reinterpret(buffSize);
-        io_uring_prep_read.invokeExact(sqe, fd, buff, buffSize, 0L);
-
-        io_uring_sqe_set_data.invokeExact(sqe, 15L);
 
 
         ret = (int) io_uring_submit.invokeExact(ring);
@@ -194,24 +210,36 @@ public class Main {
             System.out.println("Error in submit");
         }
 
-        MemorySegment cqe = arena.allocate(io_uring_cq_layout);
+        MemorySegment cqePtr = arena.allocate(ADDRESS);
 
-        ret = (int) io_uring_wait_cqe.invokeExact(ring, cqe);
-        if (ret < 0) {
-            System.out.println("Error in wait_cqe");
+
+        for (int i = 0; i < io_data.length; i++) {
+            ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
+            if (ret < 0) {
+                System.out.println("Error in wait_cqe");
+            }
+
+            var cqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
+                    .reinterpret(io_uring_cqe_layout.byteSize());
+
+            long userData = cqe.get(ValueLayout.JAVA_LONG, 0);
+            int res = cqe.get(ValueLayout.JAVA_INT, 8);
+
+            io_data[(int) userData].buffer.set(JAVA_BYTE, res, (byte)0);
+
+            String buffString = io_data[(int) userData].buffer.getString(0);
+          //  if (!buffString.equals("hello world\n")) {
+            System.out.println("userdata = " + userData);
+            System.out.println(buffString);
+           // }
+
+            io_uring_cqe_seen.invokeExact(ring, cqe);
+            free.invokeExact(io_data[(int) userData].buffer);
+
+            close.invokeExact(io_data[(int) userData].fd);
         }
 
-        String buffString = buff.getString(0);
-        //  if (!buffString.equals("hello world\n")) {
-        long userdata =  ((MemorySegment)io_uring_cqe_get_data.invokeExact(cqe)).get(JAVA_LONG, 0);
-        System.out.println("userdata = " + userdata);
-        System.out.println(buffString);
-        //   }
 
-        io_uring_cqe_seen.invokeExact(ring, cqe);
-        free.invokeExact(buff);
-
-        close.invokeExact(fd);
         io_uring_queue_exit.invokeExact(ring);
         arena.close();
 
