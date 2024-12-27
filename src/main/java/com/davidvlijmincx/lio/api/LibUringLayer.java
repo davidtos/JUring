@@ -5,9 +5,7 @@ import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.*;
 
-public class Main {
-
-    public static final int buffSize = 15;
+class LibUringLayer implements AutoCloseable {
 
     private static final MethodHandle open;
     private static final MethodHandle malloc;
@@ -72,7 +70,7 @@ public class Main {
                         C_POINTER,
                         JAVA_INT,
                         C_POINTER,
-                        JAVA_INT,
+                        JAVA_LONG,
                         ValueLayout.JAVA_LONG
                 )
         );
@@ -167,159 +165,156 @@ public class Main {
 
     }
 
-    record IoData(MemorySegment buffer, int fd) {
-    }
+    private final MemorySegment ring;
+    private final Arena arena;
+    private final Arena autoArena = Arena.ofAuto();
 
-    public static void main() throws Throwable {
-        Main main = new Main();
-         main.read();
-        main.write();
-    }
+    LibUringLayer(int queueDepth, boolean polling) {
+        arena = Arena.ofConfined();
+        ring = arena.allocate(ring_layout);
 
-    public void read() throws Throwable {
-        IoData[] io_data = new IoData[6500];
+        try {
 
-        Arena arena = Arena.ofConfined();
-        MemorySegment ring = arena.allocate(ring_layout);
-
-        int ret = (int) io_uring_queue_init.invokeExact(io_data.length + 10, ring, 0);
-        if (ret < 0) {
-            System.out.println("Error in io_uring_queue_init");
+            int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, 0);
+            if (ret < 0) {
+                System.out.println("Error in io_uring_queue_init");
+            }
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
 
-        for (int i = 0; i < io_data.length; i++) {
-            //   MemorySegment filePath = arena.allocateFrom("/home/david/Documents/tmp_file_read");
-            MemorySegment filePath = arena.allocateFrom("/home/david/Desktop/tmp_file_read");
-//            MemorySegment filePath = arena.allocateFrom("/media/david/Data2/tmp_file_read");
-            int fd = (int) open.invokeExact(filePath, 0, 0);
+    }
+
+    int openFile(String path, int flags, int mode) {
+        MemorySegment filePath = autoArena.allocateFrom(path);
+
+        try {
+            int fd = (int) open.invokeExact(filePath, flags, mode);
             if (fd < 0) {
                 System.out.println("Error in open");
             }
+            return fd;
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 
+    MemorySegment getSqe() {
+        try {
             MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
             if (sqe == null) {
                 System.out.println("Error in get_sqe");
             }
-
-            MemorySegment buff = ((MemorySegment) malloc.invokeExact(buffSize)).reinterpret(buffSize);
-            io_uring_prep_read.invokeExact(sqe, fd, buff, buffSize, 0L);
-
-            io_data[i] = new IoData(buff, fd);
-
-            io_uring_sqe_set_data.invokeExact(sqe, (long) i);
+            return sqe;
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
+    }
 
-        ret = (int) io_uring_submit.invokeExact(ring);
-        if (ret < 0) {
-            System.out.println("Error in submit");
+    MemorySegment malloc(int size) {
+        try {
+            return ((MemorySegment) malloc.invokeExact(size)).reinterpret(size);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
+    }
 
-        MemorySegment cqePtr = arena.allocate(ADDRESS);
+    void prepareRead(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
+        try {
+            io_uring_prep_read.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 
+    void prepareWrite(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
+        try {
+            io_uring_prep_write.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-        for (int i = 0; i < io_data.length; i++) {
-            ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
+    void setUserData(MemorySegment sqe, long userData) {
+        try {
+            io_uring_sqe_set_data.invokeExact(sqe, userData);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void submit() {
+        try {
+            int ret = (int) io_uring_submit.invokeExact(ring);
             if (ret < 0) {
-                System.out.println("Error in wait_cqe");
+                System.out.println("Error in submit");
             }
-
-            var cqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
-                    .reinterpret(io_uring_cqe_layout.byteSize());
-
-            long userData = cqe.get(ValueLayout.JAVA_LONG, 0);
-            int res = cqe.get(ValueLayout.JAVA_INT, 8);
-
-            io_data[(int) userData].buffer.set(JAVA_BYTE, res, (byte) 0);
-
-            String buffString = io_data[(int) userData].buffer.getString(0);
-            if (!buffString.equals("hello world\n")) {
-                System.out.println("userdata = " + userData);
-                System.out.println(buffString);
-            }
-
-            io_uring_cqe_seen.invokeExact(ring, cqe);
-            free.invokeExact(io_data[(int) userData].buffer);
-
-            close.invokeExact(io_data[(int) userData].fd);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
-
-
-        io_uring_queue_exit.invokeExact(ring);
-        arena.close();
 
     }
 
-
-    public void write() throws Throwable {
-        IoData[] io_data = new IoData[3];
-
-        Arena arena = Arena.ofConfined();
-        MemorySegment ring = arena.allocate(ring_layout);
-
-        int ret = (int) io_uring_queue_init.invokeExact(io_data.length + 10, ring, 0);
-        if (ret < 0) {
-            System.out.println("Error in io_uring_queue_init");
-        }
-
-        for (int i = 0; i < io_data.length; i++) {
-            MemorySegment filePath = arena.allocateFrom("/home/david/Desktop/tmp_file_write");
-            int fd = (int) open.invokeExact(filePath, 0000002, 0);
-            if (fd < 0) {
-                System.out.println("Error in open");
-            }
-
-            MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
-            if (sqe == null) {
-                System.out.println("Error in get_sqe");
-            }
-
-
-            String a = "Hello, form Java " + i;
-            var StringBytes = a.getBytes();
-            MemorySegment buff = ((MemorySegment) malloc.invokeExact(StringBytes.length)).reinterpret(StringBytes.length);
-            MemorySegment.copy(StringBytes, 0, buff, JAVA_BYTE, 0, StringBytes.length);
-
-            io_uring_prep_write.invokeExact(sqe, fd, buff, buff.byteSize(), 1L);
-
-            io_data[i] = new IoData(buff, fd);
-
-            io_uring_sqe_set_data.invokeExact(sqe, (long) i);
-        }
-
-        ret = (int) io_uring_submit.invokeExact(ring);
-        if (ret < 0) {
-            System.out.println("Error in submit");
-        }
-
-        MemorySegment cqePtr = arena.allocate(ADDRESS);
-
-
-        for (int i = 0; i < io_data.length; i++) {
-            ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
+    Cqe waitForResult() {
+        try {
+            MemorySegment cqePtr = arena.allocate(ADDRESS);
+            int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
                 System.out.println("Error in wait_cqe");
             }
 
-            var cqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
+            var cqeRaw = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
                     .reinterpret(io_uring_cqe_layout.byteSize());
 
-            long userData = cqe.get(ValueLayout.JAVA_LONG, 0);
-            int res = cqe.get(ValueLayout.JAVA_INT, 8);
+            long userData = cqeRaw.get(ValueLayout.JAVA_LONG, 0);
+            int res = cqeRaw.get(ValueLayout.JAVA_INT, 8);
 
-
-            System.out.println("userdata = " + userData);
-            System.out.println("res = " + res);
-
-            io_uring_cqe_seen.invokeExact(ring, cqe);
-            free.invokeExact(io_data[(int) userData].buffer);
-
-            close.invokeExact(io_data[(int) userData].fd);
+            return new Cqe(userData, res, cqeRaw);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
+    }
 
+    void seen(MemorySegment cqePointer) {
+        try {
+            io_uring_cqe_seen.invokeExact(ring, cqePointer);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 
-        io_uring_queue_exit.invokeExact(ring);
+    void freeMemory(MemorySegment memory) {
+        try {
+            free.invokeExact(memory);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void closeFile(int fd) {
+        try {
+            close.invokeExact(fd);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void closeRing() {
+        try {
+            io_uring_queue_exit.invokeExact(ring);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void closeArena() {
         arena.close();
+    }
 
+    @Override
+    public void close() {
+        closeRing();
+        closeArena();
     }
 
 }
