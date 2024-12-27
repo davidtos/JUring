@@ -23,7 +23,8 @@ public class JUring implements AutoCloseable {
         MemorySegment sqe = libUringLayer.getSqe();
         libUringLayer.setUserData(sqe, buff.address());
 
-        requests.put(buff.address(), new ReadRequest(fd, buff));
+        long id = buff.address();
+        requests.put(id, new ReadRequest(id, fd, buff));
         libUringLayer.prepareRead(sqe, fd, buff, offset);
 
         // return an id
@@ -42,7 +43,8 @@ public class JUring implements AutoCloseable {
         libUringLayer.setUserData(sqe, buff.address());
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
-        requests.put(buff.address(), new WriteRequest(fd, buff));
+        long id = buff.address();
+        requests.put(id, new WriteRequest(id, fd, buff));
         libUringLayer.prepareWrite(sqe, fd, buff, offset);
 
         // return an id
@@ -55,6 +57,7 @@ public class JUring implements AutoCloseable {
 
     public Result waitForResult(){
         Cqe cqe = libUringLayer.waitForResult();
+        long id = cqe.UserData();
         Request request = requests.get(cqe.UserData());
 
         libUringLayer.closeFile(request.getFd());
@@ -63,10 +66,10 @@ public class JUring implements AutoCloseable {
 
         if(request instanceof WriteRequest wr){
             libUringLayer.freeMemory(wr.getBuffer());
-            return new WriteResult(cqe.result());
+            return new WriteResult(id, cqe.result());
         }
 
-        return new ReadResult(request.getBuffer(), cqe.result());
+        return new ReadResult(id, request.getBuffer(), cqe.result());
     }
 
 
