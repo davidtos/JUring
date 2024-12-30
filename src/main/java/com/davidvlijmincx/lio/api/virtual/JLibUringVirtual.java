@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class JLibUringVirtual implements AutoCloseable {
 
-    private final Map<Long, BlockingReadResult> requests = new ConcurrentHashMap<>();
+    private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
     private final JUring jUring;
     private int userData = 0;
 
@@ -25,15 +25,12 @@ public class JLibUringVirtual implements AutoCloseable {
             while (true) {
                 final Result result = jUring.waitForResult();
 
-                BlockingReadResult request = requests.get(result.getId());
+                BlockingResult request = requests.get(result.getId());
                 while (request == null) {
                     request = requests.get(result.getId());
                 }
 
-                if (result instanceof AsyncReadResult r) {
-                    request.setResult(r);
-                }
-
+                request.setResult(result);
 
                 requests.remove(userData);
 
@@ -45,9 +42,16 @@ public class JLibUringVirtual implements AutoCloseable {
         jUring.submit();
     }
 
-    public BlockingReadResult submitRead(String path, int size, int offset) {
+    public BlockingReadResult prepareRead(String path, int size, int offset) {
         long id = jUring.prepareRead(path, size, offset);
         BlockingReadResult result = new BlockingReadResult(id);
+        requests.put(id, result);
+        return result;
+    }
+
+    public BlockingWriteResult prepareWrite(String path, byte[] bytes, int offset) {
+        long id = jUring.prepareWrite(path, bytes, offset);
+        BlockingWriteResult result = new BlockingWriteResult(id);
         requests.put(id, result);
         return result;
     }

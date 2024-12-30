@@ -308,7 +308,12 @@ class LibUringLayer implements AutoCloseable {
     }
 
     void closeArena() {
-        arena.close();
+        try{
+            arena.close();
+        } catch (Exception e) {
+            // TODO: close the arena in a nice way
+         //   throw new RuntimeException(e);
+        }
     }
 
     @Override

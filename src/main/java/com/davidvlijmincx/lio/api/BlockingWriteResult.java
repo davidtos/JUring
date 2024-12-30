@@ -1,28 +1,20 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.MemorySegment;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public final class BlockingReadResult extends Result implements ReadResult, BlockingResult{
+public final class BlockingWriteResult extends Result implements WriteResult, BlockingResult{
 
     private final CompletableFuture<Void> lock = new CompletableFuture<>();
-    private MemorySegment buffer;
     private long result;
 
-
-    public BlockingReadResult(long id) {
+    public BlockingWriteResult(long id) {
         super(id);
     }
 
-
-    public MemorySegment getBuffer() {
-        try {
-            lock.get();
-        } catch (InterruptedException | ExecutionException e) {
-            throw new RuntimeException(e);
-        }
-        return buffer;
+    public void setResult(AsyncReadResult result) {
+        this.result = result.getResult();
+        lock.complete(null);
     }
 
     public long getResult() {
@@ -36,12 +28,11 @@ public final class BlockingReadResult extends Result implements ReadResult, Bloc
 
     @Override
     public void setResult(Result result) {
-        if (result instanceof ReadResult r) {
+        if (result instanceof WriteResult r) {
             this.result = r.getResult();
-            this.buffer = r.getBuffer();
             lock.complete(null);
         } else {
-            throw new IllegalArgumentException("Result is not a ReadResult");
+            throw new IllegalArgumentException("Result is not a WriteResult");
         }
     }
 }

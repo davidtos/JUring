@@ -66,7 +66,7 @@ public class JUring implements AutoCloseable {
 
         if (request instanceof WriteRequest wr) {
             libUringLayer.freeMemory(wr.getBuffer());
-            return new WriteResult(id, cqe.result());
+            return new AsyncWriteResult(id, cqe.result());
         }
 
         return new AsyncReadResult(id, request.getBuffer(), cqe.result());

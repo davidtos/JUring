@@ -37,7 +37,7 @@ public class finalMain {
             Result result = jUring.waitForResult();
 
 
-            if (result instanceof WriteResult w) {
+            if (result instanceof AsyncWriteResult w) {
                 System.out.println("w.getId() = " + w.getId());
                 System.out.println("w.getResult() = " + w.getResult());
             }
