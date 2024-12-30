@@ -170,7 +170,7 @@ class LibUringLayer implements AutoCloseable {
     private final Arena autoArena = Arena.ofAuto();
 
     LibUringLayer(int queueDepth, boolean polling) {
-        arena = Arena.ofConfined();
+        arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
 
         try {

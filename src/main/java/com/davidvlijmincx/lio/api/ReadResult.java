@@ -2,22 +2,11 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
 
-public final class ReadResult extends Result {
+public interface ReadResult {
 
-    private final MemorySegment buffer;
-    private final long result;
 
-    public ReadResult(long id, MemorySegment buffer, long result) {
-        super(id);
-        this.buffer = buffer;
-        this.result = result;
-    }
+    long getId();
+    MemorySegment getBuffer();
+    long getResult();
 
-    public MemorySegment getBuffer() {
-        return buffer;
-    }
-
-    public long getResult() {
-        return result;
-    }
 }

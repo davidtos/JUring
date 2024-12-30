@@ -1,15 +1,15 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class JUring implements AutoCloseable {
 
     private final LibUringLayer libUringLayer;
-    private final Map<Long, Request> requests = new HashMap<>();
+    private final Map<Long, Request> requests = new ConcurrentHashMap<>();
 
     public JUring(int queueDepth, boolean polling) {
         libUringLayer = new LibUringLayer(queueDepth, polling);
@@ -51,7 +51,7 @@ public class JUring implements AutoCloseable {
         return buff.address();
     }
 
-    public void submit(){
+    public void submit() {
         libUringLayer.submit();
     }
 
@@ -64,12 +64,12 @@ public class JUring implements AutoCloseable {
         libUringLayer.seen(cqe.cqePointer());
         requests.remove(cqe.UserData());
 
-        if(request instanceof WriteRequest wr){
+        if (request instanceof WriteRequest wr) {
             libUringLayer.freeMemory(wr.getBuffer());
             return new WriteResult(id, cqe.result());
         }
 
-        return new ReadResult(id, request.getBuffer(), cqe.result());
+        return new AsyncReadResult(id, request.getBuffer(), cqe.result());
     }
 
 
