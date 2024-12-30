@@ -1,8 +1,10 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -20,15 +22,17 @@ public class JUring implements AutoCloseable {
 
         MemorySegment buff = libUringLayer.malloc(readSize);
 
-        MemorySegment sqe = libUringLayer.getSqe();
-        libUringLayer.setUserData(sqe, buff.address());
+        // TODO: more unique
+        long id = buff.address() + ThreadLocalRandom.current().nextLong();
 
-        long id = buff.address();
+        MemorySegment sqe = libUringLayer.getSqe();
+        libUringLayer.setUserData(sqe, id);
+
         requests.put(id, new ReadRequest(id, fd, buff));
         libUringLayer.prepareRead(sqe, fd, buff, offset);
 
         // return an id
-        return buff.address();
+        return id;
     }
 
     public void freeReadBuffer(MemorySegment buffer) {
@@ -58,18 +62,18 @@ public class JUring implements AutoCloseable {
     public Result waitForResult(){
         Cqe cqe = libUringLayer.waitForResult();
         long id = cqe.UserData();
-        Request request = requests.get(cqe.UserData());
+        Request result = requests.get(id);
 
-        libUringLayer.closeFile(request.getFd());
+        libUringLayer.closeFile(result.getFd());
         libUringLayer.seen(cqe.cqePointer());
         requests.remove(cqe.UserData());
 
-        if (request instanceof WriteRequest wr) {
+        if (result instanceof WriteRequest wr) {
             libUringLayer.freeMemory(wr.getBuffer());
             return new AsyncWriteResult(id, cqe.result());
         }
 
-        return new AsyncReadResult(id, request.getBuffer(), cqe.result());
+        return new AsyncReadResult(id, result.getBuffer(), cqe.result());
     }
 
 

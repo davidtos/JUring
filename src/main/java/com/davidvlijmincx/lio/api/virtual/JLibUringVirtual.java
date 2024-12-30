@@ -12,8 +12,6 @@ public class JLibUringVirtual implements AutoCloseable {
 
     private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
     private final JUring jUring;
-    private int userData = 0;
-
 
     public JLibUringVirtual(int queueDepth, boolean polling) {
         this.jUring = new JUring(queueDepth, polling);
@@ -32,7 +30,7 @@ public class JLibUringVirtual implements AutoCloseable {
 
                 request.setResult(result);
 
-                requests.remove(userData);
+                requests.remove(result.getId());
 
             }
         });
@@ -62,6 +60,10 @@ public class JLibUringVirtual implements AutoCloseable {
 
     @Override
     public void close() {
-        jUring.close();
+        try{
+            jUring.close();
+        } catch (Exception ignored) {
+            // TODO: close arena nicely
+        }
     }
 }
