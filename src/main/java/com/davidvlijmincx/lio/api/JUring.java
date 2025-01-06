@@ -55,7 +55,6 @@ public class JUring implements AutoCloseable {
 
         MemorySegment buff = libUringLayer.malloc(readSize);
 
-        // TODO: more unique
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
 
         MemorySegment sqe = libUringLayer.getSqe();
