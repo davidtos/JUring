@@ -1,7 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
@@ -31,7 +30,6 @@ public class JUring implements AutoCloseable {
         requests.put(id, new ReadRequest(id, fd, buff));
         libUringLayer.prepareRead(sqe, fd, buff, offset);
 
-        // return an id
         return id;
     }
 
@@ -47,11 +45,11 @@ public class JUring implements AutoCloseable {
         libUringLayer.setUserData(sqe, buff.address());
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
-        long id = buff.address();
+        long id = buff.address() + ThreadLocalRandom.current().nextLong();
+
         requests.put(id, new WriteRequest(id, fd, buff));
         libUringLayer.prepareWrite(sqe, fd, buff, offset);
 
-        // return an id
         return buff.address();
     }
 
