@@ -5,12 +5,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.nio.file.Path;
-import java.util.Random;
 import java.nio.file.Files;
+import java.nio.file.Path;
 
-
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 
 class JUringTest {
 
@@ -29,12 +28,13 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        long id = jUring.prepareRead("src/test/resources/read_file", 14, 0);
+        long id = jUring.prepareRead("src/test/resources/read_file", 13, 0);
         jUring.submit();
         Result result = jUring.waitForResult();
 
         if (result instanceof ReadResult readResult) {
             assertEquals(id, readResult.getId(), "id mismatch between prepareRead and result");
+            assertEquals(13, readResult.getResult());
 
             String string = readResult.getBuffer().getString(0);
             jUring.freeReadBuffer(readResult.getBuffer());
