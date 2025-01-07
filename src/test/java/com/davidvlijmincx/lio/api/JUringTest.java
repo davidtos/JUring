@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -20,7 +21,6 @@ class JUringTest {
         jUring = new JUring(10, false);
     }
 
-
     @AfterEach
     void tearDown() {
         jUring.close();
@@ -28,7 +28,7 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        long id = jUring.prepareRead("src/test/resources/read_file", 13, 0);
+        long id = jUring.prepareRead("src/test/resources/read_file", 14, 0);
         jUring.submit();
         Result result = jUring.waitForResult();
 
@@ -36,6 +36,7 @@ class JUringTest {
             assertEquals(id, readResult.getId(), "id mismatch between prepareRead and result");
             assertEquals(13, readResult.getResult());
 
+            readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
             String string = readResult.getBuffer().getString(0);
             jUring.freeReadBuffer(readResult.getBuffer());
             assertEquals("Hello, World!", string);

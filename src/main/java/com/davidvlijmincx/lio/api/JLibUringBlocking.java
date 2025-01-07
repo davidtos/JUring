@@ -1,19 +1,17 @@
-package com.davidvlijmincx.lio.api.virtual;
+package com.davidvlijmincx.lio.api;
 
-
-import com.davidvlijmincx.lio.api.*;
 
 import java.lang.foreign.MemorySegment;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 
-public class JLibUringVirtual implements AutoCloseable {
+public class JLibUringBlocking implements AutoCloseable {
 
     private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
     private final JUring jUring;
 
-    public JLibUringVirtual(int queueDepth, boolean polling) {
+    public JLibUringBlocking(int queueDepth, boolean polling) {
         this.jUring = new JUring(queueDepth, polling);
         startPoller();
     }
