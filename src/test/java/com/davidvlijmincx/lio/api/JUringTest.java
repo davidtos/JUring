@@ -7,8 +7,11 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -33,7 +36,7 @@ class JUringTest {
         Result result = jUring.waitForResult();
 
         if (result instanceof ReadResult readResult) {
-            assertEquals(id, readResult.getId(), "id mismatch between prepareRead and result");
+            assertEquals(id, readResult.getId());
             assertEquals(13, readResult.getResult());
 
             readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
@@ -47,13 +50,101 @@ class JUringTest {
     }
 
     @Test
+    void multipleReads() {
+
+        List<Long> ids = new ArrayList<>();
+        List<Long> completedIds = new ArrayList<>();
+
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+
+        jUring.submit();
+
+        for (int i = 0; i < ids.size(); i++) {
+            Result result = jUring.waitForResult();
+            completedIds.add(result.getId());
+
+            if (result instanceof ReadResult readResult) {
+                jUring.freeReadBuffer(readResult.getBuffer());
+            } else {
+                fail("Result is not a ReadResult");
+            }
+        }
+
+        assertEquals(completedIds.size(), ids.size());
+        assertThat(completedIds).containsAll(ids);
+
+    }
+
+    @Test
+    void multipleWrites() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        List<Long> ids = new ArrayList<>();
+        List<Long> completedIds = new ArrayList<>();
+
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+
+        jUring.submit();
+
+        for (int i = 0; i < ids.size(); i++) {
+            Result result = jUring.waitForResult();
+            completedIds.add(result.getId());
+
+            if (result instanceof ReadResult readResult) {
+                jUring.freeReadBuffer(readResult.getBuffer());
+            }
+        }
+
+        assertEquals(completedIds.size(), ids.size());
+        assertThat(completedIds).containsAll(ids);
+
+    }
+
+    @Test
+    void mixedReadAndWrite() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        List<Long> ids = new ArrayList<>();
+        List<Long> completedIds = new ArrayList<>();
+
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+
+        jUring.submit();
+
+        for (int i = 0; i < ids.size(); i++) {
+            Result result = jUring.waitForResult();
+            completedIds.add(result.getId());
+        }
+
+        assertEquals(completedIds.size(), ids.size());
+        assertThat(completedIds).containsAll(ids);
+    }
+
+    @Test
     void readFromFileAtOffset() {
         long id = jUring.prepareRead("src/test/resources/read_file", 6, 7);
         jUring.submit();
         Result result = jUring.waitForResult();
 
         if (result instanceof ReadResult readResult) {
-            assertEquals(id, readResult.getId(), "id mismatch between prepareRead and result");
+            assertEquals(id, readResult.getId());
 
             String string = readResult.getBuffer().getString(0);
             jUring.freeReadBuffer(readResult.getBuffer());
@@ -78,7 +169,7 @@ class JUringTest {
         Result result = jUring.waitForResult();
 
         if (result instanceof AsyncWriteResult writeResult) {
-            assertEquals(id, writeResult.getId(), "id mismatch between prepareRead and result");
+            assertEquals(id, writeResult.getId());
             assertEquals(inputBytes.length, writeResult.getResult());
         } else {
             fail("Result is not a AsyncWriteResult");
@@ -102,7 +193,7 @@ class JUringTest {
         Result result = jUring.waitForResult();
 
         if (result instanceof AsyncWriteResult writeResult) {
-            assertEquals(id, writeResult.getId(), "id mismatch between prepareRead and result");
+            assertEquals(id, writeResult.getId());
             assertEquals(inputBytes.length, writeResult.getResult());
         } else {
             fail("Result is not a AsyncWriteResult");
