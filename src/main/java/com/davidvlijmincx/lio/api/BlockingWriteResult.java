@@ -12,11 +12,6 @@ public final class BlockingWriteResult extends Result implements WriteResult, Bl
         super(id);
     }
 
-    public void setResult(AsyncReadResult result) {
-        this.result = result.getResult();
-        lock.complete(null);
-    }
-
     public long getResult() {
         try {
             lock.get();

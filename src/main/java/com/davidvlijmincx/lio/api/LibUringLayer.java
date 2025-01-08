@@ -26,6 +26,10 @@ class LibUringLayer implements AutoCloseable {
     private static final GroupLayout io_uring_sq_layout;
     private static final GroupLayout io_uring_cqe_layout;
 
+    private final MemorySegment ring;
+    private final Arena arena;
+    private final Arena autoArena = Arena.ofAuto();
+
     static {
 
         Linker linker = Linker.nativeLinker();
@@ -162,12 +166,7 @@ class LibUringLayer implements AutoCloseable {
                 ValueLayout.JAVA_INT.withName("flags"),
                 MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
         ).withName("io_uring_cqe");
-
     }
-
-    private final MemorySegment ring;
-    private final Arena arena;
-    private final Arena autoArena = Arena.ofAuto();
 
     LibUringLayer(int queueDepth, boolean polling) {
         arena = Arena.ofShared();
