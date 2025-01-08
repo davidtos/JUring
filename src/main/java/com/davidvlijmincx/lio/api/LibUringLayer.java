@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -17,6 +18,7 @@ class LibUringLayer implements AutoCloseable {
     private static final MethodHandle io_uring_prep_write;
     private static final MethodHandle io_uring_submit;
     private static final MethodHandle io_uring_wait_cqe;
+    private static final MethodHandle io_uring_peek_cqe;
     private static final MethodHandle io_uring_cqe_seen;
     private static final MethodHandle io_uring_queue_exit;
     private static final MethodHandle io_uring_sqe_set_data;
@@ -97,6 +99,11 @@ class LibUringLayer implements AutoCloseable {
 
         io_uring_wait_cqe = linker.downcallHandle(
                 liburing.find("io_uring_wait_cqe").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER)
+        );
+
+        io_uring_peek_cqe = linker.downcallHandle(
+                liburing.find("io_uring_peek_cqe").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER)
         );
 
@@ -251,7 +258,33 @@ class LibUringLayer implements AutoCloseable {
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+    }
 
+    Optional<Cqe> peekForResult() {
+        try {
+            MemorySegment cqePtr = arena.allocate(ADDRESS);
+            int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
+
+            if (ret == 0) {
+                var cqeRaw = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
+                        .reinterpret(io_uring_cqe_layout.byteSize());
+
+                long userData = cqeRaw.get(ValueLayout.JAVA_LONG, 0);
+                int res = cqeRaw.get(ValueLayout.JAVA_INT, 8);
+
+                return Optional.of(new Cqe(userData, res, cqeRaw));
+            } else if (ret == -11) {
+                return Optional.empty();
+            }
+            else if (ret < 0) {
+                System.out.println("Error in wait_cqe: " + ret);
+            }
+
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+
+        return Optional.empty();
     }
 
     Cqe waitForResult() {

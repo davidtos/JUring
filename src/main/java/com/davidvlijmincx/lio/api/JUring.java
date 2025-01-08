@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -94,8 +95,17 @@ public class JUring implements AutoCloseable {
         libUringLayer.submit();
     }
 
+    public Optional<Result> peekForResult(){
+        Optional<Cqe> cqe = libUringLayer.peekForResult();
+        return cqe.map(this::getResultFromCqe);
+    }
+
     public Result waitForResult() {
         Cqe cqe = libUringLayer.waitForResult();
+        return getResultFromCqe(cqe);
+    }
+
+    private Result getResultFromCqe(Cqe cqe) {
         long address = cqe.UserData();
         MemorySegment result = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
 
