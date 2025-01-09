@@ -10,14 +10,15 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class JLibUringBlocking implements AutoCloseable {
 
-    public static final int MILLIS = 1;
+    public final int pollingInterval;
     private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
     private final JUring jUring;
     private boolean running = true;
     private Thread pollerThread;
 
-    public JLibUringBlocking(int queueDepth, boolean polling) {
+    public JLibUringBlocking(int queueDepth, boolean polling, int pollingInterval) {
         this.jUring = new JUring(queueDepth, polling);
+        this.pollingInterval = pollingInterval;
         startPoller();
     }
 
@@ -35,13 +36,19 @@ public class JLibUringBlocking implements AutoCloseable {
                     requests.remove(result.get().getId());
                 }
 
-                try {
-                    Thread.sleep(Duration.ofMillis(MILLIS));
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
+                sleepInterval();
             }
         });
+    }
+
+    private void sleepInterval() {
+        if (pollingInterval >= 0) {
+            try {
+                Thread.sleep(Duration.ofMillis(pollingInterval));
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 
     public void submit() {

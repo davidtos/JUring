@@ -17,7 +17,7 @@ class JLibUringBlockingTest {
 
     @BeforeEach
     void setUp() {
-        jLibUringBlocking = new JLibUringBlocking(10, false);
+        jLibUringBlocking = new JLibUringBlocking(10, false, -1);
     }
 
     @AfterEach

@@ -53,17 +53,13 @@ public class JUring implements AutoCloseable {
 
     public long prepareRead(String path, int readSize, int offset) {
         int fd = libUringLayer.openFile(path, 0, 0);
-
         MemorySegment buff = libUringLayer.malloc(readSize);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
-
-        MemorySegment sqe = libUringLayer.getSqe();
-
         MemorySegment userData = createUserData(id, fd, true, buff);
 
+        MemorySegment sqe = libUringLayer.getSqe();
         libUringLayer.setUserData(sqe, userData.address());
-
         libUringLayer.prepareRead(sqe, fd, buff, offset);
 
         return id;

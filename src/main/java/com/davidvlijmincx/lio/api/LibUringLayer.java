@@ -183,7 +183,7 @@ class LibUringLayer implements AutoCloseable {
 
             int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, 0);
             if (ret < 0) {
-                System.out.println("Error in io_uring_queue_init");
+                throw new RuntimeException("Failed to initialize queue " + ret);
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
@@ -197,7 +197,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             int fd = (int) open.invokeExact(filePath, flags, mode);
             if (fd < 0) {
-                System.out.println("Error in open");
+                throw new RuntimeException("Failed to open file");
             }
             return fd;
         } catch (Throwable e) {
@@ -209,7 +209,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
             if (sqe == null) {
-                System.out.println("Error in get_sqe");
+                throw new RuntimeException("Failed to get sqe");
             }
             return sqe;
         } catch (Throwable e) {
@@ -253,7 +253,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             int ret = (int) io_uring_submit.invokeExact(ring);
             if (ret < 0) {
-                System.out.println("Error in submit");
+                throw new RuntimeException("Failed to submit queue");
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
@@ -277,11 +277,11 @@ class LibUringLayer implements AutoCloseable {
                 return Optional.empty();
             }
             else if (ret < 0) {
-                System.out.println("Error in wait_cqe: " + ret);
+                throw new RuntimeException("Failed to peek result");
             }
 
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Failed while peeking or creating result from cqe ",e);
         }
 
         return Optional.empty();
@@ -292,7 +292,7 @@ class LibUringLayer implements AutoCloseable {
             MemorySegment cqePtr = arena.allocate(ADDRESS);
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
-                System.out.println("Error in wait_cqe");
+                throw new RuntimeException("Error while waiting for cqe: " + ret);
             }
 
             var cqeRaw = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
@@ -303,7 +303,7 @@ class LibUringLayer implements AutoCloseable {
 
             return new Cqe(userData, res, cqeRaw);
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Exception while waiting/creating result", e);
         }
     }
 
@@ -311,7 +311,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             io_uring_cqe_seen.invokeExact(ring, cqePointer);
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Could not mark cqe as seen",e);
         }
     }
 
@@ -319,7 +319,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             free.invokeExact(memory);
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Could not free memory", e);
         }
     }
 
@@ -327,7 +327,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             close.invokeExact(fd);
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Could not close file with FD:" + fd, e);
         }
     }
 
@@ -335,7 +335,7 @@ class LibUringLayer implements AutoCloseable {
         try {
             io_uring_queue_exit.invokeExact(ring);
         } catch (Throwable e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Could not close ring", e);
         }
     }
 
