@@ -14,10 +14,10 @@ BenchMarkLibUring.libUring              thrpt    5  1127.286 ± 153.142  ops/ms
 BenchMarkLibUring.libUringBlocking      thrpt    5  838.727  ± 35.353   ops/ms
 BenchMarkLibUring.readUsingFileChannel  thrpt    5  847.292  ± 8.200    ops/ms
 ```
-JUring achieves ~33% higher throughput compared to using FileChannel.
+JUring achieves 33% higher throughput compared to using FileChannel.
 
 ### Local vs Remote File Performance
-When testing with remote files (network mounted storage), IO_uring peroformances 78% better than FileChannels 
+When testing with remote files (network mounted storage), IO_uring peroformances 78% better than FileChannels.
 
 ```text
 Benchmark                                              Mode  Cnt  Score   Error   Units
@@ -38,17 +38,12 @@ The benchmarks are conducted using JMH (Java Microbenchmark Harness) with the fo
 - Fixed read size of 4KB (4096 bytes)
 - Random offsets within files
 
-The test suite includes three main scenarios:
+The benchmark includes three main scenarios:
 
 - Non-blocking io_uring (libUring): Direct io_uring operations
 - Blocking io_uring (libUringBlocking): io_uring with a blocking API
-- Traditional FileChannel (readUsingFileChannel): Standard Java NIO file operations
+- FileChannel (readUsingFileChannel): Standard Java NIO file operations
 
-The benchmark code ensures fair comparison by:
-
-- Using the same file sets across all tests
-- Maintaining consistent buffer sizes
-- Handling cleanup and resource management
 
 For full benchmark details and methodology, see [BenchMarkLibUring.java](https://github.com/davidtos/JUring/tree/master/src/test/java/bench) in the source code.
 
