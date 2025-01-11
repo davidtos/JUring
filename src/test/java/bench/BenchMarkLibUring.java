@@ -1,8 +1,8 @@
 package bench;
 
 import com.davidvlijmincx.lio.api.AsyncReadResult;
-import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.BlockingReadResult;
+import com.davidvlijmincx.lio.api.Result;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
@@ -12,9 +12,7 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.CharBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -25,7 +23,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
-@Threads(5)
+@Threads(MAX)
 public class BenchMarkLibUring {
 
     public static void main(String[] args) throws RunnerException {
@@ -113,6 +111,49 @@ public class BenchMarkLibUring {
             data.flip();
             blackhole.consume(data);
 
+        }
+
+        for (FileChannel fc : fileChannels) {
+            try {
+                fc.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    @Benchmark
+    public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
+
+        FileTooReadData[] files = BenchmarkFiles.filesTooRead;
+
+        FileChannel[] fileChannels = new FileChannel[files.length];
+        for (int i = 0; i < files.length; i++) {
+            try {
+                fileChannels[i] = FileChannel.open(files[i].path(), StandardOpenOption.READ);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+
+            for (int i = 0; i < files.length; i++) {
+                int finalI = i;
+                executor.execute(() -> {
+                    final ByteBuffer data = ByteBuffer.allocate(files[finalI].bufferSize());
+                    final FileChannel fc = fileChannels[finalI];
+                    try {
+                        fc.read(data, files[finalI].offset());
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                    data.flip();
+                    blackhole.consume(data);
+                });
+
+
+            }
         }
 
         for (FileChannel fc : fileChannels) {
