@@ -8,7 +8,7 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
 
-public class JLibUringBlocking implements AutoCloseable {
+public class JUringBlocking implements AutoCloseable {
 
     public final int pollingInterval;
     private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
@@ -16,19 +16,19 @@ public class JLibUringBlocking implements AutoCloseable {
     private boolean running = true;
     private Thread pollerThread;
 
-    public JLibUringBlocking(int queueDepth) {
+    public JUringBlocking(int queueDepth) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = -1;
         startPoller();
     }
 
-    public JLibUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
+    public JUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = cqPollerTimeoutInMillis;
         startPoller();
     }
 
-    void startPoller() {
+    private void startPoller() {
         pollerThread = Thread.ofPlatform().start(() -> {
             while (running) {
                 final Optional<Result> result = jUring.peekForResult();

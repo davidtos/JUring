@@ -11,25 +11,25 @@ import java.nio.file.Path;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.*;
 
-class JLibUringBlockingTest {
+class JUringBlockingTest {
 
-    JLibUringBlocking jLibUringBlocking;
+    JUringBlocking jUringBlocking;
 
     @BeforeEach
     void setUp() {
-        jLibUringBlocking = new JLibUringBlocking(10);
+        jUringBlocking = new JUringBlocking(10);
     }
 
     @AfterEach
     void tearDown() {
-        jLibUringBlocking.close();
+        jUringBlocking.close();
     }
 
     @Test
     void readFromFile() {
-        BlockingReadResult result = jLibUringBlocking.prepareRead("src/test/resources/read_file", 14, 0);
+        BlockingReadResult result = jUringBlocking.prepareRead("src/test/resources/read_file", 14, 0);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         // make it valid UTF-8
         result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
@@ -41,11 +41,11 @@ class JLibUringBlockingTest {
 
     @Test
     void multiReadFromFile() {
-        BlockingReadResult result = jLibUringBlocking.prepareRead("src/test/resources/read_file", 14, 0);
-        BlockingReadResult result1 = jLibUringBlocking.prepareRead("src/test/resources/read_file", 5, 0);
-        BlockingReadResult result2 = jLibUringBlocking.prepareRead("src/test/resources/read_file", 7, 7);
+        BlockingReadResult result = jUringBlocking.prepareRead("src/test/resources/read_file", 14, 0);
+        BlockingReadResult result1 = jUringBlocking.prepareRead("src/test/resources/read_file", 5, 0);
+        BlockingReadResult result2 = jUringBlocking.prepareRead("src/test/resources/read_file", 7, 7);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         // make it valid UTF-8
         result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
@@ -63,9 +63,9 @@ class JLibUringBlockingTest {
 
     @Test
     void readFromFileAtOffset() {
-        BlockingReadResult result = jLibUringBlocking.prepareRead("src/test/resources/read_file", 6, 7);
+        BlockingReadResult result = jUringBlocking.prepareRead("src/test/resources/read_file", 6, 7);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         String string = result.getBuffer().getString(0);
         result.freeBuffer();
@@ -80,9 +80,9 @@ class JLibUringBlockingTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        BlockingWriteResult result = jLibUringBlocking.prepareWrite(path.toString(), inputBytes, 0);
+        BlockingWriteResult result = jUringBlocking.prepareWrite(path.toString(), inputBytes, 0);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         assertEquals(inputBytes.length, result.getResult());
 
@@ -98,9 +98,9 @@ class JLibUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        BlockingWriteResult result = jLibUringBlocking.prepareWrite(path.toString(), inputBytes, 4);
+        BlockingWriteResult result = jUringBlocking.prepareWrite(path.toString(), inputBytes, 4);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         assertEquals(inputBytes.length, result.getResult());
 
@@ -117,13 +117,13 @@ class JLibUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        BlockingReadResult readResult = jLibUringBlocking.prepareRead(readPath.toString(), 14, 0);
-        BlockingWriteResult writeResult = jLibUringBlocking.prepareWrite(writePath.toString(), inputBytes, 4);
-        BlockingReadResult readResult1 = jLibUringBlocking.prepareRead(readPath.toString(), 5, 0);
-        BlockingWriteResult writeResult1 = jLibUringBlocking.prepareWrite(writePath.toString(), inputBytes, 4);
-        BlockingReadResult readResult2 = jLibUringBlocking.prepareRead(readPath.toString(), 7, 7);
+        BlockingReadResult readResult = jUringBlocking.prepareRead(readPath.toString(), 14, 0);
+        BlockingWriteResult writeResult = jUringBlocking.prepareWrite(writePath.toString(), inputBytes, 4);
+        BlockingReadResult readResult1 = jUringBlocking.prepareRead(readPath.toString(), 5, 0);
+        BlockingWriteResult writeResult1 = jUringBlocking.prepareWrite(writePath.toString(), inputBytes, 4);
+        BlockingReadResult readResult2 = jUringBlocking.prepareRead(readPath.toString(), 7, 7);
 
-        jLibUringBlocking.submit();
+        jUringBlocking.submit();
 
         assertEquals(13, readResult.getResult());
         assertEquals(5, readResult1.getResult());
