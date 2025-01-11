@@ -5,8 +5,7 @@ import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
 
-import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.*;
 
 class LibCWrapper {
 
@@ -31,7 +30,7 @@ class LibCWrapper {
 
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_INT)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG)
         );
 
         close = linker.downcallHandle(
@@ -74,6 +73,10 @@ class LibCWrapper {
     }
 
     static MemorySegment malloc(int size) {
+        return malloc((long) size);
+    }
+
+    static MemorySegment malloc(long size) {
         try {
             return ((MemorySegment) malloc.invokeExact(size)).reinterpret(size);
         } catch (Throwable e) {

@@ -41,7 +41,7 @@ public class JUring implements AutoCloseable {
     }
 
     private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
-        MemorySegment segment = LibCWrapper.malloc((int)requestLayout.byteSize());
+        MemorySegment segment = LibCWrapper.malloc(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);

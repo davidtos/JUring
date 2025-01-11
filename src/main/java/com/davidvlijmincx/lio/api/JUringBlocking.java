@@ -42,7 +42,9 @@ public class JUringBlocking implements AutoCloseable {
                     requests.remove(result.get().getId());
                 }
 
-                sleepInterval();
+                if (result.isEmpty()){
+                    sleepInterval();
+                }
             }
         });
     }

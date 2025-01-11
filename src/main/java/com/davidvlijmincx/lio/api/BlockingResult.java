@@ -1,6 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-public interface BlockingResult {
+public sealed interface BlockingResult permits BlockingReadResult, BlockingWriteResult {
 
     void setResult(Result result);
 }

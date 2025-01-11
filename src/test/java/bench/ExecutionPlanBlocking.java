@@ -7,13 +7,13 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 @State(Scope.Thread)
-public class ExecutionPlanVirtual {
+public class ExecutionPlanBlocking {
 
     JUringBlocking q;
 
     @Setup
     public void setup() {
-        q = new JUringBlocking(2500);
+        q = new JUringBlocking(2500,10);
 
     }
 

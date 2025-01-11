@@ -1,6 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-public interface WriteResult {
+public sealed interface WriteResult permits AsyncWriteResult, BlockingWriteResult{
 
     long getResult();
 }

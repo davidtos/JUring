@@ -2,7 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
 
-public interface ReadResult {
+public sealed interface ReadResult permits AsyncReadResult, BlockingReadResult {
     long getId();
     MemorySegment getBuffer();
     long getResult();
