@@ -20,4 +20,8 @@ public final class AsyncReadResult extends Result implements ReadResult {
     public long getResult() {
         return result;
     }
+
+    public void freeBuffer() {
+        LibCWrapper.freeBuffer(buffer);
+    }
 }

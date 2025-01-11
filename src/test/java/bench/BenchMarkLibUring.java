@@ -77,7 +77,7 @@ public class BenchMarkLibUring {
 
                 if (result instanceof AsyncReadResult r) {
                     blackhole.consume(r.getBuffer());
-                    q.freeReadBuffer(r.getBuffer());
+                    r.freeBuffer();
                 }
             }
 

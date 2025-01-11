@@ -34,14 +34,14 @@ public class JUring implements AutoCloseable {
         bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
-    private final LibUringLayer libUringLayer;
+    private final LibUringWrapper libUringWrapper;
 
-    public JUring(int queueDepth, boolean polling) {
-        libUringLayer = new LibUringLayer(queueDepth, polling);
+    public JUring(int queueDepth) {
+        libUringWrapper = new LibUringWrapper(queueDepth);
     }
 
     private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
-        MemorySegment segment = libUringLayer.malloc((int)requestLayout.byteSize());
+        MemorySegment segment = LibCWrapper.malloc((int)requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);
@@ -52,52 +52,52 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareRead(String path, int readSize, int offset) {
-        int fd = libUringLayer.openFile(path, 0, 0);
-        MemorySegment buff = libUringLayer.malloc(readSize);
+        int fd = libUringWrapper.openFile(path, 0, 0);
+        MemorySegment buff = LibCWrapper.malloc(readSize);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
         MemorySegment userData = createUserData(id, fd, true, buff);
 
-        MemorySegment sqe = libUringLayer.getSqe();
-        libUringLayer.setUserData(sqe, userData.address());
-        libUringLayer.prepareRead(sqe, fd, buff, offset);
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.setUserData(sqe, userData.address());
+        libUringWrapper.prepareRead(sqe, fd, buff, offset);
 
         return id;
     }
 
-    public void freeReadBuffer(MemorySegment buffer) {
-        libUringLayer.freeMemory(buffer);
+    void freeReadBuffer(MemorySegment buffer) {
+        libUringWrapper.freeMemory(buffer);
     }
 
     public long prepareWrite(String path, byte[] bytes, int offset) {
-        int fd = libUringLayer.openFile(path, 2, 0);
+        int fd = libUringWrapper.openFile(path, 2, 0);
 
-        MemorySegment sqe = libUringLayer.getSqe();
-        MemorySegment buff = libUringLayer.malloc(bytes.length);
+        MemorySegment sqe = libUringWrapper.getSqe();
+        MemorySegment buff = LibCWrapper.malloc(bytes.length);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
         MemorySegment userData = createUserData(id, fd, false, buff);
 
-        libUringLayer.setUserData(sqe, userData.address());
+        libUringWrapper.setUserData(sqe, userData.address());
 
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
-        libUringLayer.prepareWrite(sqe, fd, buff, offset);
+        libUringWrapper.prepareWrite(sqe, fd, buff, offset);
 
         return id;
     }
 
     public void submit() {
-        libUringLayer.submit();
+        libUringWrapper.submit();
     }
 
     public Optional<Result> peekForResult(){
-        Optional<Cqe> cqe = libUringLayer.peekForResult();
+        Optional<Cqe> cqe = libUringWrapper.peekForResult();
         return cqe.map(this::getResultFromCqe);
     }
 
     public Result waitForResult() {
-        Cqe cqe = libUringLayer.waitForResult();
+        Cqe cqe = libUringWrapper.waitForResult();
         return getResultFromCqe(cqe);
     }
 
@@ -105,17 +105,17 @@ public class JUring implements AutoCloseable {
         long address = cqe.UserData();
         MemorySegment result = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
 
-        libUringLayer.closeFile((int) fdHandle.get(result, 0L));
-        libUringLayer.seen(cqe.cqePointer());
+        LibCWrapper.closeFile((int) fdHandle.get(result, 0L));
+        libUringWrapper.seen(cqe.cqePointer());
 
         boolean readResult = (boolean) readHandle.get(result, 0L);
 
         long idResult = (long) idHandle.get(result, 0L);
         MemorySegment bufferResult = (MemorySegment) bufferHandle.get(result, 0L);
-        libUringLayer.freeMemory(result);
+        libUringWrapper.freeMemory(result);
 
         if (!readResult) {
-            libUringLayer.freeMemory(bufferResult);
+            libUringWrapper.freeMemory(bufferResult);
             return new AsyncWriteResult(idResult, cqe.result());
         }
 
@@ -125,6 +125,6 @@ public class JUring implements AutoCloseable {
 
     @Override
     public void close() {
-        libUringLayer.close();
+        libUringWrapper.close();
     }
 }

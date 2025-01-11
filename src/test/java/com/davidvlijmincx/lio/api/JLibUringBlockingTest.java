@@ -17,7 +17,7 @@ class JLibUringBlockingTest {
 
     @BeforeEach
     void setUp() {
-        jLibUringBlocking = new JLibUringBlocking(10, false, -1);
+        jLibUringBlocking = new JLibUringBlocking(10);
     }
 
     @AfterEach
@@ -35,7 +35,7 @@ class JLibUringBlockingTest {
         result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
 
         String string = result.getBuffer().getString(0);
-        jLibUringBlocking.freeReadBuffer(result.getBuffer());
+        result.freeBuffer();
         assertEquals("Hello, World!", string);
     }
 
@@ -56,10 +56,9 @@ class JLibUringBlockingTest {
         assertEquals("Hello", result1.getBuffer().getString(0));
         assertEquals("World!", result2.getBuffer().getString(0));
 
-        jLibUringBlocking.freeReadBuffer(result.getBuffer());
-        jLibUringBlocking.freeReadBuffer(result1.getBuffer());
-        jLibUringBlocking.freeReadBuffer(result2.getBuffer());
-
+        result.freeBuffer();
+        result1.freeBuffer();
+        result2.freeBuffer();
     }
 
     @Test
@@ -69,7 +68,7 @@ class JLibUringBlockingTest {
         jLibUringBlocking.submit();
 
         String string = result.getBuffer().getString(0);
-        jLibUringBlocking.freeReadBuffer(result.getBuffer());
+        result.freeBuffer();
         assertEquals("World!", string);
     }
 
@@ -133,8 +132,8 @@ class JLibUringBlockingTest {
         assertEquals(16, writeResult.getResult());
         assertEquals(16, writeResult1.getResult());
 
-        jLibUringBlocking.freeReadBuffer(readResult.getBuffer());
-        jLibUringBlocking.freeReadBuffer(readResult1.getBuffer());
-        jLibUringBlocking.freeReadBuffer(readResult2.getBuffer());
+        readResult.freeBuffer();
+        readResult1.freeBuffer();
+        readResult2.freeBuffer();
     }
 }

@@ -13,7 +13,7 @@ public class ExecutionPlanVirtual {
 
     @Setup
     public void setup() {
-        q = new JLibUringBlocking(2500, false, -1);
+        q = new JLibUringBlocking(2500);
 
     }
 

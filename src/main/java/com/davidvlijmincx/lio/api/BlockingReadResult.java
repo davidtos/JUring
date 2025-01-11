@@ -44,4 +44,8 @@ public final class BlockingReadResult extends Result implements ReadResult, Bloc
             throw new IllegalArgumentException("Result is not a ReadResult");
         }
     }
+
+    public void freeBuffer() {
+        LibCWrapper.freeBuffer(buffer);
+    }
 }

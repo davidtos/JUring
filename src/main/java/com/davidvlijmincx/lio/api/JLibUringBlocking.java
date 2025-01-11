@@ -16,9 +16,15 @@ public class JLibUringBlocking implements AutoCloseable {
     private boolean running = true;
     private Thread pollerThread;
 
-    public JLibUringBlocking(int queueDepth, boolean polling, int pollingInterval) {
-        this.jUring = new JUring(queueDepth, polling);
-        this.pollingInterval = pollingInterval;
+    public JLibUringBlocking(int queueDepth) {
+        this.jUring = new JUring(queueDepth);
+        this.pollingInterval = -1;
+        startPoller();
+    }
+
+    public JLibUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
+        this.jUring = new JUring(queueDepth);
+        this.pollingInterval = cqPollerTimeoutInMillis;
         startPoller();
     }
 

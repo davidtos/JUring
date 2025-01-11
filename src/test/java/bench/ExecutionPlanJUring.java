@@ -13,7 +13,7 @@ public class ExecutionPlanJUring {
 
     @Setup
     public void setup() {
-        q = new JUring(2500, false);
+        q = new JUring(2500);
 
     }
 

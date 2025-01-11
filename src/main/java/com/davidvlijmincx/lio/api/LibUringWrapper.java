@@ -6,12 +6,8 @@ import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.*;
 
-class LibUringLayer implements AutoCloseable {
+class LibUringWrapper implements AutoCloseable {
 
-    private static final MethodHandle open;
-    private static final MethodHandle malloc;
-    private static final MethodHandle free;
-    private static final MethodHandle close;
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_prep_read;
@@ -40,25 +36,6 @@ class LibUringLayer implements AutoCloseable {
         AddressLayout C_POINTER = ValueLayout.ADDRESS
                 .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
-        open = linker.downcallHandle(
-                linker.defaultLookup().find("open").orElseThrow(),
-                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT)
-        );
-
-        free = linker.downcallHandle(
-                linker.defaultLookup().find("free").orElseThrow(),
-                FunctionDescriptor.ofVoid(ADDRESS)
-        );
-
-        malloc = linker.downcallHandle(
-                linker.defaultLookup().find("malloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_INT)
-        );
-
-        close = linker.downcallHandle(
-                linker.defaultLookup().find("close").orElseThrow(),
-                FunctionDescriptor.ofVoid(JAVA_INT)
-        );
 
         io_uring_queue_init = linker.downcallHandle(
                 liburing.find("io_uring_queue_init").orElseThrow(),
@@ -175,7 +152,7 @@ class LibUringLayer implements AutoCloseable {
         ).withName("io_uring_cqe");
     }
 
-    LibUringLayer(int queueDepth, boolean polling) {
+    LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
 
@@ -193,16 +170,7 @@ class LibUringLayer implements AutoCloseable {
 
     int openFile(String path, int flags, int mode) {
         MemorySegment filePath = autoArena.allocateFrom(path);
-
-        try {
-            int fd = (int) open.invokeExact(filePath, flags, mode);
-            if (fd < 0) {
-                throw new RuntimeException("Failed to open file");
-            }
-            return fd;
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        return LibCWrapper.openFile(filePath, flags, mode);
     }
 
     MemorySegment getSqe() {
@@ -212,14 +180,6 @@ class LibUringLayer implements AutoCloseable {
                 throw new RuntimeException("Failed to get sqe");
             }
             return sqe;
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    MemorySegment malloc(int size) {
-        try {
-            return ((MemorySegment) malloc.invokeExact(size)).reinterpret(size);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
@@ -316,20 +276,9 @@ class LibUringLayer implements AutoCloseable {
     }
 
     void freeMemory(MemorySegment memory) {
-        try {
-            free.invokeExact(memory);
-        } catch (Throwable e) {
-            throw new RuntimeException("Could not free memory", e);
-        }
+        LibCWrapper.freeBuffer(memory);
     }
 
-    void closeFile(int fd) {
-        try {
-            close.invokeExact(fd);
-        } catch (Throwable e) {
-            throw new RuntimeException("Could not close file with FD:" + fd, e);
-        }
-    }
 
     void closeRing() {
         try {

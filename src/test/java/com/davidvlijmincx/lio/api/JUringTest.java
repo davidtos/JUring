@@ -21,7 +21,7 @@ class JUringTest {
 
     @BeforeEach
     void setUp() {
-        jUring = new JUring(10, false);
+        jUring = new JUring(10);
     }
 
     @AfterEach
@@ -41,7 +41,7 @@ class JUringTest {
 
             readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
             String string = readResult.getBuffer().getString(0);
-            jUring.freeReadBuffer(readResult.getBuffer());
+            readResult.freeBuffer();
             assertEquals("Hello, World!", string);
         } else {
             fail("Result is not a ReadResult");
@@ -66,7 +66,7 @@ class JUringTest {
             completedIds.add(result.getId());
 
             if (result instanceof ReadResult readResult) {
-                jUring.freeReadBuffer(readResult.getBuffer());
+                readResult.freeBuffer();
             } else {
                 fail("Result is not a ReadResult");
             }
@@ -102,7 +102,7 @@ class JUringTest {
             completedIds.add(result.getId());
 
             if (result instanceof ReadResult readResult) {
-                jUring.freeReadBuffer(readResult.getBuffer());
+               readResult.freeBuffer();
             }
         }
 
@@ -147,7 +147,7 @@ class JUringTest {
             assertEquals(id, readResult.getId());
 
             String string = readResult.getBuffer().getString(0);
-            jUring.freeReadBuffer(readResult.getBuffer());
+            readResult.freeBuffer();
             assertEquals("World!", string);
         } else {
             fail("Result is not a ReadResult");
