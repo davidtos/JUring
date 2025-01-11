@@ -11,7 +11,7 @@ public final class BlockingReadResult extends Result implements ReadResult, Bloc
     private long result;
 
 
-    public BlockingReadResult(long id) {
+    BlockingReadResult(long id) {
         super(id);
     }
 

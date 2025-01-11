@@ -8,7 +8,7 @@ public final class BlockingWriteResult extends Result implements WriteResult, Bl
     private final CompletableFuture<Void> lock = new CompletableFuture<>();
     private long result;
 
-    public BlockingWriteResult(long id) {
+    BlockingWriteResult(long id) {
         super(id);
     }
 

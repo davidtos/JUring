@@ -4,7 +4,7 @@ public final class AsyncWriteResult extends Result implements WriteResult {
 
     private final long result;
 
-    public AsyncWriteResult(long id, long result) {
+    AsyncWriteResult(long id, long result) {
         super(id);
         this.result = result;
     }

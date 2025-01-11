@@ -9,6 +9,8 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class JUring implements AutoCloseable {
 
+    private final LibUringWrapper libUringWrapper;
+
     private static final StructLayout requestLayout;
     private static final AddressLayout C_POINTER;
 
@@ -33,8 +35,6 @@ public class JUring implements AutoCloseable {
         readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
         bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
-
-    private final LibUringWrapper libUringWrapper;
 
     public JUring(int queueDepth) {
         libUringWrapper = new LibUringWrapper(queueDepth);
