@@ -50,7 +50,7 @@ The benchmark code ensures fair comparison by:
 - Maintaining consistent buffer sizes
 - Handling cleanup and resource management
 
-For full benchmark details and methodology, see BenchMarkLibUring.java in the source code.
+For full benchmark details and methodology, see [BenchMarkLibUring.java](https://github.com/davidtos/JUring/tree/master/src/test/java/bench) in the source code.
 
 ## Requirements
 
