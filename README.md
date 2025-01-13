@@ -1,11 +1,11 @@
 # JUring: File I/O for Java using IO_uring
 JUring is a high-performance Java library that provides bindings to Linux's io_uring asynchronous I/O interface
-using Java's Foreign Function & Memory API. Doing Random reads it achieves 33% better performance than Java NIO FileChannel
+using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 33% better performance than Java NIO FileChannel
 operations for local files and 78% better performance for remote files.
 
 ## Performance 
-The following benchmarks show the improvement of using IO_uring over Java built-in I/O.
-The test ran on a linux machine with 32 cores, a nvme SSD, and a mounted remote directory.
+The following benchmarks show the improvement of using io_uring over Java built-in I/O.
+The test ran on a Linux machine with 32 cores, a nvme SSD, and a mounted remote directory.
 
 Local file performance:
 ```text
@@ -17,7 +17,7 @@ BenchMarkLibUring.readUsingFileChannel  thrpt    5  847.292  ± 8.200    ops/ms
 JUring achieves 33% higher throughput compared to using FileChannel.
 
 ### Local vs Remote File Performance
-When testing with remote files (network mounted storage), IO_uring peroformances 78% better than FileChannels.
+When testing with remote files (network mounted storage), io_uring performs 78% better than FileChannels.
 
 ```text
 Benchmark                                              Mode  Cnt  Score   Error   Units
@@ -26,14 +26,14 @@ BenchMarkLibUring.libUringBlocking                    thrpt    5  1.920 ± 0.168
 BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5  1.078 ± 0.990  ops/ms
 ```
 The remote machine uses HDD and is connected with a Cat 5E cable to the machine running the benchmarks. The benchmarks were run 
-using a maximum of 5 threads, using more threads opened to many file descriptors. 
+using a maximum of 5 threads, using more threads opened too many file descriptors. 
 
 ## Benchmark Methodology
 The benchmarks are conducted using JMH (Java Microbenchmark Harness) with the following parameters:
 
 - Each test performs 2300 operations per invocation 
 - Tests using local files ran with 32 threads
-- Tests using remote files ran with 5 threads
+- Tests using remote files ran with 5 threads (Linux threw errors when using more threads to run the FileChannel and io_uring example)
 - Queue depth of 2500 for io_uring operations
 - Fixed read size of 4KB (4096 bytes)
 - Random offsets within files
@@ -142,15 +142,18 @@ Result result = io.waitForResult();
 ```
 
 5. **Cleanup**: Free read buffer
-For read operations you need to free the buffer when you are done. These buffer live off heap and are not managed by an Arena.
+
+For read operations it is necessary to free the buffer that lives inside the result. The buffers are created using malloc and are not managed by an arena. They are MemorySegments, so it is possible to 
+have them cleaned up when an area closes.
 ```java
 result.freeBuffer();
 ```
-This is not necessary for write operations, these are automatically freed by when the operation is seen in the completion queue.
+Freeing buffers is not necessary for write operations, these buffers are automatically freed when the operation is seen in the completion queue by JUring.
 
 ## Thread Safety
-JURing is not thread safe. The completion and submission queue used by IO_uring don't support multiple thread. preparing operations or waiting 
-for completions should be done with only with a single thread. Ideally each thread should have its own ring. processing the results/buffers is thread safe.k 
+JURing is not thread safe, from what I read about io_uring there should only be one instance per thread. I want to copy this behaviour to 
+not deviate too much from how io_works. The completion and submission queue used by io_uring don't support multiple threads writing to them at the same time. Preparing operations or waiting 
+for completions should be done by a single thread. Processing the results/buffers is thread safe.
 
 ## Current Limitations and Future Improvements
 
@@ -159,9 +162,10 @@ for completions should be done with only with a single thread. Ideally each thre
 
 ## Future improvements planned:
 
-- Adding more IO_uring features
+- Adding more io_uring features
 - File modes and flags
 - Adding a blocking-api for local files
 - Better memory usage 
 - Improved memory cleanup strategies (smart MemorySegments) 
 - Encoding support
+- Support for sockets
