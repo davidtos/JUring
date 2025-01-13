@@ -37,6 +37,7 @@ The benchmarks are conducted using JMH (Java Microbenchmark Harness) with the fo
 - Queue depth of 2500 for io_uring operations
 - Fixed read size of 4KB (4096 bytes)
 - Random offsets within files
+- Initializing the rings is done outside the benchmark
 
 The benchmark includes three main scenarios:
 
@@ -51,7 +52,7 @@ For full benchmark details and methodology, see [BenchMarkLibUring.java](https:/
 
 - Linux kernel 5.1 or higher
 - liburing installed
-- Java 21 or higher (for Foreign Function & Memory API)
+- Java 22 or higher (for Foreign Function & Memory API)
 
 ## Quickstart
 There are two ways to use JUring, there is the direct and blocking API. The direct API lets you prepare entries that you
@@ -157,11 +158,15 @@ for completions should be done by a single thread. Processing the results/buffer
 
 ## Current Limitations and Future Improvements
 
+## Creation cost of JUring instances
+- Creating an instance takes a few of milliseconds, I am working on minimizing this creation time.
+
 ### Memory Usage 
 - The current implementation has higher memory usage than ideal. This is a known issue that I'm actively working on improving.
 
 ## Future improvements planned:
 
+- Pooling of rings.
 - Adding more io_uring features
 - File modes and flags
 - Adding a blocking-api for local files
