@@ -40,4 +40,4 @@ WORKDIR /app
 CMD ["mvn", "verify"]
 
 ## docker build -f Dockerfile.base --target test -t myapp-test .
-## docker run -v $(pwd):/app -v ~/.m2:/root/.m2 myapp-test
+## docker run --rm -v $(pwd):/app -v ~/.m2:/root/.m2 myapp-test
