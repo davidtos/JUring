@@ -12,6 +12,7 @@ class LibCWrapper {
     private static final MethodHandle free;
     private static final MethodHandle open;
     private static final MethodHandle malloc;
+    private static final MethodHandle calloc;
     private static final MethodHandle close;
 
     static {
@@ -31,6 +32,11 @@ class LibCWrapper {
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG)
+        );
+
+        calloc = linker.downcallHandle(
+                linker.defaultLookup().find("calloc").orElseThrow(),
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
         );
 
         close = linker.downcallHandle(
@@ -77,8 +83,22 @@ class LibCWrapper {
     }
 
     static MemorySegment malloc(long size) {
+
+        if (size >= 4000) {
+            return calloc(size);
+        }
+
         try {
             return ((MemorySegment) malloc.invokeExact(size)).reinterpret(size);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    static MemorySegment calloc(long size) {
+        try {
+            return ((MemorySegment) calloc.invokeExact(1L, size)).reinterpret(size);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
