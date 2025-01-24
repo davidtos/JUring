@@ -103,4 +103,20 @@ class LibCWrapper {
             throw new RuntimeException(e);
         }
     }
+
+    static MemorySegment nativeCalloc(long size) {
+        try {
+            return (MemorySegment) calloc.invokeExact(1L,size);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    static MemorySegment nativeMalloc(long size) {
+        try {
+            return (MemorySegment) malloc.invokeExact(size);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 }
