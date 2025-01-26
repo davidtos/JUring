@@ -9,7 +9,7 @@
         // set target to dev
         "target": "dev",
 		// Update the 'dockerFile' property if you aren't using the standard 'Dockerfile' filename.
-		"dockerfile": "Dockerfile"
+		"dockerfile": "Dockerfile.base"
 	},
 
 	// Features to add to the dev container. More info: https://containers.dev/features.
