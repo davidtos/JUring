@@ -1,27 +1,23 @@
 # Base image - Dockerfile.base
 FROM arm64v8/ubuntu:25.04 AS base
 
+ARG JDK_VERSION=24
+
 # Install prerequisites
 RUN apt-get update && apt-get install -y \
     wget \
+    git \
+    liburing-dev \
+    maven \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenJDK 24
-RUN wget https://download.java.net/java/early_access/jdk24/33/GPL/openjdk-24-ea+33_linux-aarch64_bin.tar.gz && \
+RUN wget "https://download.java.net/java/early_access/jdk24/33/GPL/openjdk-24-ea+33_linux-aarch64_bin.tar.gz" -O jdk.tar.gz && \
     mkdir -p /usr/lib/jvm && \
-    tar -xzf openjdk-24-ea+33_linux-aarch64_bin.tar.gz -C /usr/lib/jvm && \
-    rm openjdk-24-ea+33_linux-aarch64_bin.tar.gz
+    tar -xzf jdk.tar.gz -C /usr/lib/jvm && \
+    rm jdk.tar.gz
 
-# Install liburing
-RUN apt-get update && apt-get install -y \
-    liburing-dev
-
-# Install git
-RUN apt-get update && apt-get install -y git
-
-# Set environment variables
-ENV JAVA_HOME=/usr/lib/jvm/jdk-24
-ENV PATH=$JAVA_HOME/bin:$PATH
+ENV JAVA_HOME=/usr/lib/jvm/jdk-${JDK_VERSION} \
+    PATH=$JAVA_HOME/bin:$PATH
 
 # Development image - Dockerfile
 FROM base AS dev
