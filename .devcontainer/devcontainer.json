@@ -1,7 +1,6 @@
 {
-  "name": "Existing Dockerfile",
+  "name": "JUring",
   "build": {
-    "target": "dev",
     "dockerfile": "Dockerfile"
   },
   "mounts": [
