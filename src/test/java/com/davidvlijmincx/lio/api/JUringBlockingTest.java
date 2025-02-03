@@ -136,4 +136,23 @@ class JUringBlockingTest {
         readResult1.freeBuffer();
         readResult2.freeBuffer();
     }
+
+
+    @Test
+    void scope(){
+        BlockingReadResult result;
+        try(JUringBlocking.AllocScope scope = jUringBlocking.allocScope()){
+
+            result = scope.prepareRead("src/test/resources/read_file", 14, 0);
+
+            jUringBlocking.submit();
+
+            // make it valid UTF-8
+            result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
+
+            String string = result.getBuffer().getString(0);
+            result.freeBuffer();
+            assertEquals("Hello, World!", string);
+        }
+    }
 }

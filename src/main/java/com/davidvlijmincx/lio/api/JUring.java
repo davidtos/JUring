@@ -4,6 +4,7 @@ import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Function;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -40,8 +41,8 @@ public class JUring implements AutoCloseable {
         libUringWrapper = new LibUringWrapper(queueDepth);
     }
 
-    private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
-        MemorySegment segment = LibCWrapper.malloc(requestLayout.byteSize());
+    private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer, Function<Long, MemorySegment> alloc) {
+        MemorySegment segment = alloc.apply(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);
@@ -51,18 +52,22 @@ public class JUring implements AutoCloseable {
         return segment;
     }
 
-    public long prepareRead(String path, int readSize, int offset) {
+    long prepareRead(String path, int readSize, int offset, Function<Long, MemorySegment> alloc) {
         int fd = libUringWrapper.openFile(path, 0, 0);
-        MemorySegment buff = LibCWrapper.malloc(readSize);
+        MemorySegment buff = alloc.apply((long) readSize);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
-        MemorySegment userData = createUserData(id, fd, true, buff);
+        MemorySegment userData = createUserData(id, fd, true, buff, alloc);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.setUserData(sqe, userData.address());
         libUringWrapper.prepareRead(sqe, fd, buff, offset);
 
         return id;
+    }
+
+    public long prepareRead(String path, int readSize, int offset) {
+        return prepareRead(path, readSize, offset, LibCWrapper::alloc);
     }
 
     void freeReadBuffer(MemorySegment buffer) {
@@ -73,10 +78,10 @@ public class JUring implements AutoCloseable {
         int fd = libUringWrapper.openFile(path, 2, 0);
 
         MemorySegment sqe = libUringWrapper.getSqe();
-        MemorySegment buff = LibCWrapper.malloc(bytes.length);
+        MemorySegment buff = LibCWrapper.alloc(bytes.length);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
-        MemorySegment userData = createUserData(id, fd, false, buff);
+        MemorySegment userData = createUserData(id, fd, false, buff, LibCWrapper::alloc);
 
         libUringWrapper.setUserData(sqe, userData.address());
 
@@ -122,9 +127,13 @@ public class JUring implements AutoCloseable {
         return new AsyncReadResult(idResult, bufferResult, cqe.result());
     }
 
-
     @Override
     public void close() {
         libUringWrapper.close();
     }
+
+    public AllocScope allocScope() {
+        return new AllocScope(this);
+    }
+
 }

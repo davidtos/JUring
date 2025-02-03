@@ -1,11 +1,13 @@
 package com.davidvlijmincx.lio.api;
 
 
+import java.io.Closeable;
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 
 public class JUringBlocking implements AutoCloseable {
@@ -63,11 +65,15 @@ public class JUringBlocking implements AutoCloseable {
         jUring.submit();
     }
 
-    public BlockingReadResult prepareRead(String path, int size, int offset) {
-        long id = jUring.prepareRead(path, size, offset);
+    public BlockingReadResult prepareRead(String path, int size, int offset, Function<Long, MemorySegment> alloc) {
+        long id = jUring.prepareRead(path, size, offset, alloc);
         BlockingReadResult result = new BlockingReadResult(id);
         requests.put(id, result);
         return result;
+    }
+
+    public BlockingReadResult prepareRead(String path, int size, int offset) {
+        return prepareRead(path, size, offset, LibCWrapper::alloc);
     }
 
     public BlockingWriteResult prepareWrite(String path, byte[] bytes, int offset) {
@@ -75,10 +81,6 @@ public class JUringBlocking implements AutoCloseable {
         BlockingWriteResult result = new BlockingWriteResult(id);
         requests.put(id, result);
         return result;
-    }
-
-    public void freeReadBuffer(MemorySegment buffer) {
-        jUring.freeReadBuffer(buffer);
     }
 
     @Override
@@ -91,5 +93,29 @@ public class JUringBlocking implements AutoCloseable {
         }
         jUring.close();
 
+    }
+
+    public AllocScope allocScope() {
+        return new AllocScope(this);
+    }
+
+    public final class AllocScope implements Closeable {
+
+        private final JUringBlocking jUringBlocking;
+        private final AllocArena allocArena;
+
+        AllocScope(JUringBlocking jUringBlocking) {
+            this.jUringBlocking = jUringBlocking;
+            allocArena = new AllocArena();
+        }
+
+        public BlockingReadResult prepareRead(String path, int size, int offset){
+            return jUringBlocking.prepareRead(path, size, offset,  allocArena::allocate);
+        }
+
+        @Override
+        public void close() {
+            allocArena.close();
+        }
     }
 }

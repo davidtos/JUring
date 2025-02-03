@@ -78,30 +78,22 @@ class LibCWrapper {
         }
     }
 
-    static MemorySegment malloc(int size) {
-        return malloc((long) size);
+    static MemorySegment alloc(int size) {
+        return alloc((long) size);
     }
 
-    static MemorySegment malloc(long size) {
+    static MemorySegment alloc(long size) {
 
         if (size >= 4000) {
             return calloc(size);
         }
 
-        try {
-            return ((MemorySegment) malloc.invokeExact(size)).reinterpret(size);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        return nativeMalloc(size).reinterpret(size);
     }
 
 
     static MemorySegment calloc(long size) {
-        try {
-            return ((MemorySegment) calloc.invokeExact(1L, size)).reinterpret(size);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+            return nativeCalloc(size).reinterpret(size);
     }
 
     static MemorySegment nativeCalloc(long size) {
