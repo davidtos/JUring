@@ -1,0 +1,15 @@
+{
+  "name": "JUring",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/data,target=/mnt/data,type=bind,consistency=cached"
+  ],
+  // Configure tool-specific properties.
+  "customizations": {
+    "jetbrains": {
+      "backend": "IntelliJ"
+    }
+  },
+}
