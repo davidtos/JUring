@@ -26,8 +26,6 @@ class LibUringWrapper implements AutoCloseable {
 
     private final MemorySegment ring;
     private final Arena arena;
-    private final Arena autoArena = Arena.ofAuto();
-
     static {
 
         Linker linker = Linker.nativeLinker();
@@ -169,8 +167,7 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     int openFile(String path, int flags, int mode) {
-        MemorySegment filePath = autoArena.allocateFrom(path);
-        return LibCWrapper.openFile(filePath, flags, mode);
+        return LibCWrapper.openFile(path, flags, mode);
     }
 
     MemorySegment getSqe() {

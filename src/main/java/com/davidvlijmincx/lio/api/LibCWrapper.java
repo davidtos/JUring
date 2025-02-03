@@ -25,33 +25,36 @@ class LibCWrapper {
 
         open = linker.downcallHandle(
                 linker.defaultLookup().find("open").orElseThrow(),
-                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT)
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
+                Linker.Option.critical(true)
         );
 
 
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG),
+                Linker.Option.critical(true)
         );
 
         calloc = linker.downcallHandle(
                 linker.defaultLookup().find("calloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
+                Linker.Option.critical(true)
         );
 
         close = linker.downcallHandle(
                 linker.defaultLookup().find("close").orElseThrow(),
-                FunctionDescriptor.ofVoid(JAVA_INT)
+                FunctionDescriptor.ofVoid(JAVA_INT),
+                Linker.Option.critical(true)
         );
     }
 
     private LibCWrapper() {
     }
 
-    static int openFile(MemorySegment filePath, int flags, int mode) {
-
+    static int openFile(String filePath, int flags, int mode) {
         try {
-            int fd = (int) open.invokeExact(filePath, flags, mode);
+            int fd = (int) open.invokeExact(MemorySegment.ofArray(filePath.getBytes()), flags, mode);
             if (fd < 0) {
                 throw new RuntimeException("Failed to open file");
             }
