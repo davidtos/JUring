@@ -1,11 +1,9 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 import static java.lang.foreign.ValueLayout.*;
@@ -24,6 +22,7 @@ class LibCWrapper {
         free = linker.downcallHandle(
                 linker.defaultLookup().find("free").orElseThrow(),
                 FunctionDescriptor.ofVoid(ADDRESS)
+                , Linker.Option.critical(true)
         );
 
         open = linker.downcallHandle(
@@ -36,25 +35,26 @@ class LibCWrapper {
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG)
+                , Linker.Option.critical(true)
         );
 
         calloc = linker.downcallHandle(
                 linker.defaultLookup().find("calloc").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
+                , Linker.Option.critical(true)
         );
 
         close = linker.downcallHandle(
                 linker.defaultLookup().find("close").orElseThrow(),
                 FunctionDescriptor.ofVoid(JAVA_INT)
+                , Linker.Option.critical(true)
         );
     }
 
     private LibCWrapper() {
     }
 
-    static int openFile(String filePath, int flags, int mode) {
-        byte[] stableBuffer = new byte[4096];
-
+    static int OpenFile(String filePath, int flags, int mode, byte[] stableBuffer) {
         try {
             byte[] pathBytes = filePath.getBytes();
             Arrays.fill(stableBuffer,pathBytes.length,pathBytes.length + 5,(byte) 0);
