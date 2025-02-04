@@ -1,9 +1,12 @@
 package com.davidvlijmincx.lio.api;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -11,9 +14,9 @@ class LibCWrapper {
 
     private static final MethodHandle free;
     private static final MethodHandle open;
+    private static final MethodHandle close;
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
-    private static final MethodHandle close;
 
     static {
         Linker linker = Linker.nativeLinker();
@@ -32,20 +35,17 @@ class LibCWrapper {
 
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG),
-                Linker.Option.critical(true)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG)
         );
 
         calloc = linker.downcallHandle(
                 linker.defaultLookup().find("calloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
-                Linker.Option.critical(true)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
         );
 
         close = linker.downcallHandle(
                 linker.defaultLookup().find("close").orElseThrow(),
-                FunctionDescriptor.ofVoid(JAVA_INT),
-                Linker.Option.critical(true)
+                FunctionDescriptor.ofVoid(JAVA_INT)
         );
     }
 
@@ -53,10 +53,17 @@ class LibCWrapper {
     }
 
     static int openFile(String filePath, int flags, int mode) {
+        byte[] stableBuffer = new byte[4096];
+
         try {
-            int fd = (int) open.invokeExact(MemorySegment.ofArray(filePath.getBytes()), flags, mode);
+            byte[] pathBytes = filePath.getBytes();
+            Arrays.fill(stableBuffer,pathBytes.length,pathBytes.length + 5,(byte) 0);
+            System.arraycopy(pathBytes, 0, stableBuffer, 0, pathBytes.length);
+
+
+            int fd = (int) open.invokeExact(MemorySegment.ofArray(stableBuffer), flags, mode);
             if (fd < 0) {
-                throw new RuntimeException("Failed to open file");
+                throw new RuntimeException("Failed to open file fd=" + fd);
             }
             return fd;
         } catch (Throwable e) {

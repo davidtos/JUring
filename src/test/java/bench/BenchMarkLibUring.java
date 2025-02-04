@@ -23,6 +23,8 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
+@Fork(value = 3, jvmArgs = { "--enable-native-access=ALL-UNNAMED" })
+
 @Threads(MAX)
 public class BenchMarkLibUring {
 
@@ -38,7 +40,7 @@ public class BenchMarkLibUring {
 
 
 
-    @Benchmark()
+//    @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
 
         final var q = plan.q;
@@ -122,7 +124,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+  //  @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
