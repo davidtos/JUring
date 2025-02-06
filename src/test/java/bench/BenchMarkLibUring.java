@@ -23,9 +23,8 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
-@Fork(value = 3, jvmArgs = { "--enable-native-access=ALL-UNNAMED" })
-
-@Threads(MAX)
+@Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
+@Threads(5)
 public class BenchMarkLibUring {
 
     public static void main(String[] args) throws RunnerException {
@@ -40,7 +39,7 @@ public class BenchMarkLibUring {
 
 
 
-//    @Benchmark()
+    @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
 
         final var q = plan.q;
@@ -59,7 +58,7 @@ public class BenchMarkLibUring {
         }
     }
 
-  //  @Benchmark()
+    @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan) {
 
 
@@ -67,14 +66,16 @@ public class BenchMarkLibUring {
         final var paths = BenchmarkFiles.filesTooRead;
 
         try {
-            for (int i = 0; i < paths.length; i++) {
-                q.prepareRead(paths[i].sPath(), paths[i].bufferSize(), paths[i].offset());
+            int j = 0;
+            for (var path : paths) {
+                q.prepareRead(path.sPath(), path.bufferSize(), path.offset());
 
-                if (i % 100 == 0) {
+                j++;
+                if (j % 100 == 0) {
                     q.submit();
                 }
-
             }
+
 
             q.submit();
 
@@ -92,7 +93,7 @@ public class BenchMarkLibUring {
         }
     }
 
- //   @Benchmark
+    @Benchmark
     public void readUsingFileChannel(Blackhole blackhole) throws Throwable {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
@@ -124,7 +125,7 @@ public class BenchMarkLibUring {
         }
     }
 
-  //  @Benchmark
+    @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;

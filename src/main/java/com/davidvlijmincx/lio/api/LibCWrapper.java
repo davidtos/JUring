@@ -54,14 +54,9 @@ class LibCWrapper {
     private LibCWrapper() {
     }
 
-    static int OpenFile(String filePath, int flags, int mode, byte[] stableBuffer) {
+    static int OpenFile(String filePath, int flags, int mode) {
         try {
-            byte[] pathBytes = filePath.getBytes();
-            Arrays.fill(stableBuffer,pathBytes.length,pathBytes.length + 5,(byte) 0);
-            System.arraycopy(pathBytes, 0, stableBuffer, 0, pathBytes.length);
-
-
-            int fd = (int) open.invokeExact(MemorySegment.ofArray(stableBuffer), flags, mode);
+            int fd = (int) open.invokeExact(MemorySegment.ofArray((filePath + "\0").getBytes()), flags, mode);
             if (fd < 0) {
                 throw new RuntimeException("Failed to open file fd=" + fd);
             }

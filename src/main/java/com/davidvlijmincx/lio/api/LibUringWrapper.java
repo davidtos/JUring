@@ -24,8 +24,6 @@ class LibUringWrapper implements AutoCloseable {
     private static final GroupLayout io_uring_sq_layout;
     private static final GroupLayout io_uring_cqe_layout;
 
-
-    byte[] stableBuffer = new byte[4096];
     private final MemorySegment ring;
     private final Arena arena;
     static {
@@ -172,7 +170,7 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     int openFile(String path, int flags, int mode) {
-        return LibCWrapper.OpenFile(path, flags, mode,stableBuffer);
+        return LibCWrapper.OpenFile(path, flags, mode);
     }
 
     MemorySegment getSqe() {

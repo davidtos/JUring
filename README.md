@@ -9,13 +9,13 @@ The test ran on a Linux machine with 32 cores, a nvme SSD, and a mounted remote 
 
 Local file performance:
 ```text
-Benchmark                                              Mode  Cnt     Score     Error   Units
-BenchMarkLibUring.libUring                            thrpt    5  1074.229 ± 242.693  ops/ms
-BenchMarkLibUring.libUringBlocking                    thrpt    5   829.590 ±  48.144  ops/ms
-BenchMarkLibUring.readUsingFileChannel                thrpt    5   736.241 ±  21.925  ops/ms
-BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5   691.886 ±   4.563  ops/ms
+Benchmark                                              Mode  Cnt     Score    Error   Units
+BenchMarkLibUring.libUring                            thrpt    5  1167.150 ± 69.679  ops/ms
+BenchMarkLibUring.libUringBlocking                    thrpt    5   886.779 ± 47.565  ops/ms
+BenchMarkLibUring.readUsingFileChannel                thrpt    5   665.914 ± 18.992  ops/ms
+BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5   686.253 ± 14.033  ops/ms
 ```
-JUring achieves 45.9% higher throughput compared to using FileChannel.
+JUring achieves 75,48% higher throughput compared to using FileChannel.
 
 ### Local vs Remote File Performance
 When testing with remote files (network mounted storage), io_uring performs 78% better than FileChannels.
