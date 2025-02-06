@@ -18,13 +18,14 @@ BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5   686.253 ± 14
 JUring achieves 75,48% higher throughput compared to using FileChannel.
 
 ### Local vs Remote File Performance
-When testing with remote files (network mounted storage), io_uring performs 78% better than FileChannels.
+When testing with remote files (network mounted storage), io_uring performs 86.92% better than FileChannels.
 
 ```text
 Benchmark                                              Mode  Cnt  Score   Error   Units
-BenchMarkLibUring.libUring                            thrpt    5  1.729 ± 1.201  ops/ms
-BenchMarkLibUring.libUringBlocking                    thrpt    5  1.920 ± 0.168  ops/ms
-BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5  1.078 ± 0.990  ops/ms
+BenchMarkLibUring.libUring                            thrpt    5  1.539 ± 1.132  ops/ms
+BenchMarkLibUring.libUringBlocking                    thrpt    5  1.987 ± 0.092  ops/ms
+BenchMarkLibUring.readUsingFileChannel                thrpt    5  1.063 ± 0.637  ops/ms
+BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5  1.096 ± 0.838  ops/ms
 ```
 The remote machine uses HDD and is connected with a Cat 5E cable to the machine running the benchmarks. The benchmarks were run 
 using a maximum of 5 threads, using more threads opened too many file descriptors. 

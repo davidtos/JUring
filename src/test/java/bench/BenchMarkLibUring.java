@@ -24,7 +24,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(5)
+@Threads(MAX)
 public class BenchMarkLibUring {
 
     public static void main(String[] args) throws RunnerException {
@@ -36,8 +36,6 @@ public class BenchMarkLibUring {
 
         new Runner(opt).run();
     }
-
-
 
     @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
