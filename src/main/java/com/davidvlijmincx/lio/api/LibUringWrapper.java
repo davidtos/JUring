@@ -42,8 +42,8 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_get_sqe = linker.downcallHandle(
                 liburing.find("io_uring_get_sqe").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, ADDRESS)
-                , Linker.Option.critical(true)
+                FunctionDescriptor.of(ADDRESS, ADDRESS),
+                Linker.Option.critical(true)
         );
 
         io_uring_prep_read = linker.downcallHandle(
@@ -70,8 +70,8 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_submit = linker.downcallHandle(
                 liburing.find("io_uring_submit").orElseThrow(),
-                FunctionDescriptor.of(JAVA_INT, ADDRESS)
-                , Linker.Option.critical(true)
+                FunctionDescriptor.of(JAVA_INT, ADDRESS),
+                Linker.Option.critical(true)
         );
 
         io_uring_wait_cqe = linker.downcallHandle(
@@ -86,8 +86,8 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_cqe_seen = linker.downcallHandle(
                 liburing.find("io_uring_cqe_seen").orElseThrow(),
-                FunctionDescriptor.ofVoid(ADDRESS, ADDRESS)
-                , Linker.Option.critical(true)
+                FunctionDescriptor.ofVoid(ADDRESS, ADDRESS),
+                Linker.Option.critical(true)
         );
 
         io_uring_queue_exit = linker.downcallHandle(
