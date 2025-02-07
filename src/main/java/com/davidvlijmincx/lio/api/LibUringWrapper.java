@@ -24,6 +24,10 @@ class LibUringWrapper implements AutoCloseable {
     private static final GroupLayout io_uring_sq_layout;
     private static final GroupLayout io_uring_cqe_layout;
 
+    private static final MethodHandle io_uring_prep_accept;
+    private static final MethodHandle io_uring_prep_recv;
+    private static final MethodHandle io_uring_prep_send;
+
     private final MemorySegment ring;
     private final Arena arena;
     static {
@@ -98,6 +102,21 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_sqe_set_data = linker.downcallHandle(
                 liburing.find("io_uring_sqe_set_data").orElseThrow(),
                 FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG)
+        );
+
+        io_uring_prep_accept = linker.downcallHandle(
+                liburing.find("io_uring_prep_accept").orElseThrow(),
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT, ADDRESS, ADDRESS, JAVA_INT)
+        );
+
+        io_uring_prep_recv = linker.downcallHandle(
+                liburing.find("io_uring_prep_recv").orElseThrow(),
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT)
+        );
+
+        io_uring_prep_send = linker.downcallHandle(
+                liburing.find("io_uring_prep_send").orElseThrow(),
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT)
         );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -285,6 +304,30 @@ class LibUringWrapper implements AutoCloseable {
             io_uring_queue_exit.invokeExact(ring);
         } catch (Throwable e) {
             throw new RuntimeException("Could not close ring", e);
+        }
+    }
+
+    void prepareAccept(MemorySegment sqe, int fd) {
+        try {
+            io_uring_prep_accept.invokeExact(sqe, fd, MemorySegment.NULL, MemorySegment.NULL, 0);
+        } catch (Throwable e) {
+            throw new RuntimeException("Failed to prepare accept", e);
+        }
+    }
+
+    void prepareRecv(MemorySegment sqe, int fd, MemorySegment buffer, int len) {
+        try {
+            io_uring_prep_recv.invokeExact(sqe, fd, buffer, len, 0);
+        } catch (Throwable e) {
+            throw new RuntimeException("Failed to prepare recv", e);
+        }
+    }
+
+    void prepareSend(MemorySegment sqe, int fd, MemorySegment buffer, int len) {
+        try {
+            io_uring_prep_send.invokeExact(sqe, fd, buffer, len, 0);
+        } catch (Throwable e) {
+            throw new RuntimeException("Failed to prepare send", e);
         }
     }
 
