@@ -10,7 +10,7 @@ import java.util.stream.Stream;
  */
 public class BenchmarkFiles {
     public static final String BENCHMARK_FILE_EXTENSION = ".bin";
-    public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/app/test_files");
+    public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/media/david/Data2/text_files");
     public static final FileTooReadData[] filesTooRead;
 
     static {

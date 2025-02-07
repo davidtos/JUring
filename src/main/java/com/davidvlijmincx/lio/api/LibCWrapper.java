@@ -4,6 +4,7 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandle;
+import java.util.Arrays;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -11,49 +12,53 @@ class LibCWrapper {
 
     private static final MethodHandle free;
     private static final MethodHandle open;
+    private static final MethodHandle close;
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
-    private static final MethodHandle close;
 
     static {
         Linker linker = Linker.nativeLinker();
 
         free = linker.downcallHandle(
                 linker.defaultLookup().find("free").orElseThrow(),
-                FunctionDescriptor.ofVoid(ADDRESS)
+                FunctionDescriptor.ofVoid(ADDRESS),
+                Linker.Option.critical(true)
         );
 
         open = linker.downcallHandle(
                 linker.defaultLookup().find("open").orElseThrow(),
-                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT)
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
+                Linker.Option.critical(true)
         );
 
 
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG),
+                Linker.Option.critical(true)
         );
 
         calloc = linker.downcallHandle(
                 linker.defaultLookup().find("calloc").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
+                Linker.Option.critical(true)
         );
 
         close = linker.downcallHandle(
                 linker.defaultLookup().find("close").orElseThrow(),
-                FunctionDescriptor.ofVoid(JAVA_INT)
+                FunctionDescriptor.ofVoid(JAVA_INT),
+                Linker.Option.critical(true)
         );
     }
 
     private LibCWrapper() {
     }
 
-    static int openFile(MemorySegment filePath, int flags, int mode) {
-
+    static int OpenFile(String filePath, int flags, int mode) {
         try {
-            int fd = (int) open.invokeExact(filePath, flags, mode);
+            int fd = (int) open.invokeExact(MemorySegment.ofArray((filePath + "\0").getBytes()), flags, mode);
             if (fd < 0) {
-                throw new RuntimeException("Failed to open file");
+                throw new RuntimeException("Failed to open file fd=" + fd);
             }
             return fd;
         } catch (Throwable e) {
