@@ -1,12 +1,10 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
-import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.net.InetSocketAddress;
-import java.util.Optional;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class JUringNetwork implements AutoCloseable {
     private final LibUringWrapper libUringWrapper;
@@ -17,6 +15,7 @@ public class JUringNetwork implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle typeHandle;
     private static final AddressLayout C_POINTER;
+    private static final VarHandle bufferHandle;
 
     static {
         C_POINTER = ValueLayout.ADDRESS
@@ -32,6 +31,7 @@ public class JUringNetwork implements AutoCloseable {
 
         fdHandle = connectionLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
         typeHandle = connectionLayout.varHandle(MemoryLayout.PathElement.groupElement("type"));
+        bufferHandle = connectionLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
     public JUringNetwork(int queueDepth) {
@@ -55,19 +55,16 @@ public class JUringNetwork implements AutoCloseable {
         }
     }
 
-    public long prepareAccept(int serverSocket) {
-        MemorySegment conn = createConnection(serverSocket, 0); // OP_ACCEPT = 0
-
+    public void prepareAccept(int serverSocket) {
         MemorySegment sqe = libUringWrapper.getSqe();
+        MemorySegment conn = createConnection(serverSocket, 0, MemorySegment.NULL); // OP_ACCEPT = 0
         libUringWrapper.prepareAccept(sqe, serverSocket);
         libUringWrapper.setUserData(sqe, conn.address());
-
-        return conn.address();
     }
 
     public long prepareRead(int clientSocket) {
-        MemorySegment conn = createConnection(clientSocket, 1); // OP_READ = 1
         MemorySegment buffer = LibCWrapper.malloc(MAX_MESSAGE_LEN);
+        MemorySegment conn = createConnection(clientSocket, 1, buffer); // OP_READ = 1
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareRecv(sqe, clientSocket, buffer, MAX_MESSAGE_LEN);
@@ -77,8 +74,8 @@ public class JUringNetwork implements AutoCloseable {
     }
 
     public long prepareWrite(int clientSocket, byte[] response) {
-        MemorySegment conn = createConnection(clientSocket, 2); // OP_WRITE = 2
         MemorySegment buffer = LibCWrapper.malloc(response.length);
+        MemorySegment conn = createConnection(clientSocket, 2, buffer); // OP_WRITE = 2
         MemorySegment.copy(response, 0, buffer, JAVA_BYTE, 0, response.length);
 
         MemorySegment sqe = libUringWrapper.getSqe();
@@ -88,10 +85,11 @@ public class JUringNetwork implements AutoCloseable {
         return conn.address();
     }
 
-    private MemorySegment createConnection(int fd, int type) {
+    private MemorySegment createConnection(int fd, int type, MemorySegment buffer) {
         MemorySegment conn = LibCWrapper.malloc(connectionLayout.byteSize());
         fdHandle.set(conn, 0L, fd);
         typeHandle.set(conn, 0L, type);
+        bufferHandle.set(conn, 0L, buffer);
         return conn;
     }
 
@@ -99,10 +97,6 @@ public class JUringNetwork implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public Optional<NetworkResult> peekForResult() {
-        Optional<Cqe> cqe = libUringWrapper.peekForResult();
-        return cqe.map(this::getResultFromCqe);
-    }
 
     public NetworkResult waitForResult() {
         Cqe cqe = libUringWrapper.waitForResult();
@@ -116,14 +110,19 @@ public class JUringNetwork implements AutoCloseable {
 
         int fd = (int) fdHandle.get(conn, 0L);
         int type = (int) typeHandle.get(conn, 0L);
+        MemorySegment buffer = (MemorySegment) bufferHandle.get(conn, 0L);
 
         libUringWrapper.freeMemory(conn);
 
-        return new NetworkResult(fd, type, cqe.result());
-    }
+        System.out.println("type = " + type);
 
-    public long writeHttpResponse(int clientSocket, HttpResponse response) {
-        return prepareWrite(clientSocket, response.toBytes());
+        if (type == 2) {
+            LibCWrapper.freeBuffer(buffer);
+            LibCWrapper.closeFile(fd);
+        }
+
+        libUringWrapper.seen(cqe.cqePointer());
+        return new NetworkResult(fd, type, cqe.result(), buffer);
     }
 
     @Override

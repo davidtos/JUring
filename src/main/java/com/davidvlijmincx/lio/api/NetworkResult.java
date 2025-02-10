@@ -1,14 +1,18 @@
 package com.davidvlijmincx.lio.api;
 
+import java.lang.foreign.MemorySegment;
+
 public class NetworkResult {
     private final int fd;
     private final int type;
     private final long result;
+    private final MemorySegment buffer;
 
-    public NetworkResult(int fd, int type, long result) {
+    public NetworkResult(int fd, int type, long result, MemorySegment buffer) {
         this.fd = fd;
         this.type = type;
         this.result = result;
+        this.buffer = buffer;
     }
 
     public int getFd() {
@@ -21,5 +25,9 @@ public class NetworkResult {
 
     public long getResult() {
         return result;
+    }
+
+    public MemorySegment getBuffer() {
+        return buffer;
     }
 }

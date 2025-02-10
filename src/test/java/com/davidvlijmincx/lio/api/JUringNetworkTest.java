@@ -7,19 +7,19 @@ import static org.junit.jupiter.api.Assertions.*;
 class JUringNetworkTest {
 
 
-
     @Test
     void testJUringNetwork() {
         try (JUringNetwork network = new JUringNetwork(256)) {
             int serverSocket = network.setupListener();
-            long acceptId = network.prepareAccept(serverSocket);
-            network.submit();
 
-            NetworkResult result = network.waitForResult();
-            if (result.getResult() >= 0) {
-                int clientSocket = (int) result.getResult();
-                // Handle client connection...
-                HttpResponse response = new HttpResponse(200, "text/html", """
+            for (int i = 0; i < 5; i++) {
+                network.prepareAccept(serverSocket);
+                network.submit();
+
+                NetworkResult result = network.waitForResult();
+                if (result.getResult() >= 0) {
+                    // Handle client connection...
+                    HttpResponse response = new HttpResponse(200, "text/html", """
                         <html>
                             <head>
                                 <title>
@@ -31,9 +31,13 @@ class JUringNetworkTest {
                             </body>
                         </html>
                         """.getBytes());
-                network.writeHttpResponse(clientSocket, response);
-                network.submit();
+                    network.prepareWrite((int)result.getResult(), response.toBytes());
+                    network.submit();
+                    network.waitForResult();
+
+                }
             }
+
         }
     }
 
