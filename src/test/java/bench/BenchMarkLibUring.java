@@ -46,11 +46,13 @@ public class BenchMarkLibUring {
         try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < paths.length; i++) {
-                BlockingReadResult r = q.prepareRead(paths[i].sPath(), paths[i].bufferSize(), paths[i].offset());
+                int fd = q.openFile(paths[i].sPath());
+                BlockingReadResult r = q.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
                 q.submit();
                 executor.execute(() -> {
                     blackhole.consume(r.getBuffer());
                     r.freeBuffer();
+                    q.closeFile(fd);
                 });
             }
         }
@@ -66,7 +68,8 @@ public class BenchMarkLibUring {
         try {
             int j = 0;
             for (var path : paths) {
-                q.prepareRead(path.sPath(), path.bufferSize(), path.offset());
+                int fd = q.openFile(path.sPath());
+                q.prepareRead(fd, path.bufferSize(), path.offset());
 
                 j++;
                 if (j % 100 == 0) {

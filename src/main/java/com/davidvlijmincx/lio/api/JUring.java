@@ -3,6 +3,8 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -18,6 +20,8 @@ public class JUring implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
+    private final Set<Integer> fileDescriptors = ConcurrentHashMap.newKeySet();
+
 
     static {
         C_POINTER = ValueLayout.ADDRESS
@@ -51,8 +55,7 @@ public class JUring implements AutoCloseable {
         return segment;
     }
 
-    public long prepareRead(String path, int readSize, int offset) {
-        int fd = libUringWrapper.openFile(path, 0, 0);
+    public long prepareRead(int fd, int readSize, int offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
@@ -69,13 +72,14 @@ public class JUring implements AutoCloseable {
         libUringWrapper.freeMemory(buffer);
     }
 
-    public long prepareWrite(String path, byte[] bytes, int offset) {
-        int fd = libUringWrapper.openFile(path, 2, 0);
+    public long prepareWrite(int fd, byte[] bytes, int offset) {
 
         MemorySegment sqe = libUringWrapper.getSqe();
+
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
+
         MemorySegment userData = createUserData(id, fd, false, buff);
 
         libUringWrapper.setUserData(sqe, userData.address());
@@ -105,7 +109,6 @@ public class JUring implements AutoCloseable {
         long address = cqe.UserData();
         MemorySegment result = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
 
-        LibCWrapper.closeFile((int) fdHandle.get(result, 0L));
         libUringWrapper.seen(cqe.cqePointer());
 
         boolean readResult = (boolean) readHandle.get(result, 0L);
@@ -122,9 +125,27 @@ public class JUring implements AutoCloseable {
         return new AsyncReadResult(idResult, bufferResult, cqe.result());
     }
 
+    // by default opening file in Create | RDWR | Append mode
+    public int openFile(String path) {
+        int fd = libUringWrapper.openFile(path, 1090, 0);
+        fileDescriptors.add(fd);
+        return fd;
+    }
+
+    public int openFile(String path, int flags, int mode) {
+        int fd = libUringWrapper.openFile(path, flags, mode);
+        fileDescriptors.add(fd);
+        return fd;
+    }
+
+    public void closeFile(int fd) {
+        LibCWrapper.closeFile(fd);
+        fileDescriptors.remove(fd);
+    }
 
     @Override
     public void close() {
+        fileDescriptors.forEach(LibCWrapper::closeFile);
         libUringWrapper.close();
     }
 }

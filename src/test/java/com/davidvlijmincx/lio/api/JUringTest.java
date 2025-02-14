@@ -31,7 +31,8 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        long id = jUring.prepareRead("src/test/resources/read_file", 14, 0);
+        int fd = jUring.openFile("src/test/resources/read_file");
+        long id = jUring.prepareRead(fd, 14, 0);
         jUring.submit();
         Result result = jUring.waitForResult();
 
@@ -47,6 +48,7 @@ class JUringTest {
             fail("Result is not a ReadResult");
         }
 
+        jUring.closeFile(fd);
     }
 
     @Test
@@ -55,9 +57,11 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
+        int fd = jUring.openFile("src/test/resources/read_file");
+
+        ids.add(jUring.prepareRead(fd, 14, 0));
+        ids.add(jUring.prepareRead(fd, 14, 0));
+        ids.add(jUring.prepareRead(fd, 14, 0));
 
         jUring.submit();
 
@@ -75,12 +79,13 @@ class JUringTest {
         assertEquals(completedIds.size(), ids.size());
         assertThat(completedIds).containsAll(ids);
 
+        jUring.closeFile(fd);
+
     }
 
     @Test
     void multipleWrites() throws IOException {
-        String path = "src/test/resources/write_file";
-        Files.write(Path.of(path), "Clean content".getBytes());
+        Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
@@ -88,12 +93,15 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
-        ids.add(jUring.prepareRead("src/test/resources/read_file", 14, 0));
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        int fd = jUring.openFile("src/test/resources/read_file");
+        int writeFd = jUring.openFile("src/test/resources/write_file");
+
+        ids.add(jUring.prepareRead(fd, 14, 0));
+        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
+        ids.add(jUring.prepareRead(fd, 14, 0));
+        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
+        ids.add(jUring.prepareRead(fd, 14, 0));
+        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
 
         jUring.submit();
 
@@ -109,12 +117,12 @@ class JUringTest {
         assertEquals(completedIds.size(), ids.size());
         assertThat(completedIds).containsAll(ids);
 
+        jUring.closeFile(fd);
     }
 
     @Test
     void mixedReadAndWrite() throws IOException {
-        String path = "src/test/resources/write_file";
-        Files.write(Path.of(path), "Clean content".getBytes());
+        Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
@@ -122,9 +130,11 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
-        ids.add(jUring.prepareWrite(path, inputBytes, 0));
+        int fd = jUring.openFile("src/test/resources/write_file");
+
+        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
+        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
+        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
 
         jUring.submit();
 
@@ -135,11 +145,14 @@ class JUringTest {
 
         assertEquals(completedIds.size(), ids.size());
         assertThat(completedIds).containsAll(ids);
+
+        jUring.closeFile(fd);
     }
 
     @Test
     void readFromFileAtOffset() {
-        long id = jUring.prepareRead("src/test/resources/read_file", 6, 7);
+        int fd = jUring.openFile("src/test/resources/read_file");
+        long id = jUring.prepareRead(fd, 6, 7);
         jUring.submit();
         Result result = jUring.waitForResult();
 
@@ -163,7 +176,8 @@ class JUringTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        long id = jUring.prepareWrite(path, inputBytes, 0);
+        int fd = jUring.openFile("src/test/resources/write_file");
+        long id = jUring.prepareWrite(fd, inputBytes, 0);
 
         jUring.submit();
         Result result = jUring.waitForResult();
@@ -177,6 +191,8 @@ class JUringTest {
 
         String writtenContent = Files.readString(Path.of(path));
         assertEquals(input, writtenContent);
+
+        jUring.closeFile(fd);
     }
 
     @Test
@@ -187,7 +203,8 @@ class JUringTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        long id = jUring.prepareWrite(path, inputBytes, 4);
+        int fd = jUring.openFile(path);
+        long id = jUring.prepareWrite(fd, inputBytes, 4);
 
         jUring.submit();
         Result result = jUring.waitForResult();
@@ -201,6 +218,8 @@ class JUringTest {
 
         String writtenContent = Files.readString(Path.of(path));
         assertEquals("Big hello, from Java", writtenContent);
+
+        jUring.closeFile(fd);
     }
 
 
