@@ -2,6 +2,7 @@ package bench;
 
 import com.davidvlijmincx.lio.api.AsyncReadResult;
 import com.davidvlijmincx.lio.api.BlockingReadResult;
+import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.Result;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -46,14 +47,17 @@ public class BenchMarkLibUring {
         try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < paths.length; i++) {
-                int fd = q.openFile(paths[i].sPath());
-                BlockingReadResult r = q.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
-                q.submit();
-                executor.execute(() -> {
-                    blackhole.consume(r.getBuffer());
-                    r.freeBuffer();
-                    q.closeFile(fd);
-                });
+
+                try(FileDescriptor fd = q.openFile(paths[i].sPath())) {
+
+                    BlockingReadResult r = q.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
+                    q.submit();
+                    executor.execute(() -> {
+                        blackhole.consume(r.getBuffer());
+                        r.freeBuffer();
+                        q.closeFile(fd);
+                    });
+                }
             }
         }
     }
@@ -68,12 +72,15 @@ public class BenchMarkLibUring {
         try {
             int j = 0;
             for (var path : paths) {
-                int fd = q.openFile(path.sPath());
-                q.prepareRead(fd, path.bufferSize(), path.offset());
 
-                j++;
-                if (j % 100 == 0) {
-                    q.submit();
+                try(FileDescriptor fd = q.openFile(path.sPath())) {
+
+                    q.prepareRead(fd, path.bufferSize(), path.offset());
+
+                    j++;
+                    if (j % 100 == 0) {
+                        q.submit();
+                    }
                 }
             }
 

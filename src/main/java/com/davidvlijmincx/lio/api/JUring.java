@@ -20,7 +20,7 @@ public class JUring implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
-    private final Set<Integer> fileDescriptors = ConcurrentHashMap.newKeySet();
+    private final Set<FileDescriptor> fileDescriptors = ConcurrentHashMap.newKeySet();
 
 
     static {
@@ -55,15 +55,15 @@ public class JUring implements AutoCloseable {
         return segment;
     }
 
-    public long prepareRead(int fd, int readSize, int offset) {
+    public long prepareRead(FileDescriptor fd, int readSize, int offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
-        MemorySegment userData = createUserData(id, fd, true, buff);
+        MemorySegment userData = createUserData(id, fd.getFd(), true, buff);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.setUserData(sqe, userData.address());
-        libUringWrapper.prepareRead(sqe, fd, buff, offset);
+        libUringWrapper.prepareRead(sqe, fd.getFd(), buff, offset);
 
         return id;
     }
@@ -72,7 +72,7 @@ public class JUring implements AutoCloseable {
         libUringWrapper.freeMemory(buffer);
     }
 
-    public long prepareWrite(int fd, byte[] bytes, int offset) {
+    public long prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
 
         MemorySegment sqe = libUringWrapper.getSqe();
 
@@ -80,13 +80,13 @@ public class JUring implements AutoCloseable {
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
 
-        MemorySegment userData = createUserData(id, fd, false, buff);
+        MemorySegment userData = createUserData(id, fd.getFd(), false, buff);
 
         libUringWrapper.setUserData(sqe, userData.address());
 
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
-        libUringWrapper.prepareWrite(sqe, fd, buff, offset);
+        libUringWrapper.prepareWrite(sqe, fd.getFd(), buff, offset);
 
         return id;
     }
@@ -126,26 +126,28 @@ public class JUring implements AutoCloseable {
     }
 
     // by default opening file in Create | RDWR | Append mode
-    public int openFile(String path) {
-        int fd = libUringWrapper.openFile(path, 1090, 0);
-        fileDescriptors.add(fd);
-        return fd;
+    public FileDescriptor openFile(String path) {
+        FileDescriptor fileDescriptor = new FileDescriptor(libUringWrapper.openFile(path, 1090, 0), this);
+        fileDescriptors.add(fileDescriptor);
+        return fileDescriptor;
     }
 
-    public int openFile(String path, int flags, int mode) {
-        int fd = libUringWrapper.openFile(path, flags, mode);
-        fileDescriptors.add(fd);
-        return fd;
+    public FileDescriptor openFile(String path, int flags, int mode) {
+        FileDescriptor fileDescriptor = new FileDescriptor(libUringWrapper.openFile(path, flags, mode), this);
+        fileDescriptors.add(fileDescriptor);
+        return fileDescriptor;
     }
 
-    public void closeFile(int fd) {
-        LibCWrapper.closeFile(fd);
-        fileDescriptors.remove(fd);
+    public void closeFile(FileDescriptor fileDescriptor) {
+        LibCWrapper.closeFile(fileDescriptor.getFd());
+        fileDescriptors.remove(fileDescriptor);
     }
 
     @Override
     public void close() {
-        fileDescriptors.forEach(LibCWrapper::closeFile);
+
+        fileDescriptors.forEach(this::closeFile);
+
         libUringWrapper.close();
     }
 }

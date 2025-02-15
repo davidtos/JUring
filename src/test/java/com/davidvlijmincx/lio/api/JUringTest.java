@@ -31,7 +31,7 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        int fd = jUring.openFile("src/test/resources/read_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
         long id = jUring.prepareRead(fd, 14, 0);
         jUring.submit();
         Result result = jUring.waitForResult();
@@ -57,7 +57,7 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        int fd = jUring.openFile("src/test/resources/read_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
 
         ids.add(jUring.prepareRead(fd, 14, 0));
         ids.add(jUring.prepareRead(fd, 14, 0));
@@ -93,8 +93,8 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        int fd = jUring.openFile("src/test/resources/read_file");
-        int writeFd = jUring.openFile("src/test/resources/write_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
+        FileDescriptor writeFd = jUring.openFile("src/test/resources/write_file");
 
         ids.add(jUring.prepareRead(fd, 14, 0));
         ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
@@ -130,7 +130,7 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        int fd = jUring.openFile("src/test/resources/write_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/write_file");
 
         ids.add(jUring.prepareWrite(fd, inputBytes, 0));
         ids.add(jUring.prepareWrite(fd, inputBytes, 0));
@@ -151,7 +151,7 @@ class JUringTest {
 
     @Test
     void readFromFileAtOffset() {
-        int fd = jUring.openFile("src/test/resources/read_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
         long id = jUring.prepareRead(fd, 6, 7);
         jUring.submit();
         Result result = jUring.waitForResult();
@@ -171,12 +171,12 @@ class JUringTest {
     @Test
     void writeToFile() throws IOException {
         String path = "src/test/resources/write_file";
-        Files.write(Path.of(path), "Clean content".getBytes());
+        Files.write(Path.of(path), "Clean content : ".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        int fd = jUring.openFile("src/test/resources/write_file");
+        FileDescriptor fd = jUring.openFile("src/test/resources/write_file");
         long id = jUring.prepareWrite(fd, inputBytes, 0);
 
         jUring.submit();
@@ -190,7 +190,7 @@ class JUringTest {
         }
 
         String writtenContent = Files.readString(Path.of(path));
-        assertEquals(input, writtenContent);
+        assertEquals("Clean content : " + input, writtenContent);
 
         jUring.closeFile(fd);
     }
@@ -203,7 +203,7 @@ class JUringTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        int fd = jUring.openFile(path);
+        FileDescriptor fd = jUring.openFile(path);
         long id = jUring.prepareWrite(fd, inputBytes, 4);
 
         jUring.submit();
@@ -221,6 +221,4 @@ class JUringTest {
 
         jUring.closeFile(fd);
     }
-
-
 }

@@ -63,10 +63,10 @@ match with results based on id. The blocking API is built with virtual threads i
 Reading from a file
 ```java
 // Blocking API Example
-try (JUringBlocking io = new JUringBlocking(32)) {
+try (JUringBlocking io = new JUringBlocking(32);
+        FileDescriptor fd = io.openFile("input.txt")){
     // Read file
-    BlockingReadResult result = io.prepareRead("input.txt", 1024, 0);
-
+    BlockingReadResult result = io.prepareRead(fd, 1024, 0);
     io.submit();
 
     MemorySegment buffer = result.getBuffer();
@@ -75,8 +75,9 @@ try (JUringBlocking io = new JUringBlocking(32)) {
 }
 
 // Non-blocking API Example
-try (JUring io = new JUring(32)) {
-    long id = io.prepareRead("input.txt", 1024, 0);
+try (JUring io = new JUring(32);
+     FileDescriptor fd = io.openFile("input.txt")){
+    long id = io.prepareRead(fd, 1024, 0);
 
     io.submit();
 
@@ -92,7 +93,8 @@ try (JUring io = new JUring(32)) {
 Write to a file
 ```java
 // Blocking API Example
-try (JUringBlocking io = new JUringBlocking(32)) {
+try (JUringBlocking io = new JUringBlocking(32);
+     FileDescriptor fd = io.openFile("test.txt")) {
     byte[] data = "Hello, World!".getBytes();
     int fd = io.openFile("test.txt");
     BlockingWriteResult writeResult = io.prepareWrite(fd, data, 0);
@@ -101,15 +103,12 @@ try (JUringBlocking io = new JUringBlocking(32)) {
 
     long bytesWritten = writeResult.getResult();
     System.out.println("Wrote " + bytesWritten + " bytes");
-
-    // if read/write operation successfully done then close the file descriptors
-    io.closeFile(fd);
 }
 
 // Non-blocking API Example
 try (JUring io = new JUring(32)) {
     byte[] data = "Hello, World!".getBytes();
-    int fd = iouring.openFile("test.txt");
+    FileDescriptor fd = io.openFile("test.txt");
     long id = io.prepareWrite(fd, data, 0);
 
     io.submit();
@@ -120,7 +119,7 @@ try (JUring io = new JUring(32)) {
         System.out.println("Wrote " + bytesWritten + " bytes");
     }
 
-    // if read/write operation successfully done then close the file descriptors
+    // file descriptors will be closed automatically if used in try-with-resources else you have to manually close it
         io.closeFile(fd);
 }
 ```
@@ -161,7 +160,7 @@ result.freeBuffer();
 ```
 Freeing buffers is not necessary for write operations, these buffers are automatically freed when the operation is seen in the completion queue by JUring.
 
-JUring/ JUringBlocking class close() method will close all file descriptors but best practice is to close them manually.
+JUring/ JUringBlocking class close() method will close all file descriptors but best practice is to open File Descriptor using try with resources or else close it manually once all file related operation done.
 
 ## Thread Safety
 JURing is not thread safe, from what I read about io_uring there should only be one instance per thread. I want to copy this behaviour to
