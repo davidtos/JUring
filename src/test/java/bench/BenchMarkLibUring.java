@@ -1,8 +1,6 @@
 package bench;
 
-import com.davidvlijmincx.lio.api.AsyncReadResult;
-import com.davidvlijmincx.lio.api.BlockingReadResult;
-import com.davidvlijmincx.lio.api.Result;
+import com.davidvlijmincx.lio.api.*;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
@@ -14,6 +12,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -39,51 +38,62 @@ public class BenchMarkLibUring {
 
     @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
-
-        final var q = plan.q;
+        final var jUringBlocking = plan.jUringBlocking;
         final var paths = BenchmarkFiles.filesTooRead;
 
-        try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < paths.length; i++) {
-                BlockingReadResult r = q.prepareRead(paths[i].sPath(), paths[i].bufferSize(), paths[i].offset());
-                q.submit();
+
+                FileDescriptor fd = new FileDescriptor(paths[i].sPath(), Flag.READ, 0);
+
+                BlockingReadResult r = jUringBlocking.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
+                jUringBlocking.submit();
                 executor.execute(() -> {
                     blackhole.consume(r.getBuffer());
                     r.freeBuffer();
+                    fd.close();
                 });
+
             }
         }
     }
 
     @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan) {
-
-
-        final var q = plan.q;
+        final var jUring = plan.jUring;
         final var paths = BenchmarkFiles.filesTooRead;
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
             int j = 0;
             for (var path : paths) {
-                q.prepareRead(path.sPath(), path.bufferSize(), path.offset());
+
+                FileDescriptor fd = new FileDescriptor(path.sPath(), Flag.READ, 0);
+                openFiles.add(fd);
+
+                jUring.prepareRead(fd, path.bufferSize(), path.offset());
 
                 j++;
                 if (j % 100 == 0) {
-                    q.submit();
+                    jUring.submit();
                 }
             }
 
 
-            q.submit();
+            jUring.submit();
 
             for (int i = 0; i < paths.length; i++) {
-                Result result = q.waitForResult();
+                Result result = jUring.waitForResult();
 
                 if (result instanceof AsyncReadResult r) {
                     blackhole.consume(r.getBuffer());
                     r.freeBuffer();
                 }
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                fd.close();
             }
 
         } catch (Exception e) {
@@ -137,7 +147,7 @@ public class BenchMarkLibUring {
             }
         }
 
-        try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < files.length; i++) {
                 int finalI = i;

@@ -63,22 +63,18 @@ public class JUringBlocking implements AutoCloseable {
         jUring.submit();
     }
 
-    public BlockingReadResult prepareRead(String path, int size, int offset) {
-        long id = jUring.prepareRead(path, size, offset);
+    public BlockingReadResult prepareRead(FileDescriptor fd, int size, int offset) {
+        long id = jUring.prepareRead(fd, size, offset);
         BlockingReadResult result = new BlockingReadResult(id);
         requests.put(id, result);
         return result;
     }
 
-    public BlockingWriteResult prepareWrite(String path, byte[] bytes, int offset) {
-        long id = jUring.prepareWrite(path, bytes, offset);
+    public BlockingWriteResult prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
+        long id = jUring.prepareWrite(fd, bytes, offset);
         BlockingWriteResult result = new BlockingWriteResult(id);
         requests.put(id, result);
         return result;
-    }
-
-    public void freeReadBuffer(MemorySegment buffer) {
-        jUring.freeReadBuffer(buffer);
     }
 
     @Override

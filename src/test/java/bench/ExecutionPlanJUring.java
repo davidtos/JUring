@@ -9,17 +9,17 @@ import org.openjdk.jmh.annotations.TearDown;
 @State(Scope.Thread)
 public class ExecutionPlanJUring {
 
-    JUring q;
+    JUring jUring;
 
     @Setup
     public void setup() {
-        q = new JUring(2500);
+        jUring = new JUring(2500);
 
     }
 
     @TearDown
     public void tearDown() throws Throwable {
-        q.close();
+        jUring.close();
     }
 
 }

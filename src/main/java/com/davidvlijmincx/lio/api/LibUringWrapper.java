@@ -169,10 +169,6 @@ class LibUringWrapper implements AutoCloseable {
 
     }
 
-    int openFile(String path, int flags, int mode) {
-        return LibCWrapper.OpenFile(path, flags, mode);
-    }
-
     MemorySegment getSqe() {
         try {
             MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
