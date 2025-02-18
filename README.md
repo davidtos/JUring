@@ -60,11 +60,11 @@ For full benchmark details and methodology, see [BenchMarkLibUring.java](https:/
 There are two ways to use JUring, there is the direct and blocking API. The direct API lets you prepare entries that you
 match with results based on id. The blocking API is built with virtual threads in mind, blocking/unmounting them while they wait for a result.
 
-Reading from a file
+Reading from a file:
 ```java
 // Blocking API Example
-try (JUringBlocking io = new JUringBlocking(32);
-        FileDescriptor fd = io.openFile("input.txt")){
+try (JUringBlocking io = new JUringBlocking(32)) {
+    FileDescriptor fd = new FileDescriptor("input.txt", Flag.READ, 0);
     // Read file
     BlockingReadResult result = io.prepareRead(fd, 1024, 0);
     io.submit();
@@ -72,11 +72,12 @@ try (JUringBlocking io = new JUringBlocking(32);
     MemorySegment buffer = result.getBuffer();
     // Process buffer...
     result.freeBuffer();
+    fd.close();
 }
 
 // Non-blocking API Example
-try (JUring io = new JUring(32);
-     FileDescriptor fd = io.openFile("input.txt")){
+try (JUring io = new JUring(32)) {
+    FileDescriptor fd = new FileDescriptor("input.txt", Flag.READ, 0);
     long id = io.prepareRead(fd, 1024, 0);
 
     io.submit();
@@ -84,31 +85,38 @@ try (JUring io = new JUring(32);
     Result result = io.waitForResult();
     if (result instanceof ReadResult r) {
         MemorySegment buffer = r.getBuffer();
+        long resultId = r.getId();
+
         // Process buffer...
         r.freeBuffer();
     }
+
+    fd.close();
 }
 ```
 
 Write to a file
 ```java
 // Blocking API Example
-try (JUringBlocking io = new JUringBlocking(32);
-     FileDescriptor fd = io.openFile("test.txt")) {
+try (JUringBlocking io = new JUringBlocking(32)) {
+    FileDescriptor fd = new FileDescriptor("output.txt", Flag.WRITE, 0);
     byte[] data = "Hello, World!".getBytes();
-    int fd = io.openFile("test.txt");
+
     BlockingWriteResult writeResult = io.prepareWrite(fd, data, 0);
 
     io.submit();
 
     long bytesWritten = writeResult.getResult();
     System.out.println("Wrote " + bytesWritten + " bytes");
+
+    fd.close();
 }
 
 // Non-blocking API Example
 try (JUring io = new JUring(32)) {
+
     byte[] data = "Hello, World!".getBytes();
-    FileDescriptor fd = io.openFile("test.txt");
+    FileDescriptor fd = new FileDescriptor("output.txt", Flag.WRITE, 0);
     long id = io.prepareWrite(fd, data, 0);
 
     io.submit();
@@ -116,11 +124,10 @@ try (JUring io = new JUring(32)) {
     Result result = io.waitForResult();
     if (result instanceof WriteResult w) {
         long bytesWritten = w.getResult();
-        System.out.println("Wrote " + bytesWritten + " bytes");
+        System.out.println("Wrote " + bytesWritten + " bytes from opartion with id: " + result.getId());
     }
 
-    // file descriptors will be closed automatically if used in try-with-resources else you have to manually close it
-        io.closeFile(fd);
+    fd.close();
 }
 ```
 
@@ -131,10 +138,14 @@ Both APIs follow a similar pattern of operations:
 ```java
 try (JUringBlocking io = new JUringBlocking(32)) {}
 ```
+2. **Opening a File**: Open a file you want to perform the operations on. The file has to stay open for the entire duration of the operation. `FileDescriptor` implements the autocloseable interface.
+```java
+FileDescriptor fd = new FileDescriptor("output.txt", Flag.WRITE, 0);
+```
 
 2. **Prepare Operation**: Tell io_uring what operation you want to perform. This will add it to the submission queue.
 ```java
-BlockingReadResult result = io.prepareRead("input.txt", 1024, 0);
+BlockingReadResult result = io.prepareRead(fd, 1024, 0);
 ```
 
 3. **Submit**: tell IO_Uring to start working on the prepared entries.
@@ -151,7 +162,7 @@ MemorySegment buffer = result.getBuffer();
 Result result = io.waitForResult();
 ```
 
-5. **Cleanup**: Free read buffer
+5. **Cleanup buffers**: Free read buffer
 
 For read operations it is necessary to free the buffer that lives inside the result. The buffers are created using malloc and are not managed by an arena. They are MemorySegments, so it is possible to
 have them cleaned up when an area closes.
@@ -160,7 +171,11 @@ result.freeBuffer();
 ```
 Freeing buffers is not necessary for write operations, these buffers are automatically freed when the operation is seen in the completion queue by JUring.
 
-JUring/ JUringBlocking class close() method will close all file descriptors but best practice is to open File Descriptor using try with resources or else close it manually once all file related operation done.
+6. **Cleanup File descriptors**: After performing all the operations you need to close the file descriptors. It implements the `AutoCloseable` interface to use it with the try-with-resource statement
+
+```java
+fd.close();
+```
 
 ## Thread Safety
 JURing is not thread safe, from what I read about io_uring there should only be one instance per thread. I want to copy this behaviour to
@@ -181,7 +196,6 @@ for completions should be done by a single thread. Processing the results/buffer
 - Adding more io_uring features
 - File modes and flags
 - Adding a blocking-api for local files
-- Better memory usage
 - Improved memory cleanup strategies (smart MemorySegments)
 - Encoding support
 - Support for sockets
