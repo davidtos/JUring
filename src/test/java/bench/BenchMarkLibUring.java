@@ -15,6 +15,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -44,20 +45,20 @@ public class BenchMarkLibUring {
         final var q = plan.q;
         final var paths = BenchmarkFiles.filesTooRead;
 
-        try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < paths.length; i++) {
 
-                try(FileDescriptor fd = q.openFile(paths[i].sPath())) {
+                FileDescriptor fd = q.openFile(paths[i].sPath());
 
-                    BlockingReadResult r = q.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
-                    q.submit();
-                    executor.execute(() -> {
-                        blackhole.consume(r.getBuffer());
-                        r.freeBuffer();
-                        q.closeFile(fd);
-                    });
-                }
+                BlockingReadResult r = q.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
+                q.submit();
+                executor.execute(() -> {
+                    blackhole.consume(r.getBuffer());
+                    r.freeBuffer();
+                    q.closeFile(fd);
+                });
+
             }
         }
     }
@@ -68,19 +69,20 @@ public class BenchMarkLibUring {
 
         final var q = plan.q;
         final var paths = BenchmarkFiles.filesTooRead;
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
             int j = 0;
             for (var path : paths) {
 
-                try(FileDescriptor fd = q.openFile(path.sPath())) {
+                FileDescriptor fd = q.openFile(path.sPath());
+                openFiles.add(fd);
 
-                    q.prepareRead(fd, path.bufferSize(), path.offset());
+                q.prepareRead(fd, path.bufferSize(), path.offset());
 
-                    j++;
-                    if (j % 100 == 0) {
-                        q.submit();
-                    }
+                j++;
+                if (j % 100 == 0) {
+                    q.submit();
                 }
             }
 
@@ -94,6 +96,10 @@ public class BenchMarkLibUring {
                     blackhole.consume(r.getBuffer());
                     r.freeBuffer();
                 }
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                q.closeFile(fd);
             }
 
         } catch (Exception e) {
@@ -133,7 +139,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+      @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
@@ -147,7 +153,7 @@ public class BenchMarkLibUring {
             }
         }
 
-        try(ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (int i = 0; i < files.length; i++) {
                 int finalI = i;
