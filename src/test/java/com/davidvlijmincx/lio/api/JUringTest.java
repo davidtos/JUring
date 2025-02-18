@@ -31,24 +31,24 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
-        long id = jUring.prepareRead(fd, 14, 0);
-        jUring.submit();
-        Result result = jUring.waitForResult();
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            long id = jUring.prepareRead(fd, 14, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
 
-        if (result instanceof ReadResult readResult) {
-            assertEquals(id, readResult.getId());
-            assertEquals(13, readResult.getResult());
+            if (result instanceof ReadResult readResult) {
+                assertEquals(id, readResult.getId());
+                assertEquals(13, readResult.getResult());
 
-            readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
-            String string = readResult.getBuffer().getString(0);
-            readResult.freeBuffer();
-            assertEquals("Hello, World!", string);
-        } else {
-            fail("Result is not a ReadResult");
+                readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
+                String string = readResult.getBuffer().getString(0);
+                readResult.freeBuffer();
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
         }
-
-        jUring.closeFile(fd);
     }
 
     @Test
@@ -57,29 +57,29 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
 
-        ids.add(jUring.prepareRead(fd, 14, 0));
-        ids.add(jUring.prepareRead(fd, 14, 0));
-        ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
 
-        jUring.submit();
+            jUring.submit();
 
-        for (int i = 0; i < ids.size(); i++) {
-            Result result = jUring.waitForResult();
-            completedIds.add(result.getId());
+            for (int i = 0; i < ids.size(); i++) {
+                Result result = jUring.waitForResult();
+                completedIds.add(result.getId());
 
-            if (result instanceof ReadResult readResult) {
-                readResult.freeBuffer();
-            } else {
-                fail("Result is not a ReadResult");
+                if (result instanceof ReadResult readResult) {
+                    readResult.freeBuffer();
+                } else {
+                    fail("Result is not a ReadResult");
+                }
             }
+
+            assertEquals(completedIds.size(), ids.size());
+            assertThat(completedIds).containsAll(ids);
+
         }
-
-        assertEquals(completedIds.size(), ids.size());
-        assertThat(completedIds).containsAll(ids);
-
-        jUring.closeFile(fd);
 
     }
 
@@ -93,8 +93,9 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
-        FileDescriptor writeFd = jUring.openFile("src/test/resources/write_file");
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);
+                FileDescriptor writeFd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
+
 
         ids.add(jUring.prepareRead(fd, 14, 0));
         ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
@@ -117,7 +118,7 @@ class JUringTest {
         assertEquals(completedIds.size(), ids.size());
         assertThat(completedIds).containsAll(ids);
 
-        jUring.closeFile(fd);
+        }
     }
 
     @Test
@@ -130,40 +131,42 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        FileDescriptor fd = jUring.openFile("src/test/resources/write_file");
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
 
-        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
-        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
-        ids.add(jUring.prepareWrite(fd, inputBytes, 0));
+            ids.add(jUring.prepareWrite(fd, inputBytes, 0));
+            ids.add(jUring.prepareWrite(fd, inputBytes, 0));
+            ids.add(jUring.prepareWrite(fd, inputBytes, 0));
 
-        jUring.submit();
+            jUring.submit();
 
-        for (int i = 0; i < ids.size(); i++) {
-            Result result = jUring.waitForResult();
-            completedIds.add(result.getId());
+            for (int i = 0; i < ids.size(); i++) {
+                Result result = jUring.waitForResult();
+                completedIds.add(result.getId());
+            }
+
+            assertEquals(completedIds.size(), ids.size());
+            assertThat(completedIds).containsAll(ids);
+
         }
-
-        assertEquals(completedIds.size(), ids.size());
-        assertThat(completedIds).containsAll(ids);
-
-        jUring.closeFile(fd);
     }
 
     @Test
     void readFromFileAtOffset() {
-        FileDescriptor fd = jUring.openFile("src/test/resources/read_file");
-        long id = jUring.prepareRead(fd, 6, 7);
-        jUring.submit();
-        Result result = jUring.waitForResult();
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            long id = jUring.prepareRead(fd, 6, 7);
+            jUring.submit();
+            Result result = jUring.waitForResult();
 
-        if (result instanceof ReadResult readResult) {
-            assertEquals(id, readResult.getId());
+            if (result instanceof ReadResult readResult) {
+                assertEquals(id, readResult.getId());
 
-            String string = readResult.getBuffer().getString(0);
-            readResult.freeBuffer();
-            assertEquals("World!", string);
-        } else {
-            fail("Result is not a ReadResult");
+                String string = readResult.getBuffer().getString(0);
+                readResult.freeBuffer();
+                assertEquals("World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
         }
 
     }
@@ -176,23 +179,23 @@ class JUringTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        FileDescriptor fd = jUring.openFile("src/test/resources/write_file");
-        long id = jUring.prepareWrite(fd, inputBytes, 0);
+        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+            long id = jUring.prepareWrite(fd, inputBytes, 0);
 
-        jUring.submit();
-        Result result = jUring.waitForResult();
+            jUring.submit();
+            Result result = jUring.waitForResult();
 
-        if (result instanceof AsyncWriteResult writeResult) {
-            assertEquals(id, writeResult.getId());
-            assertEquals(inputBytes.length, writeResult.getResult());
-        } else {
-            fail("Result is not a AsyncWriteResult");
+            if (result instanceof AsyncWriteResult writeResult) {
+                assertEquals(id, writeResult.getId());
+                assertEquals(inputBytes.length, writeResult.getResult());
+            } else {
+                fail("Result is not a AsyncWriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+
         }
-
-        String writtenContent = Files.readString(Path.of(path));
-        assertEquals("Clean content : " + input, writtenContent);
-
-        jUring.closeFile(fd);
     }
 
     @Test
@@ -203,22 +206,22 @@ class JUringTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        FileDescriptor fd = jUring.openFile(path);
-        long id = jUring.prepareWrite(fd, inputBytes, 4);
+        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+            long id = jUring.prepareWrite(fd, inputBytes, 4);
 
-        jUring.submit();
-        Result result = jUring.waitForResult();
+            jUring.submit();
+            Result result = jUring.waitForResult();
 
-        if (result instanceof AsyncWriteResult writeResult) {
-            assertEquals(id, writeResult.getId());
-            assertEquals(inputBytes.length, writeResult.getResult());
-        } else {
-            fail("Result is not a AsyncWriteResult");
+            if (result instanceof AsyncWriteResult writeResult) {
+                assertEquals(id, writeResult.getId());
+                assertEquals(inputBytes.length, writeResult.getResult());
+            } else {
+                fail("Result is not a AsyncWriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals("Big hello, from Java", writtenContent);
+
         }
-
-        String writtenContent = Files.readString(Path.of(path));
-        assertEquals("Big hello, from Java", writtenContent);
-
-        jUring.closeFile(fd);
     }
 }

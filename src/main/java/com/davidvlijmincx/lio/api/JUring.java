@@ -20,8 +20,6 @@ public class JUring implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
-    private final Set<FileDescriptor> fileDescriptors = ConcurrentHashMap.newKeySet();
-
 
     static {
         C_POINTER = ValueLayout.ADDRESS
@@ -125,29 +123,8 @@ public class JUring implements AutoCloseable {
         return new AsyncReadResult(idResult, bufferResult, cqe.result());
     }
 
-    // by default opening file in Create | RDWR | Append mode
-    public FileDescriptor openFile(String path) {
-        FileDescriptor fileDescriptor = new FileDescriptor(libUringWrapper.openFile(path, 1090, 0), this);
-        fileDescriptors.add(fileDescriptor);
-        return fileDescriptor;
-    }
-
-    public FileDescriptor openFile(String path, int flags, int mode) {
-        FileDescriptor fileDescriptor = new FileDescriptor(libUringWrapper.openFile(path, flags, mode), this);
-        fileDescriptors.add(fileDescriptor);
-        return fileDescriptor;
-    }
-
-    public void closeFile(FileDescriptor fileDescriptor) {
-        LibCWrapper.closeFile(fileDescriptor.getFd());
-        fileDescriptors.remove(fileDescriptor);
-    }
-
     @Override
     public void close() {
-
-        fileDescriptors.forEach(this::closeFile);
-
         libUringWrapper.close();
     }
 }

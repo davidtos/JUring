@@ -3,15 +3,13 @@ package com.davidvlijmincx.lio.api;
 public class FileDescriptor implements AutoCloseable {
 
     private final int fd;
-    private final JUring jUring;
     private boolean closed = false;
 
-    protected FileDescriptor(int fd, JUring jUring) {
-        this.fd = fd;
-        this.jUring = jUring;
+    public FileDescriptor(String path, Flag flags, int mode) {
+        this.fd = LibCWrapper.OpenFile(path, flags.getValue(), mode);
     }
 
-    protected int getFd() {
+    int getFd() {
         if (closed) {
             throw new IllegalStateException("File descriptor has been closed");
         }
@@ -21,8 +19,9 @@ public class FileDescriptor implements AutoCloseable {
     @Override
     public void close(){
         if (!closed) {
-            jUring.closeFile(this);
+            LibCWrapper.closeFile(fd);
             closed = true;
         }
     }
+
 }

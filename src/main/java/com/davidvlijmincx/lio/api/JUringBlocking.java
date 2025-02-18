@@ -77,22 +77,6 @@ public class JUringBlocking implements AutoCloseable {
         return result;
     }
 
-    public FileDescriptor openFile(String path) {
-        return jUring.openFile(path);
-    }
-
-    public FileDescriptor openFile(String path, int flags, int mode) {
-        return jUring.openFile(path,flags,mode);
-    }
-
-    public void closeFile(FileDescriptor fd) {
-        jUring.closeFile(fd);
-    }
-
-    public void freeReadBuffer(MemorySegment buffer) {
-        jUring.freeReadBuffer(buffer);
-    }
-
     @Override
     public void close() {
         running = false;

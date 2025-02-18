@@ -28,7 +28,7 @@ class JUringBlockingTest {
     @Test
     void readFromFile() {
 
-        try (FileDescriptor fd = jUringBlocking.openFile("src/test/resources/read_file")) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
             BlockingReadResult result = jUringBlocking.prepareRead(fd, 14, 0);
 
             jUringBlocking.submit();
@@ -45,7 +45,7 @@ class JUringBlockingTest {
     @Test
     void multiReadFromFile() {
 
-        try (FileDescriptor fd = jUringBlocking.openFile("src/test/resources/read_file")) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
 
             BlockingReadResult result = jUringBlocking.prepareRead(fd, 14, 0);
             BlockingReadResult result1 = jUringBlocking.prepareRead(fd, 5, 0);
@@ -70,18 +70,18 @@ class JUringBlockingTest {
 
     @Test
     void readFromFileAtOffset() {
-        FileDescriptor fd = jUringBlocking.openFile("src/test/resources/read_file");
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
 
-        BlockingReadResult result = jUringBlocking.prepareRead(fd, 6, 7);
+            BlockingReadResult result = jUringBlocking.prepareRead(fd, 6, 7);
 
-        jUringBlocking.submit();
+            jUringBlocking.submit();
 
-        String string = result.getBuffer().getString(0);
-        result.freeBuffer();
+            String string = result.getBuffer().getString(0);
+            result.freeBuffer();
 
-        assertEquals("World!", string);
+            assertEquals("World!", string);
 
-        jUringBlocking.closeFile(fd);
+        }
     }
 
     @Test
@@ -92,7 +92,7 @@ class JUringBlockingTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = jUringBlocking.openFile(path.toString())) {
+        try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
 
             BlockingWriteResult result = jUringBlocking.prepareWrite(fd, inputBytes, 0);
 
@@ -101,7 +101,7 @@ class JUringBlockingTest {
             assertEquals(inputBytes.length, result.getResult());
 
             String writtenContent = Files.readString(path);
-            assertEquals("Clean content : " + input,  writtenContent);
+            assertEquals(input, writtenContent);
         }
     }
 
@@ -113,18 +113,18 @@ class JUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        FileDescriptor fd = jUringBlocking.openFile(path.toString());
+        try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
 
-        BlockingWriteResult result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
+            BlockingWriteResult result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
 
-        jUringBlocking.submit();
+            jUringBlocking.submit();
 
-        assertEquals(inputBytes.length, result.getResult());
+            assertEquals(inputBytes.length, result.getResult());
 
-        String writtenContent = Files.readString(path);
-        assertEquals("Big hello, from Java", writtenContent);
+            String writtenContent = Files.readString(path);
+            assertEquals("Big hello, from Java", writtenContent);
 
-        jUringBlocking.closeFile(fd);
+        }
     }
 
     @Test
@@ -135,26 +135,27 @@ class JUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        FileDescriptor fd = jUringBlocking.openFile(readPath.toString());
-        FileDescriptor writeFd = jUringBlocking.openFile(writePath.toString());
+        try (FileDescriptor fd = new FileDescriptor(readPath.toString(), Flag.READ, 0); FileDescriptor writeFd = new FileDescriptor(writePath.toString(), Flag.WRITE, 0)) {
 
-        BlockingReadResult readResult = jUringBlocking.prepareRead(fd, 14, 0);
-        BlockingWriteResult writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-        BlockingReadResult readResult1 = jUringBlocking.prepareRead(fd, 5, 0);
-        BlockingWriteResult writeResult1 = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-        BlockingReadResult readResult2 = jUringBlocking.prepareRead(fd, 7, 7);
+            BlockingReadResult readResult = jUringBlocking.prepareRead(fd, 14, 0);
+            BlockingWriteResult writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
+            BlockingReadResult readResult1 = jUringBlocking.prepareRead(fd, 5, 0);
+            BlockingWriteResult writeResult1 = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
+            BlockingReadResult readResult2 = jUringBlocking.prepareRead(fd, 7, 7);
 
-        jUringBlocking.submit();
+            jUringBlocking.submit();
 
-        assertEquals(13, readResult.getResult());
-        assertEquals(5, readResult1.getResult());
-        assertEquals(6, readResult2.getResult());
+            assertEquals(13, readResult.getResult());
+            assertEquals(5, readResult1.getResult());
+            assertEquals(6, readResult2.getResult());
 
-        assertEquals(16, writeResult.getResult());
-        assertEquals(16, writeResult1.getResult());
+            assertEquals(16, writeResult.getResult());
+            assertEquals(16, writeResult1.getResult());
 
-        readResult.freeBuffer();
-        readResult1.freeBuffer();
-        readResult2.freeBuffer();
+            readResult.freeBuffer();
+            readResult1.freeBuffer();
+            readResult2.freeBuffer();
+
+        }
     }
 }
