@@ -1,8 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
 
-import java.lang.foreign.AddressLayout;
-import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
