@@ -93,9 +93,12 @@ public class JUring implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public Optional<Result> peekForResult(){
-        Optional<Cqe> cqe = libUringWrapper.peekForResult();
-        return cqe.map(this::getResultFromCqe);
+    public Result peekForResult(){
+        Cqe cqe = libUringWrapper.peekForResult();
+        if (cqe != null) {
+            return getResultFromCqe(cqe);
+        }
+        return null;
     }
 
     public Result waitForResult() {

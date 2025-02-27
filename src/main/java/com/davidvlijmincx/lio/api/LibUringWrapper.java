@@ -216,7 +216,7 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Optional<Cqe> peekForResult() {
+    Cqe peekForResult() {
         try {
             MemorySegment cqePtr = arena.allocate(ADDRESS);
             int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
@@ -228,9 +228,9 @@ class LibUringWrapper implements AutoCloseable {
                 long userData = cqeRaw.get(ValueLayout.JAVA_LONG, 0);
                 int res = cqeRaw.get(ValueLayout.JAVA_INT, 8);
 
-                return Optional.of(new Cqe(userData, res, cqeRaw));
+                return new Cqe(userData, res, cqeRaw);
             } else if (ret == -11) {
-                return Optional.empty();
+                return null;
             }
             else if (ret < 0) {
                 throw new RuntimeException("Failed to peek result");
@@ -240,7 +240,7 @@ class LibUringWrapper implements AutoCloseable {
             throw new RuntimeException("Failed while peeking or creating result from cqe ",e);
         }
 
-        return Optional.empty();
+        return null;
     }
 
     Cqe waitForResult() {

@@ -33,18 +33,12 @@ public class JUringBlocking implements AutoCloseable {
     private void startPoller() {
         pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
             while (running) {
-                final Optional<Result> result = jUring.peekForResult();
+                final Result result = jUring.peekForResult();
 
-                if (result.isPresent()) {
-                    BlockingResult request = requests.remove(result.get().getId());
-                    while (request == null) {
-                        request = requests.remove(result.get().getId());
-                    }
-                    request.setResult(result.get());
-
-                }
-
-                if (result.isEmpty()){
+                if (result != null) {
+                    BlockingResult request = requests.remove(result.getId());
+                    request.setResult(result);
+                } else {
                     sleepInterval();
                 }
             }
