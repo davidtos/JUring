@@ -1,6 +1,6 @@
 # JUring: File I/O for Java using IO_uring
 JUring is a high-performance Java library that provides bindings to Linux's io_uring asynchronous I/O interface
-using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 75,48% better performance than Java NIO FileChannel
+using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 85.63% better performance than Java NIO FileChannel
 operations for local files and 86.92% better performance for remote files.
 
 ## Performance
@@ -9,13 +9,13 @@ The test ran on a Linux machine with 32 cores, a nvme SSD, and a mounted remote 
 
 Local file performance:
 ```text
-Benchmark                                              Mode  Cnt     Score    Error   Units
-BenchMarkLibUring.libUring                            thrpt    5  1167.150 ± 69.679  ops/ms
-BenchMarkLibUring.libUringBlocking                    thrpt    5   886.779 ± 47.565  ops/ms
-BenchMarkLibUring.readUsingFileChannel                thrpt    5   665.914 ± 18.992  ops/ms
-BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5   686.253 ± 14.033  ops/ms
+Benchmark                                              Mode  Cnt     Score     Error   Units
+BenchMarkLibUring.libUring                            thrpt    5  1266.332 ± 110.762  ops/ms
+BenchMarkLibUring.libUringBlocking                    thrpt    5   974.876 ±   2.284  ops/ms
+BenchMarkLibUring.readUsingFileChannel                thrpt    5   682.427 ±  17.897  ops/ms
+BenchMarkLibUring.readUsingFileChannelVirtualThreads  thrpt    5   699.397 ±   4.254  ops/ms
 ```
-JUring achieves 75,48% higher throughput compared to using FileChannel.
+JUring achieves 85.63% higher throughput compared to using FileChannel.
 
 ### Local vs Remote File Performance
 When testing with remote files (network mounted storage), io_uring performs 86.92% better than FileChannels.
