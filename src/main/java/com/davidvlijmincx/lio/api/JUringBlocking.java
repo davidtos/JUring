@@ -11,7 +11,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class JUringBlocking implements AutoCloseable {
 
     public final int pollingInterval;
-    private final Map<Long, BlockingResult> requests = new ConcurrentHashMap<>();
+    private final Map<Long, BlockingResult> requests;
     private final JUring jUring;
     private boolean running = true;
     private Thread pollerThread;
@@ -19,27 +19,29 @@ public class JUringBlocking implements AutoCloseable {
     public JUringBlocking(int queueDepth) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = -1;
+        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f,  Runtime.getRuntime().availableProcessors());
         startPoller();
     }
 
     public JUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = cqPollerTimeoutInMillis;
+        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f,  Runtime.getRuntime().availableProcessors());
         startPoller();
     }
 
     private void startPoller() {
-        pollerThread = Thread.ofPlatform().start(() -> {
+        pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
             while (running) {
                 final Optional<Result> result = jUring.peekForResult();
 
                 if (result.isPresent()) {
-                    BlockingResult request = requests.get(result.get().getId());
+                    BlockingResult request = requests.remove(result.get().getId());
                     while (request == null) {
-                        request = requests.get(result.get().getId());
+                        request = requests.remove(result.get().getId());
                     }
                     request.setResult(result.get());
-                    requests.remove(result.get().getId());
+
                 }
 
                 if (result.isEmpty()){
