@@ -1,12 +1,11 @@
 package com.davidvlijmincx.lio.api;
 
 
+import java.lang.foreign.AddressLayout;
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
-
 
 public class JUringBlocking implements AutoCloseable {
 
@@ -32,9 +31,9 @@ public class JUringBlocking implements AutoCloseable {
 
     private void startPoller() {
         pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
+
             while (running) {
                 final Result result = jUring.peekForResult();
-
                 if (result != null) {
                     BlockingResult request = requests.remove(result.getId());
                     request.setResult(result);

@@ -2,7 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
-import java.util.Optional;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -216,9 +215,8 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Cqe peekForResult() {
+    Cqe peekForResult(MemorySegment cqePtr) {
         try {
-            MemorySegment cqePtr = arena.allocate(ADDRESS);
             int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
 
             if (ret == 0) {
@@ -243,9 +241,8 @@ class LibUringWrapper implements AutoCloseable {
         return null;
     }
 
-    Cqe waitForResult() {
+    Cqe waitForResult(MemorySegment cqePtr) {
         try {
-            MemorySegment cqePtr = arena.allocate(ADDRESS);
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
                 throw new RuntimeException("Error while waiting for cqe: " + ret);

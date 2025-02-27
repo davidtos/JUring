@@ -20,6 +20,7 @@ public class JUring implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
+    private final MemorySegment cqePtr;
 
     static {
         C_POINTER = ValueLayout.ADDRESS
@@ -40,6 +41,7 @@ public class JUring implements AutoCloseable {
 
     public JUring(int queueDepth) {
         libUringWrapper = new LibUringWrapper(queueDepth);
+        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
     }
 
     private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
@@ -94,7 +96,7 @@ public class JUring implements AutoCloseable {
     }
 
     public Result peekForResult(){
-        Cqe cqe = libUringWrapper.peekForResult();
+        Cqe cqe = libUringWrapper.peekForResult(cqePtr);
         if (cqe != null) {
             return getResultFromCqe(cqe);
         }
@@ -102,7 +104,7 @@ public class JUring implements AutoCloseable {
     }
 
     public Result waitForResult() {
-        Cqe cqe = libUringWrapper.waitForResult();
+        Cqe cqe = libUringWrapper.waitForResult(cqePtr);
         return getResultFromCqe(cqe);
     }
 
@@ -129,5 +131,6 @@ public class JUring implements AutoCloseable {
     @Override
     public void close() {
         libUringWrapper.close();
+        LibCWrapper.freeBuffer(cqePtr);
     }
 }
