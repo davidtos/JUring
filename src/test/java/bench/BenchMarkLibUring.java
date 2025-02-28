@@ -36,7 +36,7 @@ public class BenchMarkLibUring {
         new Runner(opt).run();
     }
 
-    @Benchmark()
+   // @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
         final var jUringBlocking = plan.jUringBlocking;
         final var paths = BenchmarkFiles.filesTooRead;
@@ -101,7 +101,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+  //  @Benchmark
     public void readUsingFileChannel(Blackhole blackhole) throws Throwable {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
@@ -133,7 +133,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+ //   @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
