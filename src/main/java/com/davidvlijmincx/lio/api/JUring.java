@@ -2,9 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
-import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -56,27 +53,21 @@ public class JUring implements AutoCloseable {
     public long prepareRead(FileDescriptor fd, int readSize, int offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
 
-        long id = buff.address() + ThreadLocalRandom.current().nextLong();
+        long id = buff.address();
         MemorySegment userData = createUserData(id, fd.getFd(), true, buff);
 
         MemorySegment sqe = libUringWrapper.getSqe();
-        libUringWrapper.setUserData(sqe, userData.address());
         libUringWrapper.prepareRead(sqe, fd.getFd(), buff, offset);
+        libUringWrapper.setUserData(sqe, userData.address());
 
         return id;
     }
 
-    void freeReadBuffer(MemorySegment buffer) {
-        libUringWrapper.freeMemory(buffer);
-    }
-
     public long prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
-
         MemorySegment sqe = libUringWrapper.getSqe();
-
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
 
-        long id = buff.address() + ThreadLocalRandom.current().nextLong();
+        long id = buff.address();
 
         MemorySegment userData = createUserData(id, fd.getFd(), false, buff);
 
@@ -93,9 +84,12 @@ public class JUring implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public Optional<Result> peekForResult(){
-        Optional<Cqe> cqe = libUringWrapper.peekForResult();
-        return cqe.map(this::getResultFromCqe);
+    public Result peekForResult(){
+        Cqe cqe = libUringWrapper.peekForResult();
+        if (cqe != null) {
+            return getResultFromCqe(cqe);
+        }
+        return null;
     }
 
     public Result waitForResult() {
@@ -105,18 +99,18 @@ public class JUring implements AutoCloseable {
 
     private Result getResultFromCqe(Cqe cqe) {
         long address = cqe.UserData();
-        MemorySegment result = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
+        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
 
         libUringWrapper.seen(cqe.cqePointer());
 
-        boolean readResult = (boolean) readHandle.get(result, 0L);
+        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
+        long idResult = (long) idHandle.get(nativeUserData, 0L);
+        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
 
-        long idResult = (long) idHandle.get(result, 0L);
-        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(result, 0L);
-        libUringWrapper.freeMemory(result);
+        LibCWrapper.freeBuffer(nativeUserData);
 
         if (!readResult) {
-            libUringWrapper.freeMemory(bufferResult);
+            LibCWrapper.freeBuffer(bufferResult);
             return new AsyncWriteResult(idResult, cqe.result());
         }
 
