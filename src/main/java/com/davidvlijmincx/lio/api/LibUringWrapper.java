@@ -25,6 +25,8 @@ class LibUringWrapper implements AutoCloseable {
 
     private final MemorySegment ring;
     private final Arena arena;
+    private final MemorySegment cqePtr;
+
     static {
 
         Linker linker = Linker.nativeLinker();
@@ -155,6 +157,7 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
+        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
 
         try {
 
@@ -215,18 +218,18 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Cqe peekForResult(MemorySegment cqePtr) {
+    Cqe peekForResult() {
         try {
             int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
 
             if (ret == 0) {
-                var cqeRaw = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
+                var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
                         .reinterpret(io_uring_cqe_layout.byteSize());
 
-                long userData = cqeRaw.get(ValueLayout.JAVA_LONG, 0);
-                int res = cqeRaw.get(ValueLayout.JAVA_INT, 8);
+                long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
+                int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-                return new Cqe(userData, res, cqeRaw);
+                return new Cqe(userData, res, nativeCqe);
             } else if (ret == -11) {
                 return null;
             }
@@ -241,20 +244,20 @@ class LibUringWrapper implements AutoCloseable {
         return null;
     }
 
-    Cqe waitForResult(MemorySegment cqePtr) {
+    Cqe waitForResult() {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
                 throw new RuntimeException("Error while waiting for cqe: " + ret);
             }
 
-            var cqeRaw = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
+            var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
                     .reinterpret(io_uring_cqe_layout.byteSize());
 
-            long userData = cqeRaw.get(ValueLayout.JAVA_LONG, 0);
-            int res = cqeRaw.get(ValueLayout.JAVA_INT, 8);
+            long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
+            int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-            return new Cqe(userData, res, cqeRaw);
+            return new Cqe(userData, res, nativeCqe);
         } catch (Throwable e) {
             throw new RuntimeException("Exception while waiting/creating result", e);
         }
@@ -267,11 +270,6 @@ class LibUringWrapper implements AutoCloseable {
             throw new RuntimeException("Could not mark cqe as seen",e);
         }
     }
-
-    void freeMemory(MemorySegment memory) {
-        LibCWrapper.freeBuffer(memory);
-    }
-
 
     void closeRing() {
         try {
@@ -288,6 +286,7 @@ class LibUringWrapper implements AutoCloseable {
     @Override
     public void close() {
         closeRing();
+        LibCWrapper.freeBuffer(cqePtr);
         closeArena();
     }
 

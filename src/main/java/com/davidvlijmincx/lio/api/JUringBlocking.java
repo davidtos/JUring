@@ -16,14 +16,14 @@ public class JUringBlocking implements AutoCloseable {
     public JUringBlocking(int queueDepth) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = -1;
-        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f,  Runtime.getRuntime().availableProcessors());
+        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
         startPoller();
     }
 
     public JUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
         this.jUring = new JUring(queueDepth);
         this.pollingInterval = cqPollerTimeoutInMillis;
-        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f,  Runtime.getRuntime().availableProcessors());
+        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
         startPoller();
     }
 
@@ -43,12 +43,10 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     private void sleepInterval() {
-        if (pollingInterval >= 0) {
-            try {
-                Thread.sleep(Duration.ofMillis(pollingInterval));
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
+        try {
+            Thread.sleep(Duration.ofMillis(pollingInterval));
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
