@@ -2,7 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -17,6 +16,7 @@ public class JUring implements AutoCloseable {
     private static final VarHandle fdHandle;
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
+    private static final VarHandle hasArenaHandle;
 
     static {
         C_POINTER = ValueLayout.ADDRESS
@@ -26,36 +26,49 @@ public class JUring implements AutoCloseable {
                         ValueLayout.JAVA_LONG.withName("id"),
                         C_POINTER.withName("buffer"),
                         ValueLayout.JAVA_INT.withName("fd"),
-                        ValueLayout.JAVA_BOOLEAN.withName("read"))
+                        ValueLayout.JAVA_BOOLEAN.withName("read"),
+                        ValueLayout.JAVA_BOOLEAN.withName("hasArena"))
                 .withName("request");
 
         idHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("id"));
         fdHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
         readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
         bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
+        hasArenaHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("hasArena"));
     }
 
     public JUring(int queueDepth) {
         libUringWrapper = new LibUringWrapper(queueDepth);
     }
 
-    private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
+    private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer, boolean hasArena) {
         MemorySegment segment = LibCWrapper.malloc(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);
         readHandle.set(segment, 0L, read);
         bufferHandle.set(segment, 0L, buffer);
+        hasArenaHandle.set(segment, 0L, hasArena);
 
         return segment;
     }
 
     public long prepareRead(FileDescriptor fd, int readSize, int offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
+        MemorySegment userData = createUserData(buff.address(), fd.getFd(), true, buff, false);
 
-        long id = buff.address();
-        MemorySegment userData = createUserData(id, fd.getFd(), true, buff);
+        return prepareRead(fd, buff, offset, userData);
+    }
 
+    public long prepareRead(FileDescriptor fd, MemorySegment buff, int offset) {
+        var id = buff.address();
+        MemorySegment userData = createUserData(id, fd.getFd(), true, buff, true);
+
+        return prepareRead(fd, buff, offset, userData);
+    }
+
+    private long prepareRead(FileDescriptor fd, MemorySegment buff, int offset, MemorySegment userData) {
+        var id = buff.address();
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareRead(sqe, fd.getFd(), buff, offset);
         libUringWrapper.setUserData(sqe, userData.address());
@@ -64,17 +77,27 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
-        MemorySegment sqe = libUringWrapper.getSqe();
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
+        MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
+        MemorySegment userData = createUserData(buff.address(), fd.getFd(), false, buff, false);
+
+        return prepareWrite(fd, buff, offset, userData);
+    }
+
+    public long prepareWrite(FileDescriptor fd, MemorySegment buff, int offset) {
+        MemorySegment sqe = libUringWrapper.getSqe();
+
+        MemorySegment userData = createUserData(buff.address(), fd.getFd(), false, buff, true);
+
+        return prepareWrite(fd, buff, offset, userData);
+    }
+
+    public long prepareWrite(FileDescriptor fd, MemorySegment buff, int offset, MemorySegment userData) {
+        MemorySegment sqe = libUringWrapper.getSqe();
 
         long id = buff.address();
 
-        MemorySegment userData = createUserData(id, fd.getFd(), false, buff);
-
         libUringWrapper.setUserData(sqe, userData.address());
-
-        MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
-
         libUringWrapper.prepareWrite(sqe, fd.getFd(), buff, offset);
 
         return id;
@@ -84,7 +107,7 @@ public class JUring implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public Result peekForResult(){
+    public Result peekForResult() {
         Cqe cqe = libUringWrapper.peekForResult();
         if (cqe != null) {
             return getResultFromCqe(cqe);
@@ -104,17 +127,20 @@ public class JUring implements AutoCloseable {
         libUringWrapper.seen(cqe.cqePointer());
 
         boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
+        boolean hasArena = (boolean) hasArenaHandle.get(nativeUserData, 0L);
         long idResult = (long) idHandle.get(nativeUserData, 0L);
         MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
 
         LibCWrapper.freeBuffer(nativeUserData);
 
         if (!readResult) {
-            LibCWrapper.freeBuffer(bufferResult);
+            if (!hasArena) {
+                LibCWrapper.freeBuffer(bufferResult);
+            }
             return new AsyncWriteResult(idResult, cqe.result());
         }
 
-        return new AsyncReadResult(idResult, bufferResult, cqe.result());
+        return new AsyncReadResult(idResult, bufferResult, cqe.result(), hasArena);
     }
 
     @Override
