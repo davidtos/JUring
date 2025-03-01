@@ -241,11 +241,11 @@ class LibUringWrapper implements AutoCloseable {
             if (count > 0) {
 
                 List<Cqe> ret = new ArrayList<>(count);
-                for (int i = 0; i < count; i++) {
-                    SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
-                    MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
+                SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
+                MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
-                    var nativeCqe = pointers.getAtIndex(ADDRESS,0).reinterpret(io_uring_cqe_layout.byteSize());
+                for (int i = 0; i < count; i++) {
+                    var nativeCqe = pointers.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
 
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
@@ -255,10 +255,10 @@ class LibUringWrapper implements AutoCloseable {
 
                 return ret;
             }
-           return null;
+            return null;
 
         } catch (Throwable e) {
-            throw new RuntimeException("Failed while peeking or creating result from cqe ",e);
+            throw new RuntimeException("Failed while peeking or creating result from cqe ", e);
         }
 
     }
@@ -286,7 +286,7 @@ class LibUringWrapper implements AutoCloseable {
         try {
             io_uring_cqe_seen.invokeExact(ring, cqePointer);
         } catch (Throwable e) {
-            throw new RuntimeException("Could not mark cqe as seen",e);
+            throw new RuntimeException("Could not mark cqe as seen", e);
         }
     }
 
