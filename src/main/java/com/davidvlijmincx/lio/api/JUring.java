@@ -2,7 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.List;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -90,6 +90,14 @@ public class JUring implements AutoCloseable {
             return getResultFromCqe(cqe);
         }
         return null;
+    }
+
+    public List<Result> peekForBatchResult(int batchSize) {
+        List<Cqe> cqes = libUringWrapper.peekForBatchResult(batchSize);
+        if (cqes == null) {
+            return null;
+        }
+        return cqes.stream().map(this::getResultFromCqe).toList();
     }
 
     public Result waitForResult() {
