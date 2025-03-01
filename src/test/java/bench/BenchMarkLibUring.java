@@ -36,7 +36,7 @@ public class BenchMarkLibUring {
         new Runner(opt).run();
     }
 
-    @Benchmark()
+   // @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
         final var jUringBlocking = plan.jUringBlocking;
         final var paths = BenchmarkFiles.filesTooRead;
@@ -59,7 +59,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark()
+   // @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan) {
         final var jUring = plan.jUring;
         final var paths = BenchmarkFiles.filesTooRead;
@@ -101,7 +101,49 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+    @Benchmark()
+    public void libUringOwnArena(Blackhole blackhole, ExecutionPlanJUring plan) {
+        final var jUring = plan.jUring;
+        final var paths = BenchmarkFiles.filesTooRead;
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+
+        try(AllocArena arena = new AllocArena()) {
+
+            int j = 0;
+            for (var path : paths) {
+
+                FileDescriptor fd = new FileDescriptor(path.sPath(), Flag.READ, 0);
+                openFiles.add(fd);
+
+                jUring.prepareRead(fd, arena.allocate(path.bufferSize()), path.offset());
+
+                j++;
+                if (j % 100 == 0) {
+                    jUring.submit();
+                }
+            }
+
+
+            jUring.submit();
+
+            for (int i = 0; i < paths.length; i++) {
+                Result result = jUring.waitForResult();
+
+                if (result instanceof AsyncReadResult r) {
+                    blackhole.consume(r.getBuffer());
+                }
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                fd.close();
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+ //   @Benchmark
     public void readUsingFileChannel(Blackhole blackhole) throws Throwable {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
@@ -133,7 +175,7 @@ public class BenchMarkLibUring {
         }
     }
 
-    @Benchmark
+ //   @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
 
         FileTooReadData[] files = BenchmarkFiles.filesTooRead;
