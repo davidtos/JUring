@@ -29,13 +29,14 @@ class LibUringWrapper implements AutoCloseable {
     private final MemorySegment ring;
     private final Arena arena;
     private final MemorySegment cqePtr;
+    private static final AddressLayout C_POINTER;
 
     static {
 
         Linker linker = Linker.nativeLinker();
 
         SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
-        AddressLayout C_POINTER = ValueLayout.ADDRESS
+        C_POINTER = ValueLayout.ADDRESS
                 .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
 
@@ -241,11 +242,11 @@ class LibUringWrapper implements AutoCloseable {
             if (count > 0) {
 
                 List<Cqe> ret = new ArrayList<>(count);
-                SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
+                SequenceLayout layout = MemoryLayout.sequenceLayout(count, C_POINTER);
                 MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
                 for (int i = 0; i < count; i++) {
-                    var nativeCqe = pointers.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+                    var nativeCqe = pointers.getAtIndex(C_POINTER, i).reinterpret(io_uring_cqe_layout.byteSize());
 
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
@@ -260,7 +261,6 @@ class LibUringWrapper implements AutoCloseable {
         } catch (Throwable e) {
             throw new RuntimeException("Failed while peeking or creating result from cqe ", e);
         }
-
     }
 
     Cqe waitForResult() {

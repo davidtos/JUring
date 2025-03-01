@@ -80,6 +80,5 @@ public class JUringBlocking implements AutoCloseable {
             throw new RuntimeException(e);
         }
         jUring.close();
-
     }
 }
