@@ -2,6 +2,8 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.util.ArrayList;
+import java.util.List;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -14,6 +16,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_submit;
     private static final MethodHandle io_uring_wait_cqe;
     private static final MethodHandle io_uring_peek_cqe;
+    private static final MethodHandle io_uring_peek_batch_cqe;
     private static final MethodHandle io_uring_cqe_seen;
     private static final MethodHandle io_uring_queue_exit;
     private static final MethodHandle io_uring_sqe_set_data;
@@ -83,6 +86,11 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_peek_cqe = linker.downcallHandle(
                 liburing.find("io_uring_peek_cqe").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER)
+        );
+
+        io_uring_peek_batch_cqe = linker.downcallHandle(
+                liburing.find("io_uring_peek_batch_cqe").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT)
         );
 
         io_uring_cqe_seen = linker.downcallHandle(
@@ -219,29 +227,40 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     Cqe peekForResult() {
+        List<Cqe> cqes = peekForBatchResult(1);
+        if (cqes != null) {
+            return cqes.getFirst();
+        }
+        return null;
+    }
+
+    List<Cqe> peekForBatchResult(int batchSize) {
         try {
-            int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
+            int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtr, batchSize);
 
-            if (ret == 0) {
-                var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
-                        .reinterpret(io_uring_cqe_layout.byteSize());
+            if (count > 0) {
 
-                long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
-                int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
+                List<Cqe> ret = new ArrayList<>(count);
+                for (int i = 0; i < count; i++) {
+                    SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
+                    MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
-                return new Cqe(userData, res, nativeCqe);
-            } else if (ret == -11) {
-                return null;
+                    var nativeCqe = pointers.getAtIndex(ADDRESS,0).reinterpret(io_uring_cqe_layout.byteSize());
+
+                    long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
+                    int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
+
+                    ret.add(new Cqe(userData, res, nativeCqe));
+                }
+
+                return ret;
             }
-            else if (ret < 0) {
-                throw new RuntimeException("Failed to peek result");
-            }
+           return null;
 
         } catch (Throwable e) {
             throw new RuntimeException("Failed while peeking or creating result from cqe ",e);
         }
 
-        return null;
     }
 
     Cqe waitForResult() {
