@@ -1,8 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -13,15 +11,15 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class JUringBlockingTest {
 
-    JUringBlocking jUringBlocking;
+    static JUringBlocking jUringBlocking;
 
-    @BeforeEach
-    void setUp() {
+    @BeforeAll
+    static void setUp() {
         jUringBlocking = new JUringBlocking(10);
     }
 
-    @AfterEach
-    void tearDown() {
+    @AfterAll
+    static void tearDown() {
         jUringBlocking.close();
     }
 

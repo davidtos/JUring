@@ -2,6 +2,9 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.VarHandle;
+import java.util.ArrayList;
+import java.util.List;
 
 import static java.lang.foreign.ValueLayout.*;
 
@@ -14,6 +17,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_submit;
     private static final MethodHandle io_uring_wait_cqe;
     private static final MethodHandle io_uring_peek_cqe;
+    private static final MethodHandle io_uring_peek_batch_cqe;
     private static final MethodHandle io_uring_cqe_seen;
     private static final MethodHandle io_uring_queue_exit;
     private static final MethodHandle io_uring_sqe_set_data;
@@ -26,13 +30,21 @@ class LibUringWrapper implements AutoCloseable {
     private final MemorySegment ring;
     private final Arena arena;
     private final MemorySegment cqePtr;
+    private final MemorySegment cqePtrPtr;
+    private static final AddressLayout C_POINTER;
+
+    private static final StructLayout requestLayout;
+    private static final VarHandle idHandle;
+    private static final VarHandle fdHandle;
+    private static final VarHandle readHandle;
+    private static final VarHandle bufferHandle;
 
     static {
 
         Linker linker = Linker.nativeLinker();
 
         SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
-        AddressLayout C_POINTER = ValueLayout.ADDRESS
+        C_POINTER = ValueLayout.ADDRESS
                 .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
 
@@ -83,6 +95,11 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_peek_cqe = linker.downcallHandle(
                 liburing.find("io_uring_peek_cqe").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER)
+        );
+
+        io_uring_peek_batch_cqe = linker.downcallHandle(
+                liburing.find("io_uring_peek_batch_cqe").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT)
         );
 
         io_uring_cqe_seen = linker.downcallHandle(
@@ -152,12 +169,25 @@ class LibUringWrapper implements AutoCloseable {
                 ValueLayout.JAVA_INT.withName("flags"),
                 MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
         ).withName("io_uring_cqe");
+
+        requestLayout = MemoryLayout.structLayout(
+                        ValueLayout.JAVA_LONG.withName("id"),
+                        C_POINTER.withName("buffer"),
+                        ValueLayout.JAVA_INT.withName("fd"),
+                        ValueLayout.JAVA_BOOLEAN.withName("read"))
+                .withName("request");
+
+        idHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("id"));
+        fdHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
+        readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
+        bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
         cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
+        cqePtrPtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
 
         try {
 
@@ -218,56 +248,73 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Cqe peekForResult() {
+    List<Result> peekForBatchResult(int batchSize) {
         try {
-            int ret = (int) io_uring_peek_cqe.invokeExact(ring, cqePtr);
+            int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtrPtr, batchSize);
 
-            if (ret == 0) {
-                var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
-                        .reinterpret(io_uring_cqe_layout.byteSize());
+            if (count > 0) {
+                List<Result> ret = new ArrayList<>(count);
 
-                long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
-                int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
+                for (int i = 0; i < count; i++) {
+                    var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
 
-                return new Cqe(userData, res, nativeCqe);
-            } else if (ret == -11) {
-                return null;
+                    long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
+                    int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
+
+                    ret.add(getResultFromCqe(userData, res, nativeCqe));
+                }
+
+                return ret;
             }
-            else if (ret < 0) {
-                throw new RuntimeException("Failed to peek result");
-            }
+            return List.of();
 
         } catch (Throwable e) {
-            throw new RuntimeException("Failed while peeking or creating result from cqe ",e);
+            throw new RuntimeException("Failed while peeking or creating result from cqe ", e);
         }
-
-        return null;
     }
 
-    Cqe waitForResult() {
+    Result waitForResult() {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
                 throw new RuntimeException("Error while waiting for cqe: " + ret);
             }
 
-            var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
-                    .reinterpret(io_uring_cqe_layout.byteSize());
+            var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
 
             long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
             int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-            return new Cqe(userData, res, nativeCqe);
+            return getResultFromCqe(userData, res, nativeCqe);
         } catch (Throwable e) {
             throw new RuntimeException("Exception while waiting/creating result", e);
         }
     }
 
-    void seen(MemorySegment cqePointer) {
+    private Result getResultFromCqe(long address, long result, MemorySegment cqePointer) {
+        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
+
+        seen(cqePointer);
+
+        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
+        long idResult = (long) idHandle.get(nativeUserData, 0L);
+        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
+
+        LibCWrapper.freeBuffer(nativeUserData);
+
+        if (!readResult) {
+            LibCWrapper.freeBuffer(bufferResult);
+            return new AsyncWriteResult(idResult, result);
+        }
+
+        return new AsyncReadResult(idResult, bufferResult, result);
+    }
+
+    private void seen(MemorySegment cqePointer) {
         try {
             io_uring_cqe_seen.invokeExact(ring, cqePointer);
         } catch (Throwable e) {
-            throw new RuntimeException("Could not mark cqe as seen",e);
+            throw new RuntimeException("Could not mark cqe as seen", e);
         }
     }
 
@@ -287,6 +334,7 @@ class LibUringWrapper implements AutoCloseable {
     public void close() {
         closeRing();
         LibCWrapper.freeBuffer(cqePtr);
+        LibCWrapper.freeBuffer(cqePtrPtr);
         closeArena();
     }
 

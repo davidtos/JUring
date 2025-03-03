@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,13 +32,15 @@ public class JUringBlocking implements AutoCloseable {
         pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
 
             while (running) {
-                final Result result = jUring.peekForResult();
-                if (result != null) {
+                final List<Result> results = jUring.peekForBatchResult(100);
+
+                results.forEach(result -> {
                     BlockingResult request = requests.remove(result.getId());
                     request.setResult(result);
-                } else {
-                    sleepInterval();
-                }
+                });
+
+                sleepInterval();
+
             }
         });
     }
@@ -77,6 +80,5 @@ public class JUringBlocking implements AutoCloseable {
             throw new RuntimeException(e);
         }
         jUring.close();
-
     }
 }
