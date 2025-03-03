@@ -185,7 +185,7 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
+        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 200);
 
         try {
 
@@ -251,13 +251,10 @@ class LibUringWrapper implements AutoCloseable {
             int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtr, batchSize);
 
             if (count > 0) {
-
                 List<Result> ret = new ArrayList<>(count);
-                SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
-                MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
                 for (int i = 0; i < count; i++) {
-                    var nativeCqe = pointers.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+                    var nativeCqe = cqePtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
 
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
@@ -267,7 +264,7 @@ class LibUringWrapper implements AutoCloseable {
 
                 return ret;
             }
-            return null;
+            return List.of();
 
         } catch (Throwable e) {
             throw new RuntimeException("Failed while peeking or creating result from cqe ", e);
