@@ -30,6 +30,7 @@ class LibUringWrapper implements AutoCloseable {
     private final MemorySegment ring;
     private final Arena arena;
     private final MemorySegment cqePtr;
+    private final MemorySegment cqePtrPtr;
     private static final AddressLayout C_POINTER;
 
     private static final StructLayout requestLayout;
@@ -185,7 +186,8 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 200);
+        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
+        cqePtrPtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
 
         try {
 
@@ -248,13 +250,13 @@ class LibUringWrapper implements AutoCloseable {
 
     List<Result> peekForBatchResult(int batchSize) {
         try {
-            int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtr, batchSize);
+            int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtrPtr, batchSize);
 
             if (count > 0) {
                 List<Result> ret = new ArrayList<>(count);
 
                 for (int i = 0; i < count; i++) {
-                    var nativeCqe = cqePtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+                    var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
 
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
@@ -333,6 +335,7 @@ class LibUringWrapper implements AutoCloseable {
     public void close() {
         closeRing();
         LibCWrapper.freeBuffer(cqePtr);
+        LibCWrapper.freeBuffer(cqePtrPtr);
         closeArena();
     }
 
