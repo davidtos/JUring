@@ -84,45 +84,12 @@ public class JUring implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public Result peekForResult(){
-        Cqe cqe = libUringWrapper.peekForResult();
-        if (cqe != null) {
-            return getResultFromCqe(cqe);
-        }
-        return null;
-    }
-
     public List<Result> peekForBatchResult(int batchSize) {
-        List<Cqe> cqes = libUringWrapper.peekForBatchResult(batchSize);
-        if (cqes == null) {
-            return null;
-        }
-        return cqes.stream().map(this::getResultFromCqe).toList();
+        return libUringWrapper.peekForBatchResult(batchSize);
     }
 
     public Result waitForResult() {
-        Cqe cqe = libUringWrapper.waitForResult();
-        return getResultFromCqe(cqe);
-    }
-
-    private Result getResultFromCqe(Cqe cqe) {
-        long address = cqe.UserData();
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
-
-        libUringWrapper.seen(cqe.cqePointer());
-
-        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
-        long idResult = (long) idHandle.get(nativeUserData, 0L);
-        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
-
-        LibCWrapper.freeBuffer(nativeUserData);
-
-        if (!readResult) {
-            LibCWrapper.freeBuffer(bufferResult);
-            return new AsyncWriteResult(idResult, cqe.result());
-        }
-
-        return new AsyncReadResult(idResult, bufferResult, cqe.result());
+        return libUringWrapper.waitForResult();
     }
 
     @Override

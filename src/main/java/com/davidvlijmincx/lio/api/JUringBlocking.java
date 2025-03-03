@@ -33,11 +33,12 @@ public class JUringBlocking implements AutoCloseable {
 
             while (running) {
                 final List<Result> results = jUring.peekForBatchResult(100);
+
                 if (results != null) {
-                    for (Result result : results) {
+                    results.forEach(result -> {
                         BlockingResult request = requests.remove(result.getId());
                         request.setResult(result);
-                    }
+                    });
                 } else {
                     sleepInterval();
                 }

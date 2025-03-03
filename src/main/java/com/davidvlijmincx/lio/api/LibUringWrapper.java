@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,6 +31,12 @@ class LibUringWrapper implements AutoCloseable {
     private final Arena arena;
     private final MemorySegment cqePtr;
     private static final AddressLayout C_POINTER;
+
+    private static final StructLayout requestLayout;
+    private static final VarHandle idHandle;
+    private static final VarHandle fdHandle;
+    private static final VarHandle readHandle;
+    private static final VarHandle bufferHandle;
 
     static {
 
@@ -161,6 +168,18 @@ class LibUringWrapper implements AutoCloseable {
                 ValueLayout.JAVA_INT.withName("flags"),
                 MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
         ).withName("io_uring_cqe");
+
+        requestLayout = MemoryLayout.structLayout(
+                        ValueLayout.JAVA_LONG.withName("id"),
+                        C_POINTER.withName("buffer"),
+                        ValueLayout.JAVA_INT.withName("fd"),
+                        ValueLayout.JAVA_BOOLEAN.withName("read"))
+                .withName("request");
+
+        idHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("id"));
+        fdHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
+        readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
+        bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
     LibUringWrapper(int queueDepth) {
@@ -227,21 +246,13 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Cqe peekForResult() {
-        List<Cqe> cqes = peekForBatchResult(1);
-        if (cqes != null) {
-            return cqes.getFirst();
-        }
-        return null;
-    }
-
-    List<Cqe> peekForBatchResult(int batchSize) {
+    List<Result> peekForBatchResult(int batchSize) {
         try {
             int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtr, batchSize);
 
             if (count > 0) {
 
-                List<Cqe> ret = new ArrayList<>(count);
+                List<Result> ret = new ArrayList<>(count);
                 SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
                 MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
@@ -251,7 +262,7 @@ class LibUringWrapper implements AutoCloseable {
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-                    ret.add(new Cqe(userData, res, nativeCqe));
+                    ret.add(getResultFromCqe(userData, res, nativeCqe));
                 }
 
                 return ret;
@@ -263,7 +274,7 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Cqe waitForResult() {
+    Result waitForResult() {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
@@ -276,13 +287,32 @@ class LibUringWrapper implements AutoCloseable {
             long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
             int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-            return new Cqe(userData, res, nativeCqe);
+            return getResultFromCqe(userData, res, nativeCqe);
         } catch (Throwable e) {
             throw new RuntimeException("Exception while waiting/creating result", e);
         }
     }
 
-    void seen(MemorySegment cqePointer) {
+    private Result getResultFromCqe(long address, long result, MemorySegment cqePointer) {
+        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
+
+        seen(cqePointer);
+
+        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
+        long idResult = (long) idHandle.get(nativeUserData, 0L);
+        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
+
+        LibCWrapper.freeBuffer(nativeUserData);
+
+        if (!readResult) {
+            LibCWrapper.freeBuffer(bufferResult);
+            return new AsyncWriteResult(idResult, result);
+        }
+
+        return new AsyncReadResult(idResult, bufferResult, result);
+    }
+
+    private void seen(MemorySegment cqePointer) {
         try {
             io_uring_cqe_seen.invokeExact(ring, cqePointer);
         } catch (Throwable e) {
