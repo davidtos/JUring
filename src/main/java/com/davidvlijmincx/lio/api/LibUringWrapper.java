@@ -280,8 +280,7 @@ class LibUringWrapper implements AutoCloseable {
                 throw new RuntimeException("Error while waiting for cqe: " + ret);
             }
 
-            var nativeCqe = MemorySegment.ofAddress(cqePtr.get(ValueLayout.ADDRESS, 0).address())
-                    .reinterpret(io_uring_cqe_layout.byteSize());
+            var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
 
             long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
             int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
