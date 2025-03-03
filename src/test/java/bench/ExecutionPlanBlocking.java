@@ -13,7 +13,7 @@ public class ExecutionPlanBlocking {
 
     @Setup
     public void setup() {
-        jUringBlocking = new JUringBlocking(2500,2);
+        jUringBlocking = new JUringBlocking(2500,1);
 
     }
 

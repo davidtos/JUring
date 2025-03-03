@@ -166,7 +166,7 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
+        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
 
         try {
 
@@ -242,11 +242,11 @@ class LibUringWrapper implements AutoCloseable {
             if (count > 0) {
 
                 List<Cqe> ret = new ArrayList<>(count);
-                SequenceLayout layout = MemoryLayout.sequenceLayout(count, C_POINTER);
+                SequenceLayout layout = MemoryLayout.sequenceLayout(count, ADDRESS);
                 MemorySegment pointers = cqePtr.reinterpret(layout.byteSize());
 
                 for (int i = 0; i < count; i++) {
-                    var nativeCqe = pointers.getAtIndex(C_POINTER, i).reinterpret(io_uring_cqe_layout.byteSize());
+                    var nativeCqe = pointers.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
 
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
