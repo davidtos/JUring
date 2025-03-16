@@ -37,9 +37,9 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark()
-    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadFiles randomReadFiles) {
+    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
-        final var readTasks = randomReadFiles.RandomReadTasks;
+        final var readTasks = randomReadTaskCreator.RandomReadTasks;
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
@@ -60,9 +60,9 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark()
-    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadFiles randomReadFiles) {
+    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
-        final var readTasks = randomReadFiles.RandomReadTasks;
+        final var readTasks = randomReadTaskCreator.RandomReadTasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
@@ -102,9 +102,9 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void readUsingFileChannel(Blackhole blackhole, RandomReadFiles randomReadFiles) throws Throwable {
+    public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
 
-        RandomReadTask[] readTasks = randomReadFiles.RandomReadTasks;
+        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
 
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
         for (int i = 0; i < readTasks.length; i++) {
@@ -134,9 +134,9 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadFiles randomReadFiles) {
+    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
 
-        RandomReadTask[] readTasks = randomReadFiles.RandomReadTasks;
+        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
 
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
         for (int i = 0; i < readTasks.length; i++) {

@@ -13,7 +13,7 @@ import java.util.stream.Stream;
  * Collection of benchmark test files
  */
 @State(Scope.Benchmark)
-public class RandomReadFiles {
+public class RandomReadTaskCreator {
     public static final String BENCHMARK_FILE_EXTENSION = ".bin";
     public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/mnt/data/test_files/");
     public final RandomReadTask[] RandomReadTasks;
