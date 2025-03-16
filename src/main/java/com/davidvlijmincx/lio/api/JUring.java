@@ -50,7 +50,7 @@ public class JUring implements AutoCloseable {
         return segment;
     }
 
-    public long prepareRead(FileDescriptor fd, int readSize, int offset) {
+    public long prepareRead(FileDescriptor fd, int readSize, long offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
 
         long id = buff.address();
@@ -63,7 +63,7 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    public long prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
+    public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         MemorySegment sqe = libUringWrapper.getSqe();
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
 
