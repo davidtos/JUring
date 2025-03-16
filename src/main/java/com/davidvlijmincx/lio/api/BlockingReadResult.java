@@ -10,11 +10,9 @@ public final class BlockingReadResult extends Result implements ReadResult, Bloc
     private MemorySegment buffer;
     private long result;
 
-
     BlockingReadResult(long id) {
         super(id);
     }
-
 
     public MemorySegment getBuffer() {
         try {
