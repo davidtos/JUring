@@ -1,8 +1,6 @@
 package bench;
 
-import com.davidvlijmincx.lio.api.BlockingReadResult;
-import com.davidvlijmincx.lio.api.FileDescriptor;
-import com.davidvlijmincx.lio.api.Flag;
+import com.davidvlijmincx.lio.api.*;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
@@ -68,6 +66,60 @@ public class SequentialReadBenchmark {
                 });
 
             }
+        }
+    }
+
+    @Benchmark()
+    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, SequentialReadTaskCreator taskCreator) {
+        final var jUring = plan.jUring;
+        final var readTasks = taskCreator.getSequentialReadTasks();
+        final int bufferSize = taskCreator.getReadSize();
+
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+
+        try {
+            int taskNumber = 0;
+            for (var task : readTasks) {
+
+                long position = 0;
+                long fileSize = task.fileSize();
+
+                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ, 0);
+                openFiles.add(fd);
+
+                while (position < fileSize) {
+                    long currentPosition = position;
+                    int readSize = (int) Math.min(bufferSize, fileSize - position);
+
+                    jUring.prepareRead(fd, readSize, currentPosition);
+
+                    position += readSize;
+
+                    taskNumber++;
+                }
+
+                if (taskNumber % 100 >= 0) {
+                    jUring.submit();
+                }
+            }
+
+            jUring.submit();
+
+            for (int i = 0; i < taskNumber; i++) {
+                Result result = jUring.waitForResult();
+
+                if (result instanceof AsyncReadResult r) {
+                    blackhole.consume(r.getBuffer());
+                    r.freeBuffer();
+                }
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                fd.close();
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
     }
 

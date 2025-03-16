@@ -80,7 +80,6 @@ public class RandomReadBenchMark {
                 }
             }
 
-
             jUring.submit();
 
             for (int i = 0; i < readTasks.length; i++) {
