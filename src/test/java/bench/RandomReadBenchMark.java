@@ -24,11 +24,11 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
 @Threads(MAX)
-public class BenchMarkLibUring {
+public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
         Options opt = new OptionsBuilder()
-                .include(BenchMarkLibUring.class.getSimpleName())
+                .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
                 .shouldDoGC(false)
                 .build();
@@ -37,17 +37,17 @@ public class BenchMarkLibUring {
     }
 
     @Benchmark()
-    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan) {
+    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadFiles randomReadFiles) {
         final var jUringBlocking = plan.jUringBlocking;
-        final var paths = BenchmarkFiles.filesTooRead;
+        final var readTasks = randomReadFiles.RandomReadTasks;
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-            for (int i = 0; i < paths.length; i++) {
+            for (int i = 0; i < readTasks.length; i++) {
 
-                FileDescriptor fd = new FileDescriptor(paths[i].sPath(), Flag.READ, 0);
+                FileDescriptor fd = new FileDescriptor(readTasks[i].sPath(), Flag.READ, 0);
 
-                BlockingReadResult r = jUringBlocking.prepareRead(fd, paths[i].bufferSize(), paths[i].offset());
+                BlockingReadResult r = jUringBlocking.prepareRead(fd, readTasks[i].bufferSize(), readTasks[i].offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
                     blackhole.consume(r.getBuffer());
@@ -60,19 +60,19 @@ public class BenchMarkLibUring {
     }
 
     @Benchmark()
-    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan) {
+    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadFiles randomReadFiles) {
         final var jUring = plan.jUring;
-        final var paths = BenchmarkFiles.filesTooRead;
+        final var readTasks = randomReadFiles.RandomReadTasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
             int j = 0;
-            for (var path : paths) {
+            for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(path.sPath(), Flag.READ, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ, 0);
                 openFiles.add(fd);
 
-                jUring.prepareRead(fd, path.bufferSize(), path.offset());
+                jUring.prepareRead(fd, task.bufferSize(), task.offset());
 
                 j++;
                 if (j % 100 == 0) {
@@ -83,7 +83,7 @@ public class BenchMarkLibUring {
 
             jUring.submit();
 
-            for (int i = 0; i < paths.length; i++) {
+            for (int i = 0; i < readTasks.length; i++) {
                 Result result = jUring.waitForResult();
 
                 if (result instanceof AsyncReadResult r) {
@@ -102,23 +102,23 @@ public class BenchMarkLibUring {
     }
 
     @Benchmark
-    public void readUsingFileChannel(Blackhole blackhole) throws Throwable {
+    public void readUsingFileChannel(Blackhole blackhole, RandomReadFiles randomReadFiles) throws Throwable {
 
-        FileTooReadData[] files = BenchmarkFiles.filesTooRead;
+        RandomReadTask[] readTasks = randomReadFiles.RandomReadTasks;
 
-        FileChannel[] fileChannels = new FileChannel[files.length];
-        for (int i = 0; i < files.length; i++) {
+        FileChannel[] fileChannels = new FileChannel[readTasks.length];
+        for (int i = 0; i < readTasks.length; i++) {
             try {
-                fileChannels[i] = FileChannel.open(files[i].path(), StandardOpenOption.READ);
+                fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }
 
-        for (int i = 0; i < files.length; i++) {
-            final ByteBuffer data = ByteBuffer.allocate(files[i].bufferSize());
+        for (int i = 0; i < readTasks.length; i++) {
+            final ByteBuffer data = ByteBuffer.allocate(readTasks[i].bufferSize());
             final FileChannel fc = fileChannels[i];
-            fc.read(data, files[i].offset());
+            fc.read(data, readTasks[i].offset());
             data.flip();
             blackhole.consume(data);
 
@@ -134,14 +134,14 @@ public class BenchMarkLibUring {
     }
 
     @Benchmark
-    public void readUsingFileChannelVirtualThreads(Blackhole blackhole) {
+    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadFiles randomReadFiles) {
 
-        FileTooReadData[] files = BenchmarkFiles.filesTooRead;
+        RandomReadTask[] readTasks = randomReadFiles.RandomReadTasks;
 
-        FileChannel[] fileChannels = new FileChannel[files.length];
-        for (int i = 0; i < files.length; i++) {
+        FileChannel[] fileChannels = new FileChannel[readTasks.length];
+        for (int i = 0; i < readTasks.length; i++) {
             try {
-                fileChannels[i] = FileChannel.open(files[i].path(), StandardOpenOption.READ);
+                fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -149,13 +149,13 @@ public class BenchMarkLibUring {
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-            for (int i = 0; i < files.length; i++) {
+            for (int i = 0; i < readTasks.length; i++) {
                 int finalI = i;
                 executor.execute(() -> {
-                    final ByteBuffer data = ByteBuffer.allocate(files[finalI].bufferSize());
+                    final ByteBuffer data = ByteBuffer.allocate(readTasks[finalI].bufferSize());
                     final FileChannel fc = fileChannels[finalI];
                     try {
-                        fc.read(data, files[finalI].offset());
+                        fc.read(data, readTasks[finalI].offset());
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }
