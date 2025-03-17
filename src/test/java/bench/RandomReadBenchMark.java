@@ -43,18 +43,15 @@ public class RandomReadBenchMark {
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-            for (int i = 0; i < readTasks.length; i++) {
-
-                FileDescriptor fd = new FileDescriptor(readTasks[i].sPath(), Flag.READ, 0);
-
-                BlockingReadResult r = jUringBlocking.prepareRead(fd, readTasks[i].bufferSize(), readTasks[i].offset());
+            for (RandomReadTask readTask : readTasks) {
+                FileDescriptor fd = new FileDescriptor(readTask.sPath(), Flag.READ, 0);
+                BlockingReadResult r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
                     blackhole.consume(r.getBuffer());
                     r.freeBuffer();
                     fd.close();
                 });
-
             }
         }
     }
@@ -82,7 +79,7 @@ public class RandomReadBenchMark {
 
             jUring.submit();
 
-            for (int i = 0; i < readTasks.length; i++) {
+            for (var _ : readTasks) {
                 Result result = jUring.waitForResult();
 
                 if (result instanceof AsyncReadResult r) {

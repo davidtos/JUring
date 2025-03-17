@@ -7,7 +7,6 @@ import org.openjdk.jmh.annotations.State;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.stream.Stream;
 
 /**
@@ -18,8 +17,6 @@ public class SequentialReadTaskCreator {
     private static final String BENCHMARK_FILE_EXTENSION = ".bin";
     private static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/mnt/data/test_files/");
     private final SequentialReadTask[] sequentialReadTasks;
-
-    private List<Path> files;
 
     // Buffer sizes for sequential reads: 4KB, 8KB, 64KB, 1MB, 16MB, 128MB
     @Param({"4096", "8192", "65536", "1048576", "16777216", "134217728"})
