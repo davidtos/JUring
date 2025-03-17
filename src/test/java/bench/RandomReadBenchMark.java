@@ -9,6 +9,7 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
@@ -99,10 +100,9 @@ public class RandomReadBenchMark {
 
     @Benchmark
     public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
-
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
-
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
+
         for (int i = 0; i < readTasks.length; i++) {
             try {
                 fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
@@ -130,11 +130,41 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
-
+    public void readUsingRandomAccessFile(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
-
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
+
+        for (int i = 0; i < readTasks.length; i++) {
+            try {
+                fileChannels[i] = new RandomAccessFile(readTasks[i].sPath(), "r").getChannel();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        for (int i = 0; i < readTasks.length; i++) {
+            final ByteBuffer data = ByteBuffer.allocate(readTasks[i].bufferSize());
+            final FileChannel fc = fileChannels[i];
+            fc.read(data, readTasks[i].offset());
+            data.flip();
+            blackhole.consume(data);
+
+        }
+
+        for (FileChannel fc : fileChannels) {
+            try {
+                fc.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    @Benchmark
+    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
+        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        FileChannel[] fileChannels = new FileChannel[readTasks.length];
+
         for (int i = 0; i < readTasks.length; i++) {
             try {
                 fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
