@@ -8,6 +8,10 @@ import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -120,6 +124,40 @@ public class SequentialReadBenchmark {
 
         } catch (Exception e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    @Benchmark
+    public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
+        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        FileChannel[] fileChannels = new FileChannel[readTasks.length];
+
+        for (int i = 0; i < readTasks.length; i++) {
+            try {
+                fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        for (int i = 0; i < readTasks.length; i++) {
+            final ByteBuffer data = ByteBuffer.allocate(readTasks[i].bufferSize());
+            FileChannel fc = fileChannels[i];
+
+            while (fc.read(data) > 0) {
+                fc.read(data, readTasks[i].offset());
+                data.flip();
+                blackhole.consume(data);
+            }
+
+        }
+
+        for (FileChannel fc : fileChannels) {
+            try {
+                fc.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
