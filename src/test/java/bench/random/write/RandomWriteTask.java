@@ -1,15 +1,15 @@
-package bench;
+package bench.random.write;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 
-public record RandomReadTask(String sPath, Path path, int fileSize, int offset, int bufferSize) {
+public record RandomWriteTask(String sPath, Path path, int fileSize, int offset, int bufferSize) {
 
     final static Random random = new Random(315315153152442L);
 
-    public static RandomReadTask fromPath(Path path, int readSize) {
+    public static RandomWriteTask fromPath(Path path, int readSize) {
         int fileSize;
         try {
             fileSize = (int) Files.size(path);
@@ -17,7 +17,7 @@ public record RandomReadTask(String sPath, Path path, int fileSize, int offset, 
             throw new RuntimeException(e);
         }
         int offset = random.nextInt(0, fileSize - readSize);
-        return new RandomReadTask(path.toString(), path, fileSize, offset, readSize);
+        return new RandomWriteTask(path.toString(), path, fileSize, offset, readSize);
     }
 
 }

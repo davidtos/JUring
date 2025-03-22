@@ -9,7 +9,7 @@ import org.openjdk.jmh.annotations.TearDown;
 @State(Scope.Thread)
 public class ExecutionPlanBlocking {
 
-    JUringBlocking jUringBlocking;
+    public JUringBlocking jUringBlocking;
 
     @Setup
     public void setup() {
