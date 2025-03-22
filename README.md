@@ -52,7 +52,7 @@ b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A  
 b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        16386  thrpt    5   688.860 ±  11.856  ops/ms
 b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        65536  thrpt    5   266.329 ±  62.960  ops/ms
 ```
-Uring achieves 29.35% better random read performance than Java NIO FileChannel operations for local files and 82.31% better performance for random read operations.
+Uring achieves 29.35% better random read performance than Java NIO FileChannel operations for local files and 82.31% better performance for random write operations.
 
 
 ## Benchmark Methodology
