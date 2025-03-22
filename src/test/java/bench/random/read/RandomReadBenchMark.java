@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -82,13 +83,16 @@ public class RandomReadBenchMark {
 
             jUring.submit();
 
-            for (var _ : readTasks) {
-                Result result = jUring.waitForResult();
+            for (int i = 0; i < readTasks.length; i++) {
+                List<Result> results = jUring.peekForBatchResult(100);
 
-                if (result instanceof AsyncReadResult r) {
-                    blackhole.consume(r.getBuffer());
-                    r.freeBuffer();
+                for (Result result : results) {
+                    if (result instanceof AsyncReadResult r) {
+                        blackhole.consume(r.getBuffer());
+                        r.freeBuffer();
+                    }
                 }
+                i += results.size();
             }
 
             for (FileDescriptor fd : openFiles) {
