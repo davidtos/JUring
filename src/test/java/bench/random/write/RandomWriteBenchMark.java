@@ -126,7 +126,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark
-    public void readUsingRandomAccessFile(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
+    public void writeUsingRandomAccessFile(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
         RandomWriteTask[] writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];
 
@@ -155,7 +155,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark
-    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) {
+    public void writeUsingFileChannelVirtualThreads(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) {
         RandomWriteTask[] writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];
 
