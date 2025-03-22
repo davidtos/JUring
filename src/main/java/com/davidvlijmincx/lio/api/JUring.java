@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -50,7 +51,7 @@ public class JUring implements AutoCloseable {
         return segment;
     }
 
-    public long prepareRead(FileDescriptor fd, int readSize, int offset) {
+    public long prepareRead(FileDescriptor fd, int readSize, long offset) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
 
         long id = buff.address();
@@ -63,11 +64,11 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    public long prepareWrite(FileDescriptor fd, byte[] bytes, int offset) {
+    public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         MemorySegment sqe = libUringWrapper.getSqe();
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
 
-        long id = buff.address();
+        long id = buff.address() + ThreadLocalRandom.current().nextLong();
 
         MemorySegment userData = createUserData(id, fd.getFd(), false, buff);
 

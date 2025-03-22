@@ -10,6 +10,13 @@
   "customizations": {
     "jetbrains": {
       "backend": "IntelliJ"
+    },
+    "vscode": {
+      "extensions": [
+        "Oracle.oracle-java",
+        "ms-azuretools.vscode-docker",
+        "vscjava.vscode-java-pack"
+      ]
     }
   },
 }
