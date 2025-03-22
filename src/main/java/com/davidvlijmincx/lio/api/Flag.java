@@ -2,7 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 public enum Flag {
     READ(0),
-    WRITE(2);
+    WRITE(1 | 16384);
 
     private int flag;
 

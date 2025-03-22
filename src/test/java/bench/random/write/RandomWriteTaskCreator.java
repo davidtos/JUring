@@ -23,13 +23,13 @@ public class RandomWriteTaskCreator {
 
     // 512 bytes, 4K, 16KB, 64KB
     @Param({"512", "4096", "16386", "65536"})
-    public static int readSize;
+    public static int writeSize;
 
     {
         try (Stream<Path> files = Files.walk(BASE_BENCHMARK_FILES_DIR)) {
             randomWriteTasks = files
                     .filter(p -> p.getFileName().toString().endsWith(BENCHMARK_FILE_EXTENSION))
-                    .map(a -> RandomWriteTask.fromPath(a, readSize))
+                    .map(a -> RandomWriteTask.fromPath(a, writeSize))
                     .toArray(RandomWriteTask[]::new);
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -38,7 +38,7 @@ public class RandomWriteTaskCreator {
 
     @Setup
     public void setup() {
-        content = new byte[readSize];
+        content = new byte[writeSize];
         new Random().nextBytes(content);
     }
 
