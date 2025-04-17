@@ -2,11 +2,11 @@ package bench.random.write;
 
 import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
-import bench.random.read.RandomReadTask;
-import bench.random.read.RandomReadTaskCreator;
-import com.davidvlijmincx.lio.api.*;
+import com.davidvlijmincx.lio.api.BlockingWriteResult;
+import com.davidvlijmincx.lio.api.FileDescriptor;
+import com.davidvlijmincx.lio.api.Flag;
+import com.davidvlijmincx.lio.api.Result;
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -16,9 +16,9 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.Charset;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -43,7 +43,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark()
-    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomWriteTaskCreator randomWriteTaskCreator) {
+    public void libUringBlocking(ExecutionPlanBlocking plan, RandomWriteTaskCreator randomWriteTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
         final var writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
 
@@ -62,14 +62,14 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark()
-    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomWriteTaskCreator randomWriteTaskCreator) {
+    public void libUring(ExecutionPlanJUring plan, RandomWriteTaskCreator randomWriteTaskCreator) {
         final var jUring = plan.jUring;
-        final var readTasks = randomWriteTaskCreator.randomWriteTasks;
+        final var writeTasks = randomWriteTaskCreator.randomWriteTasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
             int j = 0;
-            for (var task : readTasks) {
+            for (var task : writeTasks) {
 
                 FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.WRITE, 0);
                 openFiles.add(fd);
@@ -84,8 +84,9 @@ public class RandomWriteBenchMark {
 
             jUring.submit();
 
-            for (var _ : readTasks) {
-                jUring.waitForResult();
+            for (int i = 0; i < writeTasks.length; i++) {
+                List<Result> results = jUring.peekForBatchResult(100);
+                i += results.size();
             }
 
             for (FileDescriptor fd : openFiles) {
@@ -98,7 +99,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark
-    public void writeUsingFileChannel(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
+    public void writeUsingFileChannel(RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
         RandomWriteTask[] writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];
 
@@ -126,7 +127,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark
-    public void writeUsingRandomAccessFile(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
+    public void writeUsingRandomAccessFile(RandomWriteTaskCreator randomWriteTaskCreator) throws Throwable {
         RandomWriteTask[] writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];
 
@@ -142,7 +143,6 @@ public class RandomWriteBenchMark {
             final ByteBuffer data = ByteBuffer.wrap(randomWriteTaskCreator.content);
             final FileChannel fc = fileChannels[i];
             fc.write(data, writeTasks[i].offset());
-
         }
 
         for (FileChannel fc : fileChannels) {
@@ -155,7 +155,7 @@ public class RandomWriteBenchMark {
     }
 
     @Benchmark
-    public void writeUsingFileChannelVirtualThreads(Blackhole blackhole, RandomWriteTaskCreator randomWriteTaskCreator) {
+    public void writeUsingFileChannelVirtualThreads(RandomWriteTaskCreator randomWriteTaskCreator) {
         RandomWriteTask[] writeTasks = randomWriteTaskCreator.getRandomWriteTasks();
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];
 

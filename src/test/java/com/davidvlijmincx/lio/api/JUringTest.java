@@ -84,7 +84,7 @@ class JUringTest {
     }
 
     @Test
-    void multipleWrites() throws IOException {
+    void mixedReadAndWrite() throws IOException {
         Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -122,7 +122,7 @@ class JUringTest {
     }
 
     @Test
-    void mixedReadAndWrite() throws IOException {
+    void multipleWrites() throws IOException {
         Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
 
         String input = "Hello, from Java";
