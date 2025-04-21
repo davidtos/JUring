@@ -1,7 +1,7 @@
 # JUring: File I/O for Java using IO_uring
 JUring is a high-performance Java library that provides bindings to Linux's io_uring asynchronous I/O interface
 using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 29.35% better random read performance than Java NIO FileChannel
-operations for local files and 82.31% better performance for random read operations.
+operations for local files and 82.31% better performance for random write operations.
 
 ## Performance
 The following benchmarks show the improvement of using io_uring over Java built-in I/O.
