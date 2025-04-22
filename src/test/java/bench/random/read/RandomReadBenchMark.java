@@ -25,7 +25,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
-@OperationsPerInvocation(2300)
+@OperationsPerInvocation(1000)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
 @Threads(MAX)
 public class RandomReadBenchMark {

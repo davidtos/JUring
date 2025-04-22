@@ -15,11 +15,12 @@ import java.util.stream.Stream;
 @State(Scope.Benchmark)
 public class RandomReadTaskCreator {
     public static final String BENCHMARK_FILE_EXTENSION = ".bin";
-    public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/home/david/testData/text_files/");
+    public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/mnt/testData/");
     public final RandomReadTask[] RandomReadTasks;
 
     // 512 bytes, 4K, 16KB, 64KB
-    @Param({"512", "4096", "16386", "65536"})
+   // @Param({"512", "4096", "16386", "65536"})
+    @Param({ "4096"})
     public static int readSize;
 
     {
