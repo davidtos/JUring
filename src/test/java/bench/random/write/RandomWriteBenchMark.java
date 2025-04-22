@@ -50,7 +50,7 @@ public class RandomWriteBenchMark {
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (RandomWriteTask writeTask : writeTasks) {
-                FileDescriptor fd = new FileDescriptor(writeTask.sPath(), Flag.WRITE, 0);
+                FileDescriptor fd = new FileDescriptor(writeTask.sPath(), Flag.WRITE_DIRECT, 0);
                 BlockingWriteResult r = jUringBlocking.prepareWrite(fd, randomWriteTaskCreator.content, writeTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
@@ -71,7 +71,7 @@ public class RandomWriteBenchMark {
             int j = 0;
             for (var task : writeTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.WRITE, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.WRITE_DIRECT, 0);
                 openFiles.add(fd);
 
                 jUring.prepareWrite(fd, randomWriteTaskCreator.content, task.offset());
