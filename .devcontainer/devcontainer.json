@@ -4,7 +4,8 @@
     "dockerfile": "Dockerfile"
   },
   "mounts": [
-    "source=${localEnv:HOME}${localEnv:USERPROFILE}/data,target=/mnt/data,type=bind,consistency=cached"
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/data,target=/mnt/data,type=bind,consistency=cached",
+    "source=juring-data,target=/mnt/testData,type=volume"
   ],
   // Configure tool-specific properties.
   "customizations": {

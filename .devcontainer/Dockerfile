@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     maven \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget "https://download.java.net/java/early_access/jdk24/33/GPL/openjdk-24-ea+33_linux-aarch64_bin.tar.gz" -O jdk.tar.gz && \
+RUN wget "https://download.java.net/java/early_access/jdk25/19/GPL/openjdk-25-ea+19_linux-aarch64_bin.tar.gz" -O jdk.tar.gz && \
     mkdir -p /usr/lib/jvm && \
     tar -xzf jdk.tar.gz -C /usr/lib/jvm && \
     rm jdk.tar.gz
