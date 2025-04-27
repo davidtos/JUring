@@ -15,8 +15,9 @@ class LibCWrapper {
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
 
+    private static final Linker linker = Linker.nativeLinker();
+
     static {
-        Linker linker = Linker.nativeLinker();
 
         free = linker.downcallHandle(
                 linker.defaultLookup().find("free").orElseThrow(),
@@ -29,7 +30,6 @@ class LibCWrapper {
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
                 Linker.Option.critical(true)
         );
-
 
         malloc = linker.downcallHandle(
                 linker.defaultLookup().find("malloc").orElseThrow(),

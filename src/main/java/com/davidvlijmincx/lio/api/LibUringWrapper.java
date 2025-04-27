@@ -39,11 +39,10 @@ class LibUringWrapper implements AutoCloseable {
     private static final VarHandle readHandle;
     private static final VarHandle bufferHandle;
 
+    private final static Linker linker = Linker.nativeLinker();
+    private final static SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
     static {
 
-        Linker linker = Linker.nativeLinker();
-
-        SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
         C_POINTER = ValueLayout.ADDRESS
                 .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
