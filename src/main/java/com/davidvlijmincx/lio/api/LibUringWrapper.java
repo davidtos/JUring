@@ -255,12 +255,7 @@ class LibUringWrapper implements AutoCloseable {
                 List<Result> ret = new ArrayList<>(count);
 
                 for (int i = 0; i < count; i++) {
-                    var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
-
-                    long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
-                    int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
-
-                    ret.add(getResultFromCqe(userData, res, nativeCqe));
+                    ret.add(getResultFromCqe(cqePtrPtr.getAtIndex(ADDRESS, i)));
                 }
 
                 return ret;
@@ -279,19 +274,19 @@ class LibUringWrapper implements AutoCloseable {
                 throw new RuntimeException("Error while waiting for cqe: " + ret);
             }
 
-            var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
-
-            long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
-            int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
-
-            return getResultFromCqe(userData, res, nativeCqe);
+            return getResultFromCqe(cqePtr.getAtIndex(ADDRESS, 0));
         } catch (Throwable e) {
             throw new RuntimeException("Exception while waiting/creating result", e);
         }
     }
 
-    private Result getResultFromCqe(long address, long result, MemorySegment cqePointer) {
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
+    private Result getResultFromCqe(MemorySegment ptr) {
+        var cqePointer = ptr.reinterpret(io_uring_cqe_layout.byteSize());
+
+        long userData = cqePointer.get(ValueLayout.JAVA_LONG, 0);
+        int result = cqePointer.get(ValueLayout.JAVA_INT, 8);
+
+        MemorySegment nativeUserData = MemorySegment.ofAddress(userData).reinterpret(requestLayout.byteSize());
 
         seen(cqePointer);
 
