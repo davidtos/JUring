@@ -297,16 +297,14 @@ class LibUringWrapper implements AutoCloseable {
 
         boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
         long idResult = (long) idHandle.get(nativeUserData, 0L);
-        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
+        MemorySegment buffer = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
 
         LibCWrapper.freeBuffer(nativeUserData);
 
         if (!readResult) {
-            LibCWrapper.freeBuffer(bufferResult);
-            return new AsyncWriteResult(idResult, result);
+            return new AsyncWriteResult(idResult, buffer ,result);
         }
-
-        return new AsyncReadResult(idResult, bufferResult, result);
+        return new AsyncReadResult(idResult, buffer, result);
     }
 
     private void seen(MemorySegment cqePointer) {

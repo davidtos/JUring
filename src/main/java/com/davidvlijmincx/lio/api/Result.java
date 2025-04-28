@@ -11,4 +11,6 @@ public abstract sealed class Result permits AsyncReadResult, AsyncWriteResult, B
     public long getId() {
         return id;
     }
+
+    abstract void freeBuffer();
 }

@@ -110,9 +110,7 @@ class JUringTest {
             Result result = jUring.waitForResult();
             completedIds.add(result.getId());
 
-            if (result instanceof ReadResult readResult) {
-               readResult.freeBuffer();
-            }
+            result.freeBuffer();
         }
 
         assertEquals(completedIds.size(), ids.size());
@@ -142,6 +140,7 @@ class JUringTest {
             for (int i = 0; i < ids.size(); i++) {
                 Result result = jUring.waitForResult();
                 completedIds.add(result.getId());
+                result.freeBuffer();
             }
 
             assertEquals(completedIds.size(), ids.size());
@@ -188,6 +187,7 @@ class JUringTest {
             if (result instanceof AsyncWriteResult writeResult) {
                 assertEquals(id, writeResult.getId());
                 assertEquals(inputBytes.length, writeResult.getResult());
+                result.freeBuffer();
             } else {
                 fail("Result is not a AsyncWriteResult");
             }
@@ -215,6 +215,7 @@ class JUringTest {
             if (result instanceof AsyncWriteResult writeResult) {
                 assertEquals(id, writeResult.getId());
                 assertEquals(inputBytes.length, writeResult.getResult());
+                result.freeBuffer();
             } else {
                 fail("Result is not a AsyncWriteResult");
             }

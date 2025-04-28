@@ -19,7 +19,8 @@ public class RandomReadTaskCreator {
     public final RandomReadTask[] RandomReadTasks;
 
     // 512 bytes, 4K, 16KB, 64KB
-    @Param({"512", "4096", "16386", "65536"})
+    //@Param({"512", "4096", "16386", "65536"})
+    @Param({ "4096"})
     public static int readSize;
 
     {

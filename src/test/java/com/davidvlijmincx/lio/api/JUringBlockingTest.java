@@ -100,6 +100,7 @@ class JUringBlockingTest {
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
+            result.freeBuffer();
         }
     }
 
@@ -121,7 +122,7 @@ class JUringBlockingTest {
 
             String writtenContent = Files.readString(path);
             assertEquals("Big hello, from Java", writtenContent);
-
+            result.freeBuffer();
         }
     }
 
@@ -154,6 +155,8 @@ class JUringBlockingTest {
             readResult1.freeBuffer();
             readResult2.freeBuffer();
 
+            writeResult.freeBuffer();
+            writeResult1.freeBuffer();
         }
     }
 }
