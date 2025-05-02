@@ -12,5 +12,5 @@ public abstract sealed class Result permits AsyncReadResult, AsyncWriteResult, B
         return id;
     }
 
-    abstract void freeBuffer();
+    public abstract void freeBuffer();
 }

@@ -55,6 +55,7 @@ public class RandomWriteBenchMark {
                 jUringBlocking.submit();
                 executor.execute(() -> {
                     r.getResult();
+                    r.freeBuffer();
                     fd.close();
                 });
             }
@@ -87,6 +88,7 @@ public class RandomWriteBenchMark {
             for (int i = 0; i < writeTasks.length; i++) {
                 List<Result> results = jUring.peekForBatchResult(100);
                 i += results.size();
+                results.forEach(Result::freeBuffer);
             }
 
             for (FileDescriptor fd : openFiles) {
