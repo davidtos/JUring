@@ -41,7 +41,7 @@ public class JUring implements AutoCloseable {
     }
 
     private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
-        MemorySegment segment = LibCWrapper.malloc(requestLayout.byteSize());
+        MemorySegment segment = LibCWrapper.allocate(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);
@@ -52,7 +52,7 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareRead(FileDescriptor fd, int readSize, long offset) {
-        MemorySegment buff = LibCWrapper.malloc(readSize);
+        MemorySegment buff = LibCWrapper.allocate(readSize);
 
         long id = buff.address();
         MemorySegment userData = createUserData(id, fd.getFd(), true, buff);
@@ -66,7 +66,7 @@ public class JUring implements AutoCloseable {
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         MemorySegment sqe = libUringWrapper.getSqe();
-        MemorySegment buff = LibCWrapper.malloc(bytes.length);
+        MemorySegment buff = LibCWrapper.allocate(bytes.length);
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
 

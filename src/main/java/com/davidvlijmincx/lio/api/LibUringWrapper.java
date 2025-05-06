@@ -114,7 +114,8 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_sqe_set_data = linker.downcallHandle(
                 liburing.find("io_uring_sqe_set_data").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG)
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG),
+                Linker.Option.critical(true)
         );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -185,8 +186,8 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
-        cqePtrPtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
+        cqePtr = LibCWrapper.allocate(AddressLayout.ADDRESS.byteSize());
+        cqePtrPtr = LibCWrapper.allocate(AddressLayout.ADDRESS.byteSize() * 100);
 
         try {
 

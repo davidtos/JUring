@@ -82,11 +82,11 @@ class LibCWrapper {
         }
     }
 
-    static MemorySegment malloc(int size) {
-        return malloc((long) size);
+    static MemorySegment allocate(int size) {
+        return allocate((long) size);
     }
 
-    static MemorySegment malloc(long size) {
+    static MemorySegment allocate(long size) {
 
         if (size >= 4000) {
             return calloc(size);
