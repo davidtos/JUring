@@ -70,7 +70,7 @@ public class RandomReadBenchMark {
             int j = 0;
             for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ_DIRECT, 0);
                 openFiles.add(fd);
 
                 jUring.prepareRead(fd, task.bufferSize(), task.offset());
