@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -10,6 +11,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 public class JUring implements AutoCloseable {
 
     private final LibUringWrapper libUringWrapper;
+    private MemorySegment[] registeredBuffers;
 
     private static final StructLayout requestLayout;
     private static final AddressLayout C_POINTER;
@@ -40,6 +42,11 @@ public class JUring implements AutoCloseable {
         libUringWrapper = new LibUringWrapper(queueDepth);
     }
 
+    public JUring(int queueDepth, int bufferSize, int nrOfBuffers) {
+        libUringWrapper = new LibUringWrapper(queueDepth);
+        registeredBuffers = libUringWrapper.registerBuffers(bufferSize, nrOfBuffers);
+    }
+
     private MemorySegment createUserData(long id, int fd, boolean read, MemorySegment buffer) {
         MemorySegment segment = LibCWrapper.allocate(requestLayout.byteSize());
 
@@ -62,6 +69,21 @@ public class JUring implements AutoCloseable {
         libUringWrapper.setUserData(sqe, userData.address());
 
         return id;
+    }
+
+
+    public MemorySegment prepareReadFixed(FileDescriptor fd, long offset, int index) {
+
+        var buffer = registeredBuffers[index];
+
+        long id = buffer.address();
+        MemorySegment userData = createUserData(id, fd.getFd(), true, buffer);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.prepareReadFixed(sqe, fd.getFd(), buffer, offset, index);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return buffer;
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {

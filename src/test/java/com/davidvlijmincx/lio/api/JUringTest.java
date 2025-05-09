@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -50,6 +51,29 @@ class JUringTest {
 
         }
     }
+
+    @Test
+    void fixedRead() {
+        try(JUring jUringFixed = new JUring(10, 4096, 10);
+            FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+
+            MemorySegment buffer = jUringFixed.prepareReadFixed(fd, 0, 0);
+            jUringFixed.submit();
+            Result result = jUringFixed.waitForResult();
+
+            if (result instanceof ReadResult readResult) {
+
+                buffer.set(JAVA_BYTE, readResult.getResult(), (byte) 0);
+                String string = buffer.getString(0);
+
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
+        }
+    }
+
 
     @Test
     void multipleReads() {

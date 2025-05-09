@@ -21,7 +21,7 @@ public class RandomReadTaskCreator {
     // 512 bytes, 4K, 16KB, 64KB
     //@Param({"512", "4096", "16386", "65536"})
     @Param({ "4096"})
-    public static int readSize;
+    public static int readSize = 4096;
 
     {
         try (Stream<Path> files = Files.walk(BASE_BENCHMARK_FILES_DIR)) {
