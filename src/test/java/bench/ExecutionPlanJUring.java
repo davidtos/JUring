@@ -13,7 +13,7 @@ public class ExecutionPlanJUring {
 
     @Setup
     public void setup() {
-        jUring = new JUring(2500);
+        jUring = new JUring(2301, 4096, 2301);
 
     }
 

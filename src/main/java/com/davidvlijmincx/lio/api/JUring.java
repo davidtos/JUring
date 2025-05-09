@@ -72,8 +72,7 @@ public class JUring implements AutoCloseable {
     }
 
 
-    public MemorySegment prepareReadFixed(FileDescriptor fd, long offset, int index) {
-
+    public long prepareReadFixed(FileDescriptor fd, long offset, int index) {
         var buffer = registeredBuffers[index];
 
         long id = buffer.address();
@@ -82,8 +81,7 @@ public class JUring implements AutoCloseable {
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareReadFixed(sqe, fd.getFd(), buffer, offset, index);
         libUringWrapper.setUserData(sqe, userData.address());
-
-        return buffer;
+        return id;
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {

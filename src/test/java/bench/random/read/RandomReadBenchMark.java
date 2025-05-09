@@ -27,7 +27,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(MAX)
+@Threads(10)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -40,7 +40,7 @@ public class RandomReadBenchMark {
         new Runner(opt).run();
     }
 
-    @Benchmark()
+  //  @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
         final var readTasks = randomReadTaskCreator.RandomReadTasks;
@@ -104,7 +104,51 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
+  //  @Benchmark()
+    public void libUringFixedReads(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
+        final var jUring = plan.jUring;
+        final RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+
+        try {
+            int j = 0;
+            for (int i = 0; i < readTasks.length; i++) {
+
+                FileDescriptor fd = new FileDescriptor(readTasks[i].sPath(), Flag.READ_DIRECT, 0);
+                openFiles.add(fd);
+
+                jUring.prepareReadFixed(fd, readTasks[i].bufferSize(), i);
+
+                j++;
+                if (j % 100 == 0) {
+                    jUring.submit();
+                }
+            }
+
+            jUring.submit();
+
+            for (int i = 0; i < readTasks.length; i++) {
+                List<Result> results = jUring.peekForBatchResult(100);
+
+                for (Result result : results) {
+                    if (result instanceof AsyncReadResult r) {
+                        blackhole.consume(r.getBuffer());
+                    //    r.freeBuffer();
+                    }
+                }
+                i += results.size();
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                fd.close();
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+  //  @Benchmark
     public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
@@ -135,7 +179,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
+   // @Benchmark
     public void readUsingRandomAccessFile(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
@@ -166,7 +210,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
+  //  @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];

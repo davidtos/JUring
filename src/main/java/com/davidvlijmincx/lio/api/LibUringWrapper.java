@@ -78,7 +78,7 @@ class LibUringWrapper implements AutoCloseable {
                 ));
 
         io_uring_prep_read_fixed = linker.downcallHandle(
-                liburing.find("io_uring_register_buffers").orElseThrow(),
+                liburing.find("io_uring_prep_read_fixed").orElseThrow(),
                 FunctionDescriptor.ofVoid(
                         C_POINTER,
                         JAVA_INT,
