@@ -12,6 +12,7 @@ import static java.lang.foreign.ValueLayout.*;
 class LibUringWrapper implements AutoCloseable {
 
     private static final MethodHandle io_uring_queue_init;
+    private static final MethodHandle io_uring_queue_init_params;
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_prep_read;
     private static final MethodHandle io_uring_prep_read_fixed;
@@ -61,6 +62,12 @@ class LibUringWrapper implements AutoCloseable {
                 liburing.find("io_uring_queue_init").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
         );
+
+        io_uring_queue_init_params = linker.downcallHandle(
+                liburing.find("io_uring_queue_init_params").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, C_POINTER)
+        );
+
 
         io_uring_get_sqe = linker.downcallHandle(
                 liburing.find("io_uring_get_sqe").orElseThrow(),

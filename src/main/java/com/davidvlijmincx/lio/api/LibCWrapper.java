@@ -14,10 +14,12 @@ class LibCWrapper {
     private static final MethodHandle calloc;
 
     private static final Linker linker = Linker.nativeLinker();
+    private final static SymbolLookup libtcmalloc = SymbolLookup.libraryLookup("libtcmalloc_minimal.so.4", Arena.ofAuto());
+
 
     static {
         free = linker.downcallHandle(
-                linker.defaultLookup().find("free").orElseThrow(),
+                libtcmalloc.find("free").orElseThrow(),
                 FunctionDescriptor.ofVoid(ADDRESS),
                 Linker.Option.critical(true)
         );
@@ -29,13 +31,13 @@ class LibCWrapper {
         );
 
         malloc = linker.downcallHandle(
-                linker.defaultLookup().find("malloc").orElseThrow(),
+                libtcmalloc.find("malloc").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG),
                 Linker.Option.critical(true)
         );
 
         calloc = linker.downcallHandle(
-                linker.defaultLookup().find("calloc").orElseThrow(),
+                libtcmalloc.find("calloc").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
                 Linker.Option.critical(true)
         );

@@ -49,9 +49,9 @@ public class ProfilerHelper {
 
                     for (Result result : results) {
                         if (result instanceof AsyncReadResult r) {
-//                                 r.getBuffer().set(JAVA_BYTE, r.getResult() + 5, (byte) 0);
-//                                String string = r.getBuffer().getString(0);
-//                             System.out.println("string = " + string.substring(0,4).replace("\n", "").replace("\r", ""));
+                                 r.getBuffer().set(JAVA_BYTE, r.getResult() + 5, (byte) 0);
+                                String string = r.getBuffer().getString(0);
+                             System.out.println("string = " + string.substring(0,4).replace("\n", "").replace("\r", ""));
 //                            r.freeBuffer();
                         }
                     }
