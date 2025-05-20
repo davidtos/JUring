@@ -7,13 +7,20 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.davidvlijmincx.lio.api.JUring.*;
 import static java.lang.foreign.ValueLayout.*;
 
 class LibUringWrapper implements AutoCloseable {
 
+    private static final int AT_FDCWD = (int)-100L;
+    private static final int IOSQE_IO_LINK_BIT = 2;
+    private static final byte IOSQE_IO_LINK = (byte)(1 << IOSQE_IO_LINK_BIT);
+
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_queue_init_params;
     private static final MethodHandle io_uring_get_sqe;
+    private static final MethodHandle io_uring_prep_openat;
+    private static final MethodHandle io_uring_prep_close;
     private static final MethodHandle io_uring_prep_read;
     private static final MethodHandle io_uring_prep_read_fixed;
     private static final MethodHandle io_uring_prep_write;
@@ -39,22 +46,16 @@ class LibUringWrapper implements AutoCloseable {
     private final MemorySegment cqePtrPtr;
     private static final AddressLayout C_POINTER;
 
-    private static final StructLayout requestLayout;
-    private static final VarHandle idHandle;
-    private static final VarHandle fdHandle;
-    private static final VarHandle readHandle;
-    private static final VarHandle bufferHandle;
-
     private final static Linker linker = Linker.nativeLinker();
     private final static SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
 
     static {
         iovec_layout = MemoryLayout.structLayout(
-                ValueLayout.ADDRESS.withOrder(ByteOrder.nativeOrder()).withName("iov_base"),
-                ValueLayout.JAVA_LONG.withOrder(ByteOrder.nativeOrder()).withName("iov_len")
+                ADDRESS.withOrder(ByteOrder.nativeOrder()).withName("iov_base"),
+                JAVA_LONG.withOrder(ByteOrder.nativeOrder()).withName("iov_len")
         );
 
-        C_POINTER = ValueLayout.ADDRESS
+        C_POINTER = ADDRESS
                 .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
 
@@ -68,7 +69,6 @@ class LibUringWrapper implements AutoCloseable {
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, C_POINTER)
         );
 
-
         io_uring_get_sqe = linker.downcallHandle(
                 liburing.find("io_uring_get_sqe").orElseThrow(),
                 FunctionDescriptor.of(ADDRESS, ADDRESS),
@@ -77,44 +77,30 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_register_buffers = linker.downcallHandle(
                 liburing.find("io_uring_register_buffers").orElseThrow(),
-                FunctionDescriptor.of(
-                        JAVA_INT,
-                        C_POINTER,
-                        C_POINTER,
-                        JAVA_INT
-                ));
+                FunctionDescriptor.of(JAVA_INT, C_POINTER, C_POINTER, JAVA_INT));
 
         io_uring_prep_read_fixed = linker.downcallHandle(
                 liburing.find("io_uring_prep_read_fixed").orElseThrow(),
-                FunctionDescriptor.ofVoid(
-                        C_POINTER,
-                        JAVA_INT,
-                        C_POINTER,
-                        JAVA_LONG,
-                        JAVA_LONG,
-                        JAVA_INT
-                ));
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT));
+
+        io_uring_prep_openat = linker.downcallHandle(
+                liburing.find("io_uring_prep_openat").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT)
+        );
+
+        io_uring_prep_close = linker.downcallHandle(
+                liburing.find("io_uring_prep_close").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT)
+        );
 
         io_uring_prep_read = linker.downcallHandle(
                 liburing.find("io_uring_prep_read").orElseThrow(),
-                FunctionDescriptor.ofVoid(
-                        C_POINTER,
-                        JAVA_INT,
-                        C_POINTER,
-                        JAVA_LONG,
-                        ValueLayout.JAVA_LONG
-                )
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG)
         );
 
         io_uring_prep_write = linker.downcallHandle(
                 liburing.find("io_uring_prep_write").orElseThrow(),
-                FunctionDescriptor.ofVoid(
-                        C_POINTER,
-                        JAVA_INT,
-                        C_POINTER,
-                        JAVA_LONG,
-                        JAVA_LONG
-                )
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG)
         );
 
         io_uring_submit = linker.downcallHandle(
@@ -164,13 +150,13 @@ class LibUringWrapper implements AutoCloseable {
                 C_POINTER.withName("kdropped"),
                 C_POINTER.withName("array"),
                 C_POINTER.withName("sqes"),
-                ValueLayout.JAVA_INT.withName("sqe_head"),
-                ValueLayout.JAVA_INT.withName("sqe_tail"),
-                ValueLayout.JAVA_LONG.withName("ring_sz"),
+                JAVA_INT.withName("sqe_head"),
+                JAVA_INT.withName("sqe_tail"),
+                JAVA_LONG.withName("ring_sz"),
                 C_POINTER.withName("ring_ptr"),
-                ValueLayout.JAVA_INT.withName("ring_mask"),
-                ValueLayout.JAVA_INT.withName("ring_entries"),
-                MemoryLayout.sequenceLayout(2, ValueLayout.JAVA_INT).withName("pad")
+                JAVA_INT.withName("ring_mask"),
+                JAVA_INT.withName("ring_entries"),
+                MemoryLayout.sequenceLayout(2, JAVA_INT).withName("pad")
         ).withName("io_uring_sq");
 
         io_uring_cq_layout = MemoryLayout.structLayout(
@@ -181,50 +167,39 @@ class LibUringWrapper implements AutoCloseable {
                 C_POINTER.withName("kflags"),
                 C_POINTER.withName("koverflow"),
                 C_POINTER.withName("cqes"),
-                ValueLayout.JAVA_LONG.withName("ring_sz"),
+                JAVA_LONG.withName("ring_sz"),
                 C_POINTER.withName("ring_ptr"),
-                ValueLayout.JAVA_INT.withName("ring_mask"),
-                ValueLayout.JAVA_INT.withName("ring_entries"),
-                MemoryLayout.sequenceLayout(2, ValueLayout.JAVA_INT).withName("pad")
+                JAVA_INT.withName("ring_mask"),
+                JAVA_INT.withName("ring_entries"),
+                MemoryLayout.sequenceLayout(2, JAVA_INT).withName("pad")
         ).withName("io_uring_cq");
 
         ring_layout = MemoryLayout.structLayout(
                 io_uring_sq_layout.withName("sq"),
                 io_uring_cq_layout.withName("cq"),
-                ValueLayout.JAVA_INT.withName("flags"),
-                ValueLayout.JAVA_INT.withName("ring_fd"),
-                ValueLayout.JAVA_INT.withName("features"),
-                ValueLayout.JAVA_INT.withName("enter_ring_fd"),
-                ValueLayout.JAVA_BYTE.withName("int_flags"),
-                MemoryLayout.sequenceLayout(3, ValueLayout.JAVA_BYTE).withName("pad"),
-                ValueLayout.JAVA_INT.withName("pad2")
+                JAVA_INT.withName("flags"),
+                JAVA_INT.withName("ring_fd"),
+                JAVA_INT.withName("features"),
+                JAVA_INT.withName("enter_ring_fd"),
+                JAVA_BYTE.withName("int_flags"),
+                MemoryLayout.sequenceLayout(3, JAVA_BYTE).withName("pad"),
+                JAVA_INT.withName("pad2")
         ).withName("io_uring");
 
         io_uring_cqe_layout = MemoryLayout.structLayout(
-                ValueLayout.JAVA_LONG.withName("user_data"),
-                ValueLayout.JAVA_INT.withName("res"),
-                ValueLayout.JAVA_INT.withName("flags"),
-                MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
+                JAVA_LONG.withName("user_data"),
+                JAVA_INT.withName("res"),
+                JAVA_INT.withName("flags"),
+                MemoryLayout.sequenceLayout(0, JAVA_LONG).withName("big_cqe")
         ).withName("io_uring_cqe");
 
-        requestLayout = MemoryLayout.structLayout(
-                        ValueLayout.JAVA_LONG.withName("id"),
-                        C_POINTER.withName("buffer"),
-                        ValueLayout.JAVA_INT.withName("fd"),
-                        ValueLayout.JAVA_BOOLEAN.withName("read"))
-                .withName("request");
-
-        idHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("id"));
-        fdHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
-        readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
-        bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.allocate(AddressLayout.ADDRESS.byteSize());
-        cqePtrPtr = LibCWrapper.allocate(AddressLayout.ADDRESS.byteSize() * 100);
+        cqePtr = LibCWrapper.allocate(ADDRESS.byteSize());
+        cqePtrPtr = LibCWrapper.allocate(ADDRESS.byteSize() * 200);
 
         try {
 
@@ -248,6 +223,28 @@ class LibUringWrapper implements AutoCloseable {
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+    }
+
+    void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
+        try {
+            io_uring_prep_openat.invokeExact(sqe,AT_FDCWD,filePath, flags, mode );
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareClose(MemorySegment sqe, int fd) {
+        try {
+            io_uring_prep_close.invokeExact(sqe, fd);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void link(MemorySegment sqe) {
+        sqe = sqe.reinterpret(4);
+        byte flagz = 1;
+        sqe.set(JAVA_BYTE, JAVA_CHAR.byteSize(), flagz |= IOSQE_IO_LINK);
     }
 
     void prepareRead(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
@@ -346,23 +343,26 @@ class LibUringWrapper implements AutoCloseable {
     private Result getResultFromCqe(MemorySegment ptr) {
         var cqePointer = ptr.reinterpret(io_uring_cqe_layout.byteSize());
 
-        long userData = cqePointer.get(ValueLayout.JAVA_LONG, 0);
-        int result = cqePointer.get(ValueLayout.JAVA_INT, 8);
+        long userData = cqePointer.get(JAVA_LONG, 0);
+        int result = cqePointer.get(JAVA_INT, 8);
 
         MemorySegment nativeUserData = MemorySegment.ofAddress(userData).reinterpret(requestLayout.byteSize());
 
         seen(cqePointer);
 
-        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
-        long idResult = (long) idHandle.get(nativeUserData, 0L);
-        MemorySegment buffer = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
+        int type = (int) typeHandle.get(nativeUserData, 0L);
+        PrepareType prepareType = PrepareType.valueOf(type);
+
+         var value = switch (prepareType) {
+            case READ -> new AsyncReadResult((long) idHandle.get(nativeUserData, 0L), (MemorySegment) bufferHandle.get(nativeUserData, 0L), result);
+            case WRITE -> new AsyncWriteResult((long) idHandle.get(nativeUserData, 0L), (MemorySegment) bufferHandle.get(nativeUserData, 0L), result);
+            case OPEN -> new OpenResult((long) idHandle.get(nativeUserData, 0L), result);
+            case CLOSE -> new CloseResult((long) idHandle.get(nativeUserData, 0L),result);
+        };
 
         LibCWrapper.freeBuffer(nativeUserData);
 
-        if (!readResult) {
-            return new AsyncWriteResult(idResult, buffer, result);
-        }
-        return new AsyncReadResult(idResult, buffer, result);
+        return value;
     }
 
     private void seen(MemorySegment cqePointer) {

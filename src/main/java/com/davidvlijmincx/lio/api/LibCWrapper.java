@@ -14,7 +14,7 @@ class LibCWrapper {
     private static final MethodHandle calloc;
 
     private static final Linker linker = Linker.nativeLinker();
-    private final static SymbolLookup libtcmalloc = SymbolLookup.libraryLookup("libtcmalloc_minimal.so.4", Arena.ofAuto());
+    private final static SymbolLookup libtcmalloc = Linker.nativeLinker().defaultLookup(); // SymbolLookup.libraryLookup("libtcmalloc_minimal.so.4", Arena.ofAuto());
 
 
     static {

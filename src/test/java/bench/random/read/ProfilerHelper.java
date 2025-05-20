@@ -1,6 +1,7 @@
 package bench.random.read;
 
 import com.davidvlijmincx.lio.api.*;
+import org.openjdk.jmh.annotations.Threads;
 
 
 import java.io.IOException;
@@ -28,7 +29,7 @@ public class ProfilerHelper {
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(DEPTH);
 
 
-        for (int y = 0; y < 1; y++) {
+
             try {
                 int j = 0;
 
@@ -51,8 +52,9 @@ public class ProfilerHelper {
                         if (result instanceof AsyncReadResult r) {
                                  r.getBuffer().set(JAVA_BYTE, r.getResult() + 5, (byte) 0);
                                 String string = r.getBuffer().getString(0);
-                             System.out.println("string = " + string.substring(0,4).replace("\n", "").replace("\r", ""));
-//                            r.freeBuffer();
+                          //   System.out.println("string = " + string.substring(0,4).replace("\n", "").replace("\r", ""));
+                           // r.freeBuffer();
+
                         }
                     }
                     i += results.size();
@@ -62,10 +64,18 @@ public class ProfilerHelper {
                 throw new RuntimeException(e);
             }
 
+            System.out.println("done");
             for (FileDescriptor fd : openFiles) {
-                fd.close();
+                jUring.prepareClose(fd.getFd());
             }
-        }
+            jUring.submit();
+
+            int done = 0;
+            while (done < openFiles.size()) {
+                List<Result> results = jUring.peekForBatchResult(100);
+                done += results.size();
+            }
+
     }
 
     private static void sanityCheck(RandomReadTask task) throws IOException {

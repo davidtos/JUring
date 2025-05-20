@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -32,7 +33,7 @@ class JUringTest {
 
     @Test
     void readFromFile() {
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
             long id = jUring.prepareRead(fd, 14, 0);
             jUring.submit();
             Result result = jUring.waitForResult();
@@ -54,10 +55,10 @@ class JUringTest {
 
     @Test
     void fixedRead() {
-        try(JUring jUringFixed = new JUring(10, 4096, 10);
-            FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+        try (JUring jUringFixed = new JUring(10, 4096, 10);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
 
-            long  id = jUringFixed.prepareReadFixed(fd, 0, 0);
+            long id = jUringFixed.prepareReadFixed(fd, 0, 0);
             jUringFixed.submit();
             Result result = jUringFixed.waitForResult();
 
@@ -75,6 +76,39 @@ class JUringTest {
         }
     }
 
+    @Test
+    void prepareOpenAndClose() {
+        try (JUring juring = new JUring(10, 4096, 10); var arena = Arena.ofConfined()) {
+
+
+            juring.prepareOpen(arena.allocateFrom("src/test/resources/read_file"), Flag.READ, 0);
+            juring.submit();
+            OpenResult openResult = (OpenResult) juring.waitForResult();
+
+
+            int fd = openResult.getResult();
+            System.out.println(fd);
+
+            juring.prepareRead(fd,4096, 0);
+            juring.prepareClose(fd);
+
+            juring.submit();
+
+            ReadResult readResult = (ReadResult) juring.waitForResult();
+            CloseResult closeResult = (CloseResult) juring.waitForResult();
+
+            assertEquals(13, readResult.getResult());
+
+            readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
+            String string = readResult.getBuffer().getString(0);
+            assertEquals("Hello, World!", string);
+
+            readResult.freeBuffer();
+
+            assertEquals(0, closeResult.getResult());
+        }
+    }
+
 
     @Test
     void multipleReads() {
@@ -82,7 +116,7 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
 
             ids.add(jUring.prepareRead(fd, 14, 0));
             ids.add(jUring.prepareRead(fd, 14, 0));
@@ -118,28 +152,28 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);
-                FileDescriptor writeFd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);
+             FileDescriptor writeFd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
 
 
-        ids.add(jUring.prepareRead(fd, 14, 0));
-        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
-        ids.add(jUring.prepareRead(fd, 14, 0));
-        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
-        ids.add(jUring.prepareRead(fd, 14, 0));
-        ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
+            ids.add(jUring.prepareRead(fd, 14, 0));
+            ids.add(jUring.prepareWrite(writeFd, inputBytes, 0));
 
-        jUring.submit();
+            jUring.submit();
 
-        for (int i = 0; i < ids.size(); i++) {
-            Result result = jUring.waitForResult();
-            completedIds.add(result.getId());
+            for (int i = 0; i < ids.size(); i++) {
+                Result result = jUring.waitForResult();
+                completedIds.add(result.getId());
 
-            result.freeBuffer();
-        }
+                result.freeBuffer();
+            }
 
-        assertEquals(completedIds.size(), ids.size());
-        assertThat(completedIds).containsAll(ids);
+            assertEquals(completedIds.size(), ids.size());
+            assertThat(completedIds).containsAll(ids);
 
         }
     }
@@ -154,7 +188,7 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", Flag.WRITE, 0)) {
 
             ids.add(jUring.prepareWrite(fd, inputBytes, 0));
             ids.add(jUring.prepareWrite(fd, inputBytes, 0));
@@ -176,7 +210,7 @@ class JUringTest {
 
     @Test
     void readFromFileAtOffset() {
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
             long id = jUring.prepareRead(fd, 6, 7);
             jUring.submit();
             Result result = jUring.waitForResult();
@@ -203,7 +237,7 @@ class JUringTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
             long id = jUring.prepareWrite(fd, inputBytes, 0);
 
             jUring.submit();
@@ -231,7 +265,7 @@ class JUringTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
             long id = jUring.prepareWrite(fd, inputBytes, 4);
 
             jUring.submit();

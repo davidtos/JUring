@@ -12,6 +12,7 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
@@ -27,7 +28,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(15)
+@Threads(20)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -108,17 +109,44 @@ public class RandomReadBenchMark {
     public void JUringNewStrategy(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.RandomReadTasks;
-        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+        ArrayList<Integer> openFiles = new ArrayList<>(5000);
 
         int totalTasksDone = 0;
         int totalTasks = readTasks.length;
 
-        try {
+        try(var arena = Arena.ofConfined()) {
             int j = 0;
+
             for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ_DIRECT, 0);
-                openFiles.add(fd);
+                jUring.prepareOpen(arena.allocateFrom(task.sPath()), Flag.READ_DIRECT, 0);
+
+                j++;
+                if (j % 75 == 0) {
+                    jUring.submit();
+                }
+
+                List<Result> results = jUring.peekForBatchResult(100);
+                if (!results.isEmpty()) {
+                    for (Result result : results) {
+                        if (result instanceof OpenResult r) {
+                            openFiles.add(r.getResult());
+                        }
+                    }
+                    totalTasksDone += results.size();
+                }
+            }
+
+            jUring.submit();
+
+
+            j= 0;
+            totalTasksDone = 0;
+
+
+            for (int i = 0; i < openFiles.size(); i++) {
+                var fd = openFiles.get(i);
+                var task = readTasks[i];
 
                 jUring.prepareRead(fd, task.bufferSize(), task.offset());
 
@@ -154,9 +182,17 @@ public class RandomReadBenchMark {
             }
 
 
-            for (FileDescriptor fd : openFiles) {
-                fd.close();
+            int count = 0;
+            for (int fd : openFiles) {
+                jUring.prepareClose(fd);
             }
+            jUring.submit();
+
+            while (count < openFiles.size()) {
+                List<Result> results = jUring.peekForBatchResult(100);
+                count += results.size();
+            }
+
 
         } catch (Exception e) {
             throw new RuntimeException(e);

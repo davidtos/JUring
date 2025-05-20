@@ -8,7 +8,7 @@ public class FileDescriptor implements AutoCloseable {
         this.fd = LibCWrapper.OpenFile(path, flags.getValue(), mode);
     }
 
-    int getFd() {
+    public int getFd() {
         return fd;
     }
 
