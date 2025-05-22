@@ -85,7 +85,6 @@ class JUringTest {
             IoResult openResult = juring.waitForResult();
 
             int fd = openResult.returnValue();
-            System.out.println(fd);
 
             juring.prepareRead(fd,4096, 0);
             juring.prepareClose(fd);
