@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -36,15 +35,15 @@ class JUringTest {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
             long id = jUring.prepareRead(fd, 14, 0);
             jUring.submit();
-            Result result = jUring.waitForResult();
+            IoResult result = jUring.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.getId());
-                assertEquals(13, readResult.getResult());
+            if (OperationType.READ.equals(result.type())) {
+                assertEquals(id, result.id());
+                assertEquals(13, result.bytesTransferred());
 
-                readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
-                String string = readResult.getBuffer().getString(0);
-                readResult.freeBuffer();
+                result.readBuffer().set(JAVA_BYTE, result.bytesTransferred(), (byte) 0);
+                String string = result.readBuffer().getString(0);
+                result.freeBuffer();
                 assertEquals("Hello, World!", string);
             } else {
                 fail("Result is not a ReadResult");
@@ -60,14 +59,14 @@ class JUringTest {
 
             long id = jUringFixed.prepareReadFixed(fd, 0, 0);
             jUringFixed.submit();
-            Result result = jUringFixed.waitForResult();
+            IoResult result = jUringFixed.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.getId());
-                assertEquals(13, readResult.getResult());
+            if (OperationType.READ.equals(result.type())) {
+                assertEquals(id, result.id());
+                assertEquals(13, result.bytesTransferred());
 
-                readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
-                String string = readResult.getBuffer().getString(0);
+                result.readBuffer().set(JAVA_BYTE, result.bytesTransferred(), (byte) 0);
+                String string = result.readBuffer().getString(0);
                 assertEquals("Hello, World!", string);
             } else {
                 fail("Result is not a ReadResult");
@@ -83,10 +82,9 @@ class JUringTest {
 
             juring.prepareOpen(arena.allocateFrom("src/test/resources/read_file"), Flag.READ, 0);
             juring.submit();
-            OpenResult openResult = (OpenResult) juring.waitForResult();
+            IoResult openResult = juring.waitForResult();
 
-
-            int fd = openResult.getResult();
+            int fd = openResult.returnValue();
             System.out.println(fd);
 
             juring.prepareRead(fd,4096, 0);
@@ -94,18 +92,18 @@ class JUringTest {
 
             juring.submit();
 
-            ReadResult readResult = (ReadResult) juring.waitForResult();
-            CloseResult closeResult = (CloseResult) juring.waitForResult();
+            IoResult readResult =  juring.waitForResult();
+            IoResult closeResult =  juring.waitForResult();
 
-            assertEquals(13, readResult.getResult());
+            assertEquals(13, readResult.bytesTransferred());
 
-            readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
-            String string = readResult.getBuffer().getString(0);
+            readResult.readBuffer().set(JAVA_BYTE, readResult.bytesTransferred(), (byte) 0);
+            String string = readResult.readBuffer().getString(0);
             assertEquals("Hello, World!", string);
 
             readResult.freeBuffer();
 
-            assertEquals(0, closeResult.getResult());
+            assertEquals(0, closeResult.returnValue());
         }
     }
 
@@ -125,11 +123,11 @@ class JUringTest {
             jUring.submit();
 
             for (int i = 0; i < ids.size(); i++) {
-                Result result = jUring.waitForResult();
-                completedIds.add(result.getId());
+                IoResult result = jUring.waitForResult();
+                completedIds.add(result.id());
 
-                if (result instanceof ReadResult readResult) {
-                    readResult.freeBuffer();
+                if (OperationType.READ.equals(result.type())) {
+                    result.freeBuffer();
                 } else {
                     fail("Result is not a ReadResult");
                 }
@@ -166,8 +164,8 @@ class JUringTest {
             jUring.submit();
 
             for (int i = 0; i < ids.size(); i++) {
-                Result result = jUring.waitForResult();
-                completedIds.add(result.getId());
+                IoResult result = jUring.waitForResult();
+                completedIds.add(result.id());
 
                 result.freeBuffer();
             }
@@ -197,8 +195,8 @@ class JUringTest {
             jUring.submit();
 
             for (int i = 0; i < ids.size(); i++) {
-                Result result = jUring.waitForResult();
-                completedIds.add(result.getId());
+                IoResult result = jUring.waitForResult();
+                completedIds.add(result.id());
                 result.freeBuffer();
             }
 
@@ -213,13 +211,13 @@ class JUringTest {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
             long id = jUring.prepareRead(fd, 6, 7);
             jUring.submit();
-            Result result = jUring.waitForResult();
+            IoResult result = jUring.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.getId());
+            if (OperationType.READ.equals(result.type())) {
+                assertEquals(id, result.id());
 
-                String string = readResult.getBuffer().getString(0);
-                readResult.freeBuffer();
+                String string = result.readBuffer().getString(0);
+                result.freeBuffer();
                 assertEquals("World!", string);
             } else {
                 fail("Result is not a ReadResult");
@@ -241,11 +239,11 @@ class JUringTest {
             long id = jUring.prepareWrite(fd, inputBytes, 0);
 
             jUring.submit();
-            Result result = jUring.waitForResult();
+            IoResult result = jUring.waitForResult();
 
-            if (result instanceof AsyncWriteResult writeResult) {
-                assertEquals(id, writeResult.getId());
-                assertEquals(inputBytes.length, writeResult.getResult());
+            if (OperationType.WRITE.equals(result.type())) {
+                assertEquals(id, result.id());
+                assertEquals(inputBytes.length, result.bytesTransferred());
                 result.freeBuffer();
             } else {
                 fail("Result is not a AsyncWriteResult");
@@ -269,11 +267,11 @@ class JUringTest {
             long id = jUring.prepareWrite(fd, inputBytes, 4);
 
             jUring.submit();
-            Result result = jUring.waitForResult();
+            IoResult result = jUring.waitForResult();
 
-            if (result instanceof AsyncWriteResult writeResult) {
-                assertEquals(id, writeResult.getId());
-                assertEquals(inputBytes.length, writeResult.getResult());
+            if (OperationType.WRITE.equals(result.type())) {
+                assertEquals(id, result.id());
+                assertEquals(inputBytes.length, result.bytesTransferred());
                 result.freeBuffer();
             } else {
                 fail("Result is not a AsyncWriteResult");

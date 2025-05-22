@@ -36,7 +36,7 @@ public class AdaptiveJUringBenchmark {
         public JUring jUring;
         public boolean isRunning = true;
         public Thread pollerThread;
-        public final Queue<Result> completionQueue = new ConcurrentLinkedQueue<>();
+        public final Queue<IoResult> completionQueue = new ConcurrentLinkedQueue<>();
         public final CountDownLatch pollerInitialized = new CountDownLatch(1);
         public AtomicInteger pendingOperations = new AtomicInteger(0);
 
@@ -60,7 +60,7 @@ public class AdaptiveJUringBenchmark {
                 while (isRunning) {
                     if (pendingOperations.get() > 0) {
                         // Process completions in batches
-                        List<Result> results = jUring.peekForBatchResult(100);
+                        List<IoResult> results = jUring.peekForBatchResult(100);
                         if (!results.isEmpty()) {
                             completionQueue.addAll(results);
                             pendingOperations.addAndGet(-results.size());
@@ -239,9 +239,9 @@ public class AdaptiveJUringBenchmark {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(5);
 
         while (processed < count && System.nanoTime() < deadline) {
-            Result result;
+            IoResult result;
             while ((result = plan.completionQueue.poll()) != null && processed < count) {
-                blackhole.consume(result.getId());
+                blackhole.consume(result.id());
                 processed++;
             }
 
@@ -258,9 +258,9 @@ public class AdaptiveJUringBenchmark {
         int processed = 0;
 
         // First drain the completion queue
-        Result result;
+        IoResult result;
         while ((result = plan.completionQueue.poll()) != null) {
-            blackhole.consume(result.getId());
+            blackhole.consume(result.id());
             processed++;
         }
 
@@ -273,7 +273,7 @@ public class AdaptiveJUringBenchmark {
             }
 
             while ((result = plan.completionQueue.poll()) != null) {
-                blackhole.consume(result.getId());
+                blackhole.consume(result.id());
                 processed++;
                 if (processed >= expected) break;
             }
@@ -290,11 +290,11 @@ public class AdaptiveJUringBenchmark {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(5);
 
         while (processed < count && System.nanoTime() < deadline) {
-            Result result;
+            IoResult result;
             while ((result = plan.completionQueue.poll()) != null && processed < count) {
-                if (result instanceof ReadResult r) {
-                    blackhole.consume(r.getBuffer());
-                    r.freeBuffer();
+                if (OperationType.READ.equals(result.type())) {
+                    blackhole.consume(result.readBuffer());
+                    result.freeBuffer();
                 }
                 processed++;
             }

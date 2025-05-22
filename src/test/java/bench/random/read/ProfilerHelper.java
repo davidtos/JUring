@@ -1,21 +1,18 @@
 package bench.random.read;
 
 import com.davidvlijmincx.lio.api.*;
-import org.openjdk.jmh.annotations.Threads;
-
 
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static org.junit.jupiter.api.Assertions.fail;
 
 public class ProfilerHelper {
 
@@ -28,10 +25,7 @@ public class ProfilerHelper {
         RandomReadTask[] randomReadTasks = Arrays.stream(randomReadTaskCreator.getRandomReadTasks()).limit(DEPTH).toArray(RandomReadTask[]::new);
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(DEPTH);
 
-
-
             try {
-                int j = 0;
 
                 for (int i = 0; i < randomReadTasks.length; i++) {
                     //sanityCheck(task);
@@ -46,12 +40,12 @@ public class ProfilerHelper {
                 jUring.submit();
 
                 for (int i = 0; i < randomReadTasks.length; i++) {
-                    List<Result> results = jUring.peekForBatchResult(100);
+                    List<IoResult> results = jUring.peekForBatchResult(100);
 
-                    for (Result result : results) {
-                        if (result instanceof AsyncReadResult r) {
-                                 r.getBuffer().set(JAVA_BYTE, r.getResult() + 5, (byte) 0);
-                                String string = r.getBuffer().getString(0);
+                    for (IoResult result : results) {
+                        if (OperationType.READ.equals(result.type())) {
+                                 result.readBuffer().set(JAVA_BYTE, result.bytesTransferred() + 5, (byte) 0);
+                                String string = result.readBuffer().getString(0);
                           //   System.out.println("string = " + string.substring(0,4).replace("\n", "").replace("\r", ""));
                            // r.freeBuffer();
 
@@ -72,7 +66,7 @@ public class ProfilerHelper {
 
             int done = 0;
             while (done < openFiles.size()) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
                 done += results.size();
             }
 
@@ -83,6 +77,6 @@ public class ProfilerHelper {
         final FileChannel fc = FileChannel.open(task.path(), StandardOpenOption.READ);
         fc.read(data, task.offset());
         data.flip();
-        System.out.println(new String(data.array(), Charset.forName("UTF8")).substring(0, 4).replace("\n", "").replace("\r", ""));
+        System.out.println(new String(data.array(), StandardCharsets.UTF_8).substring(0, 4).replace("\n", "").replace("\r", ""));
     }
 }

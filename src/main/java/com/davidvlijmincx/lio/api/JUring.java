@@ -46,7 +46,7 @@ public class JUring implements AutoCloseable {
         registeredBuffers = libUringWrapper.registerBuffers(bufferSize, nrOfBuffers);
     }
 
-    private MemorySegment createUserData(long id, int fd, PrepareType type, MemorySegment buffer) {
+    private MemorySegment createUserData(long id, int fd, OperationType type, MemorySegment buffer) {
         MemorySegment segment = LibCWrapper.allocate(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
@@ -60,7 +60,7 @@ public class JUring implements AutoCloseable {
     public long prepareOpen(MemorySegment filePath, Flag flag, int mode){
         MemorySegment sqe = libUringWrapper.getSqe();
 
-        MemorySegment userData = createUserData(filePath.address(), 0, PrepareType.OPEN, MemorySegment.NULL);
+        MemorySegment userData = createUserData(filePath.address(), 0, OperationType.OPEN, MemorySegment.NULL);
 
         libUringWrapper.prepareOpen(sqe, filePath, flag.getValue(), mode);
 
@@ -71,7 +71,7 @@ public class JUring implements AutoCloseable {
 
     public void prepareClose(int fd){
         MemorySegment sqe = libUringWrapper.getSqe();
-        MemorySegment userData = createUserData(sqe.address(), fd, PrepareType.CLOSE, MemorySegment.NULL);
+        MemorySegment userData = createUserData(sqe.address(), fd, OperationType.CLOSE, MemorySegment.NULL);
         libUringWrapper.prepareClose(sqe, fd);
         libUringWrapper.setUserData(sqe, userData.address());
     }
@@ -81,7 +81,7 @@ public class JUring implements AutoCloseable {
         MemorySegment buff = LibCWrapper.allocate(readSize);
 
         long id = buff.address();
-        MemorySegment userData = createUserData(id, fd, PrepareType.READ, buff);
+        MemorySegment userData = createUserData(id, fd, OperationType.READ, buff);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareRead(sqe, fd, buff, offset);
@@ -95,7 +95,7 @@ public class JUring implements AutoCloseable {
         MemorySegment buff = LibCWrapper.allocate(readSize);
 
         long id = buff.address();
-        MemorySegment userData = createUserData(id, fd.getFd(), PrepareType.READ, buff);
+        MemorySegment userData = createUserData(id, fd.getFd(), OperationType.READ, buff);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareRead(sqe, fd.getFd(), buff, offset);
@@ -109,7 +109,7 @@ public class JUring implements AutoCloseable {
         var buffer = registeredBuffers[index];
 
         long id = buffer.address();
-        MemorySegment userData = createUserData(id, fd.getFd(), PrepareType.READ, buffer);
+        MemorySegment userData = createUserData(id, fd.getFd(), OperationType.READ, buffer);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         libUringWrapper.prepareReadFixed(sqe, fd.getFd(), buffer, offset, index);
@@ -123,7 +123,7 @@ public class JUring implements AutoCloseable {
 
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
 
-        MemorySegment userData = createUserData(id, fd.getFd(), PrepareType.WRITE, buff);
+        MemorySegment userData = createUserData(id, fd.getFd(), OperationType.WRITE, buff);
 
         libUringWrapper.setUserData(sqe, userData.address());
 
@@ -138,11 +138,11 @@ public class JUring implements AutoCloseable {
         libUringWrapper.submit();
     }
 
-    public List<Result> peekForBatchResult(int batchSize) {
+    public List<IoResult> peekForBatchResult(int batchSize) {
         return libUringWrapper.peekForBatchResult(batchSize);
     }
 
-    public Result waitForResult() {
+    public IoResult waitForResult() {
         return libUringWrapper.waitForResult();
     }
 

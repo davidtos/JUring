@@ -2,7 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.VarHandle;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
@@ -307,12 +306,12 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    List<Result> peekForBatchResult(int batchSize) {
+    List<IoResult> peekForBatchResult(int batchSize) {
         try {
             int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtrPtr, batchSize);
 
             if (count > 0) {
-                List<Result> ret = new ArrayList<>(count);
+                List<IoResult> ret = new ArrayList<>(count);
 
                 for (int i = 0; i < count; i++) {
                     ret.add(getResultFromCqe(cqePtrPtr.getAtIndex(ADDRESS, i)));
@@ -327,7 +326,7 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    Result waitForResult() {
+    IoResult waitForResult() {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
@@ -340,7 +339,7 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    private Result getResultFromCqe(MemorySegment ptr) {
+    private IoResult getResultFromCqe(MemorySegment ptr) {
         var cqePointer = ptr.reinterpret(io_uring_cqe_layout.byteSize());
 
         long userData = cqePointer.get(JAVA_LONG, 0);
@@ -351,13 +350,11 @@ class LibUringWrapper implements AutoCloseable {
         seen(cqePointer);
 
         int type = (int) typeHandle.get(nativeUserData, 0L);
-        PrepareType prepareType = PrepareType.valueOf(type);
+        OperationType operationType = OperationType.valueOf(type);
 
-         var value = switch (prepareType) {
-            case READ -> new AsyncReadResult((long) idHandle.get(nativeUserData, 0L), (MemorySegment) bufferHandle.get(nativeUserData, 0L), result);
-            case WRITE -> new AsyncWriteResult((long) idHandle.get(nativeUserData, 0L), (MemorySegment) bufferHandle.get(nativeUserData, 0L), result);
-            case OPEN -> new OpenResult((long) idHandle.get(nativeUserData, 0L), result);
-            case CLOSE -> new CloseResult((long) idHandle.get(nativeUserData, 0L),result);
+         var value = switch (operationType) {
+             case READ, WRITE -> new IoResult((long) idHandle.get(nativeUserData, 0L), operationType, result, (MemorySegment) bufferHandle.get(nativeUserData, 0L));
+            case OPEN, CLOSE -> new IoResult((long) idHandle.get(nativeUserData, 0L),operationType,result,null);
         };
 
         LibCWrapper.freeBuffer(nativeUserData);

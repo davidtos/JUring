@@ -1,6 +1,18 @@
 package com.davidvlijmincx.lio.api;
 
-public sealed interface BlockingResult permits BlockingReadResult, BlockingWriteResult {
+public abstract sealed class BlockingResult permits BlockingReadResult, BlockingWriteResult {
 
-    void setResult(Result result);
+    private final long id;
+
+    protected BlockingResult(long id) {
+        this.id = id;
+    }
+
+    public abstract void setResult(IoResult result);
+
+    public long getId() {
+        return id;
+    }
+
+    public abstract void freeBuffer();
 }

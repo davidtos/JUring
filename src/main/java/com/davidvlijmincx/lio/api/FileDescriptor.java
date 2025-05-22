@@ -14,7 +14,7 @@ public class FileDescriptor implements AutoCloseable {
 
     @Override
     public void close(){
-            LibCWrapper.closeFile(fd);
+        LibCWrapper.closeFile(fd);
     }
 
 }

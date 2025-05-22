@@ -28,7 +28,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(20)
+@Threads(25)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -85,12 +85,12 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             for (int i = 0; i < readTasks.length; i++) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
 
-                for (Result result : results) {
-                    if (result instanceof AsyncReadResult r) {
-                        blackhole.consume(r.getBuffer());
-                        r.freeBuffer();
+                for (IoResult result : results) {
+                    if (OperationType.READ.equals(result.type())) {
+                        blackhole.consume(result.readBuffer());
+                        result.freeBuffer();
                     }
                 }
                 i += results.size();
@@ -126,11 +126,11 @@ public class RandomReadBenchMark {
                     jUring.submit();
                 }
 
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
                 if (!results.isEmpty()) {
-                    for (Result result : results) {
-                        if (result instanceof OpenResult r) {
-                            openFiles.add(r.getResult());
+                    for (IoResult result : results) {
+                        if (OperationType.OPEN.equals(result.type())) {
+                            openFiles.add(result.fileDescriptor());
                         }
                     }
                     totalTasksDone += results.size();
@@ -155,12 +155,12 @@ public class RandomReadBenchMark {
                     jUring.submit();
                 }
 
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
                 if (!results.isEmpty()) {
-                    for (Result result : results) {
-                        if (result instanceof AsyncReadResult r) {
-                            blackhole.consume(r.getBuffer());
-                            r.freeBuffer();
+                    for (IoResult result : results) {
+                        if (OperationType.READ.equals(result.type())) {
+                            blackhole.consume(result.readBuffer());
+                            result.freeBuffer();
                         }
                     }
                     totalTasksDone += results.size();
@@ -170,12 +170,12 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             while (totalTasksDone < totalTasks) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
 
-                for (Result result : results) {
-                    if (result instanceof AsyncReadResult r) {
-                        blackhole.consume(r.getBuffer());
-                        r.freeBuffer();
+                for (IoResult result : results) {
+                    if (OperationType.READ.equals(result.type())) {
+                        blackhole.consume(result.readBuffer());
+                        result.freeBuffer();
                     }
                 }
                 totalTasksDone += results.size();
@@ -189,7 +189,7 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             while (count < openFiles.size()) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
                 count += results.size();
             }
 
@@ -223,11 +223,11 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             for (int i = 0; i < readTasks.length; i++) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
 
-                for (Result result : results) {
-                    if (result instanceof AsyncReadResult r) {
-                        blackhole.consume(r.getBuffer());
+                for (IoResult result : results) {
+                    if (OperationType.READ.equals(result.type())) {
+                        blackhole.consume(result.readBuffer());
                     //    r.freeBuffer();
                     }
                 }

@@ -3,17 +3,17 @@ package com.davidvlijmincx.lio.api;
 import java.util.HashMap;
 import java.util.Map;
 
-public enum PrepareType {
+public enum OperationType {
     READ(0),
     WRITE(1),
     OPEN(2),
     CLOSE(3);
 
-    private static final Map<Integer,PrepareType> map = new HashMap<>();
+    private static final Map<Integer,OperationType> map = new HashMap<>();
 
     private final int index;
 
-    private PrepareType(int index) {
+    OperationType(int index) {
         this.index = index;
     }
 
@@ -22,14 +22,12 @@ public enum PrepareType {
     }
 
     static {
-        for (PrepareType pageType : PrepareType.values()) {
+        for (OperationType pageType : OperationType.values()) {
             map.put(pageType.index, pageType);
         }
     }
 
-    public static PrepareType valueOf(int pageType) {
+    public static OperationType valueOf(int pageType) {
         return map.get(pageType);
     }
-
-
 }

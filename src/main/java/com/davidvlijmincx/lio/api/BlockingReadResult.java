@@ -4,7 +4,7 @@ import java.lang.foreign.MemorySegment;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public final class BlockingReadResult extends Result implements ReadResult, BlockingResult{
+public final class BlockingReadResult extends BlockingResult{
 
     private final CompletableFuture<Void> lock = new CompletableFuture<>();
     private MemorySegment buffer;
@@ -32,11 +32,10 @@ public final class BlockingReadResult extends Result implements ReadResult, Bloc
         return result;
     }
 
-    @Override
-    public void setResult(Result result) {
-        if (result instanceof ReadResult r) {
-            this.result = r.getResult();
-            this.buffer = r.getBuffer();
+    public void setResult(IoResult result) {
+        if (result.type() == OperationType.READ) {
+            this.result = result.bytesTransferred();
+            this.buffer = result.readBuffer();
             lock.complete(null);
         } else {
             throw new IllegalArgumentException("Result is not a ReadResult");

@@ -2,10 +2,7 @@ package bench.random.write;
 
 import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
-import com.davidvlijmincx.lio.api.BlockingWriteResult;
-import com.davidvlijmincx.lio.api.FileDescriptor;
-import com.davidvlijmincx.lio.api.Flag;
-import com.davidvlijmincx.lio.api.Result;
+import com.davidvlijmincx.lio.api.*;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
@@ -86,9 +83,9 @@ public class RandomWriteBenchMark {
             jUring.submit();
 
             for (int i = 0; i < writeTasks.length; i++) {
-                List<Result> results = jUring.peekForBatchResult(100);
+                List<IoResult> results = jUring.peekForBatchResult(100);
                 i += results.size();
-                results.forEach(Result::freeBuffer);
+                results.forEach(IoResult::freeBuffer);
             }
 
             for (FileDescriptor fd : openFiles) {
