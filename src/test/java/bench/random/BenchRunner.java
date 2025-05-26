@@ -14,6 +14,7 @@ public class BenchRunner {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .include(RandomWriteBenchMark.class.getSimpleName())
+                .threads(15)
                 .forks(1)
                 .shouldDoGC(false)
                 .build();

@@ -12,23 +12,19 @@ import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.lang.foreign.Arena;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-import static org.openjdk.jmh.annotations.Threads.MAX;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(25)
+@Threads(15)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -41,7 +37,7 @@ public class RandomReadBenchMark {
         new Runner(opt).run();
     }
 
-  //  @Benchmark()
+    @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
         final var readTasks = randomReadTaskCreator.RandomReadTasks;
@@ -61,7 +57,7 @@ public class RandomReadBenchMark {
         }
     }
 
-   // @Benchmark()
+    @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.RandomReadTasks;
@@ -71,7 +67,7 @@ public class RandomReadBenchMark {
             int j = 0;
             for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ_DIRECT, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ, 0);
                 openFiles.add(fd);
 
                 jUring.prepareRead(fd, task.bufferSize(), task.offset());
@@ -85,7 +81,7 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             for (int i = 0; i < readTasks.length; i++) {
-                List<IoResult> results = jUring.peekForBatchResult(100);
+                IoResult[] results = jUring.peekForBatchResult(100);
 
                 for (IoResult result : results) {
                     if (OperationType.READ.equals(result.type())) {
@@ -93,7 +89,7 @@ public class RandomReadBenchMark {
                         result.freeBuffer();
                     }
                 }
-                i += results.size();
+                i += results.length;
             }
 
             for (FileDescriptor fd : openFiles) {
@@ -106,100 +102,6 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark()
-    public void JUringNewStrategy(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
-        final var jUring = plan.jUring;
-        final var readTasks = randomReadTaskCreator.RandomReadTasks;
-        ArrayList<Integer> openFiles = new ArrayList<>(5000);
-
-        int totalTasksDone = 0;
-        int totalTasks = readTasks.length;
-
-        try(var arena = Arena.ofConfined()) {
-            int j = 0;
-
-            for (var task : readTasks) {
-
-                jUring.prepareOpen(arena.allocateFrom(task.sPath()), Flag.READ_DIRECT, 0);
-
-                j++;
-                if (j % 75 == 0) {
-                    jUring.submit();
-                }
-
-                List<IoResult> results = jUring.peekForBatchResult(100);
-                if (!results.isEmpty()) {
-                    for (IoResult result : results) {
-                        if (OperationType.OPEN.equals(result.type())) {
-                            openFiles.add(result.fileDescriptor());
-                        }
-                    }
-                    totalTasksDone += results.size();
-                }
-            }
-
-            jUring.submit();
-
-
-            j= 0;
-            totalTasksDone = 0;
-
-
-            for (int i = 0; i < openFiles.size(); i++) {
-                var fd = openFiles.get(i);
-                var task = readTasks[i];
-
-                jUring.prepareRead(fd, task.bufferSize(), task.offset());
-
-                j++;
-                if (j % 75 == 0) {
-                    jUring.submit();
-                }
-
-                List<IoResult> results = jUring.peekForBatchResult(100);
-                if (!results.isEmpty()) {
-                    for (IoResult result : results) {
-                        if (OperationType.READ.equals(result.type())) {
-                            blackhole.consume(result.readBuffer());
-                            result.freeBuffer();
-                        }
-                    }
-                    totalTasksDone += results.size();
-                }
-            }
-
-            jUring.submit();
-
-            while (totalTasksDone < totalTasks) {
-                List<IoResult> results = jUring.peekForBatchResult(100);
-
-                for (IoResult result : results) {
-                    if (OperationType.READ.equals(result.type())) {
-                        blackhole.consume(result.readBuffer());
-                        result.freeBuffer();
-                    }
-                }
-                totalTasksDone += results.size();
-            }
-
-
-            int count = 0;
-            for (int fd : openFiles) {
-                jUring.prepareClose(fd);
-            }
-            jUring.submit();
-
-            while (count < openFiles.size()) {
-                List<IoResult> results = jUring.peekForBatchResult(100);
-                count += results.size();
-            }
-
-
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-  //  @Benchmark()
     public void libUringFixedReads(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
@@ -209,13 +111,13 @@ public class RandomReadBenchMark {
             int j = 0;
             for (int i = 0; i < readTasks.length; i++) {
 
-                FileDescriptor fd = new FileDescriptor(readTasks[i].sPath(), Flag.READ_DIRECT, 0);
+                FileDescriptor fd = new FileDescriptor(readTasks[i].sPath(), Flag.READ, 0);
                 openFiles.add(fd);
 
                 jUring.prepareReadFixed(fd, readTasks[i].bufferSize(), i);
 
                 j++;
-                if (j % 4 == 0) {
+                if (j % 5 == 0) {
                     jUring.submit();
                 }
             }
@@ -223,7 +125,7 @@ public class RandomReadBenchMark {
             jUring.submit();
 
             for (int i = 0; i < readTasks.length; i++) {
-                List<IoResult> results = jUring.peekForBatchResult(100);
+                IoResult[] results = jUring.peekForBatchResult(100);
 
                 for (IoResult result : results) {
                     if (OperationType.READ.equals(result.type())) {
@@ -231,7 +133,7 @@ public class RandomReadBenchMark {
                     //    r.freeBuffer();
                     }
                 }
-                i += results.size();
+                i += results.length;
             }
 
             for (FileDescriptor fd : openFiles) {
@@ -243,14 +145,14 @@ public class RandomReadBenchMark {
         }
     }
 
-   // @Benchmark
+    @Benchmark
     public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
         for (int i = 0; i < readTasks.length; i++) {
             try {
-                fileChannels[i] = FileChannel.open(readTasks[i].path(), StandardOpenOption.READ);
+                fileChannels[i] = FileChannel.open(readTasks[i].path(),  StandardOpenOption.READ, StandardOpenOption.WRITE);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -274,7 +176,7 @@ public class RandomReadBenchMark {
         }
     }
 
-   // @Benchmark
+    @Benchmark
     public void readUsingRandomAccessFile(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
@@ -305,7 +207,7 @@ public class RandomReadBenchMark {
         }
     }
 
-   // @Benchmark
+    @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
         RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];

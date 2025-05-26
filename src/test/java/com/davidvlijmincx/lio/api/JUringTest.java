@@ -10,6 +10,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -102,7 +104,41 @@ class JUringTest {
 
             readResult.freeBuffer();
 
+
             assertEquals(0, closeResult.returnValue());
+        }
+    }
+
+
+    @Test
+    void CompletableFutureTest() throws Throwable {
+        try (JUring juring = new JUring(10, 4096, 10); var arena = Arena.ofConfined()) {
+
+            CompletableFuture<IoResult> open = juring.open(arena.allocateFrom("src/test/resources/read_file"), Flag.READ, 0);
+            juring.submit();
+
+            Thread.sleep(100);
+            juring.peekCompleteForBatchResult(10);
+
+            int fd = open.get().returnValue();
+
+            CompletableFuture<IoResult> read = juring.read(fd, 13, 0);
+            CompletableFuture<IoResult> close = juring.close(fd);
+
+            juring.submit();
+            juring.peekCompleteForBatchResult(10);
+
+            IoResult readResult = read.get();
+
+            assertEquals(13, readResult.bytesTransferred());
+
+            readResult.readBuffer().set(JAVA_BYTE, readResult.bytesTransferred(), (byte) 0);
+            String string = readResult.readBuffer().getString(0);
+            assertEquals("Hello, World!", string);
+
+            readResult.freeBuffer();
+
+            assertEquals(0, close.get().returnValue());
         }
     }
 

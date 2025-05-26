@@ -3,21 +3,46 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.List;
 
 import static com.davidvlijmincx.lio.api.JUring.*;
 import static java.lang.foreign.ValueLayout.*;
 
 class LibUringWrapper implements AutoCloseable {
 
-    private static final int AT_FDCWD = (int)-100L;
-    private static final int IOSQE_IO_LINK_BIT = 2;
-    private static final byte IOSQE_IO_LINK = (byte)(1 << IOSQE_IO_LINK_BIT);
+    // io_uring setup flags
+    private static final int IORING_SETUP_IOPOLL = 1 << 0;           // 1
+    private static final int IORING_SETUP_SQPOLL = 1 << 1;           // 2
+    private static final int IORING_SETUP_SQ_AFF = 1 << 2;           // 4
+    private static final int IORING_SETUP_CQSIZE = 1 << 3;           // 8
+    private static final int IORING_SETUP_CLAMP = 1 << 4;            // 16
+    private static final int IORING_SETUP_ATTACH_WQ = 1 << 5;        // 32
+    private static final int IORING_SETUP_R_DISABLED = 1 << 6;       // 64
+    private static final int IORING_SETUP_SUBMIT_ALL = 1 << 7;       // 128
+    private static final int IORING_SETUP_COOP_TASKRUN = 1 << 8;     // 256
+    private static final int IORING_SETUP_TASKRUN_FLAG = 1 << 9;     // 512
+    private static final int IORING_SETUP_SQE128 = 1 << 10;          // 1024
+    private static final int IORING_SETUP_CQE32 = 1 << 11;           // 2048
+    private static final int IORING_SETUP_SINGLE_ISSUER = 1 << 12;   // 4096
+    private static final int IORING_SETUP_DEFER_TASKRUN = 1 << 13;   // 8192
+    private static final int IORING_SETUP_NO_MMAP = 1 << 14;         // 16384
+    private static final int IORING_SETUP_REGISTERED_FD_ONLY = 1 << 15; // 32768
+    private static final int IORING_SETUP_NO_SQARRAY = 1 << 16;      // 65536
+    private static final int IORING_SETUP_HYBRID_IOPOLL = 1 << 17;   // 131072
+
+    // SQE flags
+    private static final int AT_FDCWD = (int) -100L;
+    private static final byte IOSQE_FIXED_FILE = (byte) (1 << 0);    // 0x01
+    private static final byte IOSQE_IO_DRAIN = (byte) (1 << 1);     // 0x02
+    private static final byte IOSQE_IO_LINK = (byte) (1 << 2);      // 0x04
+    private static final byte IOSQE_IO_HARDLINK = (byte) (1 << 3);  // 0x08
+    private static final byte IOSQE_ASYNC = (byte) (1 << 4);        // 0x10
+    private static final byte IOSQE_BUFFER_SELECT = (byte) (1 << 5); // 0x20
+    private static final byte IOSQE_CQE_SKIP_SUCCESS = (byte) (1 << 6); // 0x40
 
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_queue_init_params;
     private static final MethodHandle io_uring_get_sqe;
+    private static final MethodHandle io_uring_sqe_set_flags;
     private static final MethodHandle io_uring_prep_openat;
     private static final MethodHandle io_uring_prep_close;
     private static final MethodHandle io_uring_prep_read;
@@ -70,8 +95,12 @@ class LibUringWrapper implements AutoCloseable {
 
         io_uring_get_sqe = linker.downcallHandle(
                 liburing.find("io_uring_get_sqe").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, ADDRESS),
-                Linker.Option.critical(true)
+                FunctionDescriptor.of(C_POINTER, C_POINTER)
+        );
+
+        io_uring_sqe_set_flags = linker.downcallHandle(
+                liburing.find("io_uring_sqe_set_flags").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE)
         );
 
         io_uring_register_buffers = linker.downcallHandle(
@@ -201,8 +230,10 @@ class LibUringWrapper implements AutoCloseable {
         cqePtrPtr = LibCWrapper.allocate(ADDRESS.byteSize() * 200);
 
         try {
-
-            int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, 0);
+            int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER |
+                    IORING_SETUP_COOP_TASKRUN |
+                    IORING_SETUP_DEFER_TASKRUN |
+                    IORING_SETUP_CLAMP);
             if (ret < 0) {
                 throw new RuntimeException("Failed to initialize queue " + ret);
             }
@@ -226,7 +257,7 @@ class LibUringWrapper implements AutoCloseable {
 
     void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
         try {
-            io_uring_prep_openat.invokeExact(sqe,AT_FDCWD,filePath, flags, mode );
+            io_uring_prep_openat.invokeExact(sqe, AT_FDCWD, filePath, flags, mode);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
@@ -241,9 +272,11 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     void link(MemorySegment sqe) {
-        sqe = sqe.reinterpret(4);
-        byte flagz = 1;
-        sqe.set(JAVA_BYTE, JAVA_CHAR.byteSize(), flagz |= IOSQE_IO_LINK);
+        try {
+            io_uring_sqe_set_flags.invokeExact(sqe, IOSQE_IO_HARDLINK);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
     }
 
     void prepareRead(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
@@ -256,7 +289,7 @@ class LibUringWrapper implements AutoCloseable {
 
     void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int index) {
         try {
-            io_uring_prep_read_fixed.invokeExact(sqe,fd,buffer, buffer.byteSize(), offset, index);
+            io_uring_prep_read_fixed.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset, index);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
@@ -298,7 +331,7 @@ class LibUringWrapper implements AutoCloseable {
     private void registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
         try {
             int ret = (int) io_uring_register_buffers.invokeExact(ring, iovecs, nrIovecs);
-            if (ret <0) {
+            if (ret < 0) {
                 throw new RuntimeException("Failed to register buffers");
             }
         } catch (Throwable e) {
@@ -306,20 +339,20 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    List<IoResult> peekForBatchResult(int batchSize) {
+    IoResult[] peekForBatchResult(int batchSize) {
         try {
             int count = (int) io_uring_peek_batch_cqe.invokeExact(ring, cqePtrPtr, batchSize);
 
             if (count > 0) {
-                List<IoResult> ret = new ArrayList<>(count);
+                IoResult[] ret = new IoResult[count];
 
                 for (int i = 0; i < count; i++) {
-                    ret.add(getResultFromCqe(cqePtrPtr.getAtIndex(ADDRESS, i)));
+                    ret[i] =(getResultFromCqe(cqePtrPtr.getAtIndex(ADDRESS, i)));
                 }
 
                 return ret;
             }
-            return List.of();
+            return new IoResult[0];
 
         } catch (Throwable e) {
             throw new RuntimeException("Failed while peeking or creating result from cqe ", e);
@@ -352,9 +385,10 @@ class LibUringWrapper implements AutoCloseable {
         int type = (int) typeHandle.get(nativeUserData, 0L);
         OperationType operationType = OperationType.valueOf(type);
 
-         var value = switch (operationType) {
-             case READ, WRITE -> new IoResult((long) idHandle.get(nativeUserData, 0L), operationType, result, (MemorySegment) bufferHandle.get(nativeUserData, 0L));
-            case OPEN, CLOSE -> new IoResult((long) idHandle.get(nativeUserData, 0L),operationType,result,null);
+        var value = switch (operationType) {
+            case READ, WRITE ->
+                    new IoResult((long) idHandle.get(nativeUserData, 0L), operationType, result, (MemorySegment) bufferHandle.get(nativeUserData, 0L));
+            case OPEN, CLOSE -> new IoResult((long) idHandle.get(nativeUserData, 0L), operationType, result, null);
         };
 
         LibCWrapper.freeBuffer(nativeUserData);

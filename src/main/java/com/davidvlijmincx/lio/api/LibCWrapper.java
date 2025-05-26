@@ -10,6 +10,7 @@ class LibCWrapper {
     private static final MethodHandle free;
     private static final MethodHandle open;
     private static final MethodHandle close;
+    public static final MethodHandle pclose;
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
 
@@ -45,6 +46,12 @@ class LibCWrapper {
         close = linker.downcallHandle(
                 linker.defaultLookup().find("close").orElseThrow(),
                 FunctionDescriptor.ofVoid(JAVA_INT),
+                Linker.Option.critical(true)
+        );
+
+        pclose = linker.downcallHandle(
+                linker.defaultLookup().find("close").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT),
                 Linker.Option.critical(true)
         );
     }

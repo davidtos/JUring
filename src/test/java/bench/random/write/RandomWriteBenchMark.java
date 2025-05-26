@@ -15,6 +15,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -26,7 +27,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(MAX)
+@Threads(15)
 public class RandomWriteBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -83,9 +84,9 @@ public class RandomWriteBenchMark {
             jUring.submit();
 
             for (int i = 0; i < writeTasks.length; i++) {
-                List<IoResult> results = jUring.peekForBatchResult(100);
-                i += results.size();
-                results.forEach(IoResult::freeBuffer);
+                IoResult[] results = jUring.peekForBatchResult(100);
+                i += results.length;
+                Arrays.stream(results).forEach(IoResult::freeBuffer);
             }
 
             for (FileDescriptor fd : openFiles) {
