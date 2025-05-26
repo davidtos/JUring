@@ -10,6 +10,36 @@ import static java.lang.foreign.ValueLayout.*;
 
 class LibUringWrapper implements AutoCloseable {
 
+    // io_uring setup flags
+    private static final int IORING_SETUP_IOPOLL = 1 << 0;           // 1
+    private static final int IORING_SETUP_SQPOLL = 1 << 1;           // 2
+    private static final int IORING_SETUP_SQ_AFF = 1 << 2;           // 4
+    private static final int IORING_SETUP_CQSIZE = 1 << 3;           // 8
+    private static final int IORING_SETUP_CLAMP = 1 << 4;            // 16
+    private static final int IORING_SETUP_ATTACH_WQ = 1 << 5;        // 32
+    private static final int IORING_SETUP_R_DISABLED = 1 << 6;       // 64
+    private static final int IORING_SETUP_SUBMIT_ALL = 1 << 7;       // 128
+    private static final int IORING_SETUP_COOP_TASKRUN = 1 << 8;     // 256
+    private static final int IORING_SETUP_TASKRUN_FLAG = 1 << 9;     // 512
+    private static final int IORING_SETUP_SQE128 = 1 << 10;          // 1024
+    private static final int IORING_SETUP_CQE32 = 1 << 11;           // 2048
+    private static final int IORING_SETUP_SINGLE_ISSUER = 1 << 12;   // 4096
+    private static final int IORING_SETUP_DEFER_TASKRUN = 1 << 13;   // 8192
+    private static final int IORING_SETUP_NO_MMAP = 1 << 14;         // 16384
+    private static final int IORING_SETUP_REGISTERED_FD_ONLY = 1 << 15; // 32768
+    private static final int IORING_SETUP_NO_SQARRAY = 1 << 16;      // 65536
+    private static final int IORING_SETUP_HYBRID_IOPOLL = 1 << 17;   // 131072
+
+    // SQE flags
+    private static final int AT_FDCWD = (int) -100L;
+    private static final byte IOSQE_FIXED_FILE = (byte) (1 << 0);    // 0x01
+    private static final byte IOSQE_IO_DRAIN = (byte) (1 << 1);     // 0x02
+    private static final byte IOSQE_IO_LINK = (byte) (1 << 2);      // 0x04
+    private static final byte IOSQE_IO_HARDLINK = (byte) (1 << 3);  // 0x08
+    private static final byte IOSQE_ASYNC = (byte) (1 << 4);        // 0x10
+    private static final byte IOSQE_BUFFER_SELECT = (byte) (1 << 5); // 0x20
+    private static final byte IOSQE_CQE_SKIP_SUCCESS = (byte) (1 << 6); // 0x40
+
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_prep_read;
@@ -191,7 +221,7 @@ class LibUringWrapper implements AutoCloseable {
 
         try {
 
-            int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, 0);
+            int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER);
             if (ret < 0) {
                 throw new RuntimeException("Failed to initialize queue " + ret);
             }

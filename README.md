@@ -1,7 +1,7 @@
 # JUring: File I/O for Java using IO_uring
 JUring is a high-performance Java library that provides bindings to Linux's io_uring asynchronous I/O interface
-using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 29.35% better random read performance than Java NIO FileChannel
-operations for local files and 82.31% better performance for random write operations.
+using Java's Foreign Function & Memory API. Doing Random reads JUring achieves 37.86% better random read performance than Java NIO FileChannel
+operations for local files and 60% better performance for random write operations.
 
 ## Performance
 The following benchmarks show the improvement of using io_uring over Java built-in I/O.
@@ -9,60 +9,59 @@ The test ran on a Linux machine with 32 cores, a nvme SSD, and a mounted remote 
 
 Local file performance:
 ```text
-b.r.read.RandomReadBenchMark.libUring                                      512          N/A  thrpt    5  1275.874 ± 245.950  ops/ms
-b.r.read.RandomReadBenchMark.libUring                                     4096          N/A  thrpt    5  1239.701 ± 223.885  ops/ms
-b.r.read.RandomReadBenchMark.libUring                                    16386          N/A  thrpt    5  1249.493 ± 186.430  ops/ms
-b.r.read.RandomReadBenchMark.libUring                                    65536          N/A  thrpt    5  1261.449 ± 295.242  ops/ms
-b.r.read.RandomReadBenchMark.libUringBlocking                              512          N/A  thrpt    5  1057.263 ±   5.056  ops/ms
-b.r.read.RandomReadBenchMark.libUringBlocking                             4096          N/A  thrpt    5  1048.273 ±   1.401  ops/ms
-b.r.read.RandomReadBenchMark.libUringBlocking                            16386          N/A  thrpt    5  1055.845 ±   1.412  ops/ms
-b.r.read.RandomReadBenchMark.libUringBlocking                            65536          N/A  thrpt    5  1052.612 ±   3.839  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannel                          512          N/A  thrpt    5   986.372 ±   7.970  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannel                         4096          N/A  thrpt    5   987.387 ±   3.966  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannel                        16386          N/A  thrpt    5   987.740 ±   4.790  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannel                        65536          N/A  thrpt    5   987.509 ±   6.609  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads            512          N/A  thrpt    5   958.128 ±   5.137  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads           4096          N/A  thrpt    5   934.181 ±   7.713  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads          16386          N/A  thrpt    5   956.217 ±   4.759  ops/ms
-b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads          65536          N/A  thrpt    5   952.833 ±  11.446  ops/ms
-b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                     512          N/A  thrpt    5   970.055 ±   3.866  ops/ms
-b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                    4096          N/A  thrpt    5   964.447 ±   3.867  ops/ms
-b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                   16386          N/A  thrpt    5   939.419 ±   7.117  ops/ms
-b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                   65536          N/A  thrpt    5   935.430 ±   3.556  ops/ms
+Benchmark                                                           (readSize)  (writeSize)   Mode  Cnt     Score     Error   Units
+b.r.read.RandomReadBenchMark.libUring                                      512          N/A  thrpt    5  1332.440 ± 213.308  ops/ms
+b.r.read.RandomReadBenchMark.libUring                                     4096          N/A  thrpt    5  1323.459 ±  93.749  ops/ms
+b.r.read.RandomReadBenchMark.libUring                                    16386          N/A  thrpt    5  1340.537 ± 190.627  ops/ms
+b.r.read.RandomReadBenchMark.libUring                                    65536          N/A  thrpt    5  1329.904 ± 176.533  ops/ms
+b.r.read.RandomReadBenchMark.libUringBlocking                              512          N/A  thrpt    5  1018.328 ±   4.611  ops/ms
+b.r.read.RandomReadBenchMark.libUringBlocking                             4096          N/A  thrpt    5  1018.496 ±   6.833  ops/ms
+b.r.read.RandomReadBenchMark.libUringBlocking                            16386          N/A  thrpt    5  1011.150 ±   5.034  ops/ms
+b.r.read.RandomReadBenchMark.libUringBlocking                            65536          N/A  thrpt    5  1014.375 ±   3.168  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannel                          512          N/A  thrpt    5   946.615 ±   9.223  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannel                         4096          N/A  thrpt    5   966.616 ±   4.471  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannel                        16386          N/A  thrpt    5   972.344 ±   8.253  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannel                        65536          N/A  thrpt    5   966.744 ±  14.707  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads            512          N/A  thrpt    5   988.161 ±  12.255  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads           4096          N/A  thrpt    5   986.658 ±  15.267  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads          16386          N/A  thrpt    5   963.168 ±  20.832  ops/ms
+b.r.read.RandomReadBenchMark.readUsingFileChannelVirtualThreads          65536          N/A  thrpt    5   977.285 ±   8.513  ops/ms
+b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                     512          N/A  thrpt    5   956.338 ±   3.577  ops/ms
+b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                    4096          N/A  thrpt    5   917.699 ±  19.362  ops/ms
+b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                   16386          N/A  thrpt    5   915.716 ±  10.454  ops/ms
+b.r.read.RandomReadBenchMark.readUsingRandomAccessFile                   65536          N/A  thrpt    5   912.750 ±  10.079  ops/ms
 
-
-b.r.write.RandomWriteBenchMark.libUring                                    N/A          512  thrpt    5  1331.685 ± 113.858  ops/ms
-b.r.write.RandomWriteBenchMark.libUring                                    N/A         4096  thrpt    5  1233.438 ±  49.207  ops/ms
-b.r.write.RandomWriteBenchMark.libUring                                    N/A        16386  thrpt    5   628.115 ±  10.026  ops/ms
-b.r.write.RandomWriteBenchMark.libUring                                    N/A        65536  thrpt    5   181.234 ±   0.591  ops/ms
-b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A          512  thrpt    5  1001.077 ±   7.475  ops/ms
-b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A         4096  thrpt    5   993.956 ±   1.910  ops/ms
-b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A        16386  thrpt    5   967.783 ±   3.125  ops/ms
-b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A        65536  thrpt    5   485.083 ±   6.227  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A          512  thrpt    5   963.150 ±   5.306  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A         4096  thrpt    5   887.841 ±   3.353  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A        16386  thrpt    5   723.255 ±  10.389  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A        65536  thrpt    5   266.066 ±  27.711  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A          512  thrpt    5   896.105 ±   8.931  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A         4096  thrpt    5   836.641 ±  14.087  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A        16386  thrpt    5   547.818 ±   2.182  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A        65536  thrpt    5   179.065 ±   8.668  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A          512  thrpt    5   913.424 ±   8.509  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A         4096  thrpt    5   868.045 ±   5.491  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        16386  thrpt    5   688.860 ±  11.856  ops/ms
-b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        65536  thrpt    5   266.329 ±  62.960  ops/ms
+b.r.write.RandomWriteBenchMark.libUring                                    N/A          512  thrpt    5  1234.283 ±   9.916  ops/ms
+b.r.write.RandomWriteBenchMark.libUring                                    N/A         4096  thrpt    5  1099.632 ±   5.064  ops/ms
+b.r.write.RandomWriteBenchMark.libUring                                    N/A        16386  thrpt    5   666.189 ±  11.487  ops/ms
+b.r.write.RandomWriteBenchMark.libUring                                    N/A        65536  thrpt    5   183.988 ±   0.635  ops/ms
+b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A          512  thrpt    5   914.569 ±   8.853  ops/ms
+b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A         4096  thrpt    5   908.182 ±   4.156  ops/ms
+b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A        16386  thrpt    5   885.863 ±  18.603  ops/ms
+b.r.write.RandomWriteBenchMark.libUringBlocking                            N/A        65536  thrpt    5   501.706 ±  11.968  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A          512  thrpt    5   930.162 ±   4.029  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A         4096  thrpt    5   843.667 ±  18.093  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A        16386  thrpt    5   661.805 ±  36.755  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannel                       N/A        65536  thrpt    5   313.467 ±  17.602  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A          512  thrpt    5   931.536 ±  18.257  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A         4096  thrpt    5   854.390 ±  19.249  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A        16386  thrpt    5   563.341 ±   3.725  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingFileChannelVirtualThreads         N/A        65536  thrpt    5   168.824 ±   8.129  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A          512  thrpt    5   898.822 ±  13.111  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A         4096  thrpt    5   827.981 ±  14.188  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        16386  thrpt    5   656.546 ±  26.878  ops/ms
+b.r.write.RandomWriteBenchMark.writeUsingRandomAccessFile                  N/A        65536  thrpt    5   310.930 ±  30.227  ops/ms
 ```
-Uring achieves 29.35% better random read performance than Java NIO FileChannel operations for local files and 82.31% better performance for random write operations.
+Uring achieves 37.86% better random read performance than Java NIO FileChannel operations for local files and 60% better performance for random write operations.
 
 
 ## Benchmark Methodology
 The benchmarks are conducted using JMH (Java Microbenchmark Harness) with the following parameters:
 
 - Each test performs 2300 operations per invocation
-- Tests using local files ran with 32 threads
+- Tests using local files ran with 15 threads
 - Tests using remote files ran with 5 threads (Linux threw errors when using more threads to run the FileChannel and io_uring example)
 - Queue depth of 2500 for io_uring operations
-- Fixed read size of 4KB (4096 bytes)
 - Random offsets within files
 - Initializing the rings is done outside the benchmark
 

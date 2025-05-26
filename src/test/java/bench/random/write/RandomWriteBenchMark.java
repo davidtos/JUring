@@ -29,7 +29,7 @@ import static org.openjdk.jmh.annotations.Threads.MAX;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(MAX)
+@Threads(15)
 public class RandomWriteBenchMark {
 
     public static void main(String[] args) throws RunnerException {
