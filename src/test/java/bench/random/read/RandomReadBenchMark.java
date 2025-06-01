@@ -32,7 +32,7 @@ public class RandomReadBenchMark {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
-                .addProfiler(AsyncProfiler.class, "lock=1ms sfsdf=13")
+                .addProfiler(AsyncProfiler.class, "lock=1ms simple=true output=flamegraph")
                 .shouldDoGC(true)
                 .build();
 
