@@ -1,0 +1,21 @@
+--- Execution profile ---
+Total samples       : 2
+
+--- 1850426 ns (100.00%), 2 samples
+  [ 0] java.util.concurrent.locks.ReentrantLock$NonfairSync
+  [ 1] jdk.internal.misc.Unsafe.park
+  [ 2] java.util.concurrent.locks.LockSupport.park
+  [ 3] java.util.concurrent.locks.AbstractQueuedSynchronizer.acquire
+  [ 4] java.util.concurrent.locks.AbstractQueuedSynchronizer.acquireInterruptibly
+  [ 5] java.util.concurrent.locks.ReentrantLock$Sync.lockInterruptibly
+  [ 6] java.util.concurrent.locks.ReentrantLock.lockInterruptibly
+  [ 7] java.util.concurrent.LinkedBlockingQueue.take
+  [ 8] java.util.concurrent.ThreadPoolExecutor.getTask
+  [ 9] java.util.concurrent.ThreadPoolExecutor.runWorker
+  [10] java.util.concurrent.ThreadPoolExecutor$Worker.run
+  [11] java.lang.Thread.runWith
+  [12] java.lang.Thread.run
+
+          ns  percent  samples  top
+  ----------  -------  -------  ---
+     1850426  100.00%        2  java.util.concurrent.locks.ReentrantLock$NonfairSync
