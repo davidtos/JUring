@@ -64,12 +64,6 @@ class LibUringWrapper implements AutoCloseable {
     private final MemorySegment cqePtrPtr;
     private static final AddressLayout C_POINTER;
 
-    private static final StructLayout requestLayout;
-    private static final VarHandle idHandle;
-    private static final VarHandle fdHandle;
-    private static final VarHandle readHandle;
-    private static final VarHandle bufferHandle;
-
     static {
 
         Linker linker = Linker.nativeLinker();
@@ -201,17 +195,6 @@ class LibUringWrapper implements AutoCloseable {
                 MemoryLayout.sequenceLayout(0, ValueLayout.JAVA_LONG).withName("big_cqe")
         ).withName("io_uring_cqe");
 
-        requestLayout = MemoryLayout.structLayout(
-                        ValueLayout.JAVA_LONG.withName("id"),
-                        C_POINTER.withName("buffer"),
-                        ValueLayout.JAVA_INT.withName("fd"),
-                        ValueLayout.JAVA_BOOLEAN.withName("read"))
-                .withName("request");
-
-        idHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("id"));
-        fdHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("fd"));
-        readHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("read"));
-        bufferHandle = requestLayout.varHandle(MemoryLayout.PathElement.groupElement("buffer"));
     }
 
     LibUringWrapper(int queueDepth) {
@@ -323,17 +306,17 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     private Result getResultFromCqe(long address, long result, MemorySegment cqePointer) {
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(requestLayout.byteSize());
+        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
 
         seen(cqePointer);
 
-        boolean readResult = (boolean) readHandle.get(nativeUserData, 0L);
-        long idResult = (long) idHandle.get(nativeUserData, 0L);
-        MemorySegment bufferResult = (MemorySegment) bufferHandle.get(nativeUserData, 0L);
+        OperationType readResult = UserData.getType(nativeUserData);
+        long idResult = UserData.getId(nativeUserData);
+        MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
 
         LibCWrapper.freeBuffer(nativeUserData);
 
-        if (!readResult) {
+        if (OperationType.WRITE.equals(readResult)) {
             LibCWrapper.freeBuffer(bufferResult);
             return new AsyncWriteResult(idResult, result);
         }
