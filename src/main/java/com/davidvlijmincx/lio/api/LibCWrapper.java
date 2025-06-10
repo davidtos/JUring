@@ -14,6 +14,7 @@ class LibCWrapper {
     private static final MethodHandle close;
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
+    private static final MethodHandle strerror;
 
     static {
         Linker linker = Linker.nativeLinker();
@@ -23,6 +24,12 @@ class LibCWrapper {
                 FunctionDescriptor.ofVoid(ADDRESS),
                 Linker.Option.critical(true)
         );
+
+        strerror = linker.downcallHandle(
+                linker.defaultLookup().find("strerror").orElseThrow(),
+                FunctionDescriptor.of(ADDRESS, JAVA_INT)
+        );
+
 
         open = linker.downcallHandle(
                 linker.defaultLookup().find("open").orElseThrow(),
@@ -57,7 +64,7 @@ class LibCWrapper {
         try {
             int fd = (int) open.invokeExact(MemorySegment.ofArray((filePath + "\0").getBytes()), flags, mode);
             if (fd < 0) {
-                throw new RuntimeException("Failed to open file fd=" + fd);
+                throw new RuntimeException("Failed to open file: " + getErrorMessage(fd));
             }
             return fd;
         } catch (Throwable e) {
@@ -65,6 +72,14 @@ class LibCWrapper {
         }
     }
 
+    static String getErrorMessage(int errno) {
+        try {
+            MemorySegment result = (MemorySegment) strerror.invokeExact(errno);
+            return result.reinterpret(Long.MAX_VALUE).getString(0);
+        } catch (Throwable e) {
+            throw new RuntimeException("Could not get error message for errno: " + errno, e);
+        }
+    }
 
     static void freeBuffer(MemorySegment buffer) {
         try {

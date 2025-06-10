@@ -6,6 +6,7 @@ import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.davidvlijmincx.lio.api.LibCWrapper.getErrorMessage;
 import static java.lang.foreign.ValueLayout.*;
 
 class LibUringWrapper implements AutoCloseable {
@@ -223,7 +224,7 @@ class LibUringWrapper implements AutoCloseable {
 
             int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER);
             if (ret < 0) {
-                throw new RuntimeException("Failed to initialize queue " + ret);
+                throw new RuntimeException("Failed to initialize queue " + getErrorMessage(ret));
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
