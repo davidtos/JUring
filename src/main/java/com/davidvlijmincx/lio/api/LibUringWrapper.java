@@ -255,7 +255,7 @@ class LibUringWrapper implements AutoCloseable {
         try {
             int ret = (int) io_uring_submit.invokeExact(ring);
             if (ret < 0) {
-                throw new RuntimeException("Failed to submit queue");
+                throw new RuntimeException("Failed to submit queue: " + getErrorMessage(ret));
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
@@ -275,7 +275,8 @@ class LibUringWrapper implements AutoCloseable {
                     long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
                     int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-                    ret.add(getResultFromCqe(userData, res, nativeCqe));
+                    ret.add(getResultFromCqe(userData, res));
+                    seen(nativeCqe);
                 }
 
                 return ret;
@@ -291,7 +292,7 @@ class LibUringWrapper implements AutoCloseable {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
-                throw new RuntimeException("Error while waiting for cqe: " + ret);
+                throw new RuntimeException("Error while waiting for cqe: " + getErrorMessage(ret));
             }
 
             var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
@@ -299,24 +300,24 @@ class LibUringWrapper implements AutoCloseable {
             long userData = nativeCqe.get(ValueLayout.JAVA_LONG, 0);
             int res = nativeCqe.get(ValueLayout.JAVA_INT, 8);
 
-            return getResultFromCqe(userData, res, nativeCqe);
+            Result result = getResultFromCqe(userData, res);
+            seen(nativeCqe);
+            return result;
         } catch (Throwable e) {
             throw new RuntimeException("Exception while waiting/creating result", e);
         }
     }
 
-    private Result getResultFromCqe(long address, long result, MemorySegment cqePointer) {
+    private Result getResultFromCqe(long address, long result) {
         MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
 
-        seen(cqePointer);
-
-        OperationType readResult = UserData.getType(nativeUserData);
+        OperationType type = UserData.getType(nativeUserData);
         long idResult = UserData.getId(nativeUserData);
         MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
 
         LibCWrapper.freeBuffer(nativeUserData);
 
-        if (OperationType.WRITE.equals(readResult)) {
+        if (OperationType.WRITE.equals(type)) {
             LibCWrapper.freeBuffer(bufferResult);
             return new AsyncWriteResult(idResult, result);
         }
