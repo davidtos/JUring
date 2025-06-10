@@ -1,6 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-public abstract sealed class Result permits AsyncReadResult, AsyncWriteResult, BlockingReadResult, BlockingWriteResult {
+public abstract sealed class Result permits ReadResult, WriteResult {
 
     private final long id;
 

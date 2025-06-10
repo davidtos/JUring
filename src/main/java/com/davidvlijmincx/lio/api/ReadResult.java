@@ -2,9 +2,31 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
 
-public sealed interface ReadResult permits AsyncReadResult, BlockingReadResult {
-    long getId();
-    MemorySegment getBuffer();
-    long getResult();
-    void freeBuffer();
+public final class ReadResult extends Result {
+
+    MemorySegment buffer;
+    long result;
+
+
+    ReadResult(long id) {
+        super(id);
+    }
+
+    ReadResult(long id, MemorySegment buffer, long result) {
+        super(id);
+        this.buffer = buffer;
+        this.result = result;
+    }
+
+    public MemorySegment getBuffer() {
+        return buffer;
+    }
+
+    public long getResult() {
+        return result;
+    }
+
+    public void freeBuffer() {
+        LibCWrapper.freeBuffer(buffer);
+    }
 }

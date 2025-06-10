@@ -2,10 +2,10 @@ package bench.random.write;
 
 import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
-import com.davidvlijmincx.lio.api.BlockingWriteResult;
 import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.Flag;
 import com.davidvlijmincx.lio.api.Result;
+import com.davidvlijmincx.lio.api.WriteResult;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
@@ -19,9 +19,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
 import static org.openjdk.jmh.annotations.Threads.MAX;
 
@@ -51,11 +49,16 @@ public class RandomWriteBenchMark {
 
             for (RandomWriteTask writeTask : writeTasks) {
                 FileDescriptor fd = new FileDescriptor(writeTask.sPath(), Flag.WRITE, 0);
-                BlockingWriteResult r = jUringBlocking.prepareWrite(fd, randomWriteTaskCreator.content, writeTask.offset());
+                Future<WriteResult> r = jUringBlocking.prepareWrite(fd, randomWriteTaskCreator.content, writeTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
-                    r.getResult();
-                    fd.close();
+                    try {
+                        r.get().getResult();
+                        fd.close();
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    }
+
                 });
             }
         }

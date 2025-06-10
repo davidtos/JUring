@@ -4,12 +4,14 @@ package com.davidvlijmincx.lio.api;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
 
 public class JUringBlocking implements AutoCloseable {
 
     public final int pollingInterval;
-    private final Map<Long, BlockingResult> requests;
+    private final Map<Long, CompletableFuture<? extends Result>> requests;
     private final JUring jUring;
     private boolean running = true;
     private Thread pollerThread;
@@ -35,8 +37,15 @@ public class JUringBlocking implements AutoCloseable {
                 final List<Result> results = jUring.peekForBatchResult(100);
 
                 results.forEach(result -> {
-                    BlockingResult request = requests.remove(result.getId());
-                    request.setResult(result);
+                    CompletableFuture<? extends Result> request = requests.remove(result.getId());
+
+                    if(result instanceof ReadResult r) {
+                        ((CompletableFuture<ReadResult>)request).complete(r);
+                    }
+                    else if(result instanceof WriteResult r) {
+                        ((CompletableFuture<WriteResult>)request).complete(r);
+                    }
+
                 });
 
                 sleepInterval();
@@ -57,16 +66,16 @@ public class JUringBlocking implements AutoCloseable {
         jUring.submit();
     }
 
-    public BlockingReadResult prepareRead(FileDescriptor fd, int size, long offset) {
+    public Future<ReadResult> prepareRead(FileDescriptor fd, int size, long offset) {
         long id = jUring.prepareRead(fd, size, offset);
-        BlockingReadResult result = new BlockingReadResult(id);
+        CompletableFuture<ReadResult> result = new CompletableFuture<>();
         requests.put(id, result);
         return result;
     }
 
-    public BlockingWriteResult prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
+    public Future<WriteResult> prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         long id = jUring.prepareWrite(fd, bytes, offset);
-        BlockingWriteResult result = new BlockingWriteResult(id);
+        CompletableFuture<WriteResult> result = new CompletableFuture<>();
         requests.put(id, result);
         return result;
     }

@@ -185,7 +185,7 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof AsyncWriteResult writeResult) {
+            if (result instanceof WriteResult writeResult) {
                 assertEquals(id, writeResult.getId());
                 assertEquals(inputBytes.length, writeResult.getResult());
             } else {
@@ -212,7 +212,7 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof AsyncWriteResult writeResult) {
+            if (result instanceof WriteResult writeResult) {
                 assertEquals(id, writeResult.getId());
                 assertEquals(inputBytes.length, writeResult.getResult());
             } else {
