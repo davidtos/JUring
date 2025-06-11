@@ -232,7 +232,7 @@ class JUringTest {
             int result = jUring.registerFiles(fileDescriptors);
             assertEquals(0, result);
 
-            long id = jUring.prepareReadFixed(0, 14, 0);
+            long id = jUring.prepareRead(0, 14, 0);
             jUring.submit();
             Result readResult = jUring.waitForResult();
 
@@ -263,7 +263,7 @@ class JUringTest {
             int result = jUring.registerFiles(fileDescriptors);
             assertEquals(0, result);
 
-            long id = jUring.prepareWriteFixed(0, inputBytes, 0);
+            long id = jUring.prepareWrite(0, inputBytes, 0);
             jUring.submit();
             Result writeResult = jUring.waitForResult();
 
@@ -296,7 +296,7 @@ class JUringTest {
             assertEquals(1, updateResult);
 
             // Test reading from index 1 (now third_read_file) after update
-            long id2 = jUring.prepareReadFixed(0, 20, 0);
+            long id2 = jUring.prepareRead(0, 20, 0);
             jUring.submit();
             Result readResult2 = jUring.waitForResult();
 
@@ -311,7 +311,7 @@ class JUringTest {
             }
 
             // Test reading from index 1 (second_read_file) before update
-            long id1 = jUring.prepareReadFixed(1, 20, 0);
+            long id1 = jUring.prepareRead(1, 20, 0);
             jUring.submit();
             Result readResult1 = jUring.waitForResult();
 
