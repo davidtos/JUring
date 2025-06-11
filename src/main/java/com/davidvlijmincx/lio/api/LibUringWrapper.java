@@ -54,6 +54,8 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_queue_exit;
     private static final MethodHandle io_uring_sqe_set_data;
     private static final MethodHandle io_uring_register_buffers;
+    private static final MethodHandle io_uring_register_files;
+    private static final MethodHandle io_uring_register_files_update;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -160,6 +162,16 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_register_buffers = linker.downcallHandle(
                 liburing.find("io_uring_register_buffers").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT)
+        );
+
+        io_uring_register_files = linker.downcallHandle(
+                liburing.find("io_uring_register_files").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT)
+        );
+
+        io_uring_register_files_update = linker.downcallHandle(
+                liburing.find("io_uring_register_files_update").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT)
         );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -376,6 +388,44 @@ class LibUringWrapper implements AutoCloseable {
             return ret;
         } catch (Throwable e) {
             throw new RuntimeException("Exception while registering buffers", e);
+        }
+    }
+
+    int registerFiles(int[] fileDescriptors) {
+        try {
+            int count = fileDescriptors.length;
+            MemorySegment fdArray = arena.allocate(JAVA_INT.byteSize() * count);
+            
+            for (int i = 0; i < count; i++) {
+                fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
+            }
+            
+            int ret = (int) io_uring_register_files.invokeExact(ring, fdArray, count);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to register files: " + getErrorMessage(ret));
+            }
+            return ret;
+        } catch (Throwable e) {
+            throw new RuntimeException("Exception while registering files", e);
+        }
+    }
+
+    int registerFilesUpdate(int offset, int[] fileDescriptors) {
+        try {
+            int count = fileDescriptors.length;
+            MemorySegment fdArray = arena.allocate(JAVA_INT.byteSize() * count);
+            
+            for (int i = 0; i < count; i++) {
+                fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
+            }
+            
+            int ret = (int) io_uring_register_files_update.invokeExact(ring, offset, fdArray, count);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to update registered files: " + getErrorMessage(ret));
+            }
+            return ret;
+        } catch (Throwable e) {
+            throw new RuntimeException("Exception while updating registered files", e);
         }
     }
 
