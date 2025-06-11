@@ -278,4 +278,52 @@ class JUringTest {
             assertEquals(input, writtenContent);
         }
     }
+
+    @Test
+    void updateRegisteredFile() {
+        try(FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);
+            FileDescriptor secondReadFd = new FileDescriptor("src/test/resources/second_read_file", Flag.READ, 0);
+            FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", Flag.READ, 0)) {
+            
+            // Register initial files: read_file and second_read_file
+            int[] initialFiles = {readFd.getFd(), secondReadFd.getFd()};
+            int result = jUring.registerFiles(initialFiles);
+            assertEquals(0, result);
+
+            // Update index 1 to point to third_read_file
+            int[] updateFiles = {thirdReadFd.getFd()};
+            int updateResult = jUring.registerFilesUpdate(0, updateFiles);
+            assertEquals(1, updateResult);
+
+            // Test reading from index 1 (now third_read_file) after update
+            long id2 = jUring.prepareReadFixed(0, 20, 0);
+            jUring.submit();
+            Result readResult2 = jUring.waitForResult();
+
+            if (readResult2 instanceof ReadResult read) {
+                assertEquals(id2, read.getId());
+                read.getBuffer().set(JAVA_BYTE, (int)read.getResult(), (byte) 0);
+                String content = read.getBuffer().getString(0);
+                read.freeBuffer();
+                assertEquals("third file content", content);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
+            // Test reading from index 1 (second_read_file) before update
+            long id1 = jUring.prepareReadFixed(1, 20, 0);
+            jUring.submit();
+            Result readResult1 = jUring.waitForResult();
+
+            if (readResult1 instanceof ReadResult read) {
+                assertEquals(id1, read.getId());
+                read.getBuffer().set(JAVA_BYTE, (int)read.getResult(), (byte) 0);
+                String content = read.getBuffer().getString(0);
+                read.freeBuffer();
+                assertEquals("second file content", content);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+        }
+    }
 }
