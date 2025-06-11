@@ -27,6 +27,20 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
+    public long prepareReadFixed(int indexFD, int readSize, long offset) {
+        MemorySegment buff = LibCWrapper.malloc(readSize);
+
+        long id = buff.address();
+        MemorySegment userData = UserData.createUserData(id, indexFD, OperationType.READ, buff);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.fixedFile(sqe);
+        libUringWrapper.prepareRead(sqe, indexFD, buff, offset);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         MemorySegment sqe = libUringWrapper.getSqe();
         MemorySegment buff = LibCWrapper.malloc(bytes.length);
@@ -54,6 +68,18 @@ public class JUring implements AutoCloseable {
 
     public Result waitForResult() {
         return libUringWrapper.waitForResult();
+    }
+
+    public int registerBuffers(MemorySegment[] buffers) {
+        return libUringWrapper.registerBuffers(buffers);
+    }
+
+    public int registerFiles(int[] fileDescriptors) {
+        return libUringWrapper.registerFiles(fileDescriptors);
+    }
+
+    public int registerFilesUpdate(int offset, int[] fileDescriptors) {
+        return libUringWrapper.registerFilesUpdate(offset, fileDescriptors);
     }
 
     @Override

@@ -224,4 +224,29 @@ class JUringTest {
 
         }
     }
+
+    @Test
+    void readFromRegisteredFile() {
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            int[] fileDescriptors = {fd.getFd()};
+            int result = jUring.registerFiles(fileDescriptors);
+            assertEquals(0, result);
+
+            long id = jUring.prepareReadFixed(0, 14, 0);
+            jUring.submit();
+            Result readResult = jUring.waitForResult();
+
+            if (readResult instanceof ReadResult read) {
+                assertEquals(id, read.getId());
+                assertEquals(13, read.getResult());
+
+                read.getBuffer().set(JAVA_BYTE, read.getResult(), (byte) 0);
+                String string = read.getBuffer().getString(0);
+                read.freeBuffer();
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+        }
+    }
 }
