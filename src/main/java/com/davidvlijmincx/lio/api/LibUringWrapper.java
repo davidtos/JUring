@@ -44,6 +44,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_prep_read;
+    private static final MethodHandle io_uring_prep_read_fixed;
     private static final MethodHandle io_uring_prep_write;
     private static final MethodHandle io_uring_submit;
     private static final MethodHandle io_uring_wait_cqe;
@@ -52,6 +53,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_cqe_seen;
     private static final MethodHandle io_uring_queue_exit;
     private static final MethodHandle io_uring_sqe_set_data;
+    private static final MethodHandle io_uring_register_buffers;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -92,6 +94,18 @@ class LibUringWrapper implements AutoCloseable {
                         C_POINTER,
                         JAVA_LONG,
                         ValueLayout.JAVA_LONG
+                )
+        );
+
+        io_uring_prep_read_fixed = linker.downcallHandle(
+                liburing.find("io_uring_prep_read_fixed").orElseThrow(),
+                FunctionDescriptor.ofVoid(
+                        C_POINTER,
+                        JAVA_INT,
+                        C_POINTER,
+                        JAVA_LONG,
+                        JAVA_LONG,
+                        JAVA_INT
                 )
         );
 
@@ -141,6 +155,11 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_sqe_set_data = linker.downcallHandle(
                 liburing.find("io_uring_sqe_set_data").orElseThrow(),
                 FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG)
+        );
+
+        io_uring_register_buffers = linker.downcallHandle(
+                liburing.find("io_uring_register_buffers").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT)
         );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -230,6 +249,14 @@ class LibUringWrapper implements AutoCloseable {
     void prepareRead(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
         try {
             io_uring_prep_read.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int bufferIndex) {
+        try {
+            io_uring_prep_read_fixed.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset, bufferIndex);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
@@ -330,6 +357,25 @@ class LibUringWrapper implements AutoCloseable {
             io_uring_cqe_seen.invokeExact(ring, cqePointer);
         } catch (Throwable e) {
             throw new RuntimeException("Could not mark cqe as seen", e);
+        }
+    }
+
+    int registerBuffers(MemorySegment[] buffers) {
+        try {
+            int count = buffers.length;
+            MemorySegment ioVecArray = arena.allocate(AddressLayout.ADDRESS.byteSize() * count);
+            
+            for (int i = 0; i < count; i++) {
+                ioVecArray.setAtIndex(ADDRESS, i, buffers[i]);
+            }
+            
+            int ret = (int) io_uring_register_buffers.invokeExact(ring, ioVecArray, count);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to register buffers: " + getErrorMessage(ret));
+            }
+            return ret;
+        } catch (Throwable e) {
+            throw new RuntimeException("Exception while registering buffers", e);
         }
     }
 
