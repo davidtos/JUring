@@ -280,7 +280,7 @@ class LibUringWrapper implements AutoCloseable {
         setSqeFlag(sqe, IOSQE_IO_HARDLINK);
     }
 
-    void fixedFile(){
+    void fixedFile(MemorySegment sqe) {
         setSqeFlag(sqe, IOSQE_FIXED_FILE);
     }
 
