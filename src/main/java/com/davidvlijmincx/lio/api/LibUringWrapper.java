@@ -43,6 +43,9 @@ class LibUringWrapper implements AutoCloseable {
 
     private static final MethodHandle io_uring_queue_init;
     private static final MethodHandle io_uring_get_sqe;
+    private static final MethodHandle io_uring_sqe_set_flags;
+    private static final MethodHandle io_uring_prep_openat;
+    private static final MethodHandle io_uring_prep_close;
     private static final MethodHandle io_uring_prep_read;
     private static final MethodHandle io_uring_prep_read_fixed;
     private static final MethodHandle io_uring_prep_write;
@@ -88,6 +91,11 @@ class LibUringWrapper implements AutoCloseable {
                 Linker.Option.critical(true)
         );
 
+        io_uring_sqe_set_flags = linker.downcallHandle(
+                liburing.find("io_uring_sqe_set_flags").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE)
+        );
+
         io_uring_prep_read = linker.downcallHandle(
                 liburing.find("io_uring_prep_read").orElseThrow(),
                 FunctionDescriptor.ofVoid(
@@ -109,6 +117,16 @@ class LibUringWrapper implements AutoCloseable {
                         JAVA_LONG,
                         JAVA_INT
                 )
+        );
+
+        io_uring_prep_openat = linker.downcallHandle(
+                liburing.find("io_uring_prep_openat").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT)
+        );
+
+        io_uring_prep_close = linker.downcallHandle(
+                liburing.find("io_uring_prep_close").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT)
         );
 
         io_uring_prep_write = linker.downcallHandle(
@@ -253,6 +271,38 @@ class LibUringWrapper implements AutoCloseable {
                 throw new RuntimeException("Failed to get sqe");
             }
             return sqe;
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void link(MemorySegment sqe) {
+        setSqeFlag(sqe, IOSQE_IO_HARDLINK);
+    }
+
+    void fixedFile(){
+        setSqeFlag(sqe, IOSQE_FIXED_FILE);
+    }
+
+    void setSqeFlag(MemorySegment sqe, byte flag) {
+        try {
+            io_uring_sqe_set_flags.invokeExact(sqe, flag);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
+        try {
+            io_uring_prep_openat.invokeExact(sqe, AT_FDCWD, filePath, flags, mode);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareClose(MemorySegment sqe, int fd) {
+        try {
+            io_uring_prep_close.invokeExact(sqe, fd);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
