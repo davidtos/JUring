@@ -58,6 +58,24 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
+    public long prepareWriteFixed(int indexFD, byte[] bytes, long offset) {
+        MemorySegment sqe = libUringWrapper.getSqe();
+        MemorySegment buff = LibCWrapper.malloc(bytes.length);
+
+        long id = buff.address() + ThreadLocalRandom.current().nextLong();
+
+        MemorySegment userData = UserData.createUserData(id, indexFD, OperationType.WRITE, buff);
+
+        libUringWrapper.fixedFile(sqe);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
+
+        libUringWrapper.prepareWrite(sqe, indexFD, buff, offset);
+
+        return id;
+    }
+
     public void submit() {
         libUringWrapper.submit();
     }

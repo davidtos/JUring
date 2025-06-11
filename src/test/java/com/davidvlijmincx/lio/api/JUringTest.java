@@ -249,4 +249,33 @@ class JUringTest {
             }
         }
     }
+
+    @Test
+    void writeToRegisteredFile() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+            int[] fileDescriptors = {fd.getFd()};
+            int result = jUring.registerFiles(fileDescriptors);
+            assertEquals(0, result);
+
+            long id = jUring.prepareWriteFixed(0, inputBytes, 0);
+            jUring.submit();
+            Result writeResult = jUring.waitForResult();
+
+            if (writeResult instanceof WriteResult write) {
+                assertEquals(id, write.getId());
+                assertEquals(inputBytes.length, write.getResult());
+            } else {
+                fail("Result is not a WriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+        }
+    }
 }
