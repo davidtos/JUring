@@ -14,9 +14,9 @@ import static java.lang.foreign.MemoryLayout.PathElement.*;
  * }
  *}
  */
-public class iovec {
+public class Iovec {
 
-    iovec() {
+    Iovec() {
         // Should not be called directly
     }
 
