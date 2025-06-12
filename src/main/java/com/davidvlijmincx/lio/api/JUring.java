@@ -115,8 +115,9 @@ public class JUring implements AutoCloseable {
         return result;
     }
 
-    public int registerFiles(int[] fileDescriptors) {
-        return libUringWrapper.registerFiles(fileDescriptors);
+    public int registerFiles(FileDescriptor... fileDescriptors) {
+        int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
+        return libUringWrapper.registerFiles(fds);
     }
 
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {

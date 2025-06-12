@@ -229,8 +229,7 @@ class JUringTest {
     @Test
     void readFromRegisteredFile() {
         try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
-            int[] fileDescriptors = {fd.getFd()};
-            int result = jUring.registerFiles(fileDescriptors);
+            int result = jUring.registerFiles(fd);
             assertEquals(0, result);
 
             long id = jUring.prepareRead(0, 14, 0);
@@ -260,8 +259,7 @@ class JUringTest {
         var inputBytes = input.getBytes();
 
         try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
-            int[] fileDescriptors = {fd.getFd()};
-            int result = jUring.registerFiles(fileDescriptors);
+            int result = jUring.registerFiles(fd);
             assertEquals(0, result);
 
             long id = jUring.prepareWrite(0, inputBytes, 0);
@@ -287,8 +285,7 @@ class JUringTest {
             FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", Flag.READ, 0)) {
             
             // Register initial files: read_file and second_read_file
-            int[] initialFiles = {readFd.getFd(), secondReadFd.getFd()};
-            int result = jUring.registerFiles(initialFiles);
+            int result = jUring.registerFiles(readFd, secondReadFd);
             assertEquals(0, result);
 
             // Update index 1 to point to third_read_file
@@ -354,8 +351,7 @@ class JUringTest {
     @Test
     void prepareReadFixedWithRegisteredFileAndBuffer() {
         try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
-            int[] fileDescriptors = {fd.getFd()};
-            jUring.registerFiles(fileDescriptors);
+            jUring.registerFiles(fd);
 
             MemorySegment[] bufferRegisterResult = jUring.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
