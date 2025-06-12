@@ -45,6 +45,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_sqe_set_flags;
     private static final MethodHandle io_uring_prep_openat;
+    private static final MethodHandle io_uring_prep_open_direct;
     private static final MethodHandle io_uring_prep_close;
     private static final MethodHandle io_uring_prep_read;
     private static final MethodHandle io_uring_prep_read_fixed;
@@ -72,7 +73,6 @@ class LibUringWrapper implements AutoCloseable {
     private static final AddressLayout C_POINTER;
 
     static {
-
         Linker linker = Linker.nativeLinker();
 
         SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
@@ -122,6 +122,11 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_prep_openat = linker.downcallHandle(
                 liburing.find("io_uring_prep_openat").orElseThrow(),
                 FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT)
+        );
+
+        io_uring_prep_open_direct = linker.downcallHandle(
+                liburing.find("io_uring_prep_open_direct").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT)
         );
 
         io_uring_prep_close = linker.downcallHandle(
@@ -295,6 +300,14 @@ class LibUringWrapper implements AutoCloseable {
     void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
         try {
             io_uring_prep_openat.invokeExact(sqe, AT_FDCWD, filePath, flags, mode);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareOpenDirect(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex) {
+        try {
+            io_uring_prep_open_direct.invokeExact(sqe, filePath, flags, mode, fileIndex);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
