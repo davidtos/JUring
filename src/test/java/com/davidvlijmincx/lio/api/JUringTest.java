@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -324,6 +325,56 @@ class JUringTest {
             } else {
                 fail("Result is not a ReadResult");
             }
+        }
+    }
+
+    @Test
+    void prepareReadFixedWithRegisteredBuffer() {
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            MemorySegment[] registerResult = jUring.registerBuffers(30, 2);
+            assertEquals(2, registerResult.length);
+            
+            long id = jUring.prepareReadFixed(fd, 13, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+            
+            if (result instanceof ReadResult readResult) {
+                assertEquals(id, readResult.getId());
+                assertEquals(13, readResult.getResult());
+                
+                readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
+                String string = readResult.getBuffer().getString(0);
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+        }
+    }
+
+    @Test
+    void prepareReadFixedWithRegisteredFileAndBuffer() {
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            int[] fileDescriptors = {fd.getFd()};
+            jUring.registerFiles(fileDescriptors);
+
+            MemorySegment[] bufferRegisterResult = jUring.registerBuffers(20, 1);
+            assertEquals(1, bufferRegisterResult.length);
+            
+            long id = jUring.prepareReadFixed(0, 13, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+            
+            if (result instanceof ReadResult readResult) {
+                assertEquals(id, readResult.getId());
+                assertEquals(13, readResult.getResult());
+                
+                readResult.getBuffer().set(JAVA_BYTE, readResult.getResult(), (byte) 0);
+                String string = readResult.getBuffer().getString(0);
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
         }
     }
 }

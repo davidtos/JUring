@@ -422,22 +422,20 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
-    int registerBuffers(MemorySegment[] buffers) {
+    MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
+        LibCWrapper.IovecStructure iovecStructure = LibCWrapper.allocateIovec(arena, bufferSize, nrIovecs);
+        registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
+        return iovecStructure.buffers();
+    }
+
+    private void registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
         try {
-            int count = buffers.length;
-            MemorySegment ioVecArray = arena.allocate(AddressLayout.ADDRESS.byteSize() * count);
-            
-            for (int i = 0; i < count; i++) {
-                ioVecArray.setAtIndex(ADDRESS, i, buffers[i]);
+            int ret = (int) io_uring_register_buffers.invokeExact(ring, iovecs, nrIovecs);
+            if (ret <0) {
+                throw new RuntimeException("Failed to register buffers");
             }
-            
-            int ret = (int) io_uring_register_buffers.invokeExact(ring, ioVecArray, count);
-            if (ret < 0) {
-                throw new RuntimeException("Failed to register buffers: " + getErrorMessage(ret));
-            }
-            return ret;
         } catch (Throwable e) {
-            throw new RuntimeException("Exception while registering buffers", e);
+            throw new RuntimeException(e);
         }
     }
 

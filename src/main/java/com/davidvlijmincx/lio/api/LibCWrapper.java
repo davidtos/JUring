@@ -1,8 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.FunctionDescriptor;
-import java.lang.foreign.Linker;
-import java.lang.foreign.MemorySegment;
+import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 
 import static java.lang.foreign.ValueLayout.*;
@@ -58,6 +56,33 @@ class LibCWrapper {
     }
 
     private LibCWrapper() {
+    }
+
+    static IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
+        var iovecSequence = MemoryLayout.sequenceLayout(nrIovecs, iovec.layout());
+        var iovecArray = arena.allocate(iovecSequence);
+        MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
+
+        for (int i = 0; i < nrIovecs; i++) {
+            MemorySegment nthIovec = iovecArray.asSlice(i * iovec.layout().byteSize(),  iovec.layout().byteSize());
+            MemorySegment buffer = malloc(bufferSize);
+            setIovecData(nthIovec, buffer);
+            buffers[i] = buffer;
+        }
+
+        return new IovecStructure(iovecArray, buffers);
+    }
+
+    record IovecStructure(MemorySegment iovecArray, MemorySegment[] buffers) {
+    }
+
+    static private void setIovecData(MemorySegment memorySegment, MemorySegment buffer) {
+        try {
+            iovec.iov_base(memorySegment, buffer);
+            iovec.iov_len(memorySegment, buffer.byteSize());
+        } catch (Throwable e) {
+            throw new RuntimeException("Could not set com.davidvlijmincx.lio.api.iovec data", e);
+        }
     }
 
     static int OpenFile(String filePath, int flags, int mode) {

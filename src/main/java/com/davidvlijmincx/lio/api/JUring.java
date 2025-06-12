@@ -1,6 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -9,9 +11,11 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 public class JUring implements AutoCloseable {
 
     private final LibUringWrapper libUringWrapper;
+    private final List<MemorySegment> registeredBuffers;
 
     public JUring(int queueDepth) {
         libUringWrapper = new LibUringWrapper(queueDepth);
+        registeredBuffers = new ArrayList<>();
     }
 
     public long prepareRead(FileDescriptor fd, int readSize, long offset) {
@@ -20,6 +24,14 @@ public class JUring implements AutoCloseable {
 
     public long prepareRead(int indexFD, int readSize, long offset) {
         return prepareReadInternal(indexFD, readSize, offset, true);
+    }
+
+    public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex) {
+        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, false);
+    }
+
+    public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex) {
+        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, true);
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
@@ -61,6 +73,29 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
+    private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, boolean isFixed) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+        
+        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
+        if (readSize > registeredBuffer.byteSize()) {
+            throw new IllegalArgumentException("Read size exceeds registered buffer size");
+        }
+        
+        long id = registeredBuffer.address();
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        if (isFixed) {
+            libUringWrapper.fixedFile(sqe);
+        }
+        libUringWrapper.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, offset, bufferIndex);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
     public void submit() {
         libUringWrapper.submit();
     }
@@ -73,8 +108,11 @@ public class JUring implements AutoCloseable {
         return libUringWrapper.waitForResult();
     }
 
-    public int registerBuffers(MemorySegment[] buffers) {
-        return libUringWrapper.registerBuffers(buffers);
+    public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
+        MemorySegment[] result = libUringWrapper.registerBuffers(size, nrOfBuffers);
+        registeredBuffers.clear();
+        registeredBuffers.addAll(Arrays.asList(result));
+        return result;
     }
 
     public int registerFiles(int[] fileDescriptors) {
