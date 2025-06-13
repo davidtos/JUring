@@ -1,6 +1,15 @@
 package com.davidvlijmincx.lio.api;
 
-public sealed interface WriteResult permits AsyncWriteResult, BlockingWriteResult{
+public final class WriteResult extends Result {
 
-    long getResult();
+    private long result;
+
+    WriteResult(long id, long result) {
+        super(id);
+        this.result = result;
+    }
+
+    public long getResult() {
+        return result;
+    }
 }

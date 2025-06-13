@@ -5,6 +5,9 @@ import org.junit.jupiter.api.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,9 +30,11 @@ class JUringBlockingTest {
     void readFromFile() {
 
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
-            BlockingReadResult result = jUringBlocking.prepareRead(fd, 14, 0);
+            Future<ReadResult> future = jUringBlocking.prepareRead(fd, 14, 0);
 
             jUringBlocking.submit();
+
+            var result = future.get();
 
             // make it valid UTF-8
             result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
@@ -37,19 +42,25 @@ class JUringBlockingTest {
             String string = result.getBuffer().getString(0);
             result.freeBuffer();
             assertEquals("Hello, World!", string);
+        } catch (ExecutionException | InterruptedException e) {
+            throw new RuntimeException(e);
         }
     }
 
     @Test
-    void multiReadFromFile() {
+    void multiReadFromFile() throws ExecutionException, InterruptedException {
 
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
 
-            BlockingReadResult result = jUringBlocking.prepareRead(fd, 14, 0);
-            BlockingReadResult result1 = jUringBlocking.prepareRead(fd, 5, 0);
-            BlockingReadResult result2 = jUringBlocking.prepareRead(fd, 7, 7);
+            var future1 = jUringBlocking.prepareRead(fd, 14, 0);
+            var future2 = jUringBlocking.prepareRead(fd, 5, 0);
+            var future3 = jUringBlocking.prepareRead(fd, 7, 7);
 
             jUringBlocking.submit();
+
+            ReadResult result = future1.get();
+            ReadResult result1 = future2.get();
+            ReadResult result2 = future3.get();
 
             // make it valid UTF-8
             result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
@@ -67,15 +78,15 @@ class JUringBlockingTest {
     }
 
     @Test
-    void readFromFileAtOffset() {
+    void readFromFileAtOffset() throws ExecutionException, InterruptedException {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
 
-            BlockingReadResult result = jUringBlocking.prepareRead(fd, 6, 7);
+            var result = jUringBlocking.prepareRead(fd, 6, 7);
 
             jUringBlocking.submit();
 
-            String string = result.getBuffer().getString(0);
-            result.freeBuffer();
+            String string = result.get().getBuffer().getString(0);
+            result.get().freeBuffer();
 
             assertEquals("World!", string);
 
@@ -83,7 +94,7 @@ class JUringBlockingTest {
     }
 
     @Test
-    void writeToFile() throws IOException {
+    void writeToFile() throws IOException, ExecutionException, InterruptedException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content : ".getBytes());
 
@@ -92,11 +103,11 @@ class JUringBlockingTest {
 
         try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
 
-            BlockingWriteResult result = jUringBlocking.prepareWrite(fd, inputBytes, 0);
+            var future = jUringBlocking.prepareWrite(fd, inputBytes, 0);
 
             jUringBlocking.submit();
 
-            assertEquals(inputBytes.length, result.getResult());
+            assertEquals(inputBytes.length, future.get().getResult());
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -104,7 +115,7 @@ class JUringBlockingTest {
     }
 
     @Test
-    void writeToFileAtOffset() throws IOException {
+    void writeToFileAtOffset() throws IOException, ExecutionException, InterruptedException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Big ".getBytes());
 
@@ -113,11 +124,11 @@ class JUringBlockingTest {
 
         try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
 
-            BlockingWriteResult result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
+            var result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
 
             jUringBlocking.submit();
 
-            assertEquals(inputBytes.length, result.getResult());
+            assertEquals(inputBytes.length, result.get().getResult());
 
             String writtenContent = Files.readString(path);
             assertEquals("Big hello, from Java", writtenContent);
@@ -126,7 +137,7 @@ class JUringBlockingTest {
     }
 
     @Test
-    void mixedWriteAndReadFromFile() {
+    void mixedWriteAndReadFromFile() throws ExecutionException, InterruptedException {
         Path writePath = Path.of("src/test/resources/write_file");
         Path readPath = Path.of("src/test/resources/read_file");
 
@@ -135,24 +146,24 @@ class JUringBlockingTest {
 
         try (FileDescriptor fd = new FileDescriptor(readPath.toString(), Flag.READ, 0); FileDescriptor writeFd = new FileDescriptor(writePath.toString(), Flag.WRITE, 0)) {
 
-            BlockingReadResult readResult = jUringBlocking.prepareRead(fd, 14, 0);
-            BlockingWriteResult writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-            BlockingReadResult readResult1 = jUringBlocking.prepareRead(fd, 5, 0);
-            BlockingWriteResult writeResult1 = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-            BlockingReadResult readResult2 = jUringBlocking.prepareRead(fd, 7, 7);
+            var readResult = jUringBlocking.prepareRead(fd, 14, 0);
+            var writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
+            var readResult1 = jUringBlocking.prepareRead(fd, 5, 0);
+            var writeResult1 = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
+            var readResult2 = jUringBlocking.prepareRead(fd, 7, 7);
 
             jUringBlocking.submit();
 
-            assertEquals(13, readResult.getResult());
-            assertEquals(5, readResult1.getResult());
-            assertEquals(6, readResult2.getResult());
+            assertEquals(13, readResult.get().getResult());
+            assertEquals(5, readResult1.get().getResult());
+            assertEquals(6, readResult2.get().getResult());
 
-            assertEquals(16, writeResult.getResult());
-            assertEquals(16, writeResult1.getResult());
+            assertEquals(16, writeResult.get().getResult());
+            assertEquals(16, writeResult1.get().getResult());
 
-            readResult.freeBuffer();
-            readResult1.freeBuffer();
-            readResult2.freeBuffer();
+            readResult.get().freeBuffer();
+            readResult1.get().freeBuffer();
+            readResult2.get().freeBuffer();
 
         }
     }

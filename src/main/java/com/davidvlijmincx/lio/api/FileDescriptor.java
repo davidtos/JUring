@@ -9,6 +9,10 @@ public class FileDescriptor implements AutoCloseable {
         this.fd = LibCWrapper.OpenFile(path, flags.getValue(), mode);
     }
 
+    FileDescriptor(int fd) {
+        this.fd = fd;
+    }
+
     int getFd() {
         if (closed) {
             throw new IllegalStateException("File descriptor has been closed");

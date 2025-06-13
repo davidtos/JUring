@@ -17,11 +17,10 @@ import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-
-import static org.openjdk.jmh.annotations.Threads.MAX;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -49,12 +48,17 @@ public class RandomReadBenchMark {
 
             for (RandomReadTask readTask : readTasks) {
                 FileDescriptor fd = new FileDescriptor(readTask.sPath(), Flag.READ, 0);
-                BlockingReadResult r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
+                var r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
-                    blackhole.consume(r.getBuffer());
-                    r.freeBuffer();
-                    fd.close();
+                    try {
+                        blackhole.consume(r.get().getBuffer());
+                        r.get().freeBuffer();
+                    } catch (InterruptedException | ExecutionException e) {
+                        throw new RuntimeException(e);
+                    } finally {
+                        fd.close();
+                    }
                 });
             }
         }
@@ -87,7 +91,7 @@ public class RandomReadBenchMark {
                 List<Result> results = jUring.peekForBatchResult(100);
 
                 for (Result result : results) {
-                    if (result instanceof AsyncReadResult r) {
+                    if (result instanceof ReadResult r) {
                         blackhole.consume(r.getBuffer());
                         r.freeBuffer();
                     }
