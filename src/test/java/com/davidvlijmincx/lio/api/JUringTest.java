@@ -490,4 +490,49 @@ class JUringTest {
             fail("Close result is not a CloseResult");
         }
     }
+
+    @Test
+    void prepareCloseDirectFileDescriptor() {
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            jUring.registerFiles(fd);
+            
+            // First, verify we can read from the registered file
+            jUring.prepareRead(0, 14, 0);
+            jUring.submit();
+            Result readResult1 = jUring.waitForResult();
+            
+            if (readResult1 instanceof ReadResult read1) {
+                assertEquals(13, read1.getResult());
+                read1.freeBuffer();
+            } else {
+                fail("Initial read from registered file failed");
+            }
+            
+            // Now close the registered file using direct close
+            long closeId = jUring.prepareCloseDirect(0);
+            jUring.submit();
+            Result closeResult = jUring.waitForResult();
+
+            if (closeResult instanceof CloseResult close) {
+                assertEquals(closeId, close.getId());
+                assertEquals(0, close.getResult());
+                
+                // Verify the registered file descriptor is actually closed by trying to read from it
+                // This should fail with a bad file descriptor error
+                jUring.prepareRead(0, 14, 0);
+                jUring.submit();
+                Result readResult2 = jUring.waitForResult();
+                
+                if (readResult2 instanceof ReadResult read2) {
+                    // Should get EBADF (Bad file descriptor) error, which is -9
+                    assertEquals(-9, read2.getResult());
+                    read2.freeBuffer();
+                } else {
+                    fail("Expected ReadResult after attempting to read from closed registered fd");
+                }
+            } else {
+                fail("Close direct result is not a CloseResult");
+            }
+        }
+    }
 }

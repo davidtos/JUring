@@ -75,6 +75,17 @@ public class JUring implements AutoCloseable {
         return prepareCloseInternal(fd.getFd());
     }
 
+    public long prepareCloseDirect(int fileIndex) {
+        long id = ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, fileIndex, OperationType.CLOSE, MemorySegment.NULL);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.prepareCloseDirect(sqe, fileIndex);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, boolean isFixed) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
         long id = buff.address();
