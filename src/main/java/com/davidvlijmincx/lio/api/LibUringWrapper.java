@@ -51,6 +51,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_prep_read;
     private static final MethodHandle io_uring_prep_read_fixed;
     private static final MethodHandle io_uring_prep_write;
+    private static final MethodHandle io_uring_prep_write_fixed;
     private static final MethodHandle io_uring_submit;
     private static final MethodHandle io_uring_wait_cqe;
     private static final MethodHandle io_uring_peek_cqe;
@@ -148,6 +149,18 @@ class LibUringWrapper implements AutoCloseable {
                         C_POINTER,
                         JAVA_LONG,
                         JAVA_LONG
+                )
+        );
+
+        io_uring_prep_write_fixed = linker.downcallHandle(
+                liburing.find("io_uring_prep_write_fixed").orElseThrow(),
+                FunctionDescriptor.ofVoid(
+                        C_POINTER,
+                        JAVA_INT,
+                        C_POINTER,
+                        JAVA_LONG,
+                        JAVA_LONG,
+                        JAVA_INT
                 )
         );
 
@@ -354,6 +367,14 @@ class LibUringWrapper implements AutoCloseable {
     void prepareWrite(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
         try {
             io_uring_prep_write.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareWriteFixed(MemorySegment sqe, int fd, MemorySegment buffer,long nbytes, long offset, int bufferIndex) {
+        try {
+            io_uring_prep_write_fixed.invokeExact(sqe, fd, buffer, nbytes, offset, bufferIndex);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }

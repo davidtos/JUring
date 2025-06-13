@@ -42,6 +42,14 @@ public class JUring implements AutoCloseable {
         return prepareWriteInternal(indexFD, bytes, offset, true);
     }
 
+    public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, false);
+    }
+
+    public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, true);
+    }
+
     public long prepareOpen(String filePath, int flags, int mode) {
         MemorySegment pathBuffer = LibCWrapper.calloc(filePath.getBytes().length + 1);
         MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
@@ -136,6 +144,30 @@ public class JUring implements AutoCloseable {
         }
         libUringWrapper.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, offset, bufferIndex);
         libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, boolean isFixed) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+        
+        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
+        if (bytes.length > registeredBuffer.byteSize()) {
+            throw new IllegalArgumentException("Write size exceeds registered buffer size");
+        }
+        
+        long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE, registeredBuffer);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        if (isFixed) {
+            libUringWrapper.fixedFile(sqe);
+        }
+        libUringWrapper.setUserData(sqe, userData.address());
+        MemorySegment.copy(bytes, 0, registeredBuffer, JAVA_BYTE, 0, bytes.length);
+        libUringWrapper.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer,bytes.length, offset, bufferIndex);
 
         return id;
     }
