@@ -7,6 +7,7 @@ import com.davidvlijmincx.lio.api.Flag;
 import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.WriteResult;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.profile.AsyncProfiler;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -33,8 +34,8 @@ public class RandomWriteBenchMark {
     public static void main(String[] args) throws RunnerException {
         Options opt = new OptionsBuilder()
                 .include(RandomWriteBenchMark.class.getSimpleName())
+                .addProfiler(AsyncProfiler.class, "lock=1ms simple=true output=flamegraph")
                 .forks(1)
-                .shouldDoGC(false)
                 .build();
 
         new Runner(opt).run();
