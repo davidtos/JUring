@@ -535,4 +535,62 @@ class JUringTest {
             }
         }
     }
+
+    @Test
+    void prepareWriteFixedWithRegisteredBuffer() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+            MemorySegment[] registerResult = jUring.registerBuffers(30, 2);
+            assertEquals(2, registerResult.length);
+            
+            long id = jUring.prepareWriteFixed(fd, inputBytes, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+            
+            if (result instanceof WriteResult writeResult) {
+                assertEquals(id, writeResult.getId());
+                assertEquals(inputBytes.length, writeResult.getResult());
+            } else {
+                fail("Result is not a WriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+        }
+    }
+
+    @Test
+    void prepareWriteFixedWithRegisteredFileAndBuffer() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        try(FileDescriptor fd = new FileDescriptor(path, Flag.WRITE, 0)) {
+            jUring.registerFiles(fd);
+
+            MemorySegment[] bufferRegisterResult = jUring.registerBuffers(20, 1);
+            assertEquals(1, bufferRegisterResult.length);
+            
+            long id = jUring.prepareWriteFixed(0, inputBytes, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+            
+            if (result instanceof WriteResult writeResult) {
+                assertEquals(id, writeResult.getId());
+                assertEquals(inputBytes.length, writeResult.getResult());
+            } else {
+                fail("Result is not a WriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+        }
+    }
 }
