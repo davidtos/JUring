@@ -8,7 +8,10 @@ public enum OperationType {
     WRITE(1),
     WRITE_FIXED(2),
     OPEN(3),
-    CLOSE(4);
+    CLOSE(4),
+    ACCEPT(5),
+    RECV(6),
+    SEND(7);
 
     private static final Map<Integer,OperationType> map = new HashMap<>();
 

@@ -62,6 +62,9 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_register_buffers;
     private static final MethodHandle io_uring_register_files;
     private static final MethodHandle io_uring_register_files_update;
+    private static final MethodHandle io_uring_prep_accept;
+    private static final MethodHandle io_uring_prep_recv;
+    private static final MethodHandle io_uring_prep_send;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -214,6 +217,21 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_register_files_update = linker.downcallHandle(
                 liburing.find("io_uring_register_files_update").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT)
+        );
+
+        io_uring_prep_accept = linker.downcallHandle(
+                liburing.find("io_uring_prep_accept").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, C_POINTER, JAVA_INT)
+        );
+
+        io_uring_prep_recv = linker.downcallHandle(
+                liburing.find("io_uring_prep_recv").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT)
+        );
+
+        io_uring_prep_send = linker.downcallHandle(
+                liburing.find("io_uring_prep_send").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT)
         );
 
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -380,6 +398,30 @@ class LibUringWrapper implements AutoCloseable {
         }
     }
 
+    void prepareAccept(MemorySegment sqe, int serverSocket, MemorySegment clientAddr, MemorySegment clientLen) {
+        try {
+            io_uring_prep_accept.invokeExact(sqe, serverSocket, clientAddr, clientLen, 0);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareRecv(MemorySegment sqe, int clientSocket, MemorySegment buffer, int flags) {
+        try {
+            io_uring_prep_recv.invokeExact(sqe, clientSocket, buffer, buffer.byteSize(), flags);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    void prepareSend(MemorySegment sqe, int clientSocket, MemorySegment buffer, int writeLen, int flags) {
+        try {
+            io_uring_prep_send.invokeExact(sqe, clientSocket, buffer, (long) writeLen, flags);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     void setUserData(MemorySegment sqe, long userData) {
         try {
             io_uring_sqe_set_data.invokeExact(sqe, userData);
@@ -446,13 +488,28 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     private Result getResultFromCqe(long address, long result) {
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
+        if (address == 0) {
+            return new ReadResult(0, MemorySegment.NULL, result);
+        }
 
-        OperationType type = UserData.getType(nativeUserData);
-        long id = UserData.getId(nativeUserData);
-        MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
+        try {
+            MemorySegment userData = MemorySegment.ofAddress(address).reinterpret(ConnectionInfo.getByteSize());
+            OperationType type = ConnectionInfo.getType(userData);
+            
+            if (type == OperationType.ACCEPT || type == OperationType.RECV || type == OperationType.SEND) {
+                return new SocketResult(address, result);
+            }
+        } catch (Exception e) {
+            // Fall back to UserData if ConnectionInfo fails
+        }
 
-        LibCWrapper.freeBuffer(nativeUserData);
+        MemorySegment userData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
+        
+        OperationType type = UserData.getType(userData);
+        long id = UserData.getId(userData);
+        MemorySegment bufferResult = UserData.getBuffer(userData);
+
+        LibCWrapper.freeBuffer(userData);
 
         if (OperationType.WRITE.equals(type)) {
             LibCWrapper.freeBuffer(bufferResult);

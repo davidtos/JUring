@@ -13,6 +13,10 @@ class LibCWrapper {
     private static final MethodHandle malloc;
     private static final MethodHandle calloc;
     private static final MethodHandle strerror;
+    private static final MethodHandle socket;
+    private static final MethodHandle bind;
+    private static final MethodHandle listen;
+    private static final MethodHandle setsockopt;
 
     static {
         Linker linker = Linker.nativeLinker();
@@ -52,6 +56,26 @@ class LibCWrapper {
                 linker.defaultLookup().find("close").orElseThrow(),
                 FunctionDescriptor.ofVoid(JAVA_INT),
                 Linker.Option.critical(true)
+        );
+
+        socket = linker.downcallHandle(
+                linker.defaultLookup().find("socket").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT)
+        );
+
+        bind = linker.downcallHandle(
+                linker.defaultLookup().find("bind").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
+        );
+
+        listen = linker.downcallHandle(
+                linker.defaultLookup().find("listen").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)
+        );
+
+        setsockopt = linker.downcallHandle(
+                linker.defaultLookup().find("setsockopt").orElseThrow(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
         );
     }
 
@@ -146,5 +170,44 @@ class LibCWrapper {
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+    }
+
+    static int createServerSocket(int port) {
+        try (Arena arena = Arena.ofShared()) {
+            int sock = (int) socket.invokeExact(2, 1, 0); // AF_INET, SOCK_STREAM, 0
+            if (sock < 0) {
+                throw new RuntimeException("Failed to create socket: " + getErrorMessage(sock));
+            }
+
+            MemorySegment enable = arena.allocate(JAVA_INT);
+            enable.set(JAVA_INT, 0, 1);
+            int ret = (int) setsockopt.invokeExact(sock, 1, 2, enable, 4); // SOL_SOCKET, SO_REUSEADDR
+            if (ret < 0) {
+                throw new RuntimeException("Failed to set socket options: " + getErrorMessage(ret));
+            }
+
+            MemorySegment serverAddr = arena.allocate(16);
+            serverAddr.set(JAVA_SHORT, 0, (short) 2); // AF_INET
+            serverAddr.set(JAVA_SHORT, 2, (short) ((port >>> 8) | (port << 8))); // htons(port)
+            serverAddr.set(JAVA_INT, 4, 0); // INADDR_ANY
+
+            ret = (int) bind.invokeExact(sock, serverAddr, 16);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to bind socket: " + getErrorMessage(ret));
+            }
+
+            ret = (int) listen.invokeExact(sock, 10);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to listen on socket: " + getErrorMessage(ret));
+            }
+
+            return sock;
+        } catch (Throwable e) {
+            throw new RuntimeException("Failed to create server socket", e);
+        }
+    }
+
+    static void closeSocket(int fd) {
+        closeFile(fd);
     }
 }
