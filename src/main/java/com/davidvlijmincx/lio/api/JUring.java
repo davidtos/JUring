@@ -42,6 +42,39 @@ public class JUring implements AutoCloseable {
         return prepareWriteInternal(indexFD, bytes, offset, true);
     }
 
+    public long prepareOpen(String filePath, int flags, int mode) {
+        MemorySegment pathBuffer = LibCWrapper.calloc(filePath.getBytes().length + 1);
+        MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
+
+        long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, -1, OperationType.OPEN, pathBuffer);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.prepareOpen(sqe, pathBuffer, flags, mode);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex) {
+        MemorySegment pathBuffer = LibCWrapper.malloc(filePath.getBytes().length + 1);
+        MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
+        pathBuffer.set(JAVA_BYTE, filePath.getBytes().length, (byte) 0);
+        
+        long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.prepareOpenDirect(sqe, pathBuffer, flags, mode, fileIndex);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    public long prepareClose(FileDescriptor fd) {
+        return prepareCloseInternal(fd.getFd());
+    }
+
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, boolean isFixed) {
         MemorySegment buff = LibCWrapper.malloc(readSize);
         long id = buff.address();
@@ -91,6 +124,17 @@ public class JUring implements AutoCloseable {
             libUringWrapper.fixedFile(sqe);
         }
         libUringWrapper.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, offset, bufferIndex);
+        libUringWrapper.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    private long prepareCloseInternal(int fdOrIndex) {
+        long id = ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.CLOSE, MemorySegment.NULL);
+
+        MemorySegment sqe = libUringWrapper.getSqe();
+        libUringWrapper.prepareClose(sqe, fdOrIndex);
         libUringWrapper.setUserData(sqe, userData.address());
 
         return id;

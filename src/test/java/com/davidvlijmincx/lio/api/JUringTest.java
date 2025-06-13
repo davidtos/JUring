@@ -373,4 +373,121 @@ class JUringTest {
 
         }
     }
+
+    @Test
+    void prepareOpenAndRead() {
+        long openId = jUring.prepareOpen("src/test/resources/read_file", Flag.READ.getValue(), 0);
+        jUring.submit();
+        Result openResult = jUring.waitForResult();
+
+        if (openResult instanceof OpenResult open) {
+            assertEquals(openId, open.getId());
+            FileDescriptor fd = open.getFileDescriptor();
+
+            long readId = jUring.prepareRead(fd, 14, 0);
+            jUring.submit();
+            Result readResult = jUring.waitForResult();
+
+            if (readResult instanceof ReadResult read) {
+                assertEquals(readId, read.getId());
+                assertEquals(13, read.getResult());
+
+                read.getBuffer().set(JAVA_BYTE, read.getResult(), (byte) 0);
+                String content = read.getBuffer().getString(0);
+                read.freeBuffer();
+                assertEquals("Hello, World!", content);
+
+                long closeId = jUring.prepareClose(fd);
+                jUring.submit();
+                Result closeResult = jUring.waitForResult();
+
+                if (closeResult instanceof CloseResult close) {
+                    assertEquals(closeId, close.getId());
+                    assertEquals(0, close.getResult());
+                } else {
+                    fail("Close result is not a CloseResult");
+                }
+            } else {
+                fail("Read result is not a ReadResult");
+            }
+        } else {
+            fail("Open result is not an OpenResult");
+        }
+    }
+
+    @Test
+    void prepareOpenDirectAndRead() {
+        try(FileDescriptor placeholder = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+            jUring.registerFiles(placeholder);
+
+            long openId = jUring.prepareOpenDirect("src/test/resources/second_read_file", Flag.READ.getValue(), 0, 0);
+            jUring.submit();
+            Result openResult = jUring.waitForResult();
+
+            if (openResult instanceof OpenResult open) {
+                assertEquals(openId, open.getId());
+
+                long readId = jUring.prepareRead(0, 20, 0);
+                jUring.submit();
+                Result readResult = jUring.waitForResult();
+
+                if (readResult instanceof ReadResult read) {
+                    assertEquals(readId, read.getId());
+                    assertEquals(19, read.getResult());
+
+                    read.getBuffer().set(JAVA_BYTE, read.getResult(), (byte) 0);
+                    String content = read.getBuffer().getString(0);
+                    read.freeBuffer();
+                    assertEquals("second file content", content);
+                } else {
+                    fail("Read result is not a ReadResult");
+                }
+            } else {
+                fail("Open direct result is not an OpenResult");
+            }
+        }
+    }
+
+    @Test
+    void prepareCloseFileDescriptor() {
+        FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);
+        
+        // First, verify we can read from the file
+        long readId1 = jUring.prepareRead(fd, 14, 0);
+        jUring.submit();
+        Result readResult1 = jUring.waitForResult();
+        
+        if (readResult1 instanceof ReadResult read1) {
+            assertEquals(13, read1.getResult());
+            read1.freeBuffer();
+        } else {
+            fail("Initial read failed");
+        }
+        
+        // Now close the file descriptor
+        long closeId = jUring.prepareClose(fd);
+        jUring.submit();
+        Result closeResult = jUring.waitForResult();
+
+        if (closeResult instanceof CloseResult close) {
+            assertEquals(closeId, close.getId());
+            assertEquals(0, close.getResult());
+            
+            // Verify the file descriptor is actually closed by trying to read from it
+            // This should fail with a bad file descriptor error
+            long readId2 = jUring.prepareRead(fd, 14, 0);
+            jUring.submit();
+            Result readResult2 = jUring.waitForResult();
+            
+            if (readResult2 instanceof ReadResult read2) {
+                // Should get EBADF (Bad file descriptor) error, which is -9
+                assertEquals(-9, read2.getResult());
+                read2.freeBuffer();
+            } else {
+                fail("Expected ReadResult after attempting to read from closed fd");
+            }
+        } else {
+            fail("Close result is not a CloseResult");
+        }
+    }
 }
