@@ -458,11 +458,14 @@ class LibUringWrapper implements AutoCloseable {
             LibCWrapper.freeBuffer(bufferResult);
             return new WriteResult(id, result);
         }
-        if(OperationType.OPEN.equals(type)) {
+        else if (OperationType.WRITE_FIXED.equals(type)) {
+            return new WriteResult(id, result);
+        }
+        else if(OperationType.OPEN.equals(type)) {
             LibCWrapper.freeBuffer(bufferResult);
             return new OpenResult(id, (int) result);
         }
-        if(OperationType.CLOSE.equals(type)) {
+        else if(OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
         }
 

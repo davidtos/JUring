@@ -159,7 +159,7 @@ public class JUring implements AutoCloseable {
         }
         
         long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
-        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE, registeredBuffer);
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
 
         MemorySegment sqe = libUringWrapper.getSqe();
         if (isFixed) {

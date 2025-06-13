@@ -6,8 +6,9 @@ import java.util.Map;
 public enum OperationType {
     READ(0),
     WRITE(1),
-    OPEN(2),
-    CLOSE(3);
+    WRITE_FIXED(2),
+    OPEN(3),
+    CLOSE(4);
 
     private static final Map<Integer,OperationType> map = new HashMap<>();
 
