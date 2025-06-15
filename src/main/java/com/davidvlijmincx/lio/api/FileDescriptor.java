@@ -6,7 +6,7 @@ public class FileDescriptor implements AutoCloseable {
     private boolean closed = false;
 
     public FileDescriptor(String path, Flag flags, int mode) {
-        this.fd = LibCWrapper.OpenFile(path, flags.getValue(), mode);
+        this.fd = LibCWrapper.C_DISPATCHER.open(path, flags.getValue(), mode);
     }
 
     FileDescriptor(int fd) {
@@ -23,7 +23,7 @@ public class FileDescriptor implements AutoCloseable {
     @Override
     public void close(){
         if (!closed) {
-            LibCWrapper.closeFile(fd);
+            LibCWrapper.C_DISPATCHER.close(fd);
             closed = true;
         }
     }

@@ -6,7 +6,6 @@ import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.davidvlijmincx.lio.api.LibCWrapper.getErrorMessage;
 import static java.lang.foreign.ValueLayout.*;
 
 class LibUringWrapper implements AutoCloseable {
@@ -273,14 +272,14 @@ class LibUringWrapper implements AutoCloseable {
     LibUringWrapper(int queueDepth) {
         arena = Arena.ofShared();
         ring = arena.allocate(ring_layout);
-        cqePtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize());
-        cqePtrPtr = LibCWrapper.malloc(AddressLayout.ADDRESS.byteSize() * 100);
+        cqePtr = LibCWrapper.C_DISPATCHER.alloc(AddressLayout.ADDRESS.byteSize());
+        cqePtrPtr = LibCWrapper.C_DISPATCHER.alloc(AddressLayout.ADDRESS.byteSize() * 100);
 
         try {
 
             int ret = (int) io_uring_queue_init.invokeExact(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER);
             if (ret < 0) {
-                throw new RuntimeException("Failed to initialize queue " + getErrorMessage(ret));
+                throw new RuntimeException("Failed to initialize queue " + LibCWrapper.C_DISPATCHER.strerror(ret));
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
@@ -392,7 +391,7 @@ class LibUringWrapper implements AutoCloseable {
         try {
             int ret = (int) io_uring_submit.invokeExact(ring);
             if (ret < 0) {
-                throw new RuntimeException("Failed to submit queue: " + getErrorMessage(ret));
+                throw new RuntimeException("Failed to submit queue: " + LibCWrapper.C_DISPATCHER.strerror(ret));
             }
         } catch (Throwable e) {
             throw new RuntimeException(e);
@@ -429,7 +428,7 @@ class LibUringWrapper implements AutoCloseable {
         try {
             int ret = (int) io_uring_wait_cqe.invokeExact(ring, cqePtr);
             if (ret < 0) {
-                throw new RuntimeException("Error while waiting for cqe: " + getErrorMessage(ret));
+                throw new RuntimeException("Error while waiting for cqe: " + LibCWrapper.C_DISPATCHER.strerror(ret));
             }
 
             var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
@@ -452,17 +451,17 @@ class LibUringWrapper implements AutoCloseable {
         long id = UserData.getId(nativeUserData);
         MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
 
-        LibCWrapper.freeBuffer(nativeUserData);
+        LibCWrapper.C_DISPATCHER.free(nativeUserData);
 
         if (OperationType.WRITE.equals(type)) {
-            LibCWrapper.freeBuffer(bufferResult);
+            LibCWrapper.C_DISPATCHER.free(bufferResult);
             return new WriteResult(id, result);
         }
         else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
         }
         else if(OperationType.OPEN.equals(type)) {
-            LibCWrapper.freeBuffer(bufferResult);
+            LibCWrapper.C_DISPATCHER.free(bufferResult);
             return new OpenResult(id, (int) result);
         }
         else if(OperationType.CLOSE.equals(type)) {
@@ -481,7 +480,7 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
-        LibCWrapper.IovecStructure iovecStructure = LibCWrapper.allocateIovec(arena, bufferSize, nrIovecs);
+        var iovecStructure = LibCWrapper.C_DISPATCHER.allocateIovec(arena, bufferSize, nrIovecs);
         registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
         return iovecStructure.buffers();
     }
@@ -508,7 +507,7 @@ class LibUringWrapper implements AutoCloseable {
             
             int ret = (int) io_uring_register_files.invokeExact(ring, fdArray, count);
             if (ret < 0) {
-                throw new RuntimeException("Failed to register files: " + getErrorMessage(ret));
+                throw new RuntimeException("Failed to register files: " + LibCWrapper.C_DISPATCHER.strerror(ret));
             }
             return ret;
         } catch (Throwable e) {
@@ -527,7 +526,7 @@ class LibUringWrapper implements AutoCloseable {
             
             int ret = (int) io_uring_register_files_update.invokeExact(ring, offset, fdArray, count);
             if (ret < 0) {
-                throw new RuntimeException("Failed to update registered files: " + getErrorMessage(ret));
+                throw new RuntimeException("Failed to update registered files: " + LibCWrapper.C_DISPATCHER.strerror(ret));
             }
             return ret;
         } catch (Throwable e) {
@@ -550,8 +549,8 @@ class LibUringWrapper implements AutoCloseable {
     @Override
     public void close() {
         closeRing();
-        LibCWrapper.freeBuffer(cqePtr);
-        LibCWrapper.freeBuffer(cqePtrPtr);
+        LibCWrapper.C_DISPATCHER.free(cqePtr);
+        LibCWrapper.C_DISPATCHER.free(cqePtrPtr);
         closeArena();
     }
 
