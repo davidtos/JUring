@@ -17,29 +17,29 @@ record LibCDispatcher (Consumer<MemorySegment> free,
                        Strerror strerror,
                        Calloc calloc) {
 
-    public void free(MemorySegment address) {
+     void free(MemorySegment address) {
         free.accept(address);
     }
 
-    public int open(String path, int flags, int mode) {
+     int open(String path, int flags, int mode) {
         return open.open(MemorySegment.ofArray((path + "\0").getBytes()), flags, mode);
     }
 
-    public void close(int fd){ close.accept(fd); }
+     void close(int fd){ close.accept(fd); }
 
-    public MemorySegment malloc(long size) {
+     MemorySegment malloc(long size) {
        return malloc.malloc(size).reinterpret(size);
     }
 
-    public String strerror(int errno) {
+     String strerror(int errno) {
         return strerror.strerror(errno).reinterpret(Long.MAX_VALUE).getString(0);
     }
 
-    public MemorySegment calloc(long size){
+     MemorySegment calloc(long size){
        return calloc.calloc(1L, size).reinterpret(size);
     }
 
-    IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
+     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
         var iovecSequence = MemoryLayout.sequenceLayout(nrIovecs, Iovec.layout());
         var iovecArray = arena.allocate(iovecSequence);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];

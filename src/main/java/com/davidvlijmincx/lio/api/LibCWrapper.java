@@ -13,7 +13,7 @@ import java.util.function.IntConsumer;
 
 import static java.lang.foreign.ValueLayout.*;
 
-class LibCWrapper {
+final class LibCWrapper {
 
     private static final Linker linker = Linker.nativeLinker();
 
