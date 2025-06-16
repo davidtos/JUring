@@ -27,6 +27,6 @@ public final class ReadResult extends Result {
     }
 
     public void freeBuffer() {
-        LibCWrapper.C_DISPATCHER.free(buffer);
+        NativeDispatcher.C.free(buffer);
     }
 }

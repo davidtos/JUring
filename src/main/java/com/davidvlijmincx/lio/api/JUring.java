@@ -51,7 +51,7 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareOpen(String filePath, int flags, int mode) {
-        MemorySegment pathBuffer = LibCWrapper.C_DISPATCHER.calloc(filePath.getBytes().length + 1);
+        MemorySegment pathBuffer = NativeDispatcher.C.calloc(filePath.getBytes().length + 1);
         MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
@@ -65,7 +65,7 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex) {
-        MemorySegment pathBuffer = LibCWrapper.C_DISPATCHER.alloc(filePath.getBytes().length + 1);
+        MemorySegment pathBuffer = NativeDispatcher.C.alloc(filePath.getBytes().length + 1);
         MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
         pathBuffer.set(JAVA_BYTE, filePath.getBytes().length, (byte) 0);
         
@@ -95,7 +95,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, boolean isFixed) {
-        MemorySegment buff = LibCWrapper.C_DISPATCHER.malloc(readSize);
+        MemorySegment buff = NativeDispatcher.C.malloc(readSize);
         long id = buff.address();
         MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.READ, buff);
 
@@ -111,7 +111,7 @@ public class JUring implements AutoCloseable {
 
     private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, boolean isFixed) {
         MemorySegment sqe = libUringWrapper.getSqe();
-        MemorySegment buff = LibCWrapper.C_DISPATCHER.alloc(bytes.length);
+        MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
         MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE, buff);
 

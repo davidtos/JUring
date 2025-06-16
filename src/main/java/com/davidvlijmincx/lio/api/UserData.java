@@ -33,7 +33,7 @@ public class UserData {
     }
 
     static MemorySegment createUserData(long id, int fd, OperationType type, MemorySegment buffer) {
-        MemorySegment segment = LibCWrapper.C_DISPATCHER.alloc(requestLayout.byteSize());
+        MemorySegment segment = NativeDispatcher.C.malloc(requestLayout.byteSize());
 
         idHandle.set(segment, 0L, id);
         fdHandle.set(segment, 0L, fd);
