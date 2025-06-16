@@ -3,10 +3,11 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.*;
 import java.lang.invoke.VarHandle;
 
-public class UserData {
+final class UserData {
 
     private static final StructLayout requestLayout;
-    private static final AddressLayout C_POINTER;
+    private static final AddressLayout C_POINTER = ValueLayout.ADDRESS
+            .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));;
 
     private static final VarHandle idHandle;
     private static final VarHandle fdHandle;
@@ -14,9 +15,6 @@ public class UserData {
     private static final VarHandle bufferHandle;
 
     static {
-
-        C_POINTER = ValueLayout.ADDRESS
-                .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));
 
         requestLayout = MemoryLayout.structLayout(
                         ValueLayout.JAVA_LONG.withName("id"),
