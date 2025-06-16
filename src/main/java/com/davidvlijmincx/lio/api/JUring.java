@@ -51,7 +51,7 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareOpen(String filePath, int flags, int mode) {
-        MemorySegment pathBuffer = LibCWrapper.C_DISPATCHER.alloc(filePath.getBytes().length + 1);
+        MemorySegment pathBuffer = LibCWrapper.C_DISPATCHER.calloc(filePath.getBytes().length + 1);
         MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();

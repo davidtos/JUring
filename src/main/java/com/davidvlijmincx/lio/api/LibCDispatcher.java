@@ -39,15 +39,16 @@ record LibCDispatcher (Consumer<MemorySegment> free,
        return calloc.calloc(1L, size).reinterpret(size);
     }
 
-     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
-        var iovecSequence = MemoryLayout.sequenceLayout(nrIovecs, Iovec.layout());
-        var iovecArray = arena.allocate(iovecSequence);
+    IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
+        MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
 
         for (int i = 0; i < nrIovecs; i++) {
-            MemorySegment nthIovec = iovecArray.asSlice(i * Iovec.layout().byteSize(),  Iovec.layout().byteSize());
+            MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
             MemorySegment buffer = malloc(bufferSize);
-            setIovecData(nthIovec, buffer);
+
+            Iovec.iov_base(nthIovec, buffer);
+            Iovec.iov_len(nthIovec, buffer.byteSize());
             buffers[i] = buffer;
         }
 
@@ -57,14 +58,6 @@ record LibCDispatcher (Consumer<MemorySegment> free,
     record IovecStructure(MemorySegment iovecArray, MemorySegment[] buffers) {
     }
 
-    private void setIovecData(MemorySegment memorySegment, MemorySegment buffer) {
-        try {
-            Iovec.iov_base(memorySegment, buffer);
-            Iovec.iov_len(memorySegment, buffer.byteSize());
-        } catch (Throwable e) {
-            throw new RuntimeException("Could not set iovec data", e);
-        }
-    }
 
     MemorySegment alloc(long size) {
 
