@@ -5,7 +5,6 @@ import com.davidvlijmincx.lio.api.functions.Open;
 import com.davidvlijmincx.lio.api.functions.Strerror;
 
 import java.lang.foreign.Arena;
-import java.lang.foreign.MemoryLayout;
 import java.lang.foreign.MemorySegment;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
@@ -57,7 +56,6 @@ record LibCDispatcher (Consumer<MemorySegment> free,
 
     record IovecStructure(MemorySegment iovecArray, MemorySegment[] buffers) {
     }
-
 
     MemorySegment alloc(long size) {
 

@@ -41,14 +41,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final byte IOSQE_CQE_SKIP_SUCCESS = (byte) (1 << 6); // 0x40
 
     private static final MethodHandle io_uring_queue_init;
-    private static final MethodHandle io_uring_get_sqe;
-    private static final MethodHandle io_uring_sqe_set_flags;
-    private static final MethodHandle io_uring_prep_openat;
-    private static final MethodHandle io_uring_prep_open_direct;
-    private static final MethodHandle io_uring_prep_close;
-    private static final MethodHandle io_uring_prep_close_direct;
-    private static final MethodHandle io_uring_prep_read;
-    private static final MethodHandle io_uring_prep_read_fixed;
+
     private static final MethodHandle io_uring_prep_write;
     private static final MethodHandle io_uring_prep_write_fixed;
     private static final MethodHandle io_uring_submit;
@@ -84,60 +77,6 @@ class LibUringWrapper implements AutoCloseable {
         io_uring_queue_init = linker.downcallHandle(
                 liburing.find("io_uring_queue_init").orElseThrow(),
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
-        );
-
-        io_uring_get_sqe = linker.downcallHandle(
-                liburing.find("io_uring_get_sqe").orElseThrow(),
-                FunctionDescriptor.of(ADDRESS, ADDRESS),
-                Linker.Option.critical(true)
-        );
-
-        io_uring_sqe_set_flags = linker.downcallHandle(
-                liburing.find("io_uring_sqe_set_flags").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE)
-        );
-
-        io_uring_prep_read = linker.downcallHandle(
-                liburing.find("io_uring_prep_read").orElseThrow(),
-                FunctionDescriptor.ofVoid(
-                        C_POINTER,
-                        JAVA_INT,
-                        C_POINTER,
-                        JAVA_LONG,
-                        JAVA_LONG
-                )
-        );
-
-        io_uring_prep_read_fixed = linker.downcallHandle(
-                liburing.find("io_uring_prep_read_fixed").orElseThrow(),
-                FunctionDescriptor.ofVoid(
-                        C_POINTER,
-                        JAVA_INT,
-                        C_POINTER,
-                        JAVA_LONG,
-                        JAVA_LONG,
-                        JAVA_INT
-                )
-        );
-
-        io_uring_prep_openat = linker.downcallHandle(
-                liburing.find("io_uring_prep_openat").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT)
-        );
-
-        io_uring_prep_open_direct = linker.downcallHandle(
-                liburing.find("io_uring_prep_open_direct").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT)
-        );
-
-        io_uring_prep_close = linker.downcallHandle(
-                liburing.find("io_uring_prep_close").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT)
-        );
-
-        io_uring_prep_close_direct = linker.downcallHandle(
-                liburing.find("io_uring_prep_close_direct").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT)
         );
 
         io_uring_prep_write = linker.downcallHandle(
@@ -288,15 +227,7 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     MemorySegment getSqe() {
-        try {
-            MemorySegment sqe = (MemorySegment) io_uring_get_sqe.invokeExact(ring);
-            if (sqe == null) {
-                throw new RuntimeException("Failed to get sqe");
-            }
-            return sqe;
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        return LibCWrapper.URING_DISPATCHER.getSqe(ring);
     }
 
     void link(MemorySegment sqe) {
@@ -308,59 +239,31 @@ class LibUringWrapper implements AutoCloseable {
     }
 
     void setSqeFlag(MemorySegment sqe, byte flag) {
-        try {
-            io_uring_sqe_set_flags.invokeExact(sqe, flag);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        LibCWrapper.URING_DISPATCHER.setSqeFlag(sqe, flag);
     }
 
     void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
-        try {
-            io_uring_prep_openat.invokeExact(sqe, AT_FDCWD, filePath, flags, mode);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        LibCWrapper.URING_DISPATCHER.prepareOpen(sqe, filePath, flags, mode);
     }
 
     void prepareOpenDirect(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex) {
-        try {
-            io_uring_prep_open_direct.invokeExact(sqe, filePath, flags, mode, fileIndex);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+       LibCWrapper.URING_DISPATCHER.prepareOpenDirect(sqe, filePath, flags, mode, fileIndex);
     }
 
     void prepareClose(MemorySegment sqe, int fd) {
-        try {
-            io_uring_prep_close.invokeExact(sqe, fd);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        LibCWrapper.URING_DISPATCHER.prepareClose(sqe,fd);
     }
 
     void prepareCloseDirect(MemorySegment sqe, int fileIndex) {
-        try {
-            io_uring_prep_close_direct.invokeExact(sqe, fileIndex);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+       LibCWrapper.URING_DISPATCHER.prepareCloseDirect(sqe, fileIndex);
     }
 
     void prepareRead(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
-        try {
-            io_uring_prep_read.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        LibCWrapper.URING_DISPATCHER.prepareRead(sqe,fd,buffer,offset);
     }
 
     void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int bufferIndex) {
-        try {
-            io_uring_prep_read_fixed.invokeExact(sqe, fd, buffer, buffer.byteSize(), offset, bufferIndex);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
+        LibCWrapper.URING_DISPATCHER.prepareReadFixed( sqe,fd,buffer,offset,bufferIndex);
     }
 
     void prepareWrite(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
