@@ -30,7 +30,7 @@ final class NativeDispatcher {
             libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
             libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
             libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
-            libLink(PrepareOpenDirect.class, "io_uring_prep_open_direct",FunctionDescriptor.ofVoid(C_POINTER, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT), false),
+            libLink(PrepareOpenDirect.class, "io_uring_prep_openat_direct",FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT), false),
             libLink(PrepareClose.class, "io_uring_prep_close",FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
             libLink(PrepareCloseDirect.class, "io_uring_prep_close_direct",FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
             libLink(PrepareRead.class, "io_uring_prep_read",FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),

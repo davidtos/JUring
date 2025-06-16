@@ -40,7 +40,7 @@ record LibUringDispatcher (GetSqe sqe,
     }
 
     void prepareOpenDirect(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex){
-        prepOpenDirect.prepareOpenDirect(sqe, filePath, flags, mode, fileIndex);
+        prepOpenDirect.prepareOpenDirect(sqe,AT_FDCWD, filePath, flags, mode, fileIndex);
     }
 
     void prepareClose(MemorySegment sqe, int fd) {
