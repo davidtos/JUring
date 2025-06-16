@@ -54,7 +54,7 @@ public class RandomWriteBenchMark {
                 jUringBlocking.submit();
                 executor.execute(() -> {
                     try {
-                        r.get().getResult();
+                        r.get().result();
                         fd.close();
                     } catch (InterruptedException | ExecutionException e) {
                         throw new RuntimeException(e);

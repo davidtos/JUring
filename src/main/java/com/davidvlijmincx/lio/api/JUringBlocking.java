@@ -37,7 +37,7 @@ public class JUringBlocking implements AutoCloseable {
                 final List<Result> results = jUring.peekForBatchResult(100);
 
                 results.forEach(result -> {
-                    CompletableFuture<? extends Result> request = requests.remove(result.getId());
+                    CompletableFuture<? extends Result> request = requests.remove(result.id());
 
                     if(result instanceof ReadResult r) {
                         ((CompletableFuture<ReadResult>)request).complete(r);

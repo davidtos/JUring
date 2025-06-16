@@ -1,17 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.MemorySegment;
-
-public final class OpenResult extends Result {
-
-    FileDescriptor fileDescriptor;
-
+public record OpenResult(long id, FileDescriptor fileDescriptor) implements Result {
     OpenResult(long id, int fd) {
-        super(id);
-        this.fileDescriptor = new FileDescriptor(fd);
-    }
-
-    public FileDescriptor getFileDescriptor() {
-        return fileDescriptor;
+        this(id, new FileDescriptor(fd));
     }
 }

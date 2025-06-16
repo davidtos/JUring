@@ -5,7 +5,6 @@ import org.junit.jupiter.api.*;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -37,9 +36,9 @@ class JUringBlockingTest {
             var result = future.get();
 
             // make it valid UTF-8
-            result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
 
-            String string = result.getBuffer().getString(0);
+            String string = result.buffer().getString(0);
             result.freeBuffer();
             assertEquals("Hello, World!", string);
         } catch (ExecutionException | InterruptedException e) {
@@ -63,13 +62,13 @@ class JUringBlockingTest {
             ReadResult result2 = future3.get();
 
             // make it valid UTF-8
-            result.getBuffer().set(JAVA_BYTE, result.getResult(), (byte) 0);
-            result1.getBuffer().set(JAVA_BYTE, result1.getResult(), (byte) 0);
-            result2.getBuffer().set(JAVA_BYTE, result2.getResult(), (byte) 0);
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            result1.buffer().set(JAVA_BYTE, result1.result(), (byte) 0);
+            result2.buffer().set(JAVA_BYTE, result2.result(), (byte) 0);
 
-            assertEquals("Hello, World!", result.getBuffer().getString(0));
-            assertEquals("Hello", result1.getBuffer().getString(0));
-            assertEquals("World!", result2.getBuffer().getString(0));
+            assertEquals("Hello, World!", result.buffer().getString(0));
+            assertEquals("Hello", result1.buffer().getString(0));
+            assertEquals("World!", result2.buffer().getString(0));
 
             result.freeBuffer();
             result1.freeBuffer();
@@ -85,7 +84,7 @@ class JUringBlockingTest {
 
             jUringBlocking.submit();
 
-            String string = result.get().getBuffer().getString(0);
+            String string = result.get().buffer().getString(0);
             result.get().freeBuffer();
 
             assertEquals("World!", string);
@@ -107,7 +106,7 @@ class JUringBlockingTest {
 
             jUringBlocking.submit();
 
-            assertEquals(inputBytes.length, future.get().getResult());
+            assertEquals(inputBytes.length, future.get().result());
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -128,7 +127,7 @@ class JUringBlockingTest {
 
             jUringBlocking.submit();
 
-            assertEquals(inputBytes.length, result.get().getResult());
+            assertEquals(inputBytes.length, result.get().result());
 
             String writtenContent = Files.readString(path);
             assertEquals("Big hello, from Java", writtenContent);
@@ -154,12 +153,12 @@ class JUringBlockingTest {
 
             jUringBlocking.submit();
 
-            assertEquals(13, readResult.get().getResult());
-            assertEquals(5, readResult1.get().getResult());
-            assertEquals(6, readResult2.get().getResult());
+            assertEquals(13, readResult.get().result());
+            assertEquals(5, readResult1.get().result());
+            assertEquals(6, readResult2.get().result());
 
-            assertEquals(16, writeResult.get().getResult());
-            assertEquals(16, writeResult1.get().getResult());
+            assertEquals(16, writeResult.get().result());
+            assertEquals(16, writeResult1.get().result());
 
             readResult.get().freeBuffer();
             readResult1.get().freeBuffer();

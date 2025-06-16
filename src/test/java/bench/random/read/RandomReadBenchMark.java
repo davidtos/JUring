@@ -53,7 +53,7 @@ public class RandomReadBenchMark {
                 jUringBlocking.submit();
                 executor.execute(() -> {
                     try {
-                        blackhole.consume(r.get().getBuffer());
+                        blackhole.consume(r.get().buffer());
                         r.get().freeBuffer();
                     } catch (InterruptedException | ExecutionException e) {
                         throw new RuntimeException(e);
@@ -93,7 +93,7 @@ public class RandomReadBenchMark {
 
                 for (Result result : results) {
                     if (result instanceof ReadResult r) {
-                        blackhole.consume(r.getBuffer());
+                        blackhole.consume(r.buffer());
                         r.freeBuffer();
                     }
                 }
