@@ -2,7 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -45,7 +44,7 @@ class LibUringWrapper implements AutoCloseable {
     private static final MethodHandle io_uring_get_sqe;
     private static final MethodHandle io_uring_sqe_set_flags;
     private static final MethodHandle io_uring_prep_openat;
-    private static final MethodHandle io_uring_prep_open_direct;
+    private static final MethodHandle io_uring_prep_openat_direct;
     private static final MethodHandle io_uring_prep_close;
     private static final MethodHandle io_uring_prep_close_direct;
     private static final MethodHandle io_uring_prep_read;
@@ -126,9 +125,9 @@ class LibUringWrapper implements AutoCloseable {
                 FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT)
         );
 
-        io_uring_prep_open_direct = linker.downcallHandle(
-                liburing.find("io_uring_prep_open_direct").orElseThrow(),
-                FunctionDescriptor.ofVoid(C_POINTER, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT)
+        io_uring_prep_openat_direct = linker.downcallHandle(
+                liburing.find("io_uring_prep_openat_direct").orElseThrow(),
+                FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT)
         );
 
         io_uring_prep_close = linker.downcallHandle(
@@ -326,7 +325,7 @@ class LibUringWrapper implements AutoCloseable {
 
     void prepareOpenDirect(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex) {
         try {
-            io_uring_prep_open_direct.invokeExact(sqe, filePath, flags, mode, fileIndex);
+            io_uring_prep_openat_direct.invokeExact(sqe, AT_FDCWD, filePath, flags, mode, fileIndex);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
