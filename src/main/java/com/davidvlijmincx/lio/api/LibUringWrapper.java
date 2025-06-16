@@ -38,7 +38,6 @@ class LibUringWrapper implements AutoCloseable {
     private static final byte IOSQE_BUFFER_SELECT = (byte) (1 << 5); // 0x20
     private static final byte IOSQE_CQE_SKIP_SUCCESS = (byte) (1 << 6); // 0x40
 
-
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
     private static final GroupLayout io_uring_sq_layout;
