@@ -23,7 +23,11 @@ final class NativeDispatcher {
             link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(JAVA_INT),true),
             link(Malloc.class, "malloc",  FunctionDescriptor.of(ADDRESS, JAVA_LONG), true),
             link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, JAVA_INT), false),
-            link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG), true)
+            link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG), true),
+            link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), true),
+            link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
+            link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), true),
+            link(Setsockopt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true)
     );
 
     static LibUringDispatcher getUringInstance(int queueDepth){
@@ -49,7 +53,10 @@ final class NativeDispatcher {
                 libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
                 libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false)
+                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
+                libLink(PrepareAccept.class, "io_uring_prep_accept", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, C_POINTER, JAVA_INT), false),
+                libLink(PrepareRecv.class, "io_uring_prep_recv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false),
+                libLink(PrepareSend.class, "io_uring_prep_send", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false)
         );
     }
 

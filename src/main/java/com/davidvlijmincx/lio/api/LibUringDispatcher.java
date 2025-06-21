@@ -34,7 +34,10 @@ record LibUringDispatcher (Arena arena,
                            SqeSetData sqeSetData,
                            RegisterBuffers registerBuffers,
                            RegisterFiles registerFiles,
-                           RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
+                           RegisterFilesUpdate registerFilesUpdate,
+                           PrepareAccept prepAccept,
+                           PrepareRecv prepRecv,
+                           PrepareSend prepSend) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
@@ -127,8 +130,8 @@ record LibUringDispatcher (Arena arena,
         ).withName("io_uring");
     }
 
-    public LibUringDispatcher(int queueDepth, Arena arena, GetSqe sqe, SetSqeFlag setSqeFlag, PrepOpenAt prepOpenAt, PrepareOpenDirect prepOpenDirect, PrepareClose prepClose, PrepareCloseDirect prepCloseDirect, PrepareRead prepRead, PrepareReadFixed prepReadFixed, PrepareWrite prepWrite, PrepareWriteFixed prepWriteFixed, Submit submit, WaitCqe waitCqe, PeekCqe peekCqe, PeekBatchCqe peekBatchCqe, CqeSeen cqeSeen, QueueInit queueInit, QueueExit queueExit, SqeSetData sqeSetData, RegisterBuffers registerBuffers, RegisterFiles registerFiles, RegisterFilesUpdate registerFilesUpdate) {
-        this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
+    public LibUringDispatcher(int queueDepth, Arena arena, GetSqe sqe, SetSqeFlag setSqeFlag, PrepOpenAt prepOpenAt, PrepareOpenDirect prepOpenDirect, PrepareClose prepClose, PrepareCloseDirect prepCloseDirect, PrepareRead prepRead, PrepareReadFixed prepReadFixed, PrepareWrite prepWrite, PrepareWriteFixed prepWriteFixed, Submit submit, WaitCqe waitCqe, PeekCqe peekCqe, PeekBatchCqe peekBatchCqe, CqeSeen cqeSeen, QueueInit queueInit, QueueExit queueExit, SqeSetData sqeSetData, RegisterBuffers registerBuffers, RegisterFiles registerFiles, RegisterFilesUpdate registerFilesUpdate, PrepareAccept prepAccept, PrepareRecv prepRecv, PrepareSend prepSend) {
+        this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate, prepAccept, prepRecv, prepSend);
 
         int ret = queueInit(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER);
         if (ret < 0) {
@@ -182,6 +185,18 @@ record LibUringDispatcher (Arena arena,
 
     void prepareWriteFixed(MemorySegment sqe, int fd, MemorySegment buffer, long nbytes, long offset, int bufferIndex) {
         prepWriteFixed.prepareWriteFixed(sqe, fd, buffer, nbytes, offset, bufferIndex);
+    }
+
+    void prepareAccept(MemorySegment sqe, int serverFd) {
+        prepAccept.prepareAccept(sqe, serverFd, MemorySegment.NULL, MemorySegment.NULL, 0);
+    }
+
+    void prepareRecv(MemorySegment sqe, int clientFd, MemorySegment buffer) {
+        prepRecv.prepareRecv(sqe, clientFd, buffer, buffer.byteSize(), 0);
+    }
+
+    void prepareSend(MemorySegment sqe, int clientFd, MemorySegment buffer) {
+        prepSend.prepareSend(sqe, clientFd, buffer, buffer.byteSize(), 0);
     }
 
     void submit() {
@@ -290,6 +305,16 @@ record LibUringDispatcher (Arena arena,
         }
         else if(OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
+        }
+        else if(OperationType.ACCEPT.equals(type)) {
+            return new AcceptResult(id, (int) result);
+        }
+        else if(OperationType.RECV.equals(type)) {
+            return new RecvResult(id, bufferResult, result);
+        }
+        else if(OperationType.SEND.equals(type)) {
+            NativeDispatcher.C.free(bufferResult);
+            return new SendResult(id, result);
         }
 
         return new ReadResult(id, bufferResult, result);

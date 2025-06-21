@@ -1,8 +1,7 @@
 package com.davidvlijmincx.lio.api;
-import com.davidvlijmincx.lio.api.functions.Calloc;
-import com.davidvlijmincx.lio.api.functions.Malloc;
-import com.davidvlijmincx.lio.api.functions.Open;
-import com.davidvlijmincx.lio.api.functions.Strerror;
+import com.davidvlijmincx.lio.api.functions.*;
+
+import java.lang.foreign.ValueLayout;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
@@ -14,7 +13,11 @@ record LibCDispatcher (Consumer<MemorySegment> free,
                        IntConsumer close,
                        Malloc malloc,
                        Strerror strerror,
-                       Calloc calloc) {
+                       Calloc calloc,
+                       Socket socket,
+                       Bind bind,
+                       Listen listen,
+                       Setsockopt setsockopt) {
 
      void free(MemorySegment address) {
         free.accept(address);
@@ -68,6 +71,30 @@ record LibCDispatcher (Consumer<MemorySegment> free,
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+    }
+    
+    int socket(int domain, int type, int protocol) {
+        return socket.socket(domain, type, protocol);
+    }
+    
+    int bind(int sockfd, MemorySegment addr, int addrlen) {
+        return bind.bind(sockfd, addr, addrlen);
+    }
+    
+    int listen(int sockfd, int backlog) {
+        return listen.listen(sockfd, backlog);
+    }
+    
+    int setsockopt(int sockfd, int level, int optname, MemorySegment optval, int optlen) {
+        return setsockopt.setsockopt(sockfd, level, optname, optval, optlen);
+    }
+    
+    MemorySegment createSockaddrIn(Arena arena, short family, short port, int addr) {
+        MemorySegment sockaddr = arena.allocate(16); // sizeof(struct sockaddr_in)
+        sockaddr.set(ValueLayout.JAVA_SHORT, 0, family);      // sin_family
+        sockaddr.set(ValueLayout.JAVA_SHORT, 2, Short.reverseBytes(port)); // sin_port (network byte order)
+        sockaddr.set(ValueLayout.JAVA_INT, 4, addr);          // sin_addr
+        return sockaddr;
     }
 }
 
