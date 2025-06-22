@@ -26,7 +26,7 @@ final class NativeDispatcher {
             link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG), true)
     );
 
-    static LibUringDispatcher getUringInstance(int queueDepth, IoUringflags ioUringflags){
+    static LibUringDispatcher getUringInstance(int queueDepth, IoUringflags... ioUringflags){
         return  new LibUringDispatcher(queueDepth,
                 Arena.ofShared(),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),

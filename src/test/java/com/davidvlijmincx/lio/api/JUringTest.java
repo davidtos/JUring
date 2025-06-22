@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,7 +23,7 @@ class JUringTest {
 
     @BeforeEach
     void setUp() {
-        jUring = new JUring(10);
+        jUring = new JUring(10, IORING_SETUP_SINGLE_ISSUER);
     }
 
     @AfterEach
