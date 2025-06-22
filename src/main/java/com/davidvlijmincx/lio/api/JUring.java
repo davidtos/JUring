@@ -13,8 +13,8 @@ public class JUring implements AutoCloseable {
     private final LibUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
 
-    public JUring(int queueDepth, IoUringOptions... ioUringflags) {
-        ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringflags);
+    public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
+        ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
         registeredBuffers = new ArrayList<>();
     }
 
