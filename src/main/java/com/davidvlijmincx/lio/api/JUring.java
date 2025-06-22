@@ -6,7 +6,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
-import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class JUring implements AutoCloseable {
@@ -14,8 +13,8 @@ public class JUring implements AutoCloseable {
     private final LibUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
 
-    public JUring(int queueDepth) {
-        ioUring = NativeDispatcher.getUringInstance(queueDepth, IORING_SETUP_SINGLE_ISSUER);
+    public JUring(int queueDepth, IoUringflags... ioUringflags) {
+        ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringflags);
         registeredBuffers = new ArrayList<>();
     }
 

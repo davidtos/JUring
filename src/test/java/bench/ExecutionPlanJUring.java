@@ -6,6 +6,8 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
+import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
+
 @State(Scope.Thread)
 public class ExecutionPlanJUring {
 
@@ -13,7 +15,7 @@ public class ExecutionPlanJUring {
 
     @Setup
     public void setup() {
-        jUring = new JUring(2500);
+        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
 
     }
 

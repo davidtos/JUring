@@ -8,6 +8,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
+import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
+
 public class JUringBlocking implements AutoCloseable {
 
     public final int pollingInterval;
@@ -17,14 +19,14 @@ public class JUringBlocking implements AutoCloseable {
     private Thread pollerThread;
 
     public JUringBlocking(int queueDepth) {
-        this.jUring = new JUring(queueDepth);
+        this.jUring = new JUring(queueDepth, IORING_SETUP_SINGLE_ISSUER);
         this.pollingInterval = -1;
         this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
         startPoller();
     }
 
     public JUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
-        this.jUring = new JUring(queueDepth);
+        this.jUring = new JUring(queueDepth, IORING_SETUP_SINGLE_ISSUER);
         this.pollingInterval = cqPollerTimeoutInMillis;
         this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
         startPoller();

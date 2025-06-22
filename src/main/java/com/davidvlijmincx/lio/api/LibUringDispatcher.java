@@ -124,12 +124,12 @@ record LibUringDispatcher(Arena arena,
 
         this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
 
-        byte result = 0;
+        byte combinedFlags = 0;
         for (IoUringflags b : uringflags) {
-            result |= b.value;
+            combinedFlags |= b.value;
         }
 
-        int ret = queueInit(queueDepth, ring, result);
+        int ret = queueInit(queueDepth, ring, combinedFlags);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + NativeDispatcher.C.strerror(ret));
         }
