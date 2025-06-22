@@ -3,7 +3,7 @@ package bench.random.write;
 import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
 import com.davidvlijmincx.lio.api.FileDescriptor;
-import com.davidvlijmincx.lio.api.Flag;
+import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.WriteResult;
 import org.openjdk.jmh.annotations.*;
@@ -21,8 +21,6 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
-
-import static org.openjdk.jmh.annotations.Threads.MAX;
 
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -49,7 +47,7 @@ public class RandomWriteBenchMark {
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (RandomWriteTask writeTask : writeTasks) {
-                FileDescriptor fd = new FileDescriptor(writeTask.sPath(), Flag.WRITE, 0);
+                FileDescriptor fd = new FileDescriptor(writeTask.sPath(), LinuxOpenOptions.WRITE, 0);
                 Future<WriteResult> r = jUringBlocking.prepareWrite(fd, randomWriteTaskCreator.content, writeTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
@@ -75,7 +73,7 @@ public class RandomWriteBenchMark {
             int j = 0;
             for (var task : writeTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.WRITE, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), LinuxOpenOptions.WRITE, 0);
                 openFiles.add(fd);
 
                 jUring.prepareWrite(fd, randomWriteTaskCreator.content, task.offset());

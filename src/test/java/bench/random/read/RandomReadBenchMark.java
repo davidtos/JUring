@@ -48,7 +48,7 @@ public class RandomReadBenchMark {
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (RandomReadTask readTask : readTasks) {
-                FileDescriptor fd = new FileDescriptor(readTask.sPath(), Flag.READ, 0);
+                FileDescriptor fd = new FileDescriptor(readTask.sPath(), LinuxOpenOptions.READ, 0);
                 var r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
@@ -75,7 +75,7 @@ public class RandomReadBenchMark {
             int j = 0;
             for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), Flag.READ, 0);
+                FileDescriptor fd = new FileDescriptor(task.sPath(), LinuxOpenOptions.READ, 0);
                 openFiles.add(fd);
 
                 jUring.prepareRead(fd, task.bufferSize(), task.offset());

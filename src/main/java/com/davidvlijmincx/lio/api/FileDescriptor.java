@@ -5,7 +5,7 @@ public class FileDescriptor implements AutoCloseable {
     private final int fd;
     private boolean closed = false;
 
-    public FileDescriptor(String path, Flag flags, int mode) {
+    public FileDescriptor(String path, LinuxOpenOptions flags, int mode) {
         this.fd = NativeDispatcher.C.open(path, flags.getValue(), mode);
     }
 

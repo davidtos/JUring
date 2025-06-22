@@ -28,7 +28,7 @@ class JUringBlockingTest {
     @Test
     void readFromFile() {
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", LinuxOpenOptions.READ, 0);) {
             Future<ReadResult> future = jUringBlocking.prepareRead(fd, 14, 0);
 
             jUringBlocking.submit();
@@ -49,7 +49,7 @@ class JUringBlockingTest {
     @Test
     void multiReadFromFile() throws ExecutionException, InterruptedException {
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0);) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", LinuxOpenOptions.READ, 0);) {
 
             var future1 = jUringBlocking.prepareRead(fd, 14, 0);
             var future2 = jUringBlocking.prepareRead(fd, 5, 0);
@@ -78,7 +78,7 @@ class JUringBlockingTest {
 
     @Test
     void readFromFileAtOffset() throws ExecutionException, InterruptedException {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", Flag.READ, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", LinuxOpenOptions.READ, 0)) {
 
             var result = jUringBlocking.prepareRead(fd, 6, 7);
 
@@ -100,7 +100,7 @@ class JUringBlockingTest {
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(path.toString(), LinuxOpenOptions.WRITE, 0)) {
 
             var future = jUringBlocking.prepareWrite(fd, inputBytes, 0);
 
@@ -121,7 +121,7 @@ class JUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor(path.toString(), Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(path.toString(), LinuxOpenOptions.WRITE, 0)) {
 
             var result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
 
@@ -143,7 +143,7 @@ class JUringBlockingTest {
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor(readPath.toString(), Flag.READ, 0); FileDescriptor writeFd = new FileDescriptor(writePath.toString(), Flag.WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(readPath.toString(), LinuxOpenOptions.READ, 0); FileDescriptor writeFd = new FileDescriptor(writePath.toString(), LinuxOpenOptions.WRITE, 0)) {
 
             var readResult = jUringBlocking.prepareRead(fd, 14, 0);
             var writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
