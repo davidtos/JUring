@@ -7,36 +7,33 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static com.davidvlijmincx.lio.api.DirectoryFileDescriptorFlags.AT_FDCWD;
-import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.*;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
 
-record LibUringDispatcher (Arena arena,
-                           MemorySegment ring,
-                           MemorySegment cqePtr,
-                           MemorySegment cqePtrPtr,
-                           GetSqe sqe,
-                           SetSqeFlag setSqeFlag,
-                           PrepOpenAt prepOpenAt,
-                           PrepareOpenDirect prepOpenDirectAt,
-                           PrepareClose prepClose,
-                           PrepareCloseDirect prepCloseDirect,
-                           PrepareRead prepRead,
-                           PrepareReadFixed prepReadFixed,
-                           PrepareWrite prepWrite,
-                           PrepareWriteFixed prepWriteFixed,
-                           Submit submitOp,
-                           WaitCqe waitCqe,
-                           PeekCqe peekCqe,
-                           PeekBatchCqe peekBatchCqe,
-                           CqeSeen cqeSeen,
-                           QueueInit queueInit,
-                           QueueExit queueExit,
-                           SqeSetData sqeSetData,
-                           RegisterBuffers registerBuffers,
-                           RegisterFiles registerFiles,
-                           RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
+record LibUringDispatcher(Arena arena,
+                          MemorySegment ring,
+                          MemorySegment cqePtr,
+                          MemorySegment cqePtrPtr,
+                          GetSqe sqe,
+                          SetSqeFlag setSqeFlag,
+                          PrepOpenAt prepOpenAt,
+                          PrepareOpenDirect prepOpenDirectAt,
+                          PrepareClose prepClose,
+                          PrepareCloseDirect prepCloseDirect,
+                          PrepareRead prepRead,
+                          PrepareReadFixed prepReadFixed,
+                          PrepareWrite prepWrite,
+                          PrepareWriteFixed prepWriteFixed,
+                          Submit submitOp,
+                          WaitCqe waitCqe,
+                          PeekCqe peekCqe,
+                          PeekBatchCqe peekBatchCqe,
+                          CqeSeen cqeSeen,
+                          QueueInit queueInit,
+                          QueueExit queueExit,
+                          SqeSetData sqeSetData,
+                          RegisterBuffers registerBuffers,
+                          RegisterFiles registerFiles,
+                          RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
@@ -100,10 +97,39 @@ record LibUringDispatcher (Arena arena,
         ).withName("io_uring");
     }
 
-    public LibUringDispatcher(int queueDepth, Arena arena, GetSqe sqe, SetSqeFlag setSqeFlag, PrepOpenAt prepOpenAt, PrepareOpenDirect prepOpenDirect, PrepareClose prepClose, PrepareCloseDirect prepCloseDirect, PrepareRead prepRead, PrepareReadFixed prepReadFixed, PrepareWrite prepWrite, PrepareWriteFixed prepWriteFixed, Submit submit, WaitCqe waitCqe, PeekCqe peekCqe, PeekBatchCqe peekBatchCqe, CqeSeen cqeSeen, QueueInit queueInit, QueueExit queueExit, SqeSetData sqeSetData, RegisterBuffers registerBuffers, RegisterFiles registerFiles, RegisterFilesUpdate registerFilesUpdate) {
+    public LibUringDispatcher(int queueDepth,
+                              Arena arena,
+                              GetSqe sqe,
+                              SetSqeFlag setSqeFlag,
+                              PrepOpenAt prepOpenAt,
+                              PrepareOpenDirect prepOpenDirect,
+                              PrepareClose prepClose,
+                              PrepareCloseDirect prepCloseDirect,
+                              PrepareRead prepRead,
+                              PrepareReadFixed prepReadFixed,
+                              PrepareWrite prepWrite,
+                              PrepareWriteFixed prepWriteFixed,
+                              Submit submit,
+                              WaitCqe waitCqe,
+                              PeekCqe peekCqe,
+                              PeekBatchCqe peekBatchCqe,
+                              CqeSeen cqeSeen,
+                              QueueInit queueInit,
+                              QueueExit queueExit,
+                              SqeSetData sqeSetData,
+                              RegisterBuffers registerBuffers,
+                              RegisterFiles registerFiles,
+                              RegisterFilesUpdate registerFilesUpdate,
+                              IoUringflags... uringflags) {
+
         this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
 
-        int ret = queueInit(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER.value);
+        byte result = 0;
+        for (IoUringflags b : uringflags) {
+            result |= b.value;
+        }
+
+        int ret = queueInit(queueDepth, ring, result);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + NativeDispatcher.C.strerror(ret));
         }
@@ -121,7 +147,7 @@ record LibUringDispatcher (Arena arena,
         return sqe.getSqe(ring);
     }
 
-    void setSqeFlag(MemorySegment sqe, SqeFlags ...flags) {
+    void setSqeFlag(MemorySegment sqe, SqeFlags... flags) {
         byte result = 0;
         for (SqeFlags b : flags) {
             result |= b.value;
@@ -130,15 +156,15 @@ record LibUringDispatcher (Arena arena,
     }
 
     void prepareOpenAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
-        prepOpenAt.prepareOpenAt(sqe,AT_FDCWD.value,filePath, flags, mode);
+        prepOpenAt.prepareOpenAt(sqe, AT_FDCWD.value, filePath, flags, mode);
     }
 
-    void prepareOpenDirectAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex){
+    void prepareOpenDirectAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex) {
         prepOpenDirectAt.prepareOpenDirectAt(sqe, AT_FDCWD.value, filePath, flags, mode, fileIndex);
     }
 
     void prepareClose(MemorySegment sqe, int fd) {
-        prepClose.prepareClose(sqe,fd);
+        prepClose.prepareClose(sqe, fd);
     }
 
     void prepareCloseDirect(MemorySegment sqe, int fileIndex) {
@@ -257,15 +283,12 @@ record LibUringDispatcher (Arena arena,
         if (OperationType.WRITE.equals(type)) {
             NativeDispatcher.C.free(bufferResult);
             return new WriteResult(id, result);
-        }
-        else if (OperationType.WRITE_FIXED.equals(type)) {
+        } else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
-        }
-        else if(OperationType.OPEN.equals(type)) {
+        } else if (OperationType.OPEN.equals(type)) {
             NativeDispatcher.C.free(bufferResult);
             return new OpenResult(id, (int) result);
-        }
-        else if(OperationType.CLOSE.equals(type)) {
+        } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
         }
 

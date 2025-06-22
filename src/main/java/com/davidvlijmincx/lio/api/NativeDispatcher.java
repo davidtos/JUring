@@ -26,7 +26,7 @@ final class NativeDispatcher {
             link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG), true)
     );
 
-    static LibUringDispatcher getUringInstance(int queueDepth){
+    static LibUringDispatcher getUringInstance(int queueDepth, IoUringflags ioUringflags){
         return  new LibUringDispatcher(queueDepth,
                 Arena.ofShared(),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
@@ -49,7 +49,8 @@ final class NativeDispatcher {
                 libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
                 libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false)
+                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
+                ioUringflags
         );
     }
 
