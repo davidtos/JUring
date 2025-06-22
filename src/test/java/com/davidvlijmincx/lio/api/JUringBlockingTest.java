@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -17,7 +18,7 @@ class JUringBlockingTest {
 
     @BeforeAll
     static void setUp() {
-        jUringBlocking = new JUringBlocking(10);
+        jUringBlocking = new JUringBlocking(10, IORING_SETUP_SINGLE_ISSUER);
     }
 
     @AfterAll

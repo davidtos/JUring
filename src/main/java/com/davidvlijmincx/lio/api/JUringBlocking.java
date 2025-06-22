@@ -2,62 +2,50 @@ package com.davidvlijmincx.lio.api;
 
 
 import java.time.Duration;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
-import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
-
 public class JUringBlocking implements AutoCloseable {
 
-    public final int pollingInterval;
+    public final Duration timeout;
     private final Map<Long, CompletableFuture<? extends Result>> requests;
     private final JUring jUring;
     private boolean running = true;
     private Thread pollerThread;
 
-    public JUringBlocking(int queueDepth) {
-        this.jUring = new JUring(queueDepth, IORING_SETUP_SINGLE_ISSUER);
-        this.pollingInterval = -1;
-        this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
-        startPoller();
+    public JUringBlocking(int queueDepth, IoUringOptions... ioUringFlags) {
+        this(queueDepth, Duration.ofMillis(-1), ioUringFlags);
     }
 
-    public JUringBlocking(int queueDepth, int cqPollerTimeoutInMillis) {
-        this.jUring = new JUring(queueDepth, IORING_SETUP_SINGLE_ISSUER);
-        this.pollingInterval = cqPollerTimeoutInMillis;
+    public JUringBlocking(int queueDepth, Duration timeout, IoUringOptions... ioUringFlags) {
+        this.jUring = new JUring(queueDepth, ioUringFlags);
+        this.timeout = timeout;
         this.requests = new ConcurrentHashMap<>(queueDepth * 6, 0.5f);
         startPoller();
     }
 
     private void startPoller() {
         pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
-
             while (running) {
-                final List<Result> results = jUring.peekForBatchResult(100);
-
-                results.forEach(result -> {
-                    CompletableFuture<? extends Result> request = requests.remove(result.id());
-
-                    if (result instanceof ReadResult r) {
-                        ((CompletableFuture<ReadResult>) request).complete(r);
-                    } else if (result instanceof WriteResult r) {
-                        ((CompletableFuture<WriteResult>) request).complete(r);
+                jUring.peekForBatchResult(100).forEach(result -> {
+                    var request = requests.remove(result.id());
+                    switch (result) {
+                        case ReadResult r -> ((CompletableFuture<ReadResult>) request).complete(r);
+                        case WriteResult r -> ((CompletableFuture<WriteResult>) request).complete(r);
+                        case OpenResult r -> ((CompletableFuture<OpenResult>) request).complete(r);
+                        case CloseResult r -> ((CompletableFuture<CloseResult>) request).complete(r);
                     }
-
                 });
-
                 sleepInterval();
-
             }
         });
     }
 
     private void sleepInterval() {
         try {
-            Thread.sleep(Duration.ofMillis(pollingInterval));
+            Thread.sleep(timeout);
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
