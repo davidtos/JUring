@@ -120,39 +120,22 @@ record LibUringDispatcher(Arena arena,
                               RegisterBuffers registerBuffers,
                               RegisterFiles registerFiles,
                               RegisterFilesUpdate registerFilesUpdate,
-                              IoUringflags... uringflags) {
+                              IoUringOptions... ioUringOptions) {
 
         this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
 
-        byte combinedFlags = 0;
-        for (IoUringflags b : uringflags) {
-            combinedFlags |= b.value;
-        }
-
-        int ret = queueInit(queueDepth, ring, combinedFlags);
+        int ret = queueInit(queueDepth, ring, IoUringOptions.combineOptions(ioUringOptions));
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + NativeDispatcher.C.strerror(ret));
         }
-    }
-
-    void link(MemorySegment sqe) {
-        setSqeFlag(sqe, SqeFlags.IOSQE_IO_HARDLINK);
-    }
-
-    void fixedFile(MemorySegment sqe) {
-        setSqeFlag(sqe, SqeFlags.IOSQE_FIXED_FILE);
     }
 
     MemorySegment getSqe() {
         return sqe.getSqe(ring);
     }
 
-    void setSqeFlag(MemorySegment sqe, SqeFlags... flags) {
-        byte result = 0;
-        for (SqeFlags b : flags) {
-            result |= b.value;
-        }
-        setSqeFlag.setSqeFlag(sqe, result);
+    void setSqeFlag(MemorySegment sqe, SqeOptions... flags) {
+        setSqeFlag.setSqeFlag(sqe, SqeOptions.combineOptions(flags));
     }
 
     void prepareOpenAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {

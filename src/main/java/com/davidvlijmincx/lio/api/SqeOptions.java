@@ -1,6 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-public enum SqeFlags {
+public enum SqeOptions {
 
     IOSQE_FIXED_FILE((byte) (1 << 0)),    // 0x01
     IOSQE_IO_DRAIN((byte) (1 << 1)),     // 0x02
@@ -12,7 +12,15 @@ public enum SqeFlags {
 
     byte value;
 
-    SqeFlags(byte AT_FDCWD) {
-        this.value = AT_FDCWD;
+    SqeOptions(byte value) {
+        this.value = value;
+    }
+
+    static byte combineOptions(SqeOptions... options) {
+        byte combinedFlags = 0;
+        for (SqeOptions b : options) {
+            combinedFlags |= b.value;
+        }
+        return combinedFlags;
     }
 }

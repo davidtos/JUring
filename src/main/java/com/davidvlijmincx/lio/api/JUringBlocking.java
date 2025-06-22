@@ -8,7 +8,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
 
-import static com.davidvlijmincx.lio.api.IoUringflags.IORING_SETUP_SINGLE_ISSUER;
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 
 public class JUringBlocking implements AutoCloseable {
 

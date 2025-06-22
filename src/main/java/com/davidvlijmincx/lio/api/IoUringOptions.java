@@ -1,6 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-public enum IoUringflags {
+public enum IoUringOptions {
 
     IORING_SETUP_IOPOLL((byte)(1 << 0)),           // 1
     IORING_SETUP_SQPOLL((byte)(1 << 1)),           // 2
@@ -22,7 +22,15 @@ public enum IoUringflags {
     IORING_SETUP_HYBRID_IOPOLL((byte)(1 << 17));   // 131072
 
     byte value;
-    IoUringflags(byte value) {
+    IoUringOptions(byte value) {
         this.value = value;
+    }
+
+    static byte combineOptions(IoUringOptions... options) {
+        byte combinedFlags = 0;
+        for (IoUringOptions b : options) {
+            combinedFlags |= b.value;
+        }
+        return combinedFlags;
     }
 }
