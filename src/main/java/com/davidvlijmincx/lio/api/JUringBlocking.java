@@ -41,11 +41,10 @@ public class JUringBlocking implements AutoCloseable {
                 results.forEach(result -> {
                     CompletableFuture<? extends Result> request = requests.remove(result.id());
 
-                    if(result instanceof ReadResult r) {
-                        ((CompletableFuture<ReadResult>)request).complete(r);
-                    }
-                    else if(result instanceof WriteResult r) {
-                        ((CompletableFuture<WriteResult>)request).complete(r);
+                    if (result instanceof ReadResult r) {
+                        ((CompletableFuture<ReadResult>) request).complete(r);
+                    } else if (result instanceof WriteResult r) {
+                        ((CompletableFuture<WriteResult>) request).complete(r);
                     }
 
                 });

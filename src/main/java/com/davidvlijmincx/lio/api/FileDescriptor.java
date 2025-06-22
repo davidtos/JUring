@@ -21,7 +21,7 @@ public class FileDescriptor implements AutoCloseable {
     }
 
     @Override
-    public void close(){
+    public void close() {
         if (!closed) {
             NativeDispatcher.C.close(fd);
             closed = true;

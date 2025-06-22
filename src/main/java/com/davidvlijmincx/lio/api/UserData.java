@@ -7,7 +7,8 @@ final class UserData {
 
     private static final StructLayout requestLayout;
     private static final AddressLayout C_POINTER = ValueLayout.ADDRESS
-            .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));;
+            .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));
+    ;
 
     private static final VarHandle idHandle;
     private static final VarHandle fdHandle;
