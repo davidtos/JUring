@@ -58,7 +58,7 @@ public class JUring implements AutoCloseable {
         MemorySegment userData = UserData.createUserData(id, -1, OperationType.OPEN, pathBuffer);
 
         MemorySegment sqe = ioUring.getSqe();
-        ioUring.prepareOpen(sqe, pathBuffer, flags, mode);
+        ioUring.prepareOpenAt(sqe, pathBuffer, flags, mode);
         ioUring.setUserData(sqe, userData.address());
 
         return id;
@@ -73,7 +73,7 @@ public class JUring implements AutoCloseable {
         MemorySegment userData = UserData.createUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
 
         MemorySegment sqe = ioUring.getSqe();
-        ioUring.prepareOpenDirect(sqe, pathBuffer, flags, mode, fileIndex);
+        ioUring.prepareOpenDirectAt(sqe, pathBuffer, flags, mode, fileIndex);
         ioUring.setUserData(sqe, userData.address());
 
         return id;
