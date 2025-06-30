@@ -100,8 +100,8 @@ public class JUringBlocking implements AutoCloseable {
         return prepareAsync(() -> jUring.prepareOpen(filePath, flags, mode, sqeOptions));
     }
 
-    public Future<OpenResult> prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
-        return prepareAsync(() -> jUring.prepareOpenDirect(filePath, flags, mode, fileIndex, sqeOptions));
+    public Future<OpenResult> prepareOpenDirect(String filePath, LinuxOpenOptions flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareOpenDirect(filePath, flags.getValue(), mode, fileIndex, sqeOptions));
     }
 
     public Future<CloseResult> prepareClose(FileDescriptor fd, SqeOptions... sqeOptions) {
