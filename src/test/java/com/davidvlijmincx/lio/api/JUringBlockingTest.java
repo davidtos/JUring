@@ -31,7 +31,7 @@ class JUringBlockingTest {
 
     @Test
     void readFromFile() {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             Future<ReadResult> future = jUringBlocking.prepareRead(fd, 14, 0);
 
             jUringBlocking.submit();
@@ -49,7 +49,7 @@ class JUringBlockingTest {
     @Test
     void multiReadFromFile() throws ExecutionException, InterruptedException {
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
 
             var future1 = jUringBlocking.prepareRead(fd, 14, 0);
             var future2 = jUringBlocking.prepareRead(fd, 5, 0);
@@ -336,7 +336,7 @@ class JUringBlockingTest {
 
             var openFuture = jUringBlocking.prepareOpenDirect("src/test/resources/second_read_file", READ, 0, 0);
             jUringBlocking.submit();
-            OpenResult openResult = openFuture.get();
+            openFuture.get();
 
             var readFuture = jUringBlocking.prepareRead(0, 20, 0);
             jUringBlocking.submit();
