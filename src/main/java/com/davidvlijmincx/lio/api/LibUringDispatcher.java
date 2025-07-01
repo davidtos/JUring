@@ -40,7 +40,7 @@ record LibUringDispatcher(Arena arena,
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
     private static final SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
-    private static final LibCDispatcher libCDispatcher = LibCDispatcher.create();
+    private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
