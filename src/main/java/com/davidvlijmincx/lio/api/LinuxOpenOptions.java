@@ -1,6 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
-public enum Flag {
+import java.nio.file.OpenOption;
+
+public enum LinuxOpenOptions implements OpenOption {
     READ(0),
     READ_DIRECT(16384),
     WRITE(1),
@@ -9,7 +11,7 @@ public enum Flag {
 
     private int flag;
 
-    Flag(int value) {
+    LinuxOpenOptions(int value) {
         flag = value;
     }
 

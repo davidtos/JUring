@@ -6,6 +6,10 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
+import java.time.Duration;
+
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
+
 @State(Scope.Thread)
 public class ExecutionPlanBlocking {
 
@@ -13,7 +17,7 @@ public class ExecutionPlanBlocking {
 
     @Setup
     public void setup() {
-        jUringBlocking = new JUringBlocking(2500,1);
+        jUringBlocking = new JUringBlocking(2500, Duration.ofMillis(1), IORING_SETUP_SINGLE_ISSUER);
 
     }
 

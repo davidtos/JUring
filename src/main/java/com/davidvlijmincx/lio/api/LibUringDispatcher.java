@@ -6,35 +6,34 @@ import java.lang.foreign.*;
 import java.util.ArrayList;
 import java.util.List;
 
+import static com.davidvlijmincx.lio.api.DirectoryFileDescriptorFlags.AT_FDCWD;
 import static java.lang.foreign.ValueLayout.*;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
 
-record LibUringDispatcher (Arena arena,
-                           MemorySegment ring,
-                           MemorySegment cqePtr,
-                           MemorySegment cqePtrPtr,
-                           GetSqe sqe,
-                           SetSqeFlag setSqeFlag,
-                           PrepOpenAt prepOpenAt,
-                           PrepareOpenDirect prepOpenDirect,
-                           PrepareClose prepClose,
-                           PrepareCloseDirect prepCloseDirect,
-                           PrepareRead prepRead,
-                           PrepareReadFixed prepReadFixed,
-                           PrepareWrite prepWrite,
-                           PrepareWriteFixed prepWriteFixed,
-                           Submit submitOp,
-                           WaitCqe waitCqe,
-                           PeekCqe peekCqe,
-                           PeekBatchCqe peekBatchCqe,
-                           CqeSeen cqeSeen,
-                           QueueInit queueInit,
-                           QueueExit queueExit,
-                           SqeSetData sqeSetData,
-                           RegisterBuffers registerBuffers,
-                           RegisterFiles registerFiles,
-                           RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
+record LibUringDispatcher(Arena arena,
+                          MemorySegment ring,
+                          MemorySegment cqePtr,
+                          MemorySegment cqePtrPtr,
+                          GetSqe sqe,
+                          SetSqeFlag setSqeFlag,
+                          PrepOpenAt prepOpenAt,
+                          PrepareOpenDirect prepOpenDirectAt,
+                          PrepareClose prepClose,
+                          PrepareCloseDirect prepCloseDirect,
+                          PrepareRead prepRead,
+                          PrepareReadFixed prepReadFixed,
+                          PrepareWrite prepWrite,
+                          PrepareWriteFixed prepWriteFixed,
+                          Submit submitOp,
+                          WaitCqe waitCqe,
+                          PeekCqe peekCqe,
+                          PeekBatchCqe peekBatchCqe,
+                          CqeSeen cqeSeen,
+                          QueueInit queueInit,
+                          QueueExit queueExit,
+                          SqeSetData sqeSetData,
+                          RegisterBuffers registerBuffers,
+                          RegisterFiles registerFiles,
+                          RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
 
@@ -42,35 +41,6 @@ record LibUringDispatcher (Arena arena,
     private static final GroupLayout io_uring_cq_layout;
     private static final GroupLayout io_uring_sq_layout;
     private static final GroupLayout io_uring_cqe_layout;
-
-    private static final int IORING_SETUP_IOPOLL = 1 << 0;           // 1
-    private static final int IORING_SETUP_SQPOLL = 1 << 1;           // 2
-    private static final int IORING_SETUP_SQ_AFF = 1 << 2;           // 4
-    private static final int IORING_SETUP_CQSIZE = 1 << 3;           // 8
-    private static final int IORING_SETUP_CLAMP = 1 << 4;            // 16
-    private static final int IORING_SETUP_ATTACH_WQ = 1 << 5;        // 32
-    private static final int IORING_SETUP_R_DISABLED = 1 << 6;       // 64
-    private static final int IORING_SETUP_SUBMIT_ALL = 1 << 7;       // 128
-    private static final int IORING_SETUP_COOP_TASKRUN = 1 << 8;     // 256
-    private static final int IORING_SETUP_TASKRUN_FLAG = 1 << 9;     // 512
-    private static final int IORING_SETUP_SQE128 = 1 << 10;          // 1024
-    private static final int IORING_SETUP_CQE32 = 1 << 11;           // 2048
-    private static final int IORING_SETUP_SINGLE_ISSUER = 1 << 12;   // 4096
-    private static final int IORING_SETUP_DEFER_TASKRUN = 1 << 13;   // 8192
-    private static final int IORING_SETUP_NO_MMAP = 1 << 14;         // 16384
-    private static final int IORING_SETUP_REGISTERED_FD_ONLY = 1 << 15; // 32768
-    private static final int IORING_SETUP_NO_SQARRAY = 1 << 16;      // 65536
-    private static final int IORING_SETUP_HYBRID_IOPOLL = 1 << 17;   // 131072
-
-    // SQE flags
-    private static final int AT_FDCWD = (int) -100L;
-    private static final byte IOSQE_FIXED_FILE = (byte) (1 << 0);    // 0x01
-    private static final byte IOSQE_IO_DRAIN = (byte) (1 << 1);     // 0x02
-    private static final byte IOSQE_IO_LINK = (byte) (1 << 2);      // 0x04
-    private static final byte IOSQE_IO_HARDLINK = (byte) (1 << 3);  // 0x08
-    private static final byte IOSQE_ASYNC = (byte) (1 << 4);        // 0x10
-    private static final byte IOSQE_BUFFER_SELECT = (byte) (1 << 5); // 0x20
-    private static final byte IOSQE_CQE_SKIP_SUCCESS = (byte) (1 << 6); // 0x40
 
 
     static {
@@ -127,41 +97,57 @@ record LibUringDispatcher (Arena arena,
         ).withName("io_uring");
     }
 
-    public LibUringDispatcher(int queueDepth, Arena arena, GetSqe sqe, SetSqeFlag setSqeFlag, PrepOpenAt prepOpenAt, PrepareOpenDirect prepOpenDirect, PrepareClose prepClose, PrepareCloseDirect prepCloseDirect, PrepareRead prepRead, PrepareReadFixed prepReadFixed, PrepareWrite prepWrite, PrepareWriteFixed prepWriteFixed, Submit submit, WaitCqe waitCqe, PeekCqe peekCqe, PeekBatchCqe peekBatchCqe, CqeSeen cqeSeen, QueueInit queueInit, QueueExit queueExit, SqeSetData sqeSetData, RegisterBuffers registerBuffers, RegisterFiles registerFiles, RegisterFilesUpdate registerFilesUpdate) {
+    public LibUringDispatcher(int queueDepth,
+                              Arena arena,
+                              GetSqe sqe,
+                              SetSqeFlag setSqeFlag,
+                              PrepOpenAt prepOpenAt,
+                              PrepareOpenDirect prepOpenDirect,
+                              PrepareClose prepClose,
+                              PrepareCloseDirect prepCloseDirect,
+                              PrepareRead prepRead,
+                              PrepareReadFixed prepReadFixed,
+                              PrepareWrite prepWrite,
+                              PrepareWriteFixed prepWriteFixed,
+                              Submit submit,
+                              WaitCqe waitCqe,
+                              PeekCqe peekCqe,
+                              PeekBatchCqe peekBatchCqe,
+                              CqeSeen cqeSeen,
+                              QueueInit queueInit,
+                              QueueExit queueExit,
+                              SqeSetData sqeSetData,
+                              RegisterBuffers registerBuffers,
+                              RegisterFiles registerFiles,
+                              RegisterFilesUpdate registerFilesUpdate,
+                              IoUringOptions... ioUringOptions) {
+
         this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
 
-        int ret = queueInit(queueDepth, ring, IORING_SETUP_SINGLE_ISSUER);
+        int ret = queueInit(queueDepth, ring, IoUringOptions.combineOptions(ioUringOptions));
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + NativeDispatcher.C.strerror(ret));
         }
-    }
-
-    void link(MemorySegment sqe) {
-        setSqeFlag(sqe, IOSQE_IO_HARDLINK);
-    }
-
-    void fixedFile(MemorySegment sqe) {
-        setSqeFlag(sqe, IOSQE_FIXED_FILE);
     }
 
     MemorySegment getSqe() {
         return sqe.getSqe(ring);
     }
 
-    void setSqeFlag(MemorySegment sqe, byte flag) {
-        setSqeFlag.setSqeFlag(sqe, flag);
+    void setSqeFlag(MemorySegment sqe, SqeOptions... flags) {
+        setSqeFlag.setSqeFlag(sqe, SqeOptions.combineOptions(flags));
     }
 
-    void prepareOpen(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
-        prepOpenAt.prepareOpen(sqe,AT_FDCWD,filePath, flags, mode);
+    void prepareOpenAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
+        prepOpenAt.prepareOpenAt(sqe, AT_FDCWD.value, filePath, flags, mode);
     }
 
-    void prepareOpenDirect(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex){
-        prepOpenDirect.prepareOpenDirect(sqe,AT_FDCWD, filePath, flags, mode, fileIndex);
+    void prepareOpenDirectAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode, int fileIndex) {
+        prepOpenDirectAt.prepareOpenDirectAt(sqe, AT_FDCWD.value, filePath, flags, mode, fileIndex);
     }
 
     void prepareClose(MemorySegment sqe, int fd) {
-        prepClose.prepareClose(sqe,fd);
+        prepClose.prepareClose(sqe, fd);
     }
 
     void prepareCloseDirect(MemorySegment sqe, int fileIndex) {
@@ -280,15 +266,12 @@ record LibUringDispatcher (Arena arena,
         if (OperationType.WRITE.equals(type)) {
             NativeDispatcher.C.free(bufferResult);
             return new WriteResult(id, result);
-        }
-        else if (OperationType.WRITE_FIXED.equals(type)) {
+        } else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
-        }
-        else if(OperationType.OPEN.equals(type)) {
+        } else if (OperationType.OPEN.equals(type)) {
             NativeDispatcher.C.free(bufferResult);
             return new OpenResult(id, (int) result);
-        }
-        else if(OperationType.CLOSE.equals(type)) {
+        } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
         }
 

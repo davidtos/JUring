@@ -10,7 +10,7 @@ public enum OperationType {
     OPEN(3),
     CLOSE(4);
 
-    private static final Map<Integer,OperationType> map = new HashMap<>();
+    private static final Map<Integer, OperationType> map = new HashMap<>();
 
     private final int index;
 
