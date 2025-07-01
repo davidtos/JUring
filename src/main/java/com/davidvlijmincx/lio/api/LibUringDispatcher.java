@@ -103,9 +103,9 @@ record LibUringDispatcher(Arena arena,
     }
 
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
-
-        return new LibUringDispatcher(queueDepth,
-                Arena.ofShared(),
+        Arena arena = Arena.ofShared();
+        
+        LibUringDispatcher dispatcher = new LibUringDispatcher(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 100), 
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -126,48 +126,20 @@ record LibUringDispatcher(Arena arena,
                 libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
                 libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
-                ioUringOptions
-        );
+                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false));
+
+        int ret = dispatcher.queueInit(queueDepth, dispatcher.ring, IoUringOptions.combineOptions(ioUringOptions));
+        if (ret < 0) {
+            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
+        }
+        
+        return dispatcher;
     }
 
     private static <T> T libLink(Class<T> type, String name, FunctionDescriptor descriptor, boolean critical) {
         MemorySegment symbol = liburing.findOrThrow(name);
         MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
-    }
-
-    public LibUringDispatcher(int queueDepth,
-                              Arena arena,
-                              GetSqe sqe,
-                              SetSqeFlag setSqeFlag,
-                              PrepOpenAt prepOpenAt,
-                              PrepareOpenDirect prepOpenDirect,
-                              PrepareClose prepClose,
-                              PrepareCloseDirect prepCloseDirect,
-                              PrepareRead prepRead,
-                              PrepareReadFixed prepReadFixed,
-                              PrepareWrite prepWrite,
-                              PrepareWriteFixed prepWriteFixed,
-                              Submit submit,
-                              WaitCqe waitCqe,
-                              PeekCqe peekCqe,
-                              PeekBatchCqe peekBatchCqe,
-                              CqeSeen cqeSeen,
-                              QueueInit queueInit,
-                              QueueExit queueExit,
-                              SqeSetData sqeSetData,
-                              RegisterBuffers registerBuffers,
-                              RegisterFiles registerFiles,
-                              RegisterFilesUpdate registerFilesUpdate,
-                              IoUringOptions... ioUringOptions) {
-
-        this(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
-
-        int ret = queueInit(queueDepth, ring, IoUringOptions.combineOptions(ioUringOptions));
-        if (ret < 0) {
-            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
-        }
     }
 
     MemorySegment getSqe() {
