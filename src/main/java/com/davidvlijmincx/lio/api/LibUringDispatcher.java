@@ -3,6 +3,8 @@ package com.davidvlijmincx.lio.api;
 import com.davidvlijmincx.lio.api.functions.*;
 
 import java.lang.foreign.*;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandleProxies;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -36,6 +38,9 @@ record LibUringDispatcher(Arena arena,
                           RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
+    private static final Linker linker = Linker.nativeLinker();
+    private static final SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
+    private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -97,37 +102,44 @@ record LibUringDispatcher(Arena arena,
         ).withName("io_uring");
     }
 
-    public LibUringDispatcher(int queueDepth,
-                              Arena arena,
-                              GetSqe sqe,
-                              SetSqeFlag setSqeFlag,
-                              PrepOpenAt prepOpenAt,
-                              PrepareOpenDirect prepOpenDirect,
-                              PrepareClose prepClose,
-                              PrepareCloseDirect prepCloseDirect,
-                              PrepareRead prepRead,
-                              PrepareReadFixed prepReadFixed,
-                              PrepareWrite prepWrite,
-                              PrepareWriteFixed prepWriteFixed,
-                              Submit submit,
-                              WaitCqe waitCqe,
-                              PeekCqe peekCqe,
-                              PeekBatchCqe peekBatchCqe,
-                              CqeSeen cqeSeen,
-                              QueueInit queueInit,
-                              QueueExit queueExit,
-                              SqeSetData sqeSetData,
-                              RegisterBuffers registerBuffers,
-                              RegisterFiles registerFiles,
-                              RegisterFilesUpdate registerFilesUpdate,
-                              IoUringOptions... ioUringOptions) {
+    static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
+        Arena arena = Arena.ofShared();
+        
+        LibUringDispatcher dispatcher = new LibUringDispatcher(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 100), 
+                libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
+                libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
+                libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
+                libLink(PrepareOpenDirect.class, "io_uring_prep_openat_direct", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT), false),
+                libLink(PrepareClose.class, "io_uring_prep_close", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
+                libLink(PrepareCloseDirect.class, "io_uring_prep_close_direct", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
+                libLink(PrepareRead.class, "io_uring_prep_read", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
+                libLink(PrepareReadFixed.class, "io_uring_prep_read_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
+                libLink(PrepareWrite.class, "io_uring_prep_write", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
+                libLink(PrepareWriteFixed.class, "io_uring_prep_write_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
+                libLink(Submit.class, "io_uring_submit", FunctionDescriptor.of(JAVA_INT, ADDRESS), true),
+                libLink(WaitCqe.class, "io_uring_wait_cqe", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER), false),
+                libLink(PeekCqe.class, "io_uring_peek_cqe", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER), false),
+                libLink(PeekBatchCqe.class, "io_uring_peek_batch_cqe", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
+                libLink(CqeSeen.class, "io_uring_cqe_seen", FunctionDescriptor.ofVoid(ADDRESS, ADDRESS), true),
+                libLink(QueueInit.class, "io_uring_queue_init", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), false),
+                libLink(QueueExit.class, "io_uring_queue_exit", FunctionDescriptor.ofVoid(ADDRESS), false),
+                libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
+                libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
+                libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
+                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false));
 
-        this(arena, arena.allocate(ring_layout), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize()), NativeDispatcher.C.alloc(AddressLayout.ADDRESS.byteSize() * 100), sqe, setSqeFlag, prepOpenAt, prepOpenDirect, prepClose, prepCloseDirect, prepRead, prepReadFixed, prepWrite, prepWriteFixed, submit, waitCqe, peekCqe, peekBatchCqe, cqeSeen, queueInit, queueExit, sqeSetData, registerBuffers, registerFiles, registerFilesUpdate);
-
-        int ret = queueInit(queueDepth, ring, IoUringOptions.combineOptions(ioUringOptions));
+        int ret = dispatcher.queueInit(queueDepth, dispatcher.ring, IoUringOptions.combineOptions(ioUringOptions));
         if (ret < 0) {
-            throw new RuntimeException("Failed to initialize queue " + NativeDispatcher.C.strerror(ret));
+            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
+        
+        return dispatcher;
+    }
+
+    private static <T> T libLink(Class<T> type, String name, FunctionDescriptor descriptor, boolean critical) {
+        MemorySegment symbol = liburing.findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
     MemorySegment getSqe() {
@@ -173,7 +185,7 @@ record LibUringDispatcher(Arena arena,
     void submit() {
         int ret = submitOp.submit(ring);
         if (ret < 0) {
-            throw new RuntimeException("Failed to submit queue: " + NativeDispatcher.C.strerror(ret));
+            throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(ret));
         }
     }
 
@@ -241,7 +253,7 @@ record LibUringDispatcher(Arena arena,
     Result waitForResult() {
         int ret = waitCqe(ring, cqePtr);
         if (ret < 0) {
-            throw new RuntimeException("Error while waiting for cqe: " + NativeDispatcher.C.strerror(ret));
+            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(ret));
         }
 
         var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
@@ -261,15 +273,15 @@ record LibUringDispatcher(Arena arena,
         long id = UserData.getId(nativeUserData);
         MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
 
-        NativeDispatcher.C.free(nativeUserData);
+        libCDispatcher.free(nativeUserData);
 
         if (OperationType.WRITE.equals(type)) {
-            NativeDispatcher.C.free(bufferResult);
+            libCDispatcher.free(bufferResult);
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
         } else if (OperationType.OPEN.equals(type)) {
-            NativeDispatcher.C.free(bufferResult);
+            libCDispatcher.free(bufferResult);
             return new OpenResult(id, (int) result);
         } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
@@ -283,7 +295,7 @@ record LibUringDispatcher(Arena arena,
     }
 
     MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
-        var iovecStructure = NativeDispatcher.C.allocateIovec(arena, bufferSize, nrIovecs);
+        var iovecStructure = libCDispatcher.allocateIovec(arena, bufferSize, nrIovecs);
         registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
         return iovecStructure.buffers();
     }
@@ -298,7 +310,7 @@ record LibUringDispatcher(Arena arena,
 
         int ret = registerFiles(ring, fdArray, count);
         if (ret < 0) {
-            throw new RuntimeException("Failed to register files: " + NativeDispatcher.C.strerror(ret));
+            throw new RuntimeException("Failed to register files: " + libCDispatcher.strerror(ret));
         }
         return ret;
     }
@@ -313,7 +325,7 @@ record LibUringDispatcher(Arena arena,
 
         int ret = registerFilesUpdate(ring, offset, fdArray, count);
         if (ret < 0) {
-            throw new RuntimeException("Failed to update registered files: " + NativeDispatcher.C.strerror(ret));
+            throw new RuntimeException("Failed to update registered files: " + libCDispatcher.strerror(ret));
         }
         return ret;
     }
@@ -329,8 +341,8 @@ record LibUringDispatcher(Arena arena,
     @Override
     public void close() {
         closeRing();
-        NativeDispatcher.C.free(cqePtr);
-        NativeDispatcher.C.free(cqePtrPtr);
+        libCDispatcher.free(cqePtr);
+        libCDispatcher.free(cqePtrPtr);
         closeArena();
     }
 
