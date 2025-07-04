@@ -43,11 +43,11 @@ public class RandomReadBenchMark {
     @Benchmark()
     public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
-        final var readTasks = randomReadTaskCreator.RandomReadTasks;
+        final var readTasks = randomReadTaskCreator.tasks;
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-            for (RandomReadTask readTask : readTasks) {
+            for (Task readTask : readTasks) {
                 FileDescriptor fd = new FileDescriptor(readTask.sPath(), LinuxOpenOptions.READ, 0);
                 var r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
                 jUringBlocking.submit();
@@ -68,7 +68,7 @@ public class RandomReadBenchMark {
     @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
-        final var readTasks = randomReadTaskCreator.RandomReadTasks;
+        final var readTasks = randomReadTaskCreator.tasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
 
         try {
@@ -111,7 +111,7 @@ public class RandomReadBenchMark {
 
     @Benchmark
     public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
-        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
         for (int i = 0; i < readTasks.length; i++) {
@@ -142,7 +142,7 @@ public class RandomReadBenchMark {
 
     @Benchmark
     public void readUsingRandomAccessFile(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
-        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
         for (int i = 0; i < readTasks.length; i++) {
@@ -173,7 +173,7 @@ public class RandomReadBenchMark {
 
     @Benchmark
     public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
-        RandomReadTask[] readTasks = randomReadTaskCreator.RandomReadTasks;
+        Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
         for (int i = 0; i < readTasks.length; i++) {
