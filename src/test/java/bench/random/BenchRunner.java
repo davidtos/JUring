@@ -1,6 +1,6 @@
 package bench.random;
 
-import bench.random.read.RandomReadBenchMark;
+import bench.random.newRead.RandomReadBenchMark;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;

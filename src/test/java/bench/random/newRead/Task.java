@@ -1,7 +1,6 @@
 package bench.random.newRead;
 
 import java.nio.file.Path;
-import java.util.Objects;
 
 public
 
@@ -21,7 +20,7 @@ final class Task {
         this.offset = offset;
     }
 
-    public String PathAsString() {
+    public String pathAsString() {
         return PathAsString;
     }
 

@@ -1,7 +1,9 @@
 package bench.random.newRead;
 
 import org.openjdk.jmh.annotations.Param;
+import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
+import org.openjdk.jmh.annotations.State;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,6 +11,7 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Stream;
 
+@State(Scope.Benchmark)
 public class TaskCreator {
 
     @Param({"512", "4096", "16386", "65536"})

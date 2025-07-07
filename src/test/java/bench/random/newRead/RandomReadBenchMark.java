@@ -1,4 +1,4 @@
-package bench.random.read;
+package bench.random.newRead;
 
 import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
@@ -40,15 +40,15 @@ public class RandomReadBenchMark {
         new Runner(opt).run();
     }
 
-    @Benchmark()
-    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, RandomReadTaskCreator randomReadTaskCreator) {
+ //   @Benchmark()
+    public void libUringBlocking(Blackhole blackhole, ExecutionPlanBlocking plan, TaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
         final var readTasks = randomReadTaskCreator.tasks;
 
         try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
             for (Task readTask : readTasks) {
-                FileDescriptor fd = new FileDescriptor(readTask.sPath(), LinuxOpenOptions.READ, 0);
+                FileDescriptor fd = new FileDescriptor(readTask.pathAsString(), LinuxOpenOptions.READ, 0);
                 var r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
                 jUringBlocking.submit();
                 executor.execute(() -> {
@@ -65,8 +65,14 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark()
-    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, RandomReadTaskCreator randomReadTaskCreator) {
+    @Benchmark
+    public void registeredFiles(Blackhole blackhole, TaskCreator randomReadTaskCreator) throws Throwable {
+
+    }
+
+
+   // @Benchmark()
+    public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.tasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
@@ -75,7 +81,7 @@ public class RandomReadBenchMark {
             int j = 0;
             for (var task : readTasks) {
 
-                FileDescriptor fd = new FileDescriptor(task.sPath(), LinuxOpenOptions.READ, 0);
+                FileDescriptor fd = new FileDescriptor(task.pathAsString(), LinuxOpenOptions.READ, 0);
                 openFiles.add(fd);
 
                 jUring.prepareRead(fd, task.bufferSize(), task.offset());
@@ -109,8 +115,8 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
-    public void readUsingFileChannel(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
+ //   @Benchmark
+    public void readUsingFileChannel(Blackhole blackhole, TaskCreator randomReadTaskCreator) throws Throwable {
         Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
@@ -140,14 +146,14 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
-    public void readUsingRandomAccessFile(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) throws Throwable {
+   // @Benchmark
+    public void readUsingRandomAccessFile(Blackhole blackhole, TaskCreator randomReadTaskCreator) throws Throwable {
         Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
         for (int i = 0; i < readTasks.length; i++) {
             try {
-                fileChannels[i] = new RandomAccessFile(readTasks[i].sPath(), "r").getChannel();
+                fileChannels[i] = new RandomAccessFile(readTasks[i].pathAsString(), "r").getChannel();
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
@@ -171,8 +177,8 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
-    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, RandomReadTaskCreator randomReadTaskCreator) {
+   // @Benchmark
+    public void readUsingFileChannelVirtualThreads(Blackhole blackhole, TaskCreator randomReadTaskCreator) {
         Task[] readTasks = randomReadTaskCreator.tasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
 
