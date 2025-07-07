@@ -18,7 +18,6 @@ import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -28,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2300)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(15)
+@Threads(1)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -105,6 +104,19 @@ public class RandomReadBenchMark {
         }
     }
 
+   // @Benchmark
+    public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedFileChannels plan, TaskCreator randomReadTaskCreator) throws Throwable {
+        final var openFileChannels = plan.openFileChannels;
+        final var readTasks = randomReadTaskCreator.tasks;
+
+        for (var task : readTasks) {
+            final ByteBuffer data = ByteBuffer.allocate(task.bufferSize());
+            final FileChannel fc = openFileChannels.get(task.pathAsString());
+            fc.read(data, task.offset());
+            data.flip();
+            blackhole.consume(data);
+        }
+    }
 
    // @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator randomReadTaskCreator) {
