@@ -14,8 +14,9 @@ import java.util.stream.Stream;
 @State(Scope.Benchmark)
 public class TaskCreator {
 
-    @Param({"512", "4096", "16386", "65536"})
-    public static int bufferSize = 10;
+  //  @Param({"512", "4096", "16386", "65536"})
+    @Param({ "512"})
+    public static int bufferSize;
 
     final static Random random = new Random(315315153152442L);
 

@@ -34,7 +34,7 @@ public class RandomReadBenchMark {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
-                .addProfiler(AsyncProfiler.class, "lock=1ms simple=true output=flamegraph")
+                .addProfiler(AsyncProfiler.class, "event=wall;output=flamegraph;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
@@ -66,21 +66,20 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) throws Throwable {
+    public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.tasks;
         final var registeredFileIndices = plan.registeredFileIndices;
 
         try {
             int j = 0;
-            for (int i = 0; i < readTasks.length; i++) {
-                var task = readTasks[i];
+            for (Task task : readTasks) {
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
-                
+
                 jUring.prepareRead(fileIndex, task.bufferSize(), task.offset());
 
                 j++;
-                if (j % 100 == 0) {
+                if (j % 300 == 0) {
                     jUring.submit();
                 }
             }
