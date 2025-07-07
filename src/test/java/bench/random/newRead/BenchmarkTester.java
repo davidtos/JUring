@@ -1,9 +1,13 @@
 package bench.random.newRead;
 
 import com.davidvlijmincx.lio.api.*;
+import org.openjdk.jmh.annotations.Benchmark;
+import org.openjdk.jmh.infra.Blackhole;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -11,19 +15,31 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 public class BenchmarkTester {
 
 
-    public static void main(String[] args) {
-        final var jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
-        final var readTasks = new TaskCreator().getTasks(10, 1);
-        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+    public static void main(String[] args) throws Throwable {
+        System.out.println("Testing registered files benchmark...");
+
+        var taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        ExecutionPlanRegisteredFiles plan = new ExecutionPlanRegisteredFiles();
+        plan.setup(taskCreator);
+
+        registeredFiles(plan, taskCreator);
+    }
+
+
+    public static void registeredFiles(ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) throws Throwable {
+        final var jUring = plan.jUring;
+        final var readTasks = randomReadTaskCreator.tasks;
+        final var registeredFileIndices = plan.registeredFileIndices;
 
         try {
             int j = 0;
-            for (var task : readTasks) {
+            for (int i = 0; i < readTasks.length; i++) {
+                var task = readTasks[i];
+                int fileIndex = registeredFileIndices.get(task.pathAsString());
 
-                FileDescriptor fd = new FileDescriptor(task.pathAsString(), LinuxOpenOptions.READ, 0);
-                openFiles.add(fd);
-
-                jUring.prepareRead(fd, 10, task.offset());
+                jUring.prepareRead(fileIndex, task.bufferSize(), task.offset());
 
                 j++;
                 if (j % 100 == 0) {
@@ -38,17 +54,14 @@ public class BenchmarkTester {
 
                 for (Result result : results) {
                     if (result instanceof ReadResult r) {
+
                         r.buffer().set(JAVA_BYTE, r.result(), (byte) 0);
-                        System.out.println(r.buffer().getString(0));
-                        System.out.println("---");
+                        String string = r.buffer().getString(0);
+                        System.out.println(r.id());
                         r.freeBuffer();
                     }
                 }
                 i += results.size();
-            }
-
-            for (FileDescriptor fd : openFiles) {
-                fd.close();
             }
 
         } catch (Exception e) {

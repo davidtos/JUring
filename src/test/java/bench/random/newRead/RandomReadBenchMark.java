@@ -18,6 +18,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -66,8 +67,42 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void registeredFiles(Blackhole blackhole, TaskCreator randomReadTaskCreator) throws Throwable {
+    public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) throws Throwable {
+        final var jUring = plan.jUring;
+        final var readTasks = randomReadTaskCreator.tasks;
+        final var registeredFileIndices = plan.registeredFileIndices;
 
+        try {
+            int j = 0;
+            for (int i = 0; i < readTasks.length; i++) {
+                var task = readTasks[i];
+                int fileIndex = registeredFileIndices.get(task.pathAsString());
+                
+                jUring.prepareRead(fileIndex, task.bufferSize(), task.offset());
+
+                j++;
+                if (j % 100 == 0) {
+                    jUring.submit();
+                }
+            }
+
+            jUring.submit();
+
+            for (int i = 0; i < readTasks.length; i++) {
+                List<Result> results = jUring.peekForBatchResult(100);
+
+                for (Result result : results) {
+                    if (result instanceof ReadResult r) {
+                        blackhole.consume(r.buffer());
+                        r.freeBuffer();
+                    }
+                }
+                i += results.size();
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
 
