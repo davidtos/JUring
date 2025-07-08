@@ -15,7 +15,7 @@ import java.util.stream.Stream;
 public class TaskCreator {
 
     @Param({ "4096"})
-    public static int bufferSize;
+    public static int bufferSize = 4096;
 
     final static Random random = new Random(315315153152442L);
 

@@ -12,7 +12,6 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
@@ -27,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2211)
 @Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(20)
+@Threads(15)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -65,7 +64,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
+   // @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.tasks;
@@ -105,7 +104,7 @@ public class RandomReadBenchMark {
 
     }
 
-    @Benchmark
+  //  @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedFileChannels plan, TaskCreator randomReadTaskCreator) throws Throwable {
         final var openFileChannels = plan.openFileChannels;
         final var readTasks = randomReadTaskCreator.tasks;
@@ -119,39 +118,46 @@ public class RandomReadBenchMark {
         }
     }
 
-   // @Benchmark()
+    @Benchmark()
     public void libUring(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.tasks;
-        ArrayList<FileDescriptor> openFiles = new ArrayList<>(5000);
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(readTasks.length);
 
         try {
-            int j = 0;
-            for (var task : readTasks) {
+            int submitted = 0;
+            int processed = 0;
+            int taskIndex = 0;
+            final int maxInFlight = 256;
 
-                FileDescriptor fd = new FileDescriptor(task.pathAsString(), LinuxOpenOptions.READ, 0);
-                openFiles.add(fd);
+            while (processed < readTasks.length) {
+                while (submitted - processed < maxInFlight && taskIndex < readTasks.length) {
+                    Task task = readTasks[taskIndex];
+                    
+                    FileDescriptor fd = new FileDescriptor(task.pathAsString(), LinuxOpenOptions.READ, 0);
+                    openFiles.add(fd);
+                    
+                    jUring.prepareRead(fd, task.bufferSize(), task.offset());
+                    submitted++;
+                    taskIndex++;
 
-                jUring.prepareRead(fd, task.bufferSize(), task.offset());
+                    if (submitted % 64 == 0) {
+                        jUring.submit();
+                    }
+                }
 
-                j++;
-                if (j % 100 == 0) {
+                if (submitted > processed) {
                     jUring.submit();
                 }
-            }
 
-            jUring.submit();
-
-            for (int i = 0; i < readTasks.length; i++) {
-                List<Result> results = jUring.peekForBatchResult(100);
-
+                List<Result> results = jUring.peekForBatchResult(64);
                 for (Result result : results) {
                     if (result instanceof ReadResult r) {
                         blackhole.consume(r.buffer());
                         r.freeBuffer();
                     }
                 }
-                i += results.size();
+                processed += results.size();
             }
 
             for (FileDescriptor fd : openFiles) {

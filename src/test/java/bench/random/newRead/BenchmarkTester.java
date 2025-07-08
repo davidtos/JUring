@@ -1,15 +1,10 @@
 package bench.random.newRead;
 
-import com.davidvlijmincx.lio.api.*;
-import org.openjdk.jmh.annotations.Benchmark;
-import org.openjdk.jmh.infra.Blackhole;
+import com.davidvlijmincx.lio.api.ReadResult;
+import com.davidvlijmincx.lio.api.Result;
 
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
-import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class BenchmarkTester {
@@ -38,6 +33,8 @@ public class BenchmarkTester {
         int taskIndex = 0;
         final int maxInFlight = 256;
 
+        int prints = 0;
+
         while (processed < readTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < readTasks.length) {
                 Task task = readTasks[taskIndex];
@@ -58,12 +55,16 @@ public class BenchmarkTester {
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
                 if (result instanceof ReadResult r) {
-                    String string = r.buffer().getString(0);
+                    r.buffer().set(JAVA_BYTE, r.result(), (byte) 0);
+                    System.out.println("string = " + r.buffer().getString(0).substring(0,10).replace("\n", "").replace("\r", ""));
                     r.freeBuffer();
+                    prints++;
                 }
             }
             processed += results.size();
         }
+
+        System.out.println("prints = " + prints);
 
     }
 }
