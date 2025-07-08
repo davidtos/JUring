@@ -14,7 +14,7 @@ import java.util.stream.Stream;
 @State(Scope.Benchmark)
 public class TaskCreator {
 
-    @Param({"512", "4096", "16386", "65536"})
+    @Param({ "4096"})
     public static int bufferSize;
 
     final static Random random = new Random(315315153152442L);
@@ -31,7 +31,7 @@ public class TaskCreator {
     public void setup() {
         content = new byte[bufferSize];
         new Random().nextBytes(content);
-        tasks = getTasks(2300, 1);
+        tasks = getTasks(2211, 1);
     }
 
     public Task[] getTasks(int numberOfTask, double readWriteRatio){

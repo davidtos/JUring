@@ -28,44 +28,42 @@ public class BenchmarkTester {
     }
 
 
-    public static void registeredFiles(ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) throws Throwable {
+    public static void registeredFiles( ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.tasks;
         final var registeredFileIndices = plan.registeredFileIndices;
 
-        try {
-            int j = 0;
-            for (int i = 0; i < readTasks.length; i++) {
-                var task = readTasks[i];
+        int submitted = 0;
+        int processed = 0;
+        int taskIndex = 0;
+        final int maxInFlight = 256;
+
+        while (processed < readTasks.length) {
+            while (submitted - processed < maxInFlight && taskIndex < readTasks.length) {
+                Task task = readTasks[taskIndex];
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
-
                 jUring.prepareRead(fileIndex, task.bufferSize(), task.offset());
+                submitted++;
+                taskIndex++;
 
-                j++;
-                if (j % 100 == 0) {
+                if (submitted % 64 == 0) {
                     jUring.submit();
                 }
             }
 
-            jUring.submit();
-
-            for (int i = 0; i < readTasks.length; i++) {
-                List<Result> results = jUring.peekForBatchResult(100);
-
-                for (Result result : results) {
-                    if (result instanceof ReadResult r) {
-
-                        r.buffer().set(JAVA_BYTE, r.result(), (byte) 0);
-                        String string = r.buffer().getString(0);
-                        System.out.println(r.id());
-                        r.freeBuffer();
-                    }
-                }
-                i += results.size();
+            if (submitted > processed) {
+                jUring.submit();
             }
 
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+            List<Result> results = jUring.peekForBatchResult(64);
+            for (Result result : results) {
+                if (result instanceof ReadResult r) {
+                    String string = r.buffer().getString(0);
+                    r.freeBuffer();
+                }
+            }
+            processed += results.size();
         }
+
     }
 }
