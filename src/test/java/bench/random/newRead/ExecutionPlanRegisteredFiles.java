@@ -40,12 +40,11 @@ public class ExecutionPlanRegisteredFiles {
         
         for (Map.Entry<String, Integer> entry : uniqueFiles.entrySet()) {
             String filePath = entry.getKey();
-            int fileIndex = entry.getValue();
             
             FileDescriptor fd = new FileDescriptor(filePath, LinuxOpenOptions.READ, 0);
             fileDescriptors[index] = fd;
             openFileDescriptors.add(fd);
-            registeredFileIndices.put(filePath, fileIndex);
+            registeredFileIndices.put(filePath, index);
             index++;
         }
 
