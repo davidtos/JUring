@@ -25,8 +25,8 @@ Comparing registered files vs pre-opened FileChannels:
 | 16KB        | 825                       | 596                              | **+38%**        |
 | 64KB        | 159                       | 134                              | **+19%**        |
 
-> NOTE: Both implementations show reduced performance at 4KB (likely due to 4KB filesystem page size),
-> but FileChannel experiences a particularly severe degradation. Results consistent across multiple runs.
+> NOTE: 4KB is probably a sweet spot because of the page size. There are plans to get these benefits also
+> to 16KB as that would theoretically push that to 2500 ops/ms. 
 
 #### Async I/O Performance (15 threads)
 Comparing async io_uring vs standard FileChannel:
