@@ -21,7 +21,6 @@ public class TaskCreator {
 
     public static final String BENCHMARK_FILE_EXTENSION = ".bin";
     public static final Path BASE_BENCHMARK_FILES_DIR = Path.of("/home/david/testData/text_files/");
-    public static final Path BASE_BENCHMARK_FILES_DIR_2 = Path.of("/home/david/DataDisk/text_files/");
 
     // for writing
     public byte[] content;
@@ -36,8 +35,10 @@ public class TaskCreator {
 
     public Task[] getTasks(int numberOfTask, double readWriteRatio){
 
-        try (var path1 = Files.walk(BASE_BENCHMARK_FILES_DIR); var path2 = Files.walk(BASE_BENCHMARK_FILES_DIR_2)) {
-            var availablePaths = getAvailablePaths(path1, path2);
+        try (var path1 = Files.walk(BASE_BENCHMARK_FILES_DIR)) {
+            var availablePaths = path1
+                    .filter(p -> p.getFileName().toString().endsWith(BENCHMARK_FILE_EXTENSION))
+                    .toArray(Path[]::new);
 
             Task[] tasks = new Task[numberOfTask];
 
@@ -57,23 +58,6 @@ public class TaskCreator {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private static Path[] getAvailablePaths(Stream<Path> path1, Stream<Path> path2) {
-        List<Path> list1 = path1.toList();
-        List<Path> list2 = path2.toList();
-
-        List<Path> combined = new ArrayList<>();
-        final int[] i = {0};
-        list1.forEach(p -> {
-            combined.add(p);
-            combined.add(list2.get(i[0]));
-            i[0]++;
-        });
-
-        return combined.stream()
-                .filter(p -> p.getFileName().toString().endsWith(BENCHMARK_FILE_EXTENSION))
-                .toArray(Path[]::new);
     }
 
 }

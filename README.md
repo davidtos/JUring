@@ -151,4 +151,9 @@ newRead.RandomReadBenchMark.registeredFiles               16386  thrpt    5    8
 newRead.RandomReadBenchMark.registeredFiles               65536  thrpt    5    159.181 ±  17.876  ops/ms
 ```
 
+## Creating the benchmark files
+If you want to run the benchmark yourself, you can use the following 
+```shell
+seq 1 2211 | xargs -P 8 -I {} bash -c 'yes "{} " | head -c 5242880 > "file_{}.bin"'
+```
 
