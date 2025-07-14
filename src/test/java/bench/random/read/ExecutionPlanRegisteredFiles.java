@@ -1,4 +1,4 @@
-package bench.random.newRead;
+package bench.random.read;
 
 import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.JUring;

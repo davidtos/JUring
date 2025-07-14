@@ -1,10 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
-import bench.random.newRead.ExecutionPlanRegisteredFiles;
-import bench.random.newRead.Task;
-import bench.random.newRead.TaskCreator;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import bench.random.read.ExecutionPlanRegisteredFiles;
+import bench.random.read.Task;
+import bench.random.read.TaskCreator;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
