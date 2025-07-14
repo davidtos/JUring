@@ -3,12 +3,17 @@ package com.davidvlijmincx.lio.api;
 import bench.random.read.ExecutionPlanRegisteredFiles;
 import bench.random.read.Task;
 import bench.random.read.TaskCreator;
+import bench.random.write.ExecutionPlanWriteRegisteredFiles;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
@@ -31,7 +36,7 @@ public class JUringHighLevelTest {
         plan.setup(randomReadTaskCreator);
 
         final var jUring = plan.jUring;
-        final var readTasks = randomReadTaskCreator.tasks;
+        final var readTasks = randomReadTaskCreator.readTasks;
         final var registeredFileIndices = plan.registeredFileIndices;
         Map<Long, String> matchIdWithFile = new HashMap<>();
 
@@ -88,7 +93,7 @@ public class JUringHighLevelTest {
         randomReadTaskCreator.setup();
 
         final var jUring =  new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
-        final var readTasks = randomReadTaskCreator.tasks;
+        final var readTasks = randomReadTaskCreator.readTasks;
         ArrayList<FileDescriptor> openFiles = new ArrayList<>(readTasks.length);
         Map<Long, String> matchIdWithFile = new HashMap<>();
 
@@ -146,5 +151,209 @@ public class JUringHighLevelTest {
         } finally {
             jUring.close();
         }
+    }
+
+    @Test
+    void EventWriteLoopJUring() {
+        int passed = 0;
+        TaskCreator taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        ExecutionPlanWriteRegisteredFiles plan = new ExecutionPlanWriteRegisteredFiles();
+        plan.setup(taskCreator);
+
+        byte[] content = taskCreator.bytesToWrite(5000);
+
+        final var jUring = plan.jUring;
+        final var writeTasks = new ArrayList<>(Arrays.stream(taskCreator.writeTasks)
+                .collect(Collectors.toMap(
+                        Task::path,
+                        Function.identity(),
+                        (existing, _) -> existing))
+                .values()).toArray(new Task[0]);
+
+        assertThat(writeTasks).hasSizeGreaterThan(100);
+
+        final var registeredFileIndices = plan.registeredFileIndices;
+        Map<Long, Task> matchIdWithFile = new HashMap<>();
+
+        int submitted = 0;
+        int processed = 0;
+        int taskIndex = 0;
+        final int maxInFlight = 256;
+
+        while (processed < writeTasks.length) {
+            while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
+                Task task = writeTasks[taskIndex];
+                int fileIndex = registeredFileIndices.get(task.pathAsString());
+                long id = jUring.prepareWrite(fileIndex, content, task.offset());
+
+                matchIdWithFile.put(id, task);
+
+                submitted++;
+                taskIndex++;
+
+                if (submitted % 64 == 0) {
+                    jUring.submit();
+                }
+            }
+
+            if (submitted > processed) {
+                jUring.submit();
+            }
+
+            List<Result> results = jUring.peekForBatchResult(64);
+            for (Result result : results) {
+                if (result instanceof WriteResult r) {
+
+                    assertThat(r.result()).isEqualTo(content.length);
+                    Task task = matchIdWithFile.remove(r.id());
+                    byte[] bytes = readFromOffset(task.path(), task.offset(), content.length);
+                    assertThat(bytes).isEqualTo(content);
+                    passed++;
+                }
+            }
+            processed += results.size();
+        }
+
+        plan.jUring.close();
+
+        assertThat(processed).isEqualTo(writeTasks.length);
+        assertThat(matchIdWithFile).isEmpty();
+        assertThat(passed).isEqualTo(writeTasks.length);
+    }
+
+    @Test
+    void openWriteCloseFile(){
+        int passed = 0;
+        TaskCreator taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        final var jUring =  new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
+        final var writeTasks = new ArrayList<>(Arrays.stream(taskCreator.writeTasks)
+                .collect(Collectors.toMap(
+                        Task::path,
+                        Function.identity(),
+                        (existing, _) -> existing))
+                .values()).toArray(new Task[0]);
+
+        ArrayList<FileDescriptor> openFiles = new ArrayList<>(writeTasks.length);
+        Map<Long, Task> matchIdWithFile = new HashMap<>();
+
+        byte[] content = taskCreator.bytesToWrite(5000);
+
+        try {
+            int submitted = 0;
+            int processed = 0;
+            int taskIndex = 0;
+            final int maxInFlight = 256;
+
+            while (processed < writeTasks.length) {
+                while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
+                    Task task = writeTasks[taskIndex];
+
+                    FileDescriptor fd = new FileDescriptor(task.pathAsString(), LinuxOpenOptions.WRITE, 0);
+                    openFiles.add(fd);
+                    long id = jUring.prepareWrite(fd, content, task.offset());
+                    matchIdWithFile.put(id, task);
+
+                    submitted++;
+                    taskIndex++;
+
+                    if (submitted % 64 == 0) {
+                        jUring.submit();
+                    }
+                }
+
+                if (submitted > processed) {
+                    jUring.submit();
+                }
+
+                List<Result> results = jUring.peekForBatchResult(64);
+                for (Result result : results) {
+                    if (result instanceof WriteResult r) {
+
+                        assertThat(r.result()).isEqualTo(content.length);
+                        Task task = matchIdWithFile.remove(r.id());
+                        byte[] bytes = readFromOffset(task.path(), task.offset(), content.length);
+                        assertThat(bytes).isEqualTo(content);
+                        passed++;
+                    }
+                }
+                processed += results.size();
+            }
+
+            for (FileDescriptor fd : openFiles) {
+                fd.close();
+            }
+
+            assertThat(matchIdWithFile).isEmpty();
+            assertThat(passed).isEqualTo(writeTasks.length);
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        } finally {
+            jUring.close();
+        }
+    }
+
+    public static byte[] readFromOffset(Path filePath, long offset, int length) {
+        try (FileChannel channel = FileChannel.open(filePath, StandardOpenOption.READ)) {
+            ByteBuffer buffer = ByteBuffer.allocate(length);
+
+            int bytesRead = channel.read(buffer, offset);
+
+            if (bytesRead == -1) {
+                return new byte[0]; // End of file
+            }
+
+            // Flip buffer to prepare for reading
+            buffer.flip();
+
+            byte[] result = new byte[buffer.remaining()];
+            buffer.get(result);
+
+            return result;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Test
+    void writeTaskCreation(){
+        TaskCreator taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        Task[] tasks = taskCreator.getTasks(2211, 0);
+
+        assertThat(tasks).hasSize(2211);
+        assertThat(tasks).noneMatch(Objects::isNull);
+        assertThat(tasks).allMatch(task -> task.path().toString().contains("write_file"));
+    }
+
+    @Test
+    void readTaskCreation(){
+        TaskCreator taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        Task[] tasks = taskCreator.getTasks(2211, 1);
+
+        assertThat(tasks).hasSize(2211);
+        assertThat(tasks).noneMatch(Objects::isNull);
+        assertThat(tasks).allMatch(task -> task.path().toString().contains("text_file"));
+    }
+
+    @Test
+    void bytesToWrite(){
+        TaskCreator taskCreator = new TaskCreator();
+
+        final int size = 500;
+
+        byte[] bytes = taskCreator.bytesToWrite(size);
+
+        assertThat(new String(bytes))
+                .isNotEmpty()
+                .hasSize(size)
+                .matches("[a-z0-9]+");
     }
 }

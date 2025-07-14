@@ -275,7 +275,10 @@ record LibUringDispatcher(Arena arena,
 
         libCDispatcher.free(nativeUserData);
 
-        if (OperationType.WRITE.equals(type)) {
+        if (OperationType.READ.equals(type)) {
+            return new ReadResult(id, bufferResult, result);
+        }
+        else if (OperationType.WRITE.equals(type)) {
             libCDispatcher.free(bufferResult);
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
@@ -287,7 +290,7 @@ record LibUringDispatcher(Arena arena,
             return new CloseResult(id, (int) result);
         }
 
-        return new ReadResult(id, bufferResult, result);
+      throw new IllegalStateException( "Unexpected result type: " + type);
     }
 
     private void seen(MemorySegment cqePointer) {

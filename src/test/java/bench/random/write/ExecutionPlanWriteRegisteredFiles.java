@@ -1,19 +1,24 @@
-package bench.random.read;
+package bench.random.write;
 
+import bench.random.read.Task;
+import bench.random.read.TaskCreator;
 import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.JUring;
-import com.davidvlijmincx.lio.api.LinuxOpenOptions;
-import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.annotations.Scope;
+import org.openjdk.jmh.annotations.Setup;
+import org.openjdk.jmh.annotations.State;
+import org.openjdk.jmh.annotations.TearDown;
 
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.davidvlijmincx.lio.api.IoUringOptions.*;
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
+import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 
 @State(Scope.Thread)
-public class ExecutionPlanRegisteredFiles {
+public class ExecutionPlanWriteRegisteredFiles {
 
     public JUring jUring;
     public Map<String, Integer> registeredFileIndices;
@@ -28,7 +33,7 @@ public class ExecutionPlanRegisteredFiles {
         Map<String, Integer> uniqueFiles = new HashMap<>();
         int uniqueFileCount = 0;
         
-        for (Task task : taskCreator.readTasks) {
+        for (Task task : taskCreator.writeTasks) {
             String filePath = task.pathAsString();
             if (!uniqueFiles.containsKey(filePath)) {
                 uniqueFiles.put(filePath, uniqueFileCount++);
@@ -41,7 +46,7 @@ public class ExecutionPlanRegisteredFiles {
         for (Map.Entry<String, Integer> entry : uniqueFiles.entrySet()) {
             String filePath = entry.getKey();
             
-            FileDescriptor fd = new FileDescriptor(filePath, LinuxOpenOptions.READ, 0);
+            FileDescriptor fd = new FileDescriptor(filePath, WRITE, 0);
             fileDescriptors[index] = fd;
             openFileDescriptors.add(fd);
             registeredFileIndices.put(filePath, index);
