@@ -15,7 +15,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 @State(Scope.Benchmark)
 public class TaskCreator {
 
-    @Param({"512", "4096", "16386", "65536"})
+    //@Param({"512", "4096", "16386", "65536"})
+    @Param({"4096"})
     public static int bufferSize;
 
     final static Random random = new Random(315315153152442L);

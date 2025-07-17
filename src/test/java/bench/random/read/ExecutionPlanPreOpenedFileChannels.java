@@ -23,7 +23,7 @@ public class ExecutionPlanPreOpenedFileChannels {
 
         Map<String, FileChannel> uniqueFileChannels = new HashMap<>();
         
-        for (Task task : taskCreator.getTasks(2211, 1)) {
+        for (Task task : taskCreator.readTasks) {
             String filePath = task.pathAsString();
             if (!uniqueFileChannels.containsKey(filePath)) {
                 try {
