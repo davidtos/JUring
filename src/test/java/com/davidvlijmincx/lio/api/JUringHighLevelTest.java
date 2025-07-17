@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import bench.random.read.ExecutionPlanRegisteredFiles;
 import bench.random.read.Task;
 import bench.random.read.TaskCreator;
+import bench.random.write.ExecutionPlanPreOpenedWriteFileChannels;
 import bench.random.write.ExecutionPlanWriteRegisteredFiles;
 import org.junit.jupiter.api.Test;
 
@@ -221,6 +222,32 @@ public class JUringHighLevelTest {
         assertThat(processed).isEqualTo(writeTasks.length);
         assertThat(matchIdWithFile).isEmpty();
         assertThat(passed).isEqualTo(writeTasks.length);
+    }
+
+    @Test
+    void preOpenedFileChannels() throws IOException {
+
+        TaskCreator taskCreator = new TaskCreator();
+        taskCreator.setup();
+
+        ExecutionPlanPreOpenedWriteFileChannels plan = new ExecutionPlanPreOpenedWriteFileChannels();
+        plan.setup(taskCreator);
+
+        byte[] content = taskCreator.bytesToWrite(5000);
+
+        final var openFileChannels = plan.openFileChannels;
+        final var writeTasks = taskCreator.writeTasks;
+
+        for (var task : writeTasks) {
+            final FileChannel fc = openFileChannels.get(task.pathAsString());
+            int written = fc.write(ByteBuffer.wrap(content), task.offset());
+
+            assertThat(written).isGreaterThan(1);
+            assertThat(written).isEqualTo(content.length);
+            byte[] bytes = readFromOffset(task.path(), task.offset(), content.length);
+            assertThat(bytes).isEqualTo(content);
+
+        }
     }
 
     @Test

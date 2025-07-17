@@ -157,3 +157,22 @@ If you want to run the benchmark yourself, you can use the following
 seq 1 2211 | xargs -P 8 -I {} bash -c 'yes "{} " | head -c 5242880 > "file_{}.bin"'
 ```
 
+Benchmark                                       (bufferSize)   Mode  Cnt     Score     Error   Units
+RandomWriteBenchmark.fileChannelOpenWriteClose           512  thrpt    5   931.198 ±   8.868  ops/ms
+RandomWriteBenchmark.fileChannelOpenWriteClose          4096  thrpt    5   910.244 ±   5.870  ops/ms
+RandomWriteBenchmark.fileChannelOpenWriteClose         16386  thrpt    5   705.065 ±  26.470  ops/ms
+RandomWriteBenchmark.fileChannelOpenWriteClose         65536  thrpt    5   316.883 ±  23.550  ops/ms
+RandomWriteBenchmark.juringOpenWriteClose                512  thrpt    5  1105.474 ±  30.874  ops/ms
+RandomWriteBenchmark.juringOpenWriteClose               4096  thrpt    5   988.635 ±   7.500  ops/ms
+RandomWriteBenchmark.juringOpenWriteClose              16386  thrpt    5   363.911 ±   6.435  ops/ms
+RandomWriteBenchmark.juringOpenWriteClose              65536  thrpt    5    75.958 ±   0.927  ops/ms
+RandomWriteBenchmark.preOpenedFileChannels               512  thrpt    5  5877.189 ± 153.416  ops/ms
+RandomWriteBenchmark.preOpenedFileChannels              4096  thrpt    5  3774.865 ±  67.865  ops/ms
+RandomWriteBenchmark.preOpenedFileChannels             16386  thrpt    5  1495.369 ±  93.632  ops/ms
+RandomWriteBenchmark.preOpenedFileChannels             65536  thrpt    5   350.085 ±  14.179  ops/ms
+RandomWriteBenchmark.registeredFiles                     512  thrpt    5  4524.945 ±  48.455  ops/ms
+RandomWriteBenchmark.registeredFiles                    4096  thrpt    5  1444.654 ±  46.169  ops/ms
+RandomWriteBenchmark.registeredFiles                   16386  thrpt    5   355.114 ±   7.038  ops/ms
+RandomWriteBenchmark.registeredFiles                   65536  thrpt    5    76.992 ±   1.286  ops/ms
+
+
