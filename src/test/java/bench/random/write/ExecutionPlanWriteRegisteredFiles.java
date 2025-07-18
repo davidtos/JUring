@@ -10,10 +10,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 import java.lang.foreign.MemorySegment;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
@@ -28,7 +25,7 @@ public class ExecutionPlanWriteRegisteredFiles {
 
     @Setup
     public void setup(TaskCreator taskCreator) {
-        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
+        jUring = new JUring(300, IORING_SETUP_SINGLE_ISSUER);
         registeredFileIndices = new HashMap<>();
         openFileDescriptors = new ArrayList<>();
 

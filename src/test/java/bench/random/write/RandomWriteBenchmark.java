@@ -32,13 +32,14 @@ public class RandomWriteBenchmark {
                 .include(RandomWriteBenchmark.class.getSimpleName())
                 .forks(1)
                 .shouldDoGC(false)
+                .shouldFailOnError(true)
                 .addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
     }
 
-    @Benchmark
+  //  @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanWriteRegisteredFiles plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -47,7 +48,7 @@ public class RandomWriteBenchmark {
         int submitted = 0;
         int processed = 0;
         int taskIndex = 0;
-        final int maxInFlight = 1000;
+        final int maxInFlight = 256;
 
         while (processed < writeTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
@@ -59,7 +60,7 @@ public class RandomWriteBenchmark {
                 submitted++;
                 taskIndex++;
 
-                if (submitted % 250 == 0) {
+                if (submitted % 64 == 0) {
                     jUring.submit();
                 }
             }
@@ -68,7 +69,7 @@ public class RandomWriteBenchmark {
                 jUring.submit();
             }
 
-            List<Result> results = jUring.peekForBatchResult(500);
+            List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
                     blackhole.consume(r);
@@ -79,7 +80,7 @@ public class RandomWriteBenchmark {
 
     }
 
- //   @Benchmark
+    @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
