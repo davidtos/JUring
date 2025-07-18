@@ -5,6 +5,7 @@ import bench.ExecutionPlanJUring;
 import com.davidvlijmincx.lio.api.*;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.profile.AsyncProfiler;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -32,7 +33,7 @@ public class RandomReadBenchMark {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
-               // .addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results")
+               .addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
@@ -63,7 +64,7 @@ public class RandomReadBenchMark {
         }
     }
 
- //   @Benchmark
+    @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.readTasks;
@@ -103,7 +104,7 @@ public class RandomReadBenchMark {
 
     }
 
-    @Benchmark
+   // @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedFileChannels plan, TaskCreator randomReadTaskCreator) throws Throwable {
         final var openFileChannels = plan.openFileChannels;
         final var readTasks = randomReadTaskCreator.readTasks;
