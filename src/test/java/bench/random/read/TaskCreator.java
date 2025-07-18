@@ -6,6 +6,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
@@ -29,12 +30,17 @@ public class TaskCreator {
     public byte[] content;
     public Task[] readTasks;
     public Task[] writeTasks;
+    public ByteBuffer bb;
 
     @Setup
     public void setup() {
         readTasks = getTasks(2211, 1);
         writeTasks = getTasks(2211, 0);
         content = bytesToWrite(bufferSize);
+
+        bb = ByteBuffer.allocateDirect(content.length);
+        bb.put(content);
+        bb.flip();
     }
 
     public Task[] getTasks(int numberOfTask, double readWriteRatio){

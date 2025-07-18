@@ -38,7 +38,15 @@ public class JUring implements AutoCloseable {
         return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
     }
 
+    public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
+        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
+    }
+
     public long prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
+        return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
+    }
+
+    public long prepareWrite(int indexFD, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
     }
 
@@ -109,6 +117,18 @@ public class JUring implements AutoCloseable {
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareRead(sqe, fdOrIndex, buff, offset);
         ioUring.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions[] sqeOptions) {
+
+        long id = bytes.address() + ThreadLocalRandom.current().nextLong();
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
+
+        MemorySegment sqe = getSqe(sqeOptions);
+        ioUring.setUserData(sqe, userData.address());
+        ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
 
         return id;
     }

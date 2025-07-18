@@ -9,6 +9,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
+import java.lang.foreign.MemorySegment;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -22,6 +23,7 @@ public class ExecutionPlanWriteRegisteredFiles {
 
     public JUring jUring;
     public Map<String, Integer> registeredFileIndices;
+    public MemorySegment[] registeredBuffers;
     private List<FileDescriptor> openFileDescriptors;
 
     @Setup
@@ -57,6 +59,8 @@ public class ExecutionPlanWriteRegisteredFiles {
         if (result != 0) {
             throw new RuntimeException("Failed to register files: " + result);
         }
+
+        registeredBuffers = jUring.registerBuffers(5000, 260);
     }
 
     @TearDown

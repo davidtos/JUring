@@ -8,6 +8,7 @@ import bench.random.write.ExecutionPlanWriteRegisteredFiles;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Path;
@@ -154,6 +155,8 @@ public class JUringHighLevelTest {
         }
     }
 
+    record holder(byte[] content, Task task) {}
+
     @Test
     void EventWriteLoopJUring() {
         int passed = 0;
@@ -162,8 +165,6 @@ public class JUringHighLevelTest {
 
         ExecutionPlanWriteRegisteredFiles plan = new ExecutionPlanWriteRegisteredFiles();
         plan.setup(taskCreator);
-
-        byte[] content = taskCreator.bytesToWrite(5000);
 
         final var jUring = plan.jUring;
         final var writeTasks = new ArrayList<>(Arrays.stream(taskCreator.writeTasks)
@@ -176,20 +177,27 @@ public class JUringHighLevelTest {
         assertThat(writeTasks).hasSizeGreaterThan(100);
 
         final var registeredFileIndices = plan.registeredFileIndices;
-        Map<Long, Task> matchIdWithFile = new HashMap<>();
+        Map<Long, holder> matchIdWithFile = new HashMap<>();
 
         int submitted = 0;
         int processed = 0;
         int taskIndex = 0;
-        final int maxInFlight = 256;
+        final int maxInFlight = 900;
 
         while (processed < writeTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
                 Task task = writeTasks[taskIndex];
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
-                long id = jUring.prepareWrite(fileIndex, content, task.offset());
 
-                matchIdWithFile.put(id, task);
+                byte[] content = taskCreator.bytesToWrite(5);
+
+                ByteBuffer bb = ByteBuffer.allocateDirect(content.length);
+                bb.put(content);
+                bb.flip();
+
+                long id = jUring.prepareWrite(fileIndex, MemorySegment.ofBuffer(bb), task.offset());
+
+                matchIdWithFile.put(id, new holder(content, task));
 
                 submitted++;
                 taskIndex++;
@@ -206,11 +214,11 @@ public class JUringHighLevelTest {
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
+                    holder holder = matchIdWithFile.remove(r.id());
+                    assertThat(r.result()).isEqualTo(holder.content.length);
 
-                    assertThat(r.result()).isEqualTo(content.length);
-                    Task task = matchIdWithFile.remove(r.id());
-                    byte[] bytes = readFromOffset(task.path(), task.offset(), content.length);
-                    assertThat(bytes).isEqualTo(content);
+                    byte[] bytes = readFromOffset(holder.task.path(), holder.task.offset(), holder.content.length);
+                    assertThat(bytes).isEqualTo(holder.content);
                     passed++;
                 }
             }
