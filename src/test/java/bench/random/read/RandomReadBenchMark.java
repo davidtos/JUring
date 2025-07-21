@@ -25,8 +25,14 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2211)
-@Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(20)
+@Fork(value = 0, jvmArgs = {
+        "--enable-native-access=ALL-UNNAMED",
+        "-XX:+PrintCompilation",
+        "-XX:+UnlockDiagnosticVMOptions",
+        //    "-Xint"
+
+})
+@Threads(8)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {

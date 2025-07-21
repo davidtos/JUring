@@ -13,7 +13,6 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
@@ -23,8 +22,14 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2211)
-@Fork(value = 3, jvmArgs = {"--enable-native-access=ALL-UNNAMED"})
-@Threads(10)
+@Fork(value = 0, jvmArgs = {
+        "--enable-native-access=ALL-UNNAMED",
+        "-XX:+PrintCompilation",
+        "-XX:+UnlockDiagnosticVMOptions",
+    //    "-Xint"
+
+})
+@Threads(8)
 public class RandomWriteBenchmark {
 
     public static void main(String[] args) throws RunnerException {
@@ -33,13 +38,12 @@ public class RandomWriteBenchmark {
                 .forks(1)
                 .shouldDoGC(false)
                 .shouldFailOnError(true)
-                .addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results")
-                .build();
+                .addProfiler(AsyncProfiler.class, "event=cpu;cstack=fp;output=flamegraph;dir=./profiler-results").build();
 
         new Runner(opt).run();
     }
 
-  //  @Benchmark
+    @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanWriteRegisteredFiles plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -55,7 +59,7 @@ public class RandomWriteBenchmark {
                 Task task = writeTasks[taskIndex];
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
 
-                jUring.prepareWrite(fileIndex, MemorySegment.ofBuffer(taskCreator.bb), task.offset());
+                jUring.prepareWrite(fileIndex, taskCreator.ms, task.offset());
 
                 submitted++;
                 taskIndex++;
@@ -80,7 +84,7 @@ public class RandomWriteBenchmark {
 
     }
 
-    @Benchmark
+  //  @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
@@ -93,7 +97,7 @@ public class RandomWriteBenchmark {
 
     }
 
-  //  @Benchmark
+    //  @Benchmark
     public void juringOpenWriteClose(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;

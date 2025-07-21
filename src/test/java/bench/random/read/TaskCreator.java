@@ -6,6 +6,7 @@ import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,6 +32,7 @@ public class TaskCreator {
     public Task[] readTasks;
     public Task[] writeTasks;
     public ByteBuffer bb;
+    public MemorySegment ms;
 
     @Setup
     public void setup() {
@@ -41,6 +43,7 @@ public class TaskCreator {
         bb = ByteBuffer.allocateDirect(content.length);
         bb.put(content);
         bb.flip();
+        ms = MemorySegment.ofBuffer(bb);
     }
 
     public Task[] getTasks(int numberOfTask, double readWriteRatio){
