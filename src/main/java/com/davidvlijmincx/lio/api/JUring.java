@@ -122,7 +122,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        long id = bytes.address();
+        long id = bytes.address() + ThreadLocalRandom.current().nextLong();;
         MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
 
         MemorySegment sqe = getSqe(sqeOptions);

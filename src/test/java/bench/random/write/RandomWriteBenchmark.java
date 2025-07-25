@@ -75,7 +75,7 @@ public class RandomWriteBenchmark {
 
     }
 
-    @Benchmark
+ //   @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
@@ -88,7 +88,7 @@ public class RandomWriteBenchmark {
 
     }
 
-    @Benchmark
+    //@Benchmark
     public void juringOpenWriteClose(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -140,7 +140,7 @@ public class RandomWriteBenchmark {
         }
     }
 
-    @Benchmark
+  //  @Benchmark
     public void fileChannelOpenWriteClose(Blackhole blackhole, TaskCreator taskCreator) throws IOException {
         Task[] writeTasks = taskCreator.writeTasks;
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];

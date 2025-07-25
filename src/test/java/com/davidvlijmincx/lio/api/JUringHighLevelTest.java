@@ -182,7 +182,7 @@ public class JUringHighLevelTest {
         int submitted = 0;
         int processed = 0;
         int taskIndex = 0;
-        final int maxInFlight = 900;
+        final int maxInFlight = 256;
 
         while (processed < writeTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
@@ -201,15 +201,9 @@ public class JUringHighLevelTest {
 
                 submitted++;
                 taskIndex++;
-
-                if (submitted % 64 == 0) {
-                    jUring.submit();
-                }
             }
 
-            if (submitted > processed) {
-                jUring.submit();
-            }
+            jUring.submit();
 
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {

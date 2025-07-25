@@ -309,23 +309,23 @@ record LibUringDispatcher(Arena arena,
 
         OperationType type = UserData.getType(nativeUserData);
         long id = UserData.getId(nativeUserData);
-        MemorySegment bufferResult = UserData.getBuffer(nativeUserData);
 
-        libCDispatcher.free(nativeUserData);
 
         if (OperationType.READ.equals(type)) {
-            return new ReadResult(id, bufferResult, result);
+            return new ReadResult(id, UserData.getBuffer(nativeUserData), result);
         } else if (OperationType.WRITE.equals(type)) {
-            libCDispatcher.free(bufferResult);
+            libCDispatcher.free(UserData.getBuffer(nativeUserData));
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
         } else if (OperationType.OPEN.equals(type)) {
-            libCDispatcher.free(bufferResult);
+            libCDispatcher.free(UserData.getBuffer(nativeUserData));
             return new OpenResult(id, (int) result);
         } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
         }
+
+        libCDispatcher.free(nativeUserData);
 
         throw new IllegalStateException("Unexpected result type: " + type);
     }
