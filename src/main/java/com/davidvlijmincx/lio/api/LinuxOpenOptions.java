@@ -3,19 +3,19 @@ package com.davidvlijmincx.lio.api;
 import java.nio.file.OpenOption;
 
 public enum LinuxOpenOptions implements OpenOption {
-    READ(0),
-    READ_DIRECT(16384),
-    WRITE(1),
-    WRITE_DIRECT(1 | 16384),
-    CREATE(64);
+    READ((byte) 0),
+    READ_DIRECT((byte) 16384),
+    WRITE((byte) 1),
+    WRITE_DIRECT((byte) (1 | 16384)),
+    CREATE((byte) 64);
 
-    private int flag;
+    private byte flag;
 
-    LinuxOpenOptions(int value) {
+    LinuxOpenOptions(byte value) {
         flag = value;
     }
 
-    int getValue() {
+    byte getValue() {
         return flag;
     }
 }

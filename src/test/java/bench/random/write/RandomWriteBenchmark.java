@@ -61,15 +61,9 @@ public class RandomWriteBenchmark {
                 jUring.prepareWrite(fileIndex, taskCreator.ms, task.offset());
                 submitted++;
                 taskIndex++;
-
-                if (submitted % 64 == 0) {
-                    jUring.submit();
-                }
             }
 
-            if (submitted > processed) {
-                jUring.submit();
-            }
+            jUring.submit();
 
             int maxToWait = Math.min(submitted - processed, 64);
             List<Result> results = jUring.waitForBatchResult(maxToWait);

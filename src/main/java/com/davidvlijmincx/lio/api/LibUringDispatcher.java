@@ -37,7 +37,8 @@ record LibUringDispatcher(Arena arena,
                           RegisterFiles registerFiles,
                           RegisterFilesUpdate registerFilesUpdate,
                           CqAdvance cqAdvance,
-                          WaitCqeNr waitCqeNr) implements AutoCloseable {
+                          WaitCqeNr waitCqeNr,
+                          RegisterIowqMaxWorkers registerIowqMaxWorkers) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
@@ -130,9 +131,12 @@ record LibUringDispatcher(Arena arena,
                 libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
                 libLink(CqAdvance.class, "io_uring_cq_advance", FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT), true),
-                libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false));
+                libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
+                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false)
+        );
 
-        int ret = dispatcher.queueInit(queueDepth, dispatcher.ring, IoUringOptions.combineOptions(ioUringOptions));
+        int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
+        dispatcher.registerIowqMaxWorkers(8,3);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
@@ -205,9 +209,20 @@ record LibUringDispatcher(Arena arena,
         return peekBatchCqe.peekBatchCqe(ring, cqePtrPtr, batchSize);
     }
 
+    int queueInit(int queueDepth, int flags) {
+        return queueInit.queueInit(queueDepth, this.ring , flags);
+    }
 
-    int queueInit(int queueDepth, MemorySegment ring, int flags) {
-        return queueInit.queueInit(queueDepth, ring, flags);
+    void registerIowqMaxWorkers(int bounded, int unbounded) {
+
+        MemorySegment values = this.arena.allocate(JAVA_INT, 2);
+        values.setAtIndex(JAVA_INT, 0, bounded);
+        values.setAtIndex(JAVA_INT, 1, unbounded);
+
+        int ret = registerIowqMaxWorkers.registerMaxIoWqWorkers(this.ring, values);
+        if (ret < 0) {
+            throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(ret));
+        }
     }
 
     void queueExit(MemorySegment ring) {
