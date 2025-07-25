@@ -121,14 +121,13 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions[] sqeOptions) {
-
-        long id = bytes.address() + ThreadLocalRandom.current().nextLong();
+    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
+        long id = bytes.address();
         MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
 
         MemorySegment sqe = getSqe(sqeOptions);
-        ioUring.setUserData(sqe, userData.address());
         ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
+        ioUring.setUserData(sqe, userData.address());
 
         return id;
     }
@@ -213,6 +212,10 @@ public class JUring implements AutoCloseable {
 
     public List<Result> peekForBatchResult(int batchSize) {
         return ioUring.peekForBatchResult(batchSize);
+    }
+
+    public List<Result> waitForBatchResult(int batchSize) {
+        return ioUring.waitForBatchResult(batchSize);
     }
 
     public Result waitForResult() {

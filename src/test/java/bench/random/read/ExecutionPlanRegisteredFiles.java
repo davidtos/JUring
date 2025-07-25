@@ -21,7 +21,7 @@ public class ExecutionPlanRegisteredFiles {
 
     @Setup
     public void setup(TaskCreator taskCreator) {
-        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
+        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER,IORING_SETUP_DEFER_TASKRUN, IORING_SETUP_COOP_TASKRUN);
         registeredFileIndices = new HashMap<>();
         openFileDescriptors = new ArrayList<>();
 

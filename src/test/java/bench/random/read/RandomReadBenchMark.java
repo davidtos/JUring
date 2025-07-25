@@ -12,11 +12,14 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,8 +30,6 @@ import java.util.concurrent.TimeUnit;
 @OperationsPerInvocation(2211)
 @Fork(value = 0, jvmArgs = {
         "--enable-native-access=ALL-UNNAMED",
-        "-XX:+PrintCompilation",
-        "-XX:+UnlockDiagnosticVMOptions",
         //    "-Xint"
 
 })
@@ -39,7 +40,7 @@ public class RandomReadBenchMark {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
-               .addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results")
+                .addProfiler("perf")
                 .build();
 
         new Runner(opt).run();

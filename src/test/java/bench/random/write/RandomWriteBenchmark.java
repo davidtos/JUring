@@ -24,8 +24,7 @@ import java.util.concurrent.TimeUnit;
 @OperationsPerInvocation(2211)
 @Fork(value = 0, jvmArgs = {
         "--enable-native-access=ALL-UNNAMED",
-        "-XX:+PrintCompilation",
-        "-XX:+UnlockDiagnosticVMOptions",
+        "-Djmh.ignoreLock=true"
     //    "-Xint"
 
 })
@@ -36,14 +35,15 @@ public class RandomWriteBenchmark {
         Options opt = new OptionsBuilder()
                 .include(RandomWriteBenchmark.class.getSimpleName())
                 .forks(1)
-                .shouldDoGC(false)
                 .shouldFailOnError(true)
-                .addProfiler(AsyncProfiler.class, "event=cpu;cstack=fp;output=flamegraph;dir=./profiler-results").build();
+                //.addProfiler("perf")
+                //      .addProfiler(AsyncProfiler.class, "event=wall;threads=true;cstack=fp;output=tree;dir=./profiler-results")
+                .build();
 
         new Runner(opt).run();
     }
 
-    @Benchmark
+   @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanWriteRegisteredFiles plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -58,9 +58,7 @@ public class RandomWriteBenchmark {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
                 Task task = writeTasks[taskIndex];
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
-
                 jUring.prepareWrite(fileIndex, taskCreator.ms, task.offset());
-
                 submitted++;
                 taskIndex++;
 
@@ -73,7 +71,8 @@ public class RandomWriteBenchmark {
                 jUring.submit();
             }
 
-            List<Result> results = jUring.peekForBatchResult(64);
+            int maxToWait = Math.min(submitted - processed, 64);
+            List<Result> results = jUring.waitForBatchResult(maxToWait);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
                     blackhole.consume(r);

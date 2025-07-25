@@ -2,7 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 public enum SqeOptions {
 
-    IOSQE_FIXED_FILE((byte) (1 << 0)),    // 0x01
+    IOSQE_FIXED_FILE((byte) (1)),    // 0x01
     IOSQE_IO_DRAIN((byte) (1 << 1)),     // 0x02
     IOSQE_IO_LINK((byte) (1 << 2)),      // 0x04
     IOSQE_IO_HARDLINK((byte) (1 << 3)),  // 0x08
@@ -18,6 +18,9 @@ public enum SqeOptions {
 
     static byte combineOptions(SqeOptions... options) {
         byte combinedFlags = 0;
+        if (options.length == 1) {
+            return options[0].value;
+        }
         for (SqeOptions b : options) {
             combinedFlags |= b.value;
         }
