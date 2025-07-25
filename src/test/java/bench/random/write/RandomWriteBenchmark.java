@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
     //    "-Xint"
 
 })
-@Threads(8)
+@Threads(1)
 public class RandomWriteBenchmark {
 
     public static void main(String[] args) throws RunnerException {
@@ -36,7 +36,7 @@ public class RandomWriteBenchmark {
                 .include(RandomWriteBenchmark.class.getSimpleName())
                 .forks(1)
                 .shouldFailOnError(true)
-                //.addProfiler("perf")
+                .addProfiler("perf")
                 //      .addProfiler(AsyncProfiler.class, "event=wall;threads=true;cstack=fp;output=tree;dir=./profiler-results")
                 .build();
 

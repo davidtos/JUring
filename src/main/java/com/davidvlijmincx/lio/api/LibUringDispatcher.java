@@ -136,7 +136,7 @@ record LibUringDispatcher(Arena arena,
         );
 
         int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
-        dispatcher.registerIowqMaxWorkers(8,3);
+        dispatcher.registerIowqMaxWorkers(4,3);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
