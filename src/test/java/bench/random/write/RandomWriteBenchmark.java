@@ -25,10 +25,8 @@ import java.util.concurrent.TimeUnit;
 @Fork(value = 0, jvmArgs = {
         "--enable-native-access=ALL-UNNAMED",
         "-Djmh.ignoreLock=true"
-    //    "-Xint"
-
 })
-@Threads(1)
+@Threads(20)
 public class RandomWriteBenchmark {
 
     public static void main(String[] args) throws RunnerException {
@@ -36,8 +34,8 @@ public class RandomWriteBenchmark {
                 .include(RandomWriteBenchmark.class.getSimpleName())
                 .forks(1)
                 .shouldFailOnError(true)
-                .addProfiler("perf")
-                //      .addProfiler(AsyncProfiler.class, "event=wall;threads=true;cstack=fp;output=tree;dir=./profiler-results")
+               // .addProfiler("perf")
+                // .addProfiler(AsyncProfiler.class, "event=wall;threads=true;cstack=fp;output=tree;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
@@ -77,7 +75,7 @@ public class RandomWriteBenchmark {
 
     }
 
-  //  @Benchmark
+    @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
@@ -90,7 +88,7 @@ public class RandomWriteBenchmark {
 
     }
 
-    //  @Benchmark
+    @Benchmark
     public void juringOpenWriteClose(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -142,7 +140,7 @@ public class RandomWriteBenchmark {
         }
     }
 
- //   @Benchmark
+    @Benchmark
     public void fileChannelOpenWriteClose(Blackhole blackhole, TaskCreator taskCreator) throws IOException {
         Task[] writeTasks = taskCreator.writeTasks;
         FileChannel[] fileChannels = new FileChannel[writeTasks.length];

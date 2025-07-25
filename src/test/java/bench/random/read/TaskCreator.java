@@ -17,8 +17,8 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 @State(Scope.Benchmark)
 public class TaskCreator {
 
-    //@Param({"512", "4096", "16386", "65536"})
-    @Param({"4096"})
+    @Param({"512", "4096", "16386", "65536"})
+//    @Param({"4096"})
     public static int bufferSize;
 
     final static Random random = new Random(315315153152442L);
@@ -39,7 +39,6 @@ public class TaskCreator {
         readTasks = getTasks(2211, 1);
         writeTasks = getTasks(2211, 0);
         content = bytesToWrite(bufferSize);
-
         bb = ByteBuffer.allocateDirect(content.length);
         bb.put(content);
         bb.flip();

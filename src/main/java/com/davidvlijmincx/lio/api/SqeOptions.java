@@ -8,9 +8,10 @@ public enum SqeOptions {
     IOSQE_IO_HARDLINK((byte) (1 << 3)),  // 0x08
     IOSQE_ASYNC((byte) (1 << 4)),        // 0x10
     IOSQE_BUFFER_SELECT((byte) (1 << 5)), // 0x20
-    IOSQE_CQE_SKIP_SUCCESS((byte) (1 << 6)); // 0x40
+    IOSQE_CQE_SKIP_SUCCESS((byte) (1 << 6)), // 0x40
+    WF_NOWAIT((byte) (8));
 
-    byte value;
+    final byte value;
 
     SqeOptions(byte value) {
         this.value = value;
