@@ -35,7 +35,10 @@ record LibUringDispatcher(Arena arena,
                           SqeSetData sqeSetData,
                           RegisterBuffers registerBuffers,
                           RegisterFiles registerFiles,
-                          RegisterFilesUpdate registerFilesUpdate) implements AutoCloseable {
+                          RegisterFilesUpdate registerFilesUpdate,
+                          CqAdvance cqAdvance,
+                          WaitCqeNr waitCqeNr,
+                          RegisterIowqMaxWorkers registerIowqMaxWorkers) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
@@ -104,8 +107,8 @@ record LibUringDispatcher(Arena arena,
 
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
         Arena arena = Arena.ofShared();
-        
-        LibUringDispatcher dispatcher = new LibUringDispatcher(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 100), 
+
+        LibUringDispatcher dispatcher = new LibUringDispatcher(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -126,13 +129,18 @@ record LibUringDispatcher(Arena arena,
                 libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
                 libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterFiles.class, "io_uring_register_files", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false));
+                libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
+                libLink(CqAdvance.class, "io_uring_cq_advance", FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT), true),
+                libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
+                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false)
+        );
 
-        int ret = dispatcher.queueInit(queueDepth, dispatcher.ring, IoUringOptions.combineOptions(ioUringOptions));
+        int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
+        dispatcher.registerIowqMaxWorkers(4,3);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
-        
+
         return dispatcher;
     }
 
@@ -201,12 +209,20 @@ record LibUringDispatcher(Arena arena,
         return peekBatchCqe.peekBatchCqe(ring, cqePtrPtr, batchSize);
     }
 
-    void cqeSeen(MemorySegment ring, MemorySegment cqePointer) {
-        cqeSeen.cqeSeen(ring, cqePointer);
+    int queueInit(int queueDepth, int flags) {
+        return queueInit.queueInit(queueDepth, this.ring , flags);
     }
 
-    int queueInit(int queueDepth, MemorySegment ring, int flags) {
-        return queueInit.queueInit(queueDepth, ring, flags);
+    void registerIowqMaxWorkers(int bounded, int unbounded) {
+
+        MemorySegment values = this.arena.allocate(JAVA_INT, 2);
+        values.setAtIndex(JAVA_INT, 0, bounded);
+        values.setAtIndex(JAVA_INT, 1, unbounded);
+
+        int ret = registerIowqMaxWorkers.registerMaxIoWqWorkers(this.ring, values);
+        if (ret < 0) {
+            throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(ret));
+        }
     }
 
     void queueExit(MemorySegment ring) {
@@ -242,12 +258,34 @@ record LibUringDispatcher(Arena arena,
                 int res = nativeCqe.get(JAVA_INT, 8);
 
                 ret.add(getResultFromCqe(userData, res));
-                seen(nativeCqe);
             }
 
+            cqAdvance.peekBatchCqe(ring, count);
             return ret;
         }
         return List.of();
+    }
+
+    List<Result> waitForBatchResult(int batchSize) {
+        int status = waitCqeNr.waitForCqeNr(ring, cqePtrPtr, batchSize);
+        if (status < 0) {
+            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(status));
+        }
+        int count = peekBatchCqe(ring, cqePtrPtr, batchSize);
+
+        List<Result> ret = new ArrayList<>(count);
+
+        for (int i = 0; i < count; i++) {
+            var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+
+            long userData = nativeCqe.get(JAVA_LONG, 0);
+            int res = nativeCqe.get(JAVA_INT, 8);
+
+            ret.add(getResultFromCqe(userData, res));
+        }
+
+        cqAdvance.peekBatchCqe(ring, count);
+        return ret;
     }
 
     Result waitForResult() {
@@ -262,7 +300,7 @@ record LibUringDispatcher(Arena arena,
         int res = nativeCqe.get(JAVA_INT, 8);
 
         Result result = getResultFromCqe(userData, res);
-        seen(nativeCqe);
+        cqeSeen.cqeSeen(ring, nativeCqe);
         return result;
     }
 
@@ -275,7 +313,9 @@ record LibUringDispatcher(Arena arena,
 
         libCDispatcher.free(nativeUserData);
 
-        if (OperationType.WRITE.equals(type)) {
+        if (OperationType.READ.equals(type)) {
+            return new ReadResult(id, bufferResult, result);
+        } else if (OperationType.WRITE.equals(type)) {
             libCDispatcher.free(bufferResult);
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
@@ -287,11 +327,7 @@ record LibUringDispatcher(Arena arena,
             return new CloseResult(id, (int) result);
         }
 
-        return new ReadResult(id, bufferResult, result);
-    }
-
-    private void seen(MemorySegment cqePointer) {
-        cqeSeen(ring, cqePointer);
+        throw new IllegalStateException("Unexpected result type: " + type);
     }
 
     MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {

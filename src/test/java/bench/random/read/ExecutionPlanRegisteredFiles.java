@@ -1,4 +1,4 @@
-package bench.random.newRead;
+package bench.random.read;
 
 import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.JUring;
@@ -21,14 +21,14 @@ public class ExecutionPlanRegisteredFiles {
 
     @Setup
     public void setup(TaskCreator taskCreator) {
-        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
+        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER,IORING_SETUP_DEFER_TASKRUN, IORING_SETUP_COOP_TASKRUN);
         registeredFileIndices = new HashMap<>();
         openFileDescriptors = new ArrayList<>();
 
         Map<String, Integer> uniqueFiles = new HashMap<>();
         int uniqueFileCount = 0;
         
-        for (Task task : taskCreator.tasks) {
+        for (Task task : taskCreator.readTasks) {
             String filePath = task.pathAsString();
             if (!uniqueFiles.containsKey(filePath)) {
                 uniqueFiles.put(filePath, uniqueFileCount++);

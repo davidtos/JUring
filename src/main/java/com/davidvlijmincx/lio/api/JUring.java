@@ -38,7 +38,15 @@ public class JUring implements AutoCloseable {
         return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
     }
 
+    public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
+        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
+    }
+
     public long prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
+        return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
+    }
+
+    public long prepareWrite(int indexFD, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
     }
 
@@ -108,6 +116,17 @@ public class JUring implements AutoCloseable {
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareRead(sqe, fdOrIndex, buff, offset);
+        ioUring.setUserData(sqe, userData.address());
+
+        return id;
+    }
+
+    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
+        long id = bytes.address();
+        MemorySegment userData = UserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
+
+        MemorySegment sqe = getSqe(sqeOptions);
+        ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
         ioUring.setUserData(sqe, userData.address());
 
         return id;
@@ -193,6 +212,10 @@ public class JUring implements AutoCloseable {
 
     public List<Result> peekForBatchResult(int batchSize) {
         return ioUring.peekForBatchResult(batchSize);
+    }
+
+    public List<Result> waitForBatchResult(int batchSize) {
+        return ioUring.waitForBatchResult(batchSize);
     }
 
     public Result waitForResult() {

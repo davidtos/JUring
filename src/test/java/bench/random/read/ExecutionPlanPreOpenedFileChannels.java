@@ -1,4 +1,4 @@
-package bench.random.newRead;
+package bench.random.read;
 
 import org.openjdk.jmh.annotations.*;
 
@@ -23,7 +23,7 @@ public class ExecutionPlanPreOpenedFileChannels {
 
         Map<String, FileChannel> uniqueFileChannels = new HashMap<>();
         
-        for (Task task : taskCreator.tasks) {
+        for (Task task : taskCreator.readTasks) {
             String filePath = task.pathAsString();
             if (!uniqueFileChannels.containsKey(filePath)) {
                 try {

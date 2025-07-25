@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -182,7 +183,12 @@ class JUringTest {
         var inputBytes = input.getBytes();
 
         try(FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
-            long id = jUring.prepareWrite(fd, inputBytes, 0);
+
+            ByteBuffer bb = ByteBuffer.allocateDirect(inputBytes.length);
+            bb.put(inputBytes);
+            bb.flip();
+
+            long id = jUring.prepareWrite(fd, MemorySegment.ofBuffer(bb), 0);
 
             jUring.submit();
             Result result = jUring.waitForResult();

@@ -1,4 +1,4 @@
-package bench.random.newRead;
+package bench.random.read;
 
 import java.nio.file.Path;
 
