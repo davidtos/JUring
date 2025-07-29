@@ -106,9 +106,9 @@ record LibUringDispatcher(Arena arena,
     }
 
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
-        Arena arena = Arena.ofShared();
+        MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
 
-        LibUringDispatcher dispatcher = new LibUringDispatcher(arena, arena.allocate(ring_layout), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
+        LibUringDispatcher dispatcher = new LibUringDispatcher(Arena.ofShared(),ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -269,7 +269,13 @@ record LibUringDispatcher(Arena arena,
     List<Result> waitForBatchResult(int batchSize) {
         int status = waitCqeNr.waitForCqeNr(ring, cqePtrPtr, batchSize);
         if (status < 0) {
-            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(status));
+            status = waitCqeNr.waitForCqeNr(ring, cqePtrPtr, batchSize);
+            if (status < 0) {
+                status = waitCqeNr.waitForCqeNr(ring, cqePtrPtr, batchSize);
+                if (status < 0) {
+                    throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(status));
+                }
+            }
         }
         int count = peekBatchCqe(ring, cqePtrPtr, batchSize);
 
@@ -371,7 +377,7 @@ record LibUringDispatcher(Arena arena,
     }
 
     void closeArena() {
-        arena.close();
+        NativeDispatcher.C.free(ring);
     }
 
     @Override
