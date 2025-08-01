@@ -36,6 +36,8 @@ public class TaskCreator {
 
     @Setup
     public void setup() {
+
+        System.out.println("ProcessHandle.current().pid(); = " + ProcessHandle.current().pid());
         readTasks = getTasks(2211, 1);
         writeTasks = getTasks(2211, 0);
         content = bytesToWrite(bufferSize);

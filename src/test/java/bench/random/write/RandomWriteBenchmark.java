@@ -35,7 +35,7 @@ public class RandomWriteBenchmark {
                 .forks(1)
                 .shouldFailOnError(true)
                // .addProfiler("perf")
-                // .addProfiler(AsyncProfiler.class, "event=wall;threads=true;cstack=fp;output=tree;dir=./profiler-results")
+                 .addProfiler(AsyncProfiler.class, "event=cpu;threads=true;cstack=fp;output=flamegraph;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
@@ -75,7 +75,7 @@ public class RandomWriteBenchmark {
 
     }
 
- //   @Benchmark
+  //  @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
