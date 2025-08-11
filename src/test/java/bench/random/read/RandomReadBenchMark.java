@@ -31,7 +31,7 @@ import java.util.concurrent.TimeUnit;
 @Fork(value = 0, jvmArgs = {
         "--enable-native-access=ALL-UNNAMED",
 })
-@Threads(25)
+@Threads(1)
 public class RandomReadBenchMark {
 
     public static void main(String[] args) throws RunnerException {
@@ -69,7 +69,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    @Benchmark
+   // @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.readTasks;
@@ -109,7 +109,7 @@ public class RandomReadBenchMark {
 
     }
 
-//    @Benchmark
+  //  @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedFileChannels plan, TaskCreator randomReadTaskCreator) throws Throwable {
         final var openFileChannels = plan.openFileChannels;
         final var readTasks = randomReadTaskCreator.readTasks;

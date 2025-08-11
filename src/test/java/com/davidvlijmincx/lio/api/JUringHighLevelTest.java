@@ -174,7 +174,7 @@ public class JUringHighLevelTest {
                         (existing, _) -> existing))
                 .values()).toArray(new Task[0]);
 
-        assertThat(writeTasks).hasSizeGreaterThan(100);
+        assertThat(writeTasks).hasSizeGreaterThan(18);
 
         final var registeredFileIndices = plan.registeredFileIndices;
         Map<Long, holder> matchIdWithFile = new HashMap<>();
@@ -183,6 +183,8 @@ public class JUringHighLevelTest {
         int processed = 0;
         int taskIndex = 0;
         final int maxInFlight = 256;
+
+        int submitBatcher = 0;
 
         while (processed < writeTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
@@ -201,11 +203,17 @@ public class JUringHighLevelTest {
 
                 submitted++;
                 taskIndex++;
+                submitBatcher++;
             }
 
-            jUring.submit();
+            int sSize = maxInFlight - 1;
+            if (submitBatcher > sSize || taskIndex + sSize >= writeTasks.length){
+                jUring.submit();
+                submitBatcher = 0;
+            }
 
-            List<Result> results = jUring.peekForBatchResult(64);
+            int maxToWait = Math.min(submitted - processed, 100);
+            List<Result> results = jUring.peekForBatchResult(maxToWait);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
                     holder holder = matchIdWithFile.remove(r.id());

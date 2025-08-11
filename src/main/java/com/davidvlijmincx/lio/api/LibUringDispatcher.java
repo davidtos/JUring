@@ -42,7 +42,7 @@ record LibUringDispatcher(Arena arena,
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
-    private static final SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
+    private static final SymbolLookup liburing = SymbolLookup.libraryLookup("/usr/lib/aarch64-linux-gnu/liburing-ffi.so", Arena.ofAuto());
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
 
     private static final GroupLayout ring_layout;
@@ -136,7 +136,7 @@ record LibUringDispatcher(Arena arena,
         );
 
         int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
-        dispatcher.registerIowqMaxWorkers(4,3);
+     //  dispatcher.registerIowqMaxWorkers(1,1);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }

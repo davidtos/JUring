@@ -71,7 +71,7 @@ class JUringTest {
 
             for (int i = 0; i < ids.size(); i++) {
                 Result result = jUring.waitForResult();
-                completedIds.add(result.id());
+                completedIds.add(Long.valueOf(result.id()));
 
                 if (result instanceof ReadResult readResult) {
                     readResult.freeBuffer();

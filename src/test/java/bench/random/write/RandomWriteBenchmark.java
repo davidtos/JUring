@@ -1,5 +1,6 @@
 package bench.random.write;
 
+import bench.ExecutionPlanBlocking;
 import bench.ExecutionPlanJUring;
 import bench.random.read.Task;
 import bench.random.read.TaskCreator;
@@ -23,10 +24,9 @@ import java.util.concurrent.TimeUnit;
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2211)
 @Fork(value = 0, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djmh.ignoreLock=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
-@Threads(20)
+@Threads(1)
 public class RandomWriteBenchmark {
 
     public static void main(String[] args) throws RunnerException {
@@ -34,14 +34,14 @@ public class RandomWriteBenchmark {
                 .include(RandomWriteBenchmark.class.getSimpleName())
                 .forks(1)
                 .shouldFailOnError(true)
-               // .addProfiler("perf")
-                 .addProfiler(AsyncProfiler.class, "event=cpu;threads=true;cstack=fp;output=flamegraph;dir=./profiler-results")
+                .warmupIterations(1)
+                .measurementIterations(100)
                 .build();
 
         new Runner(opt).run();
     }
 
-   @Benchmark
+    @Benchmark
     public void registeredFiles(Blackhole blackhole, ExecutionPlanWriteRegisteredFiles plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
@@ -52,19 +52,26 @@ public class RandomWriteBenchmark {
         int taskIndex = 0;
         final int maxInFlight = 256;
 
+        int submitBatcher = 0;
+
         while (processed < writeTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < writeTasks.length) {
                 Task task = writeTasks[taskIndex];
                 int fileIndex = registeredFileIndices.get(task.pathAsString());
-                jUring.prepareWrite(fileIndex, taskCreator.ms, task.offset());
+                jUring.prepareWrite(fileIndex, plan.ms, task.offset());
                 submitted++;
                 taskIndex++;
+                submitBatcher++;
             }
 
-            jUring.submit();
+            int sSize = 255;
+            if (submitBatcher > sSize || taskIndex + sSize >= writeTasks.length){
+                jUring.submit();
+                submitBatcher = 0;
+            }
 
-            int maxToWait = Math.min(submitted - processed, 64);
-            List<Result> results = jUring.waitForBatchResult(maxToWait);
+            int maxToWait = Math.min(submitted - processed, 256);
+            List<Result> results = jUring.peekForBatchResult(maxToWait);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
                     blackhole.consume(r);
@@ -75,7 +82,7 @@ public class RandomWriteBenchmark {
 
     }
 
-  //  @Benchmark
+   // @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedWriteFileChannels plan, TaskCreator taskCreator) throws IOException {
         final var openFileChannels = plan.openFileChannels;
         final var writeTasks = taskCreator.writeTasks;
@@ -88,7 +95,7 @@ public class RandomWriteBenchmark {
 
     }
 
-    //@Benchmark
+    // @Benchmark
     public void juringOpenWriteClose(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator taskCreator) {
         final var jUring = plan.jUring;
         final var writeTasks = taskCreator.writeTasks;
