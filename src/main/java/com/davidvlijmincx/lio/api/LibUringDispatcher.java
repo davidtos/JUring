@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static com.davidvlijmincx.lio.api.DirectoryFileDescriptorFlags.AT_FDCWD;
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_ATTACH_WQ;
 import static java.lang.foreign.ValueLayout.*;
 
 record LibUringDispatcher(Arena arena,
@@ -31,6 +32,7 @@ record LibUringDispatcher(Arena arena,
                           PeekBatchCqe peekBatchCqe,
                           CqeSeen cqeSeen,
                           QueueInit queueInit,
+                          QueueInitParams queueInitParams,
                           QueueExit queueExit,
                           SqeSetData sqeSetData,
                           RegisterBuffers registerBuffers,
@@ -108,7 +110,19 @@ record LibUringDispatcher(Arena arena,
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
         MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
 
-        LibUringDispatcher dispatcher = new LibUringDispatcher(Arena.ofShared(),ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
+        LibUringDispatcher dispatcher = getDispatcher(ring);
+
+        int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
+     //  dispatcher.registerIowqMaxWorkers(1,1);
+        if (ret < 0) {
+            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
+        }
+
+        return dispatcher;
+    }
+
+    private static LibUringDispatcher getDispatcher(MemorySegment ring) {
+        return new LibUringDispatcher(Arena.ofShared(),ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -125,6 +139,7 @@ record LibUringDispatcher(Arena arena,
                 libLink(PeekBatchCqe.class, "io_uring_peek_batch_cqe", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(CqeSeen.class, "io_uring_cqe_seen", FunctionDescriptor.ofVoid(ADDRESS, ADDRESS), true),
                 libLink(QueueInit.class, "io_uring_queue_init", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), false),
+                libLink(QueueInitParams.class, "io_uring_queue_init_params", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, ADDRESS), false),
                 libLink(QueueExit.class, "io_uring_queue_exit", FunctionDescriptor.ofVoid(ADDRESS), false),
                 libLink(SqeSetData.class, "io_uring_sqe_set_data", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG), false),
                 libLink(RegisterBuffers.class, "io_uring_register_buffers", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
@@ -134,20 +149,34 @@ record LibUringDispatcher(Arena arena,
                 libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false)
         );
-
-        int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
-     //  dispatcher.registerIowqMaxWorkers(1,1);
-        if (ret < 0) {
-            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
-        }
-
-        return dispatcher;
     }
 
     private static <T> T libLink(Class<T> type, String name, FunctionDescriptor descriptor, boolean critical) {
         MemorySegment symbol = liburing.findOrThrow(name);
         MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+
+    /*
+     IORING_SETUP_ATTACH_WQ
+              This flag should be set in conjunction with struct
+              io_uring_params.wq_fd being set to an existing io_uring
+              ring file descriptor. When set, the io_uring instance being
+              created will share the asynchronous worker thread backend
+              of the specified io_uring ring, rather than create a new
+              separate thread pool. Additionally the sq polling thread
+              will be shared, if IORING_SETUP_SQPOLL is set.
+     */
+    public LibUringDispatcher getSharedWorkerRing(int queueDepth){
+        MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
+        LibUringDispatcher dispatcher = getDispatcher(ring);
+
+        MemorySegment params = null;
+
+        dispatcher.queueInitParams(queueDepth, ring, params);
+
+        return dispatcher;
     }
 
     MemorySegment getSqe() {
@@ -211,6 +240,10 @@ record LibUringDispatcher(Arena arena,
 
     int queueInit(int queueDepth, int flags) {
         return queueInit.queueInit(queueDepth, this.ring , flags);
+    }
+
+    int queueInitParams(int queueDepth, MemorySegment ring, MemorySegment params) {
+        return queueInitParams.queueInitParams(queueDepth, ring, params);
     }
 
     void registerIowqMaxWorkers(int bounded, int unbounded) {
