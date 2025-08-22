@@ -71,7 +71,7 @@ public class RandomWriteBenchmark {
             }
 
             int maxToWait = Math.min(submitted - processed, 256);
-            List<Result> results = jUring.peekForBatchResult(maxToWait);
+            List<Result> results = jUring.waitForBatchResult(maxToWait);
             for (Result result : results) {
                 if (result instanceof WriteResult r) {
                     blackhole.consume(r);

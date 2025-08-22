@@ -5,6 +5,7 @@ import com.davidvlijmincx.lio.api.functions.*;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandleProxies;
+import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -44,13 +45,17 @@ record LibUringDispatcher(Arena arena,
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
-    private static final SymbolLookup liburing = SymbolLookup.libraryLookup("/usr/lib/aarch64-linux-gnu/liburing-ffi.so", Arena.ofAuto());
+    private static final SymbolLookup liburing = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
     private static final GroupLayout io_uring_sq_layout;
     private static final GroupLayout io_uring_cqe_layout;
+
+    private static final VarHandle ringFdHandle;
+    private static final VarHandle ringFlagHandle;
+    private static final VarHandle ringFeaturesandle;
 
 
     static {
@@ -105,6 +110,10 @@ record LibUringDispatcher(Arena arena,
                 MemoryLayout.sequenceLayout(3, JAVA_BYTE).withName("pad"),
                 JAVA_INT.withName("pad2")
         ).withName("io_uring");
+
+        ringFdHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("ring_fd"));
+        ringFlagHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("int_flags"));
+        ringFeaturesandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("features"));
     }
 
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
@@ -157,7 +166,6 @@ record LibUringDispatcher(Arena arena,
         return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
-
     /*
      IORING_SETUP_ATTACH_WQ
               This flag should be set in conjunction with struct
@@ -168,13 +176,23 @@ record LibUringDispatcher(Arena arena,
               separate thread pool. Additionally the sq polling thread
               will be shared, if IORING_SETUP_SQPOLL is set.
      */
-    public LibUringDispatcher getSharedWorkerRing(int queueDepth){
+    public LibUringDispatcher getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions){
         MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
         LibUringDispatcher dispatcher = getDispatcher(ring);
+        MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
 
-        MemorySegment params = null;
+        int ring_fd = (int) ringFdHandle.get(this.ring, 0L); // this. is the parent (ring)
 
-        dispatcher.queueInitParams(queueDepth, ring, params);
+        var result = IoUringOptions.combineOptions(ioUringOptions);
+
+        io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
+        io_uring_params.wq_fd(params, ring_fd);
+
+        var ret = dispatcher.queueInitParams(queueDepth, ring, params);
+
+        if (ret < 0){
+            throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(ret));
+        }
 
         return dispatcher;
     }

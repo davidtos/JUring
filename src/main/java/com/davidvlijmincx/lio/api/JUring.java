@@ -18,6 +18,16 @@ public class JUring implements AutoCloseable {
         registeredBuffers = new ArrayList<>();
     }
 
+    private JUring(LibUringDispatcher ioUring){
+        this.ioUring = ioUring;
+        registeredBuffers = new ArrayList<>();
+    }
+
+    public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions){
+        var ring = this.ioUring.getSharedWorkerRing(queueDepth);
+        return new JUring(ring);
+    }
+
     public long prepareRead(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), readSize, offset, sqeOptions);
     }
