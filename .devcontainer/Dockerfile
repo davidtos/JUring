@@ -1,7 +1,7 @@
 # Base image - Dockerfile.base
 FROM arm64v8/ubuntu:25.04
 
-ARG JDK_VERSION=24
+ARG JDK_VERSION=25
 
 # Install prerequisites
 RUN apt-get update && apt-get install -y \
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     maven \
     && rm -rf /var/lib/apt/lists/*
 
-RUN wget "https://download.java.net/java/early_access/jdk24/33/GPL/openjdk-24-ea+33_linux-aarch64_bin.tar.gz" -O jdk.tar.gz && \
+RUN wget "https://download.java.net/java/GA/jdk25/bd75d5f9689641da8e1daabeccb5528b/36/GPL/openjdk-25_linux-aarch64_bin.tar.gz" -O jdk.tar.gz && \
     mkdir -p /usr/lib/jvm && \
     tar -xzf jdk.tar.gz -C /usr/lib/jvm && \
     rm jdk.tar.gz
