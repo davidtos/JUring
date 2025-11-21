@@ -10,10 +10,12 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
 import java.util.*;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 @State(Scope.Thread)
 public class ExecutionPlanWriteRegisteredFiles {
@@ -22,6 +24,7 @@ public class ExecutionPlanWriteRegisteredFiles {
     public Map<String, Integer> registeredFileIndices;
     public MemorySegment[] registeredBuffers;
     private List<FileDescriptor> openFileDescriptors;
+    public MemorySegment ms;
 
     @Setup
     public void setup(TaskCreator taskCreator) {
@@ -58,6 +61,28 @@ public class ExecutionPlanWriteRegisteredFiles {
         }
 
         registeredBuffers = jUring.registerBuffers(5000, 260);
+
+        byte[] content = bytesToWrite(4096);
+        ByteBuffer bb = ByteBuffer.allocateDirect(content.length);
+        bb.put(content);
+        bb.flip();
+        ms = MemorySegment.ofBuffer(bb);
+    }
+
+    public byte[] bytesToWrite(int size){
+        // Only lowercase letters and digits (all 1 byte in UTF-8)
+        String charPool = "abcdefghijklmnopqrstuvwxyz0123456789";
+
+        Random random = new Random();
+        StringBuilder sb = new StringBuilder();
+
+        // Since all chars are 1 byte, we can directly create the exact size
+        for (int i = 0; i < size; i++) {
+            char randomChar = charPool.charAt(random.nextInt(charPool.length()));
+            sb.append(randomChar);
+        }
+
+        return sb.toString().getBytes(UTF_8);
     }
 
     @TearDown

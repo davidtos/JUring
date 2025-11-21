@@ -35,6 +35,35 @@ class JUringTest {
     }
 
     @Test
+    void sharedWorkerRingCreation(){
+        var mainRing = new JUring(10, IORING_SETUP_SINGLE_ISSUER);
+
+        var sharedRing = mainRing.getSharedWorkerRing(10,IORING_SETUP_SINGLE_ISSUER);
+
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            long id = sharedRing.prepareRead(fd, 14, 0);
+            sharedRing.submit();
+            Result result = sharedRing.waitForResult();
+
+            if (result instanceof ReadResult readResult) {
+                assertEquals(id, readResult.id());
+                assertEquals(13, readResult.result());
+
+                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
+                String string = readResult.buffer().getString(0);
+                readResult.freeBuffer();
+                assertEquals("Hello, World!", string);
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
+        }
+
+        sharedRing.close();
+        mainRing.close();
+    }
+
+    @Test
     void readFromFile() {
         try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             long id = jUring.prepareRead(fd, 14, 0);
@@ -71,7 +100,7 @@ class JUringTest {
 
             for (int i = 0; i < ids.size(); i++) {
                 Result result = jUring.waitForResult();
-                completedIds.add(result.id());
+                completedIds.add(Long.valueOf(result.id()));
 
                 if (result instanceof ReadResult readResult) {
                     readResult.freeBuffer();
