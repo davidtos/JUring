@@ -23,6 +23,8 @@ class uring_syscalls_h_2 extends uring_syscalls_h$shared {
     static final SymbolLookup SYMBOL_LOOKUP = SymbolLookup.loaderLookup()
             .or(Linker.nativeLinker().defaultLookup());
 
+    static final SymbolLookup liburing_lookup = SymbolLookup.libraryLookup("liburing-ffi.so", Arena.ofAuto());
+
     private static final int _UNISTD_H = (int)1L;
     /**
      * {@snippet lang=c :

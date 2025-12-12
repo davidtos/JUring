@@ -1,8 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
-final class NativeDispatcher {
+final public class NativeDispatcher {
 
-    static final LibCDispatcher C = LibCDispatcher.create();
+    public static final LibCDispatcher C = LibCDispatcher.create();
 
     static LibUringDispatcher getUringInstance(int queueDepth, IoUringOptions... ioUringflags) {
         return LibUringDispatcher.create(queueDepth, ioUringflags);

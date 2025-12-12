@@ -1129,7 +1129,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_queue_init");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_queue_init");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -1310,7 +1310,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_queue_exit");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_queue_exit");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -1623,7 +1623,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_submit");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_submit");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -4892,7 +4892,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_cqe_seen");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_cqe_seen");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -4952,7 +4952,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_sqe_set_data");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_sqe_set_data");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -5012,7 +5012,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_cqe_get_data");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_cqe_get_data");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -6931,7 +6931,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_prep_multishot_accept");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_prep_multishot_accept");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -8486,7 +8486,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_prep_send");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_prep_send");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -8928,7 +8928,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_prep_recv");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_prep_recv");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -12223,7 +12223,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_wait_cqe");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_wait_cqe");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
@@ -12771,7 +12771,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_POINTER
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_get_sqe");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_get_sqe");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }

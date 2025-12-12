@@ -13,7 +13,7 @@ import java.util.function.IntConsumer;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
 
-record LibCDispatcher(Consumer<MemorySegment> free,
+public record LibCDispatcher(Consumer<MemorySegment> free,
                       Open open,
                       IntConsumer close,
                       Malloc malloc,
@@ -39,7 +39,7 @@ record LibCDispatcher(Consumer<MemorySegment> free,
         return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
-    void free(MemorySegment address) {
+    public void free(MemorySegment address) {
         free.accept(address);
     }
 
@@ -51,7 +51,7 @@ record LibCDispatcher(Consumer<MemorySegment> free,
         close.accept(fd);
     }
 
-    MemorySegment malloc(long size) {
+   public  MemorySegment malloc(long size) {
         return malloc.malloc(size).reinterpret(size);
     }
 
