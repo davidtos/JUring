@@ -7300,7 +7300,7 @@ public class uring_syscalls_h extends uring_syscalls_h_1 {
             uring_syscalls_h.C_INT
         );
 
-        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("io_uring_prep_connect");
+        public static final MemorySegment ADDR = liburing_lookup.findOrThrow("io_uring_prep_connect");
 
         public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
     }
