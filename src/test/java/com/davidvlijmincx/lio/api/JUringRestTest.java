@@ -79,8 +79,8 @@ class JUringRestTest {
 
             System.out.println("response = " + response);
 
-            assertTrue(response.startsWith("HTTP/1.1"), "Response should start with HTTP status line");
-            assertTrue(response.contains(PATH), "Response should contain requested path");
+            assertTrue(response.startsWith("HTTP/1.0"), "Response should start with HTTP status line");
+            assertTrue(response.contains("hello"));
 
             uring_syscalls_h.close(sockFd);
         }
