@@ -41,7 +41,11 @@ record LibUringDispatcher(Arena arena,
                           RegisterFilesUpdate registerFilesUpdate,
                           CqAdvance cqAdvance,
                           WaitCqeNr waitCqeNr,
-                          RegisterIowqMaxWorkers registerIowqMaxWorkers) implements AutoCloseable {
+                          RegisterIowqMaxWorkers registerIowqMaxWorkers,
+                          PrepareSocket prepSocket,
+                          PrepareConnect prepConnect,
+                          PrepareSend prepSend,
+                          PrepareRecv prepRecv) implements AutoCloseable {
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
@@ -156,7 +160,11 @@ record LibUringDispatcher(Arena arena,
                 libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
                 libLink(CqAdvance.class, "io_uring_cq_advance", FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT), true),
                 libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false)
+                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false),
+                libLink(PrepareSocket.class, "io_uring_prep_socket", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), false),
+                libLink(PrepareConnect.class, "io_uring_prep_connect", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT), false),
+                libLink(PrepareSend.class, "io_uring_prep_send", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false),
+                libLink(PrepareRecv.class, "io_uring_prep_recv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false)
         );
     }
 
@@ -199,6 +207,22 @@ record LibUringDispatcher(Arena arena,
 
     MemorySegment getSqe() {
         return sqe.getSqe(ring);
+    }
+
+    void prepareSocket(MemorySegment sqe, int domain, int type, int protocol, int flags) {
+        prepSocket.prepSocket(sqe, domain, type, protocol, flags);
+    }
+
+    void prepareConnect(MemorySegment sqe, int sockFd, MemorySegment addr, int addrLen) {
+        prepConnect.prepConnect(sqe, sockFd, addr, addrLen);
+    }
+
+    void prepareSend(MemorySegment sqe, int sockFd, MemorySegment buffer, long len, int flags) {
+        prepSend.prepSend(sqe, sockFd, buffer, len, flags);
+    }
+
+    void prepareRecv(MemorySegment sqe, int sockFd, MemorySegment buffer, long len, int flags) {
+        prepRecv.prepRecv(sqe, sockFd, buffer, len, flags);
     }
 
     void setSqeFlag(MemorySegment sqe, SqeOptions... flags) {
@@ -380,6 +404,17 @@ record LibUringDispatcher(Arena arena,
             return new OpenResult(id, (int) result);
         } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
+        } else if (OperationType.CLOSE.equals(type)) {
+            return new CloseResult(id, (int) result);
+        } else if (OperationType.SOCKET.equals(type)) {
+            return new SocketResult(id, (int) result);
+        } else if (OperationType.CONNECT.equals(type)) {
+            return new ConnectResult(id, (int) result);
+        } else if (OperationType.SEND.equals(type)) {
+            libCDispatcher.free(UserData.getBuffer(nativeUserData));
+            return new SendResult(id, result);
+        } else if (OperationType.RECV.equals(type)) {
+            return new ReadResult(id, UserData.getBuffer(nativeUserData), result);
         }
 
         libCDispatcher.free(nativeUserData);
