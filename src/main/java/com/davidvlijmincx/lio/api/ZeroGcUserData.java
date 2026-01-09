@@ -52,7 +52,7 @@ public final class ZeroGcUserData {
         VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
         VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
         VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
-        VH_ADDR.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
+        VH_LONG.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
 
         return address;
     }

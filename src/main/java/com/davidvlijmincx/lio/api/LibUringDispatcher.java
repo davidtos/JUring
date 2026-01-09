@@ -24,6 +24,7 @@ record LibUringDispatcher(Arena arena,
                           PrepareClose prepClose,
                           PrepareCloseDirect prepCloseDirect,
                           PrepareRead prepRead,
+                          PrepareReadAddress prepareReadAddress,
                           PrepareReadFixed prepReadFixed,
                           PrepareWrite prepWrite,
                           PrepareWriteFixed prepWriteFixed,
@@ -144,6 +145,7 @@ record LibUringDispatcher(Arena arena,
                 libLink(PrepareClose.class, "io_uring_prep_close", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
                 libLink(PrepareCloseDirect.class, "io_uring_prep_close_direct", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
                 libLink(PrepareRead.class, "io_uring_prep_read", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
+                libLink(PrepareReadAddress.class, "io_uring_prep_read", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_LONG), false),
                 libLink(PrepareReadFixed.class, "io_uring_prep_read_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
                 libLink(PrepareWrite.class, "io_uring_prep_write", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
                 libLink(PrepareWriteFixed.class, "io_uring_prep_write_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
@@ -230,6 +232,10 @@ record LibUringDispatcher(Arena arena,
         prepRead.prepareRead(sqe, fd, buffer, buffer.byteSize(), offset);
     }
 
+    void prepareRead(MemorySegment sqe, int fd, long buffer, long size, long offset) {
+        prepareReadAddress.prepareRead(sqe, fd, buffer, size, offset);
+    }
+
     void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int bufferIndex) {
         prepReadFixed.prepareReadFixed(sqe, fd, buffer, buffer.byteSize(), offset, bufferIndex);
     }
@@ -308,7 +314,7 @@ record LibUringDispatcher(Arena arena,
             List<Result> ret = new ArrayList<>(count);
 
             for (int i = 0; i < count; i++) {
-                long address = cqePtrPtr.getAtIndex(ADDRESS, i).address();
+                long address = cqePtrPtr.getAtIndex(JAVA_LONG, i);
 
                 long userData = ZeroGcCqe.getUserData(address);
                 int res = ZeroGcCqe.getRes(address);
@@ -338,10 +344,9 @@ record LibUringDispatcher(Arena arena,
         List<Result> ret = new ArrayList<>(count);
 
         for (int i = 0; i < count; i++) {
-            var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
-
-            long userData = nativeCqe.get(JAVA_LONG, 0);
-            int res = nativeCqe.get(JAVA_INT, 8);
+            long address =  cqePtrPtr.getAtIndex(JAVA_LONG, i);
+            long userData = ZeroGcCqe.getUserData(address);
+            int res = ZeroGcCqe.getRes(address);
 
             ret.add(getResultFromCqe(userData, res));
         }
@@ -356,13 +361,12 @@ record LibUringDispatcher(Arena arena,
             throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(ret));
         }
 
-        // TODO: is this oke??
         var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0);
 
-        long address = cqePtr.getAtIndex(ADDRESS, 0).address();
+        long userDataAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
 
-        long userData = ZeroGcCqe.getUserData(address);
-        int res = ZeroGcCqe.getRes(address);
+        long userData = ZeroGcCqe.getUserData(userDataAddress);
+        int res = ZeroGcCqe.getRes(userDataAddress);
 
         Result result = getResultFromCqe(userData, res);
         cqeSeen.cqeSeen(ring, nativeCqe);

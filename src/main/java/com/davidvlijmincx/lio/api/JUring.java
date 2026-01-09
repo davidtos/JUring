@@ -120,15 +120,15 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions) {
-        MemorySegment buff = NativeDispatcher.C.malloc(readSize);
-        long id = buff.address();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.READ, buff);
+        long address = NativeDispatcher.C.mallocAddress(readSize);
+
+        long userData = ZeroGcUserData.createUserData(address, fdOrIndex, OperationType.READ, address);
 
         MemorySegment sqe = getSqe(sqeOptions);
-        ioUring.prepareRead(sqe, fdOrIndex, buff, offset);
+        ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return address;
     }
 
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
