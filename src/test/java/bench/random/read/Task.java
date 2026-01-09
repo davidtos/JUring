@@ -1,5 +1,7 @@
 package bench.random.read;
 
+import bench.random.Type;
+
 import java.nio.file.Path;
 
 public

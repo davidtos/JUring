@@ -12,7 +12,7 @@ public class FileDescriptor implements AutoCloseable {
         this.fd = fd;
     }
 
-    int getFd() {
+    public int getFd() {
         return fd;
     }
 

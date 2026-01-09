@@ -164,7 +164,7 @@ public class JUringHighLevelTest {
         taskCreator.setup();
 
         ExecutionPlanWriteRegisteredFiles plan = new ExecutionPlanWriteRegisteredFiles();
-        plan.setup(taskCreator);
+        //plan.setup(taskCreator, );
 
         final var jUring = plan.jUring;
         final var writeTasks = new ArrayList<>(Arrays.stream(taskCreator.writeTasks)

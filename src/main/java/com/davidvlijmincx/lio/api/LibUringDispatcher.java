@@ -121,11 +121,16 @@ record LibUringDispatcher(Arena arena,
 
         LibUringDispatcher dispatcher = getDispatcher(ring);
 
+
         int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
      //  dispatcher.registerIowqMaxWorkers(1,1);
         if (ret < 0) {
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
+
+        int ring_fd = (int) ringFdHandle.get(ring, 0L);
+        System.out.println("ring_fd = " + ring_fd);
+
 
         return dispatcher;
     }
@@ -303,10 +308,10 @@ record LibUringDispatcher(Arena arena,
             List<Result> ret = new ArrayList<>(count);
 
             for (int i = 0; i < count; i++) {
-                var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+                long address = cqePtrPtr.getAtIndex(ADDRESS, i).address();
 
-                long userData = nativeCqe.get(JAVA_LONG, 0);
-                int res = nativeCqe.get(JAVA_INT, 8);
+                long userData = ZeroGcCqe.getUserData(address);
+                int res = ZeroGcCqe.getRes(address);
 
                 ret.add(getResultFromCqe(userData, res));
             }
@@ -351,38 +356,38 @@ record LibUringDispatcher(Arena arena,
             throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(ret));
         }
 
-        var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
+        // TODO: is this oke??
+        var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0);
 
-        long userData = nativeCqe.get(JAVA_LONG, 0);
-        int res = nativeCqe.get(JAVA_INT, 8);
+        long address = cqePtr.getAtIndex(ADDRESS, 0).address();
+
+        long userData = ZeroGcCqe.getUserData(address);
+        int res = ZeroGcCqe.getRes(address);
 
         Result result = getResultFromCqe(userData, res);
         cqeSeen.cqeSeen(ring, nativeCqe);
         return result;
     }
 
-    private Result getResultFromCqe(long address, long result) {
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
-
-        OperationType type = UserData.getType(nativeUserData);
-        long id = UserData.getId(nativeUserData);
-
+    private Result getResultFromCqe(long userDataAddress, long result) {
+        var type = ZeroGcUserData.getType(userDataAddress);
+        long id =  ZeroGcUserData.getId(userDataAddress);
 
         if (OperationType.READ.equals(type)) {
-            return new ReadResult(id, UserData.getBuffer(nativeUserData), result);
+            return new ReadResult(id, ZeroGcUserData.getBufferSegment(userDataAddress), result);
         } else if (OperationType.WRITE.equals(type)) {
-            libCDispatcher.free(UserData.getBuffer(nativeUserData));
+            libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
             return new WriteResult(id, result);
         } else if (OperationType.OPEN.equals(type)) {
-            libCDispatcher.free(UserData.getBuffer(nativeUserData));
+            libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
             return new OpenResult(id, (int) result);
         } else if (OperationType.CLOSE.equals(type)) {
             return new CloseResult(id, (int) result);
         }
 
-        libCDispatcher.free(nativeUserData);
+        libCDispatcher.free(userDataAddress);
 
         throw new IllegalStateException("Unexpected result type: " + type);
     }
