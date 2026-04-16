@@ -78,5 +78,18 @@ public final class ZeroGcUserData {
         return (MemorySegment) VH_POINTER.get(GLOBAL_MEMORY, address + OFF_BUFFER);
     }
 
+    public static void write(long address, long id, int fd, OperationType type, MemorySegment buffer) {
+        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
+        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
+        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
+        VH_ADDR.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
+    }
+
+    public static void write(long address, long id, int fd, OperationType type, long buffer) {
+        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
+        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
+        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
+        VH_LONG.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
+    }
 
 }

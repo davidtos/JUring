@@ -509,9 +509,9 @@ class JUringTest {
         jUring.submit();
         Result closeResult = jUring.waitForResult();
 
-        if (closeResult instanceof CloseResult close) {
-            assertEquals(closeId, close.id());
-            assertEquals(0, close.result());
+        if (closeResult instanceof CloseResult(long id, int result)) {
+            assertEquals(closeId, id);
+            assertEquals(0, result);
             
             // Verify the file descriptor is actually closed by trying to read from it
             // This should fail with a bad file descriptor error

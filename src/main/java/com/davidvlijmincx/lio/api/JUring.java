@@ -93,7 +93,7 @@ public class JUring implements AutoCloseable {
         MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, -1, OperationType.OPEN, pathBuffer);
+        long userData = ioUring.allocateUserData(id, -1, OperationType.OPEN, pathBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
 
@@ -109,7 +109,7 @@ public class JUring implements AutoCloseable {
         pathBuffer.set(JAVA_BYTE, filePath.getBytes().length, (byte) 0);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
+        long userData = ioUring.allocateUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareOpenDirectAt(sqe, pathBuffer, flags, mode, fileIndex);
@@ -124,7 +124,7 @@ public class JUring implements AutoCloseable {
 
     public long prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
         long id = ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fileIndex, OperationType.CLOSE, MemorySegment.NULL);
+        long userData = ioUring.allocateUserData(id, fileIndex, OperationType.CLOSE, MemorySegment.NULL);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareCloseDirect(sqe, fileIndex);
@@ -136,7 +136,7 @@ public class JUring implements AutoCloseable {
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions) {
         long address = NativeDispatcher.C.mallocAddress(readSize);
 
-        long userData = ZeroGcUserData.createUserData(address, fdOrIndex, OperationType.READ, address);
+        long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ, address);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
@@ -147,7 +147,7 @@ public class JUring implements AutoCloseable {
 
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
         long id = bytes.address() + ThreadLocalRandom.current().nextLong();;
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
@@ -159,7 +159,7 @@ public class JUring implements AutoCloseable {
     private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, SqeOptions[] sqeOptions) {
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.WRITE, buff);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE, buff);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.setUserData(sqe, userData);
@@ -180,7 +180,7 @@ public class JUring implements AutoCloseable {
         }
 
         long id = registeredBuffer.address();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, readSize, offset, bufferIndex);
@@ -200,7 +200,7 @@ public class JUring implements AutoCloseable {
         }
 
         long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.setUserData(sqe, userData);
@@ -221,7 +221,7 @@ public class JUring implements AutoCloseable {
         }
 
         long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
         ioUring.setUserData(sqe, userData);
@@ -233,7 +233,7 @@ public class JUring implements AutoCloseable {
 
     private long prepareCloseInternal(int fdOrIndex, SqeOptions[] sqeOptions) {
         long id = ThreadLocalRandom.current().nextLong();
-        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.CLOSE, MemorySegment.NULL);
+        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.CLOSE, MemorySegment.NULL);
 
         MemorySegment sqe = getSqe(sqeOptions);
 
