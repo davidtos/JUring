@@ -18,6 +18,7 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.fail;
 
 class JUringTest {
@@ -683,6 +684,86 @@ class JUringTest {
             } else {
                 fail("Result is not a ReadResult");
             }
+        }
+    }
+
+    @Test
+    void bufferPoolExhaustionAndRecovery() {
+        jUring.registerBuffers(64, 2);
+
+        int first = jUring.checkOutBuffer();
+        int second = jUring.checkOutBuffer();
+        assertNotEquals(-1, first);
+        assertNotEquals(-1, second);
+
+        // Pool is now exhausted
+        assertEquals(-1, jUring.checkOutBuffer());
+
+        // Return one buffer and verify it is reusable
+        jUring.checkInBuffer(first);
+        int reused = jUring.checkOutBuffer();
+        assertNotEquals(-1, reused);
+        assertEquals(first, reused);
+
+        jUring.checkInBuffer(reused);
+        jUring.checkInBuffer(second);
+    }
+
+    @Test
+    void readWithCheckedOutBuffer() {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            jUring.registerBuffers(30, 2);
+
+            int bufIdx = jUring.checkOutBuffer();
+            assertNotEquals(-1, bufIdx);
+
+            long id = jUring.prepareReadFixed(fd, 13, 0, bufIdx);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+
+            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+                assertEquals(id, rId);
+                assertEquals(13, rResult);
+
+                buffer.set(JAVA_BYTE, rResult, (byte) 0);
+                assertEquals("Hello, World!", buffer.getString(0));
+            } else {
+                fail("Result is not a ReadResult");
+            }
+
+            jUring.checkInBuffer(bufIdx);
+        }
+    }
+
+    @Test
+    void writeWithCheckedOutBuffer() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        try (FileDescriptor fd = new FileDescriptor(path, WRITE, 0)) {
+            jUring.registerBuffers(30, 2);
+
+            int bufIdx = jUring.checkOutBuffer();
+            assertNotEquals(-1, bufIdx);
+
+            long id = jUring.prepareWriteFixed(fd, inputBytes, 0, bufIdx);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+
+            if (result instanceof WriteResult(long wId, long wResult)) {
+                assertEquals(id, wId);
+                assertEquals(inputBytes.length, wResult);
+            } else {
+                fail("Result is not a WriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+
+            jUring.checkInBuffer(bufIdx);
         }
     }
 }

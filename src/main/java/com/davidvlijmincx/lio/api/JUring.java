@@ -12,15 +12,21 @@ public class JUring implements AutoCloseable {
 
     private final LibUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
+    private int[] freeBufferStack;
+    private int freeBufferTop;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
         registeredBuffers = new ArrayList<>();
+        freeBufferStack = new int[0];
+        freeBufferTop = 0;
     }
 
     private JUring(LibUringDispatcher ioUring){
         this.ioUring = ioUring;
         registeredBuffers = new ArrayList<>();
+        freeBufferStack = new int[0];
+        freeBufferTop = 0;
     }
 
     public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions){
@@ -265,7 +271,33 @@ public class JUring implements AutoCloseable {
         MemorySegment[] result = ioUring.registerBuffers(size, nrOfBuffers);
         registeredBuffers.clear();
         registeredBuffers.addAll(Arrays.asList(result));
+        freeBufferStack = new int[nrOfBuffers];
+        freeBufferTop = nrOfBuffers;
+        for (int i = 0; i < nrOfBuffers; i++) {
+            freeBufferStack[i] = i;
+        }
         return result;
+    }
+
+    /**
+     * Check out a registered buffer index from the pool.
+     * Returns -1 if no buffers are available.
+     */
+    public int checkOutBuffer() {
+        if (freeBufferTop == 0) {
+            return -1;
+        }
+        return freeBufferStack[--freeBufferTop];
+    }
+
+    /**
+     * Return a registered buffer index to the pool after use.
+     */
+    public void checkInBuffer(int bufferIndex) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+        freeBufferStack[freeBufferTop++] = bufferIndex;
     }
 
     public int registerFiles(FileDescriptor... fileDescriptors) {
