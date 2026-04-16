@@ -46,10 +46,14 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     private void sleepInterval() {
+        if (timeout.isNegative() || timeout.isZero()) {
+            Thread.yield();
+            return;
+        }
         try {
             Thread.sleep(timeout);
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
+            Thread.currentThread().interrupt();
         }
     }
 

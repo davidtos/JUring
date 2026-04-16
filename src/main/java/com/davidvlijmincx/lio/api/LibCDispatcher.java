@@ -11,7 +11,7 @@ import java.util.function.IntConsumer;
 import static java.lang.foreign.ValueLayout.ADDRESS;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-record LibCDispatcher(Consumer<Long> freeLong,
+record LibCDispatcher(FreeAddress freeLong,
         Consumer<MemorySegment> free,
                       Open open,
                       IntConsumer close,
@@ -24,7 +24,7 @@ record LibCDispatcher(Consumer<Long> freeLong,
 
     static LibCDispatcher create() {
         return new LibCDispatcher(
-                link(Consumer.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), true),
+                link(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), true),
                 link(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), true),
                 link(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT), true),
                 link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT), true),
@@ -41,8 +41,8 @@ record LibCDispatcher(Consumer<Long> freeLong,
         return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
-    void free(Long address) {
-        freeLong.accept(address);
+    void free(long address) {
+        freeLong.free(address);
     }
 
     void free(MemorySegment address) {
@@ -61,7 +61,7 @@ record LibCDispatcher(Consumer<Long> freeLong,
         return malloc.malloc(size).reinterpret(size);
     }
 
-    Long mallocAddress(long size) {
+    long mallocAddress(long size) {
         return mallocAddress.malloc(size);
     }
 

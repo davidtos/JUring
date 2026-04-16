@@ -35,67 +35,62 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareRead(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadInternal(fd.getFd(), readSize, offset, sqeOptions);
+        return prepareReadInternal(fd.getFd(), readSize, offset, sqeOptions, false);
     }
 
     public long prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadInternal(indexFD, readSize, offset, addFixedFileFlag(sqeOptions));
+        return prepareReadInternal(indexFD, readSize, offset, sqeOptions, true);
     }
 
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, sqeOptions);
+        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, sqeOptions, false);
     }
 
     public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, addFixedFileFlag(sqeOptions));
+        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, sqeOptions, true);
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
+        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions, false);
     }
 
     public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions);
+        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions, false);
     }
 
     public long prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
+        return prepareWriteInternal(indexFD, bytes, offset, sqeOptions, true);
     }
 
     public long prepareWrite(int indexFD, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(indexFD, bytes, offset, addFixedFileFlag(sqeOptions));
+        return prepareWriteInternal(indexFD, bytes, offset, sqeOptions, true);
     }
 
     public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions);
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions, false);
     }
 
     public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, addFixedFileFlag(sqeOptions));
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, sqeOptions, true);
     }
 
     public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions);
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions, false);
     }
 
     public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, addFixedFileFlag(sqeOptions));
-    }
-
-    private SqeOptions[] addFixedFileFlag(SqeOptions[] sqeOptions) {
-        SqeOptions[] allFlags = Arrays.copyOf(sqeOptions, sqeOptions.length + 1);
-        allFlags[sqeOptions.length] = SqeOptions.IOSQE_FIXED_FILE;
-        return allFlags;
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, sqeOptions, true);
     }
 
     public long prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
-        MemorySegment pathBuffer = NativeDispatcher.C.calloc(filePath.getBytes().length + 1);
-        MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
+        byte[] pathBytes = filePath.getBytes();
+        MemorySegment pathBuffer = NativeDispatcher.C.calloc(pathBytes.length + 1);
+        MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, -1, OperationType.OPEN, pathBuffer);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, false);
 
         ioUring.prepareOpenAt(sqe, pathBuffer, flags, mode);
         ioUring.setUserData(sqe, userData);
@@ -104,14 +99,15 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
-        MemorySegment pathBuffer = NativeDispatcher.C.alloc(filePath.getBytes().length + 1);
-        MemorySegment.copy(filePath.getBytes(), 0, pathBuffer, JAVA_BYTE, 0, filePath.getBytes().length);
-        pathBuffer.set(JAVA_BYTE, filePath.getBytes().length, (byte) 0);
+        byte[] pathBytes = filePath.getBytes();
+        MemorySegment pathBuffer = NativeDispatcher.C.alloc(pathBytes.length + 1);
+        MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
+        pathBuffer.set(JAVA_BYTE, pathBytes.length, (byte) 0);
 
         long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareOpenDirectAt(sqe, pathBuffer, flags, mode, fileIndex);
         ioUring.setUserData(sqe, userData);
 
@@ -126,42 +122,42 @@ public class JUring implements AutoCloseable {
         long id = ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fileIndex, OperationType.CLOSE, MemorySegment.NULL);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareCloseDirect(sqe, fileIndex);
         ioUring.setUserData(sqe, userData);
 
         return id;
     }
 
-    private long prepareReadInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions) {
+    private long prepareReadInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
         long address = NativeDispatcher.C.mallocAddress(readSize);
 
         long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ, address);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
 
         return address;
     }
 
-    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        long id = bytes.address() + ThreadLocalRandom.current().nextLong();;
+    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
+        long id = bytes.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
         ioUring.setUserData(sqe, userData);
 
         return id;
     }
 
-    private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, SqeOptions[] sqeOptions) {
+    private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         long id = buff.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE, buff);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.setUserData(sqe, userData);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
         ioUring.prepareWrite(sqe, fdOrIndex, buff, offset);
@@ -169,7 +165,7 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, SqeOptions[] sqeOptions) {
+    private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
         if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
@@ -182,14 +178,14 @@ public class JUring implements AutoCloseable {
         long id = registeredBuffer.address();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, readSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return id;
     }
 
-    private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions) {
+    private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
         if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
@@ -202,7 +198,7 @@ public class JUring implements AutoCloseable {
         long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.setUserData(sqe, userData);
         MemorySegment.copy(bytes, 0, registeredBuffer, JAVA_BYTE, 0, bytes.length);
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.length, offset, bufferIndex);
@@ -210,7 +206,7 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions) {
+    private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
         if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
@@ -223,7 +219,7 @@ public class JUring implements AutoCloseable {
         long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.setUserData(sqe, userData);
         MemorySegment.copy(bytes, 0, registeredBuffer, 0, bytes.byteSize());
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.byteSize(), offset, bufferIndex);
@@ -235,7 +231,7 @@ public class JUring implements AutoCloseable {
         long id = ThreadLocalRandom.current().nextLong();
         long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.CLOSE, MemorySegment.NULL);
 
-        MemorySegment sqe = getSqe(sqeOptions);
+        MemorySegment sqe = getSqe(sqeOptions, false);
 
         ioUring.prepareClose(sqe, fdOrIndex);
         ioUring.setUserData(sqe, userData);
@@ -243,10 +239,12 @@ public class JUring implements AutoCloseable {
         return id;
     }
 
-    private MemorySegment getSqe(SqeOptions[] sqeOptions) {
+    private MemorySegment getSqe(SqeOptions[] sqeOptions, boolean fixedFile) {
         MemorySegment sqe = ioUring.getSqe();
         if (sqe != null) {
-            ioUring.setSqeFlag(sqe, sqeOptions);
+            byte flags = SqeOptions.combineOptions(sqeOptions);
+            if (fixedFile) flags |= SqeOptions.IOSQE_FIXED_FILE.value;
+            ioUring.setSqeFlag(sqe, flags);
         }
         return sqe;
     }
@@ -301,7 +299,10 @@ public class JUring implements AutoCloseable {
     }
 
     public int registerFiles(FileDescriptor... fileDescriptors) {
-        int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
+        int[] fds = new int[fileDescriptors.length];
+        for (int i = 0; i < fileDescriptors.length; i++) {
+            fds[i] = fileDescriptors[i].getFd();
+        }
         return ioUring.registerFiles(fds);
     }
 

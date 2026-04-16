@@ -1,8 +1,5 @@
 package com.davidvlijmincx.lio.api;
 
-import java.util.HashMap;
-import java.util.Map;
-
 public enum OperationType {
     READ(0),
     WRITE(1),
@@ -10,7 +7,7 @@ public enum OperationType {
     OPEN(3),
     CLOSE(4);
 
-    private static final Map<Integer, OperationType> map = new HashMap<>();
+    private static final OperationType[] VALUES = values();
 
     private final int index;
 
@@ -22,13 +19,7 @@ public enum OperationType {
         return index;
     }
 
-    static {
-        for (OperationType pageType : OperationType.values()) {
-            map.put(pageType.index, pageType);
-        }
-    }
-
-    public static OperationType valueOf(int pageType) {
-        return map.get(pageType);
+    public static OperationType valueOf(int index) {
+        return VALUES[index];
     }
 }

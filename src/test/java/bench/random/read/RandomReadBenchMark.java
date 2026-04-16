@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
 @OperationsPerInvocation(2211)
-@Fork(value = 0, jvmArgs = {
+@Fork(value = 1, jvmArgs = {
         "--enable-native-access=ALL-UNNAMED",
 })
 @Threads(25)
@@ -71,7 +71,6 @@ public class RandomReadBenchMark {
             TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.readTasks;
-        final var registeredFileIndices = plan.registeredFileIndices;
 
         int submitted = 0;
         int processed = 0;
@@ -81,7 +80,7 @@ public class RandomReadBenchMark {
         while (processed < readTasks.length) {
             while (submitted - processed < maxInFlight && taskIndex < readTasks.length) {
                 Task task = readTasks[taskIndex];
-                int fileIndex = registeredFileIndices.get(task.pathAsString());
+                int fileIndex = plan.taskFileIndices[taskIndex];
                 jUring.prepareRead(fileIndex, task.bufferSize(), task.offset());
                 submitted++;
                 taskIndex++;

@@ -223,6 +223,10 @@ record LibUringDispatcher(Arena arena,
         setSqeFlag.setSqeFlag(sqe, SqeOptions.combineOptions(flags));
     }
 
+    void setSqeFlag(MemorySegment sqe, byte flags) {
+        setSqeFlag.setSqeFlag(sqe, flags);
+    }
+
     void prepareOpenAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
         prepOpenAt.prepareOpenAt(sqe, AT_FDCWD.value, filePath, flags, mode);
     }
@@ -385,31 +389,34 @@ record LibUringDispatcher(Arena arena,
     }
 
     private Result getResultFromCqe(long userDataAddress, long result) {
-        var type = ZeroGcUserData.getType(userDataAddress);
+        OperationType type = ZeroGcUserData.getType(userDataAddress);
         long id = ZeroGcUserData.getId(userDataAddress);
 
-        if (OperationType.READ.equals(type)) {
-            MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
-            userDataPool.checkIn(userDataAddress);
-            return new ReadResult(id, buffer, result);
-        } else if (OperationType.WRITE.equals(type)) {
-            libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
-            userDataPool.checkIn(userDataAddress);
-            return new WriteResult(id, result);
-        } else if (OperationType.WRITE_FIXED.equals(type)) {
-            userDataPool.checkIn(userDataAddress);
-            return new WriteResult(id, result);
-        } else if (OperationType.OPEN.equals(type)) {
-            libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
-            userDataPool.checkIn(userDataAddress);
-            return new OpenResult(id, (int) result);
-        } else if (OperationType.CLOSE.equals(type)) {
-            userDataPool.checkIn(userDataAddress);
-            return new CloseResult(id, (int) result);
-        }
-
-        userDataPool.checkIn(userDataAddress);
-        throw new IllegalStateException("Unexpected result type: " + type);
+        return switch (type) {
+            case READ -> {
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadResult(id, buffer, result);
+            }
+            case WRITE -> {
+                libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case WRITE_FIXED -> {
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case OPEN -> {
+                libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+                userDataPool.checkIn(userDataAddress);
+                yield new OpenResult(id, (int) result);
+            }
+            case CLOSE -> {
+                userDataPool.checkIn(userDataAddress);
+                yield new CloseResult(id, (int) result);
+            }
+        };
     }
 
     MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {

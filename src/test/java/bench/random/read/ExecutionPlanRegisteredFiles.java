@@ -17,6 +17,7 @@ public class ExecutionPlanRegisteredFiles {
 
     public JUring jUring;
     public Map<String, Integer> registeredFileIndices;
+    public int[] taskFileIndices;
     private List<FileDescriptor> openFileDescriptors;
 
     @Setup
@@ -51,6 +52,11 @@ public class ExecutionPlanRegisteredFiles {
         int result = jUring.registerFiles(fileDescriptors);
         if (result != 0) {
             throw new RuntimeException("Failed to register files: " + result);
+        }
+
+        taskFileIndices = new int[taskCreator.readTasks.length];
+        for (int i = 0; i < taskCreator.readTasks.length; i++) {
+            taskFileIndices[i] = registeredFileIndices.get(taskCreator.readTasks[i].pathAsString());
         }
     }
 
