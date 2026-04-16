@@ -130,8 +130,6 @@ record LibUringDispatcher(Arena arena,
         }
 
         int ring_fd = (int) ringFdHandle.get(ring, 0L);
-        System.out.println("ring_fd = " + ring_fd);
-
 
         return dispatcher;
     }
@@ -236,8 +234,8 @@ record LibUringDispatcher(Arena arena,
         prepareReadAddress.prepareRead(sqe, fd, buffer, size, offset);
     }
 
-    void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int bufferIndex) {
-        prepReadFixed.prepareReadFixed(sqe, fd, buffer, buffer.byteSize(), offset, bufferIndex);
+    void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long nbytes, long offset, int bufferIndex) {
+        prepReadFixed.prepareReadFixed(sqe, fd, buffer, nbytes, offset, bufferIndex);
     }
 
     void prepareWrite(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
@@ -375,24 +373,29 @@ record LibUringDispatcher(Arena arena,
 
     private Result getResultFromCqe(long userDataAddress, long result) {
         var type = ZeroGcUserData.getType(userDataAddress);
-        long id =  ZeroGcUserData.getId(userDataAddress);
+        long id = ZeroGcUserData.getId(userDataAddress);
 
         if (OperationType.READ.equals(type)) {
-            return new ReadResult(id, ZeroGcUserData.getBufferSegment(userDataAddress), result);
+            MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+            libCDispatcher.free(userDataAddress);
+            return new ReadResult(id, buffer, result);
         } else if (OperationType.WRITE.equals(type)) {
             libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+            libCDispatcher.free(userDataAddress);
             return new WriteResult(id, result);
         } else if (OperationType.WRITE_FIXED.equals(type)) {
+            libCDispatcher.free(userDataAddress);
             return new WriteResult(id, result);
         } else if (OperationType.OPEN.equals(type)) {
             libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+            libCDispatcher.free(userDataAddress);
             return new OpenResult(id, (int) result);
         } else if (OperationType.CLOSE.equals(type)) {
+            libCDispatcher.free(userDataAddress);
             return new CloseResult(id, (int) result);
         }
 
         libCDispatcher.free(userDataAddress);
-
         throw new IllegalStateException("Unexpected result type: " + type);
     }
 

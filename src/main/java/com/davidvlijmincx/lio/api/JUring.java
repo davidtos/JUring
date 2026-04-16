@@ -68,8 +68,16 @@ public class JUring implements AutoCloseable {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, addFixedFileFlag(sqeOptions));
     }
 
+    public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions);
+    }
+
+    public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, addFixedFileFlag(sqeOptions));
+    }
+
     private SqeOptions[] addFixedFileFlag(SqeOptions[] sqeOptions) {
-        SqeOptions[] allFlags = new SqeOptions[sqeOptions.length + 1];
+        SqeOptions[] allFlags = Arrays.copyOf(sqeOptions, sqeOptions.length + 1);
         allFlags[sqeOptions.length] = SqeOptions.IOSQE_FIXED_FILE;
         return allFlags;
     }
@@ -169,7 +177,7 @@ public class JUring implements AutoCloseable {
         long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
 
         MemorySegment sqe = getSqe(sqeOptions);
-        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, offset, bufferIndex);
+        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, readSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return id;
@@ -192,6 +200,27 @@ public class JUring implements AutoCloseable {
         ioUring.setUserData(sqe, userData);
         MemorySegment.copy(bytes, 0, registeredBuffer, JAVA_BYTE, 0, bytes.length);
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.length, offset, bufferIndex);
+
+        return id;
+    }
+
+    private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+
+        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
+        if (bytes.byteSize() > registeredBuffer.byteSize()) {
+            throw new IllegalArgumentException("Write size exceeds registered buffer size");
+        }
+
+        long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ZeroGcUserData.createUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
+
+        MemorySegment sqe = getSqe(sqeOptions);
+        ioUring.setUserData(sqe, userData);
+        MemorySegment.copy(bytes, 0, registeredBuffer, 0, bytes.byteSize());
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.byteSize(), offset, bufferIndex);
 
         return id;
     }

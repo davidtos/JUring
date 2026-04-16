@@ -616,11 +616,11 @@ class JUringTest {
 
             MemorySegment[] bufferRegisterResult = jUring.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
-            
+
             long id = jUring.prepareWriteFixed(0, inputBytes, 0, 0);
             jUring.submit();
             Result result = jUring.waitForResult();
-            
+
             if (result instanceof WriteResult(long wId, long wResult)) {
                 assertEquals(id, wId);
                 assertEquals(inputBytes.length, wResult);
@@ -630,6 +630,59 @@ class JUringTest {
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);
+        }
+    }
+
+    @Test
+    void prepareWriteFixedWithMemorySegmentAndRegisteredBuffer() throws IOException {
+        String path = "src/test/resources/write_file";
+        Files.write(Path.of(path), "Clean content".getBytes());
+
+        String input = "Hello, from Java";
+        var inputBytes = input.getBytes();
+
+        try(FileDescriptor fd = new FileDescriptor(path, WRITE, 0)) {
+            jUring.registerBuffers(30, 1);
+
+            ByteBuffer bb = ByteBuffer.allocateDirect(inputBytes.length);
+            bb.put(inputBytes);
+            bb.flip();
+            MemorySegment src = MemorySegment.ofBuffer(bb);
+
+            long id = jUring.prepareWriteFixed(fd, src, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+
+            if (result instanceof WriteResult(long wId, long wResult)) {
+                assertEquals(id, wId);
+                assertEquals(inputBytes.length, wResult);
+            } else {
+                fail("Result is not a WriteResult");
+            }
+
+            String writtenContent = Files.readString(Path.of(path));
+            assertEquals(input, writtenContent);
+        }
+    }
+
+    @Test
+    void prepareReadFixedReadsExactRequestedBytes() {
+        try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            jUring.registerBuffers(30, 1);
+
+            long id = jUring.prepareReadFixed(fd, 7, 0, 0);
+            jUring.submit();
+            Result result = jUring.waitForResult();
+
+            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+                assertEquals(id, rId);
+                assertEquals(7, rResult);
+
+                buffer.set(JAVA_BYTE, rResult, (byte) 0);
+                assertEquals("Hello, ", buffer.getString(0));
+            } else {
+                fail("Result is not a ReadResult");
+            }
         }
     }
 }
