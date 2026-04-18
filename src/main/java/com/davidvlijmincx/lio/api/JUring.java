@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public class JUring implements AutoCloseable {
@@ -371,6 +372,118 @@ public class JUring implements AutoCloseable {
         MemorySegment sqe = getSqe(sqeOptions, false);
 
         ioUring.prepareClose(sqe, fdOrIndex);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public int createServerSocket(int port, int backlog) {
+        int fd = NativeDispatcher.C.createSocket();
+        NativeDispatcher.C.setReuseAddrAndPort(fd);
+        NativeDispatcher.C.bindAndListen(fd, port, backlog);
+        return fd;
+    }
+
+
+    public int createClientSocket() {
+        return NativeDispatcher.C.createSocket();
+    }
+
+    public long prepareAccept(int serverFd, SqeOptions... sqeOptions) {
+        // No per-operation buffer needed when not capturing the peer address.
+        long id = ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, serverFd, OperationType.ACCEPT, MemorySegment.NULL);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareAccept(sqe, serverFd, MemorySegment.NULL, MemorySegment.NULL, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareMultishotAccept(int serverFd, SqeOptions... sqeOptions) {
+        long id = ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, serverFd, OperationType.MULTISHOT_ACCEPT, MemorySegment.NULL);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareMultishotAccept(sqe, serverFd, MemorySegment.NULL, MemorySegment.NULL, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
+        // malloc the sockaddr_in so it outlives this stack frame until CQE arrives
+        MemorySegment addr = NativeDispatcher.C.allocSockaddrIn(host, port);
+
+        long id = addr.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd, OperationType.CONNECT, addr);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareConnect(sqe, fd, addr, (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
+        MemorySegment buf = NativeDispatcher.C.alloc(length);
+
+        long id = buf.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd, OperationType.RECV, buf);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareRecv(sqe, fd, buf, length, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+        long id = buffer.address() + ThreadLocalRandom.current().nextLong();
+        // RECV_EXT: buffer not freed on completion; caller owns it
+        long userData = ioUring.allocateUserData(id, fd, OperationType.RECV_EXT, buffer);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareRecv(sqe, fd, buffer, length, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
+        MemorySegment buf = NativeDispatcher.C.alloc(bytes.length);
+        MemorySegment.copy(bytes, 0, buf, JAVA_BYTE, 0, bytes.length);
+
+        long id = buf.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd, OperationType.SEND, buf);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareSend(sqe, fd, buf, bytes.length, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+        long id = buffer.address() + ThreadLocalRandom.current().nextLong();
+        // SEND_EXT: buffer not freed on completion; caller owns it
+        long userData = ioUring.allocateUserData(id, fd, OperationType.SEND_EXT, buffer);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareSend(sqe, fd, buffer, length, 0);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareCancel(long targetOpId) {
+        long id = ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, -1, OperationType.CANCEL, MemorySegment.NULL);
+
+        MemorySegment sqe = getSqe(new SqeOptions[0], false);
+        // flags = 0: cancel the first matching SQE with this user_data
+        ioUring.prepareCancel(sqe, targetOpId, 0);
         ioUring.setUserData(sqe, userData);
 
         return id;

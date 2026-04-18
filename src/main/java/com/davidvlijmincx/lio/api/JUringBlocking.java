@@ -39,6 +39,10 @@ public class JUringBlocking implements AutoCloseable {
                         case OpenResult r -> ((CompletableFuture<OpenResult>) request).complete(r);
                         case CloseResult r -> ((CompletableFuture<CloseResult>) request).complete(r);
                         case ReadvResult r -> ((CompletableFuture<ReadvResult>) request).complete(r);
+                        case AcceptResult r -> ((CompletableFuture<AcceptResult>) request).complete(r);
+                        case ConnectResult r -> ((CompletableFuture<ConnectResult>) request).complete(r);
+                        case RecvResult r -> ((CompletableFuture<RecvResult>) request).complete(r);
+                        case SendResult r -> ((CompletableFuture<SendResult>) request).complete(r);
                     }
                 });
                 sleepInterval();
@@ -115,6 +119,50 @@ public class JUringBlocking implements AutoCloseable {
 
     public Future<CloseResult> prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareCloseDirect(fileIndex, sqeOptions));
+    }
+
+    // -------------------------------------------------------------------------
+    // Socket helpers (delegated to inner JUring)
+    // -------------------------------------------------------------------------
+
+    public int createServerSocket(int port, int backlog) {
+        return jUring.createServerSocket(port, backlog);
+    }
+
+    public int createClientSocket() {
+        return jUring.createClientSocket();
+    }
+
+    // -------------------------------------------------------------------------
+    // Socket async operations
+    // -------------------------------------------------------------------------
+
+    public Future<AcceptResult> prepareAccept(int serverFd, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareAccept(serverFd, sqeOptions));
+    }
+
+    public long prepareMultishotAccept(int serverFd, SqeOptions... sqeOptions) {
+        return jUring.prepareMultishotAccept(serverFd, sqeOptions);
+    }
+
+    public Future<ConnectResult> prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareConnect(fd, host, port, sqeOptions));
+    }
+
+    public Future<RecvResult> prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareRecv(fd, length, sqeOptions));
+    }
+
+    public Future<RecvResult> prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareRecv(fd, buffer, length, sqeOptions));
+    }
+
+    public Future<SendResult> prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareSend(fd, bytes, sqeOptions));
+    }
+
+    public Future<SendResult> prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+        return prepareAsync(() -> jUring.prepareSend(fd, buffer, length, sqeOptions));
     }
 
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
