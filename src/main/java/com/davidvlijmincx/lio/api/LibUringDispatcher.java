@@ -14,6 +14,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_ATTACH_WQ;
 import static java.lang.foreign.ValueLayout.*;
 
 record LibUringDispatcher(Arena arena,
+                          UserDataPool userDataPool,
                           MemorySegment ring,
                           MemorySegment cqePtr,
                           MemorySegment cqePtrPtr,
@@ -24,6 +25,7 @@ record LibUringDispatcher(Arena arena,
                           PrepareClose prepClose,
                           PrepareCloseDirect prepCloseDirect,
                           PrepareRead prepRead,
+                          PrepareReadAddress prepareReadAddress,
                           PrepareReadFixed prepReadFixed,
                           PrepareWrite prepWrite,
                           PrepareWriteFixed prepWriteFixed,
@@ -119,7 +121,8 @@ record LibUringDispatcher(Arena arena,
     static LibUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
         MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
 
-        LibUringDispatcher dispatcher = getDispatcher(ring);
+        LibUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
+
 
         int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
      //  dispatcher.registerIowqMaxWorkers(1,1);
@@ -127,11 +130,13 @@ record LibUringDispatcher(Arena arena,
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
         }
 
+        int ring_fd = (int) ringFdHandle.get(ring, 0L);
+
         return dispatcher;
     }
 
-    private static LibUringDispatcher getDispatcher(MemorySegment ring) {
-        return new LibUringDispatcher(Arena.ofShared(),ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
+    private static LibUringDispatcher getDispatcher(MemorySegment ring, int queueDepth) {
+        return new LibUringDispatcher(Arena.ofShared(), new UserDataPool(queueDepth), ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -139,6 +144,7 @@ record LibUringDispatcher(Arena arena,
                 libLink(PrepareClose.class, "io_uring_prep_close", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
                 libLink(PrepareCloseDirect.class, "io_uring_prep_close_direct", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT), false),
                 libLink(PrepareRead.class, "io_uring_prep_read", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
+                libLink(PrepareReadAddress.class, "io_uring_prep_read", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_LONG), false),
                 libLink(PrepareReadFixed.class, "io_uring_prep_read_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
                 libLink(PrepareWrite.class, "io_uring_prep_write", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG), false),
                 libLink(PrepareWriteFixed.class, "io_uring_prep_write_fixed", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_LONG, JAVA_INT), false),
@@ -178,7 +184,7 @@ record LibUringDispatcher(Arena arena,
      */
     public LibUringDispatcher getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions){
         MemorySegment ring = NativeDispatcher.C.malloc(ring_layout.byteSize());
-        LibUringDispatcher dispatcher = getDispatcher(ring);
+        LibUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
 
         int ring_fd = (int) ringFdHandle.get(this.ring, 0L); // this. is the parent (ring)
@@ -197,12 +203,28 @@ record LibUringDispatcher(Arena arena,
         return dispatcher;
     }
 
+    long allocateUserData(long id, int fd, OperationType type, MemorySegment buffer) {
+        long address = userDataPool.checkOut();
+        ZeroGcUserData.write(address, id, fd, type, buffer);
+        return address;
+    }
+
+    long allocateUserData(long id, int fd, OperationType type, long buffer) {
+        long address = userDataPool.checkOut();
+        ZeroGcUserData.write(address, id, fd, type, buffer);
+        return address;
+    }
+
     MemorySegment getSqe() {
         return sqe.getSqe(ring);
     }
 
     void setSqeFlag(MemorySegment sqe, SqeOptions... flags) {
         setSqeFlag.setSqeFlag(sqe, SqeOptions.combineOptions(flags));
+    }
+
+    void setSqeFlag(MemorySegment sqe, byte flags) {
+        setSqeFlag.setSqeFlag(sqe, flags);
     }
 
     void prepareOpenAt(MemorySegment sqe, MemorySegment filePath, int flags, int mode) {
@@ -225,8 +247,12 @@ record LibUringDispatcher(Arena arena,
         prepRead.prepareRead(sqe, fd, buffer, buffer.byteSize(), offset);
     }
 
-    void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long offset, int bufferIndex) {
-        prepReadFixed.prepareReadFixed(sqe, fd, buffer, buffer.byteSize(), offset, bufferIndex);
+    void prepareRead(MemorySegment sqe, int fd, long buffer, long size, long offset) {
+        prepareReadAddress.prepareRead(sqe, fd, buffer, size, offset);
+    }
+
+    void prepareReadFixed(MemorySegment sqe, int fd, MemorySegment buffer, long nbytes, long offset, int bufferIndex) {
+        prepReadFixed.prepareReadFixed(sqe, fd, buffer, nbytes, offset, bufferIndex);
     }
 
     void prepareWrite(MemorySegment sqe, int fd, MemorySegment buffer, long offset) {
@@ -303,10 +329,10 @@ record LibUringDispatcher(Arena arena,
             List<Result> ret = new ArrayList<>(count);
 
             for (int i = 0; i < count; i++) {
-                var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
+                long address = cqePtrPtr.getAtIndex(JAVA_LONG, i);
 
-                long userData = nativeCqe.get(JAVA_LONG, 0);
-                int res = nativeCqe.get(JAVA_INT, 8);
+                long userData = ZeroGcCqe.getUserData(address);
+                int res = ZeroGcCqe.getRes(address);
 
                 ret.add(getResultFromCqe(userData, res));
             }
@@ -333,10 +359,9 @@ record LibUringDispatcher(Arena arena,
         List<Result> ret = new ArrayList<>(count);
 
         for (int i = 0; i < count; i++) {
-            var nativeCqe = cqePtrPtr.getAtIndex(ADDRESS, i).reinterpret(io_uring_cqe_layout.byteSize());
-
-            long userData = nativeCqe.get(JAVA_LONG, 0);
-            int res = nativeCqe.get(JAVA_INT, 8);
+            long address =  cqePtrPtr.getAtIndex(JAVA_LONG, i);
+            long userData = ZeroGcCqe.getUserData(address);
+            int res = ZeroGcCqe.getRes(address);
 
             ret.add(getResultFromCqe(userData, res));
         }
@@ -351,40 +376,47 @@ record LibUringDispatcher(Arena arena,
             throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(ret));
         }
 
-        var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0).reinterpret(io_uring_cqe_layout.byteSize());
+        var nativeCqe = cqePtr.getAtIndex(ADDRESS, 0);
 
-        long userData = nativeCqe.get(JAVA_LONG, 0);
-        int res = nativeCqe.get(JAVA_INT, 8);
+        long userDataAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
+
+        long userData = ZeroGcCqe.getUserData(userDataAddress);
+        int res = ZeroGcCqe.getRes(userDataAddress);
 
         Result result = getResultFromCqe(userData, res);
         cqeSeen.cqeSeen(ring, nativeCqe);
         return result;
     }
 
-    private Result getResultFromCqe(long address, long result) {
-        MemorySegment nativeUserData = MemorySegment.ofAddress(address).reinterpret(UserData.getByteSize());
+    private Result getResultFromCqe(long userDataAddress, long result) {
+        OperationType type = ZeroGcUserData.getType(userDataAddress);
+        long id = ZeroGcUserData.getId(userDataAddress);
 
-        OperationType type = UserData.getType(nativeUserData);
-        long id = UserData.getId(nativeUserData);
-
-
-        if (OperationType.READ.equals(type)) {
-            return new ReadResult(id, UserData.getBuffer(nativeUserData), result);
-        } else if (OperationType.WRITE.equals(type)) {
-            libCDispatcher.free(UserData.getBuffer(nativeUserData));
-            return new WriteResult(id, result);
-        } else if (OperationType.WRITE_FIXED.equals(type)) {
-            return new WriteResult(id, result);
-        } else if (OperationType.OPEN.equals(type)) {
-            libCDispatcher.free(UserData.getBuffer(nativeUserData));
-            return new OpenResult(id, (int) result);
-        } else if (OperationType.CLOSE.equals(type)) {
-            return new CloseResult(id, (int) result);
-        }
-
-        libCDispatcher.free(nativeUserData);
-
-        throw new IllegalStateException("Unexpected result type: " + type);
+        return switch (type) {
+            case READ -> {
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadResult(id, buffer, result);
+            }
+            case WRITE -> {
+                libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case WRITE_FIXED -> {
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case OPEN -> {
+                libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+                userDataPool.checkIn(userDataAddress);
+                yield new OpenResult(id, (int) result);
+            }
+            case CLOSE -> {
+                userDataPool.checkIn(userDataAddress);
+                yield new CloseResult(id, (int) result);
+            }
+        };
     }
 
     MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
@@ -434,6 +466,7 @@ record LibUringDispatcher(Arena arena,
     @Override
     public void close() {
         closeRing();
+        userDataPool.close();
         libCDispatcher.free(cqePtr);
         libCDispatcher.free(cqePtrPtr);
         closeArena();

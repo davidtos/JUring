@@ -2,6 +2,7 @@ package bench.random.write;
 
 import bench.random.read.Task;
 import bench.random.read.TaskCreator;
+import com.sun.nio.file.ExtendedOpenOption;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -32,7 +33,7 @@ public class ExecutionPlanPreOpenedWriteFileChannels {
             String filePath = task.pathAsString();
             if (!uniqueFileChannels.containsKey(filePath)) {
                 try {
-                    FileChannel fileChannel = FileChannel.open(task.path(), StandardOpenOption.WRITE);
+                    FileChannel fileChannel = FileChannel.open(task.path(), StandardOpenOption.WRITE, ExtendedOpenOption.DIRECT);
                     uniqueFileChannels.put(filePath, fileChannel);
                     allFileChannels.add(fileChannel);
                 } catch (IOException e) {

@@ -17,17 +17,18 @@ public class ExecutionPlanRegisteredFiles {
 
     public JUring jUring;
     public Map<String, Integer> registeredFileIndices;
+    public int[] taskFileIndices;
     private List<FileDescriptor> openFileDescriptors;
 
     @Setup
     public void setup(TaskCreator taskCreator) {
-        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER,IORING_SETUP_DEFER_TASKRUN, IORING_SETUP_COOP_TASKRUN);
+        jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
         registeredFileIndices = new HashMap<>();
         openFileDescriptors = new ArrayList<>();
 
         Map<String, Integer> uniqueFiles = new HashMap<>();
         int uniqueFileCount = 0;
-        
+
         for (Task task : taskCreator.readTasks) {
             String filePath = task.pathAsString();
             if (!uniqueFiles.containsKey(filePath)) {
@@ -37,10 +38,10 @@ public class ExecutionPlanRegisteredFiles {
 
         FileDescriptor[] fileDescriptors = new FileDescriptor[uniqueFiles.size()];
         int index = 0;
-        
+
         for (Map.Entry<String, Integer> entry : uniqueFiles.entrySet()) {
             String filePath = entry.getKey();
-            
+
             FileDescriptor fd = new FileDescriptor(filePath, LinuxOpenOptions.READ, 0);
             fileDescriptors[index] = fd;
             openFileDescriptors.add(fd);
@@ -51,6 +52,11 @@ public class ExecutionPlanRegisteredFiles {
         int result = jUring.registerFiles(fileDescriptors);
         if (result != 0) {
             throw new RuntimeException("Failed to register files: " + result);
+        }
+
+        taskFileIndices = new int[taskCreator.readTasks.length];
+        for (int i = 0; i < taskCreator.readTasks.length; i++) {
+            taskFileIndices[i] = registeredFileIndices.get(taskCreator.readTasks[i].pathAsString());
         }
     }
 

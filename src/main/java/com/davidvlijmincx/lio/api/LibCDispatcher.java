@@ -1,9 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
-import com.davidvlijmincx.lio.api.functions.Calloc;
-import com.davidvlijmincx.lio.api.functions.Malloc;
-import com.davidvlijmincx.lio.api.functions.Open;
-import com.davidvlijmincx.lio.api.functions.Strerror;
+import com.davidvlijmincx.lio.api.functions.*;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
@@ -12,11 +9,14 @@ import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-record LibCDispatcher(Consumer<MemorySegment> free,
+record LibCDispatcher(FreeAddress freeLong,
+        Consumer<MemorySegment> free,
                       Open open,
                       IntConsumer close,
                       Malloc malloc,
+                      MallocAddress mallocAddress,
                       Strerror strerror,
                       Calloc calloc) {
 
@@ -24,10 +24,12 @@ record LibCDispatcher(Consumer<MemorySegment> free,
 
     static LibCDispatcher create() {
         return new LibCDispatcher(
+                link(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), true),
                 link(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), true),
                 link(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT), true),
                 link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT), true),
                 link(Malloc.class, "malloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG), true),
+                link(MallocAddress.class, "malloc", FunctionDescriptor.of(JAVA_LONG, ValueLayout.JAVA_LONG), true),
                 link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_INT), false),
                 link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG), true)
         );
@@ -37,6 +39,10 @@ record LibCDispatcher(Consumer<MemorySegment> free,
         MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
         MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    void free(long address) {
+        freeLong.free(address);
     }
 
     void free(MemorySegment address) {
@@ -53,6 +59,10 @@ record LibCDispatcher(Consumer<MemorySegment> free,
 
     MemorySegment malloc(long size) {
         return malloc.malloc(size).reinterpret(size);
+    }
+
+    long mallocAddress(long size) {
+        return mallocAddress.malloc(size);
     }
 
     String strerror(int errno) {
