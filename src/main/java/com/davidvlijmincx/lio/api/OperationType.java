@@ -5,7 +5,9 @@ public enum OperationType {
     WRITE(1),
     WRITE_FIXED(2),
     OPEN(3),
-    CLOSE(4);
+    CLOSE(4),
+    READV(5),
+    WRITEV(6);
 
     private static final OperationType[] VALUES = values();
 

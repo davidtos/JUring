@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public class JUring implements AutoCloseable {
 
@@ -80,6 +81,65 @@ public class JUring implements AutoCloseable {
 
     public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, sqeOptions, true);
+    }
+
+    public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, SqeOptions... sqeOptions) {
+        int nrVecs = bufferSizes.length;
+        // outer block: 8 bytes for count + nrVecs iovec structs
+        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
+        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
+
+        // write the count at offset 0
+        block.set(JAVA_LONG, 0, nrVecs);
+
+        // iovec array starts at offset 8
+        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
+
+        for (int i = 0; i < nrVecs; i++) {
+            MemorySegment entry = Iovec.asSlice(iovecArray, i);
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i]);
+            Iovec.iov_base(entry, dataBuf);
+            Iovec.iov_len(entry, bufferSizes[i]);
+        }
+
+        long id = block.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV, block);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareReadv(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
+    }
+
+    public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, SqeOptions... sqeOptions) {
+        int nrVecs = buffers.length;
+        // outer block: 8 bytes for count + nrVecs iovec structs
+        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
+        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
+
+        // write the count at offset 0
+        block.set(JAVA_LONG, 0, nrVecs);
+
+        // iovec array starts at offset 8
+        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
+
+        for (int i = 0; i < nrVecs; i++) {
+            MemorySegment entry = Iovec.asSlice(iovecArray, i);
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(buffers[i].length);
+            MemorySegment.copy(buffers[i], 0, dataBuf, JAVA_BYTE, 0, buffers[i].length);
+            Iovec.iov_base(entry, dataBuf);
+            Iovec.iov_len(entry, buffers[i].length);
+        }
+
+        long id = block.address() + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV, block);
+
+        MemorySegment sqe = getSqe(sqeOptions, false);
+        ioUring.prepareWritev(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.setUserData(sqe, userData);
+
+        return id;
     }
 
     public long prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {

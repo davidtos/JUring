@@ -38,6 +38,7 @@ public class JUringBlocking implements AutoCloseable {
                         case WriteResult r -> ((CompletableFuture<WriteResult>) request).complete(r);
                         case OpenResult r -> ((CompletableFuture<OpenResult>) request).complete(r);
                         case CloseResult r -> ((CompletableFuture<CloseResult>) request).complete(r);
+                        case ReadvResult r -> ((CompletableFuture<ReadvResult>) request).complete(r);
                     }
                 });
                 sleepInterval();
