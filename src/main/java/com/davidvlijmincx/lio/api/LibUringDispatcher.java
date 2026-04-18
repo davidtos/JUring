@@ -461,6 +461,32 @@ record LibUringDispatcher(Arena arena,
                 userDataPool.checkIn(userDataAddress);
                 yield new WriteResult(id, result);
             }
+            case READV_FIXED -> {
+                // block layout: [ long count | iovec[0] | iovec[1] | ... ]
+                // iov_base entries point into registered (kernel-pinned) buffers — do NOT free them
+                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
+                int count = (int) block.get(JAVA_LONG, 0);
+                MemorySegment iovecArray = block.asSlice(Long.BYTES);
+                MemorySegment[] buffers = new MemorySegment[count];
+                for (int i = 0; i < count; i++) {
+                    MemorySegment entry = Iovec.asSlice(iovecArray, i);
+                    long iov_len = Iovec.iov_len(entry);
+                    // reinterpret so the caller can read the bytes; registered memory is not owned here
+                    buffers[i] = Iovec.iov_base(entry).reinterpret(iov_len);
+                }
+                // free only the outer iovec wrapper block; registered buffers are owned by the caller
+                libCDispatcher.free(block);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadvResult(id, buffers, result);
+            }
+            case WRITEV_FIXED -> {
+                // iov_base entries point into registered buffers — do NOT free them
+                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
+                // free only the outer iovec wrapper block
+                libCDispatcher.free(block);
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
         };
     }
 
