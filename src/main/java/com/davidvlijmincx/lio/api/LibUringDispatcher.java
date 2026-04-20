@@ -15,6 +15,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 record LibUringDispatcher(Arena arena,
                           UserDataPool userDataPool,
+                          IovecBlockPool iovecBlockPool,
                           MemorySegment ring,
                           MemorySegment cqePtr,
                           MemorySegment cqePtrPtr,
@@ -45,7 +46,9 @@ record LibUringDispatcher(Arena arena,
                           WaitCqeNr waitCqeNr,
                           RegisterIowqMaxWorkers registerIowqMaxWorkers,
                           PrepareReadv prepReadv,
+                          PrepareReadvAddress prepReadvAddress,
                           PrepareWritev prepWritev,
+                          PrepareWritevAddress prepWritevAddress,
                           PrepareAccept prepAccept,
                           PrepareMultishotAccept prepMultishotAccept,
                           PrepareConnect prepConnect,
@@ -147,7 +150,7 @@ record LibUringDispatcher(Arena arena,
     }
 
     private static LibUringDispatcher getDispatcher(MemorySegment ring, int queueDepth) {
-        return new LibUringDispatcher(Arena.ofShared(), new UserDataPool(queueDepth), ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
+        return new LibUringDispatcher(Arena.ofShared(), new UserDataPool(queueDepth), new IovecBlockPool(queueDepth), ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -175,7 +178,9 @@ record LibUringDispatcher(Arena arena,
                 libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
                 libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false),
                 libLink(PrepareReadv.class, "io_uring_prep_readv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_LONG), false),
+                libLink(PrepareReadvAddress.class, "io_uring_prep_readv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_LONG), false),
                 libLink(PrepareWritev.class, "io_uring_prep_writev", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_LONG), false),
+                libLink(PrepareWritevAddress.class, "io_uring_prep_writev", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_LONG), false),
                 // io_uring_prep_accept(sqe, fd, addr*, addrlen*, flags)
                 libLink(PrepareAccept.class, "io_uring_prep_accept", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, C_POINTER, JAVA_INT), false),
                 // io_uring_prep_multishot_accept(sqe, fd, addr*, addrlen*, flags)
@@ -240,6 +245,14 @@ record LibUringDispatcher(Arena arena,
         return address;
     }
 
+    long allocateIovecBlock() {
+        return iovecBlockPool.checkOut();
+    }
+
+    void releaseIovecBlock(long address) {
+        iovecBlockPool.checkIn(address);
+    }
+
     MemorySegment getSqe() {
         return sqe.getSqe(ring);
     }
@@ -294,6 +307,14 @@ record LibUringDispatcher(Arena arena,
 
     void prepareWritev(MemorySegment sqe, int fd, MemorySegment iovecs, int nrVecs, long offset) {
         prepWritev.prepareWritev(sqe, fd, iovecs, nrVecs, offset);
+    }
+
+    void prepareReadvAddress(MemorySegment sqe, int fd, long iovecAddr, int nrVecs, long offset) {
+        prepReadvAddress.prepareReadv(sqe, fd, iovecAddr, nrVecs, offset);
+    }
+
+    void prepareWritevAddress(MemorySegment sqe, int fd, long iovecAddr, int nrVecs, long offset) {
+        prepWritevAddress.prepareWritev(sqe, fd, iovecAddr, nrVecs, offset);
     }
 
     void prepareAccept(MemorySegment sqe, int fd, MemorySegment addr, MemorySegment addrLen, int flags) {
@@ -478,60 +499,48 @@ record LibUringDispatcher(Arena arena,
             }
             case READV -> {
                 // block layout: [ long count | iovec[0] | iovec[1] | ... ]
-                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
-                int count = (int) block.get(JAVA_LONG, 0);
-                MemorySegment iovecArray = block.asSlice(Long.BYTES);
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
                 MemorySegment[] buffers = new MemorySegment[count];
                 for (int i = 0; i < count; i++) {
-                    MemorySegment entry = Iovec.asSlice(iovecArray, i);
-                    long iov_len = Iovec.iov_len(entry);
-                    // reinterpret iov_base with actual size so the caller can read the bytes
-                    MemorySegment iov_base = Iovec.iov_base(entry).reinterpret(iov_len);
-                    buffers[i] = iov_base;
+                    buffers[i] = ZeroGcIovecBlock.getIovBaseSegment(blockAddr, i);
                 }
-                // free the outer block (count + iovec array); caller owns the data buffers
-                libCDispatcher.free(block);
+                // return the outer block to pool (count + iovec array); caller owns the data buffers
+                iovecBlockPool.checkIn(blockAddr);
                 userDataPool.checkIn(userDataAddress);
                 yield new ReadvResult(id, buffers, result);
             }
             case WRITEV -> {
                 // block layout: [ long count | iovec[0] | iovec[1] | ... ]
-                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
-                int count = (int) block.get(JAVA_LONG, 0);
-                MemorySegment iovecArray = block.asSlice(Long.BYTES);
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
                 for (int i = 0; i < count; i++) {
-                    MemorySegment entry = Iovec.asSlice(iovecArray, i);
-                    // free each individual data buffer
-                    libCDispatcher.free(Iovec.iov_base(entry));
+                    libCDispatcher.free(ZeroGcIovecBlock.getIovBase(blockAddr, i));
                 }
-                // free the outer block
-                libCDispatcher.free(block);
+                // return the outer block to pool
+                iovecBlockPool.checkIn(blockAddr);
                 userDataPool.checkIn(userDataAddress);
                 yield new WriteResult(id, result);
             }
             case READV_FIXED -> {
                 // block layout: [ long count | iovec[0] | iovec[1] | ... ]
                 // iov_base entries point into registered (kernel-pinned) buffers — do NOT free them
-                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
-                int count = (int) block.get(JAVA_LONG, 0);
-                MemorySegment iovecArray = block.asSlice(Long.BYTES);
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
                 MemorySegment[] buffers = new MemorySegment[count];
                 for (int i = 0; i < count; i++) {
-                    MemorySegment entry = Iovec.asSlice(iovecArray, i);
-                    long iov_len = Iovec.iov_len(entry);
-                    // reinterpret so the caller can read the bytes; registered memory is not owned here
-                    buffers[i] = Iovec.iov_base(entry).reinterpret(iov_len);
+                    buffers[i] = ZeroGcIovecBlock.getIovBaseSegment(blockAddr, i);
                 }
-                // free only the outer iovec wrapper block; registered buffers are owned by the caller
-                libCDispatcher.free(block);
+                // return the outer iovec wrapper block to pool; registered buffers are owned by the caller
+                iovecBlockPool.checkIn(blockAddr);
                 userDataPool.checkIn(userDataAddress);
                 yield new ReadvResult(id, buffers, result);
             }
             case WRITEV_FIXED -> {
                 // iov_base entries point into registered buffers — do NOT free them
-                MemorySegment block = ZeroGcUserData.getBufferSegment(userDataAddress);
-                // free only the outer iovec wrapper block
-                libCDispatcher.free(block);
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                // return the outer iovec wrapper block to pool
+                iovecBlockPool.checkIn(blockAddr);
                 userDataPool.checkIn(userDataAddress);
                 yield new WriteResult(id, result);
             }
@@ -652,6 +661,7 @@ record LibUringDispatcher(Arena arena,
     public void close() {
         closeRing();
         userDataPool.close();
+        iovecBlockPool.close();
         libCDispatcher.free(cqePtr);
         libCDispatcher.free(cqePtrPtr);
         closeArena();

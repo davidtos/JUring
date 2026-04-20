@@ -48,8 +48,8 @@ class ReadvWritevTest {
                 MemorySegment[] buffers = readvResult.buffers();
                 assertEquals(2, buffers.length);
 
-                String first = new String(buffers[0].toArray(JAVA_BYTE));
-                String second = new String(buffers[1].toArray(JAVA_BYTE));
+                String first = buffers[0].getString(0);
+                String second = buffers[1].getString(0);
 
                 readvResult.freeBuffers();
 
@@ -110,8 +110,8 @@ class ReadvWritevTest {
                 MemorySegment[] buffers = readvResult.buffers();
                 assertEquals(2, buffers.length);
 
-                String first = new String(buffers[0].toArray(JAVA_BYTE));
-                String second = new String(buffers[1].toArray(JAVA_BYTE), 0, (int)(readvResult.result() - 7));
+                String first = buffers[0].getString(0);
+                String second = buffers[1].getString(0);
 
                 assertEquals("Hello, ", first);
                 assertEquals("World!", second);

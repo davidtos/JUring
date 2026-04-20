@@ -86,28 +86,24 @@ public class JUring implements AutoCloseable {
 
     public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, SqeOptions... sqeOptions) {
         int nrVecs = bufferSizes.length;
-        // outer block: 8 bytes for count + nrVecs iovec structs
-        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
-        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
-
-        // write the count at offset 0
-        block.set(JAVA_LONG, 0, nrVecs);
-
-        // iovec array starts at offset 8
-        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
-
-        for (int i = 0; i < nrVecs; i++) {
-            MemorySegment entry = Iovec.asSlice(iovecArray, i);
-            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i]);
-            Iovec.iov_base(entry, dataBuf);
-            Iovec.iov_len(entry, bufferSizes[i]);
+        if (nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
         }
 
-        long id = block.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV, block);
+        long blockAddr = ioUring.allocateIovecBlock();
+        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+
+        for (int i = 0; i < nrVecs; i++) {
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i]);
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, dataBuf.address());
+            ZeroGcIovecBlock.setIovLen(blockAddr, i, bufferSizes[i]);
+        }
+
+        long id = blockAddr + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV, blockAddr);
 
         MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareReadv(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return id;
@@ -115,34 +111,29 @@ public class JUring implements AutoCloseable {
 
     public long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset, SqeOptions... sqeOptions) {
         int nrVecs = bufferIndices.length;
+        if (nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        }
 
-        // outer block: 8 bytes for count + nrVecs iovec structs
-        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
-        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
-
-        // write the count at offset 0
-        block.set(JAVA_LONG, 0, nrVecs);
-
-        // iovec array starts at offset 8
-        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
+        long blockAddr = ioUring.allocateIovecBlock();
+        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
             if (idx < 0 || idx >= registeredBuffers.size()) {
-                NativeDispatcher.C.free(block);
+                ioUring.releaseIovecBlock(blockAddr);
                 throw new IllegalArgumentException("Buffer index out of range: " + idx);
             }
             MemorySegment registeredBuffer = registeredBuffers.get(idx);
-            MemorySegment entry = Iovec.asSlice(iovecArray, i);
-            Iovec.iov_base(entry, registeredBuffer);
-            Iovec.iov_len(entry, registeredBuffer.byteSize());
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
+            ZeroGcIovecBlock.setIovLen(blockAddr, i, registeredBuffer.byteSize());
         }
 
-        long id = block.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV_FIXED, block);
+        long id = blockAddr + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV_FIXED, blockAddr);
 
         MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareReadv(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return id;
@@ -153,38 +144,33 @@ public class JUring implements AutoCloseable {
         if (lengths.length != nrVecs) {
             throw new IllegalArgumentException("lengths array must have the same length as bufferIndices");
         }
+        if (nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        }
 
-        // outer block: 8 bytes for count + nrVecs iovec structs
-        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
-        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
-
-        // write the count at offset 0
-        block.set(JAVA_LONG, 0, nrVecs);
-
-        // iovec array starts at offset 8
-        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
+        long blockAddr = ioUring.allocateIovecBlock();
+        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
             if (idx < 0 || idx >= registeredBuffers.size()) {
-                NativeDispatcher.C.free(block);
+                ioUring.releaseIovecBlock(blockAddr);
                 throw new IllegalArgumentException("Buffer index out of range: " + idx);
             }
             MemorySegment registeredBuffer = registeredBuffers.get(idx);
             if (lengths[i] > registeredBuffer.byteSize()) {
-                NativeDispatcher.C.free(block);
+                ioUring.releaseIovecBlock(blockAddr);
                 throw new IllegalArgumentException("Length " + lengths[i] + " exceeds registered buffer size for index " + idx);
             }
-            MemorySegment entry = Iovec.asSlice(iovecArray, i);
-            Iovec.iov_base(entry, registeredBuffer);
-            Iovec.iov_len(entry, lengths[i]);
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
+            ZeroGcIovecBlock.setIovLen(blockAddr, i, lengths[i]);
         }
 
-        long id = block.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV_FIXED, block);
+        long id = blockAddr + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV_FIXED, blockAddr);
 
         MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareWritev(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return id;
@@ -192,29 +178,25 @@ public class JUring implements AutoCloseable {
 
     public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, SqeOptions... sqeOptions) {
         int nrVecs = buffers.length;
-        // outer block: 8 bytes for count + nrVecs iovec structs
-        long blockSize = Long.BYTES + (long) nrVecs * Iovec.sizeof();
-        MemorySegment block = NativeDispatcher.C.alloc(blockSize);
-
-        // write the count at offset 0
-        block.set(JAVA_LONG, 0, nrVecs);
-
-        // iovec array starts at offset 8
-        MemorySegment iovecArray = block.asSlice(Long.BYTES, (long) nrVecs * Iovec.sizeof());
-
-        for (int i = 0; i < nrVecs; i++) {
-            MemorySegment entry = Iovec.asSlice(iovecArray, i);
-            MemorySegment dataBuf = NativeDispatcher.C.alloc(buffers[i].length);
-            MemorySegment.copy(buffers[i], 0, dataBuf, JAVA_BYTE, 0, buffers[i].length);
-            Iovec.iov_base(entry, dataBuf);
-            Iovec.iov_len(entry, buffers[i].length);
+        if (nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
         }
 
-        long id = block.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV, block);
+        long blockAddr = ioUring.allocateIovecBlock();
+        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+
+        for (int i = 0; i < nrVecs; i++) {
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(buffers[i].length);
+            MemorySegment.copy(buffers[i], 0, dataBuf, JAVA_BYTE, 0, buffers[i].length);
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, dataBuf.address());
+            ZeroGcIovecBlock.setIovLen(blockAddr, i, buffers[i].length);
+        }
+
+        long id = blockAddr + ThreadLocalRandom.current().nextLong();
+        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV, blockAddr);
 
         MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareWritev(sqe, fd.getFd(), iovecArray, nrVecs, offset);
+        ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return id;
