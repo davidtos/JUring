@@ -23,6 +23,7 @@ public class ExecutionPlanRegisteredFiles {
     @Setup
     public void setup(TaskCreator taskCreator) {
         jUring = new JUring(2500, IORING_SETUP_SINGLE_ISSUER);
+        jUring.registerBuffers(5000, 300);
         registeredFileIndices = new HashMap<>();
         openFileDescriptors = new ArrayList<>();
 

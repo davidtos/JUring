@@ -375,7 +375,7 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
             
-            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
                 assertEquals(id, rId);
                 assertEquals(13, rResult);
                 
@@ -400,7 +400,7 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
             
-            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
                 assertEquals(id, rId);
                 assertEquals(13, rResult);
                 
@@ -675,7 +675,7 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
                 assertEquals(id, rId);
                 assertEquals(7, rResult);
 

@@ -35,6 +35,7 @@ public class JUringBlocking implements AutoCloseable {
                     var request = requests.remove(result.id());
                     switch (result) {
                         case ReadResult r -> ((CompletableFuture<ReadResult>) request).complete(r);
+                        case ReadResultFixed r -> ((CompletableFuture<ReadResultFixed>) request).complete(r);
                         case WriteResult r -> ((CompletableFuture<WriteResult>) request).complete(r);
                         case OpenResult r -> ((CompletableFuture<OpenResult>) request).complete(r);
                         case CloseResult r -> ((CompletableFuture<CloseResult>) request).complete(r);
@@ -85,11 +86,11 @@ public class JUringBlocking implements AutoCloseable {
         return prepareAsync(() -> jUring.prepareRead(indexFD, readSize, offset, sqeOptions));
     }
 
-    public Future<ReadResult> prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<ReadResultFixed> prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareReadFixed(fd, readSize, offset, bufferIndex, sqeOptions));
     }
 
-    public Future<ReadResult> prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<ReadResultFixed> prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareReadFixed(indexFD, readSize, offset, bufferIndex, sqeOptions));
     }
 

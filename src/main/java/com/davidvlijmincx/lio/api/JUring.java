@@ -7,8 +7,6 @@ import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public class JUring implements AutoCloseable {
 
@@ -524,9 +522,6 @@ public class JUring implements AutoCloseable {
      * Return a registered buffer index to the pool after use.
      */
     public void checkInBuffer(int bufferIndex) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
-            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
-        }
         freeBufferStack[freeBufferTop++] = bufferIndex;
     }
 

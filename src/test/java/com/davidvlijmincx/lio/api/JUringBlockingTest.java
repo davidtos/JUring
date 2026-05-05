@@ -270,7 +270,7 @@ class JUringBlockingTest {
             
             var future = jUringBlocking.prepareReadFixed(fd, 13, 0, 0);
             jUringBlocking.submit();
-            ReadResult result = future.get();
+            ReadResultFixed result = future.get();
             
             assertEquals(13, result.result());
 
@@ -285,6 +285,11 @@ class JUringBlockingTest {
         return result.buffer().getString(0);
     }
 
+    private static String getString(ReadResultFixed result, long endOfStringIndex) {
+        result.buffer().set(JAVA_BYTE, endOfStringIndex, (byte) 0);
+        return result.buffer().getString(0);
+    }
+
     @Test
     void prepareReadFixedWithRegisteredFileAndBuffer() throws ExecutionException, InterruptedException {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
@@ -295,7 +300,7 @@ class JUringBlockingTest {
             
             var future = jUringBlocking.prepareReadFixed(0, 13, 0, 0);
             jUringBlocking.submit();
-            ReadResult result = future.get();
+            ReadResultFixed result = future.get();
             
             assertEquals(13, result.result());
 
