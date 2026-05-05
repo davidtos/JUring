@@ -721,9 +721,10 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResult(long rId, MemorySegment buffer, long rResult)) {
+            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int bufferIndex)) {
                 assertEquals(id, rId);
                 assertEquals(13, rResult);
+                assertEquals(bufIdx, bufferIndex);
 
                 buffer.set(JAVA_BYTE, rResult, (byte) 0);
                 assertEquals("Hello, World!", buffer.getString(0));

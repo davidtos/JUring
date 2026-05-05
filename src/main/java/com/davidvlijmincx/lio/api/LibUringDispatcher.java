@@ -239,6 +239,12 @@ record LibUringDispatcher(Arena arena,
         return address;
     }
 
+    long allocateUserDataFixed(long id, int fd, OperationType type, MemorySegment buffer, int bufferIndex) {
+        long address = userDataPool.checkOut();
+        ZeroGcUserData.write(address, id, fd, type, buffer, bufferIndex);
+        return address;
+    }
+
     long allocateUserData(long id, int fd, OperationType type, long buffer) {
         long address = userDataPool.checkOut();
         ZeroGcUserData.write(address, id, fd, type, buffer);
@@ -474,6 +480,11 @@ record LibUringDispatcher(Arena arena,
         long id = ZeroGcUserData.getId(userDataAddress);
 
         return switch (type) {
+            case READ_FIXED -> {
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadResultFixed(id, buffer, result, ZeroGcUserData.getBufferIndex(userDataAddress));
+            }
             case READ -> {
                 MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
                 userDataPool.checkIn(userDataAddress);

@@ -296,7 +296,7 @@ public class JUring implements AutoCloseable {
         }
 
         long id = registeredBuffer.address();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.READ, registeredBuffer);
+        long userData = ioUring.allocateUserDataFixed(id, fdOrIndex, OperationType.READ_FIXED, registeredBuffer, bufferIndex);
 
         MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, readSize, offset, bufferIndex);

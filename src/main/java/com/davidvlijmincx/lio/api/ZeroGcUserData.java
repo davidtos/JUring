@@ -14,13 +14,15 @@ public final class ZeroGcUserData {
             JAVA_LONG.withName("id"),
             C_POINTER.withName("buffer"),
             JAVA_INT.withName("fd"),
-            JAVA_INT.withName("type")
+            JAVA_INT.withName("type"),
+            JAVA_INT.withName("bindex")
     ).withName("UserData");
 
     private static final long OFF_ID = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("id"));
     private static final long OFF_BUFFER = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("buffer"));
     private static final long OFF_FD = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("fd"));
     private static final long OFF_TYPE = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("type"));
+    private static final long BUFFER_INDEX = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bindex"));
 
 
     private static final VarHandle VH_LONG = JAVA_LONG.varHandle();
@@ -78,6 +80,10 @@ public final class ZeroGcUserData {
         return (MemorySegment) VH_POINTER.get(GLOBAL_MEMORY, address + OFF_BUFFER);
     }
 
+    public static int getBufferIndex(long address) {
+        return (int) VH_INT.get(GLOBAL_MEMORY, address + BUFFER_INDEX);
+    }
+
     public static void write(long address, long id, int fd, OperationType type, MemorySegment buffer) {
         VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
         VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
@@ -90,6 +96,11 @@ public final class ZeroGcUserData {
         VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
         VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
         VH_LONG.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
+    }
+
+    public static void write(long address, long id, int fd, OperationType type, MemorySegment buffer, int bufferIndex) {
+        write(address, id, fd, type, buffer);
+        VH_INT.set(GLOBAL_MEMORY, address + BUFFER_INDEX, bufferIndex);
     }
 
 }
