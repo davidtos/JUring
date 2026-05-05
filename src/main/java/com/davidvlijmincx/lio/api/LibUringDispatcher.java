@@ -15,6 +15,7 @@ import static java.lang.foreign.ValueLayout.*;
 
 record LibUringDispatcher(Arena arena,
                           UserDataPool userDataPool,
+                          IovecBlockPool iovecBlockPool,
                           MemorySegment ring,
                           MemorySegment cqePtr,
                           MemorySegment cqePtrPtr,
@@ -43,7 +44,20 @@ record LibUringDispatcher(Arena arena,
                           RegisterFilesUpdate registerFilesUpdate,
                           CqAdvance cqAdvance,
                           WaitCqeNr waitCqeNr,
-                          RegisterIowqMaxWorkers registerIowqMaxWorkers) implements AutoCloseable {
+                          RegisterIowqMaxWorkers registerIowqMaxWorkers,
+                          PrepareReadv prepReadv,
+                          PrepareReadvAddress prepReadvAddress,
+                          PrepareWritev prepWritev,
+                          PrepareWritevAddress prepWritevAddress,
+                          PrepareAccept prepAccept,
+                          PrepareMultishotAccept prepMultishotAccept,
+                          PrepareConnect prepConnect,
+                          PrepareRecv prepRecv,
+                          PrepareSend prepSend,
+                          PrepareCancel prepCancel) implements AutoCloseable {
+
+    /** IORING_CQE_F_MORE: set in cqe->flags when a multishot SQE will generate more CQEs. */
+    static final int IORING_CQE_F_MORE = 1 << 1;
 
     private static final AddressLayout C_POINTER = ADDRESS.withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, JAVA_BYTE));
     private static final Linker linker = Linker.nativeLinker();
@@ -136,7 +150,7 @@ record LibUringDispatcher(Arena arena,
     }
 
     private static LibUringDispatcher getDispatcher(MemorySegment ring, int queueDepth) {
-        return new LibUringDispatcher(Arena.ofShared(), new UserDataPool(queueDepth), ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
+        return new LibUringDispatcher(Arena.ofShared(), new UserDataPool(queueDepth), new IovecBlockPool(queueDepth), ring, libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()), libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 libLink(GetSqe.class, "io_uring_get_sqe", FunctionDescriptor.of(ADDRESS, ADDRESS), true),
                 libLink(SetSqeFlag.class, "io_uring_sqe_set_flags", FunctionDescriptor.ofVoid(C_POINTER, JAVA_BYTE), true),
                 libLink(PrepOpenAt.class, "io_uring_prep_openat", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_INT), false),
@@ -162,7 +176,23 @@ record LibUringDispatcher(Arena arena,
                 libLink(RegisterFilesUpdate.class, "io_uring_register_files_update", FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, C_POINTER, JAVA_INT), false),
                 libLink(CqAdvance.class, "io_uring_cq_advance", FunctionDescriptor.ofVoid(ADDRESS, JAVA_INT), true),
                 libLink(WaitCqeNr.class, "io_uring_wait_cqe_nr", FunctionDescriptor.of(JAVA_INT, ADDRESS, C_POINTER, JAVA_INT), false),
-                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false)
+                libLink(RegisterIowqMaxWorkers.class, "io_uring_register_iowq_max_workers", FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS), false),
+                libLink(PrepareReadv.class, "io_uring_prep_readv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_LONG), false),
+                libLink(PrepareReadvAddress.class, "io_uring_prep_readv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_LONG), false),
+                libLink(PrepareWritev.class, "io_uring_prep_writev", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT, JAVA_LONG), false),
+                libLink(PrepareWritevAddress.class, "io_uring_prep_writev", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, JAVA_LONG, JAVA_INT, JAVA_LONG), false),
+                // io_uring_prep_accept(sqe, fd, addr*, addrlen*, flags)
+                libLink(PrepareAccept.class, "io_uring_prep_accept", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, C_POINTER, JAVA_INT), false),
+                // io_uring_prep_multishot_accept(sqe, fd, addr*, addrlen*, flags)
+                libLink(PrepareMultishotAccept.class, "io_uring_prep_multishot_accept", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, C_POINTER, JAVA_INT), false),
+                // io_uring_prep_connect(sqe, fd, addr*, addrlen)
+                libLink(PrepareConnect.class, "io_uring_prep_connect", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_INT), false),
+                // io_uring_prep_recv(sqe, fd, buf*, len, flags)
+                libLink(PrepareRecv.class, "io_uring_prep_recv", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false),
+                // io_uring_prep_send(sqe, fd, buf*, len, flags)
+                libLink(PrepareSend.class, "io_uring_prep_send", FunctionDescriptor.ofVoid(C_POINTER, JAVA_INT, C_POINTER, JAVA_LONG, JAVA_INT), false),
+                // io_uring_prep_cancel64(sqe, user_data, flags) — cancel by 64-bit user_data value
+                libLink(PrepareCancel.class, "io_uring_prep_cancel64", FunctionDescriptor.ofVoid(C_POINTER, JAVA_LONG, JAVA_INT), false)
         );
     }
 
@@ -209,10 +239,24 @@ record LibUringDispatcher(Arena arena,
         return address;
     }
 
+    long allocateUserDataFixed(long id, int fd, OperationType type, MemorySegment buffer, int bufferIndex) {
+        long address = userDataPool.checkOut();
+        ZeroGcUserData.write(address, id, fd, type, buffer, bufferIndex);
+        return address;
+    }
+
     long allocateUserData(long id, int fd, OperationType type, long buffer) {
         long address = userDataPool.checkOut();
         ZeroGcUserData.write(address, id, fd, type, buffer);
         return address;
+    }
+
+    long allocateIovecBlock() {
+        return iovecBlockPool.checkOut();
+    }
+
+    void releaseIovecBlock(long address) {
+        iovecBlockPool.checkIn(address);
     }
 
     MemorySegment getSqe() {
@@ -261,6 +305,46 @@ record LibUringDispatcher(Arena arena,
 
     void prepareWriteFixed(MemorySegment sqe, int fd, MemorySegment buffer, long nbytes, long offset, int bufferIndex) {
         prepWriteFixed.prepareWriteFixed(sqe, fd, buffer, nbytes, offset, bufferIndex);
+    }
+
+    void prepareReadv(MemorySegment sqe, int fd, MemorySegment iovecs, int nrVecs, long offset) {
+        prepReadv.prepareReadv(sqe, fd, iovecs, nrVecs, offset);
+    }
+
+    void prepareWritev(MemorySegment sqe, int fd, MemorySegment iovecs, int nrVecs, long offset) {
+        prepWritev.prepareWritev(sqe, fd, iovecs, nrVecs, offset);
+    }
+
+    void prepareReadvAddress(MemorySegment sqe, int fd, long iovecAddr, int nrVecs, long offset) {
+        prepReadvAddress.prepareReadv(sqe, fd, iovecAddr, nrVecs, offset);
+    }
+
+    void prepareWritevAddress(MemorySegment sqe, int fd, long iovecAddr, int nrVecs, long offset) {
+        prepWritevAddress.prepareWritev(sqe, fd, iovecAddr, nrVecs, offset);
+    }
+
+    void prepareAccept(MemorySegment sqe, int fd, MemorySegment addr, MemorySegment addrLen, int flags) {
+        prepAccept.prepareAccept(sqe, fd, addr, addrLen, flags);
+    }
+
+    void prepareMultishotAccept(MemorySegment sqe, int fd, MemorySegment addr, MemorySegment addrLen, int flags) {
+        prepMultishotAccept.prepareMultishotAccept(sqe, fd, addr, addrLen, flags);
+    }
+
+    void prepareConnect(MemorySegment sqe, int fd, MemorySegment addr, int addrLen) {
+        prepConnect.prepareConnect(sqe, fd, addr, addrLen);
+    }
+
+    void prepareRecv(MemorySegment sqe, int fd, MemorySegment buf, long len, int flags) {
+        prepRecv.prepareRecv(sqe, fd, buf, len, flags);
+    }
+
+    void prepareSend(MemorySegment sqe, int fd, MemorySegment buf, long len, int flags) {
+        prepSend.prepareSend(sqe, fd, buf, len, flags);
+    }
+
+    void prepareCancel(MemorySegment sqe, long userDataToCancel, int flags) {
+        prepCancel.prepareCancel(sqe, userDataToCancel, flags);
     }
 
     void submit() {
@@ -333,8 +417,9 @@ record LibUringDispatcher(Arena arena,
 
                 long userData = ZeroGcCqe.getUserData(address);
                 int res = ZeroGcCqe.getRes(address);
+                int cqeFlags = ZeroGcCqe.getFlags(address);
 
-                ret.add(getResultFromCqe(userData, res));
+                ret.add(getResultFromCqe(userData, res, cqeFlags));
             }
 
             cqAdvance.peekBatchCqe(ring, count);
@@ -362,8 +447,9 @@ record LibUringDispatcher(Arena arena,
             long address =  cqePtrPtr.getAtIndex(JAVA_LONG, i);
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
+            int cqeFlags = ZeroGcCqe.getFlags(address);
 
-            ret.add(getResultFromCqe(userData, res));
+            ret.add(getResultFromCqe(userData, res, cqeFlags));
         }
 
         cqAdvance.peekBatchCqe(ring, count);
@@ -382,17 +468,23 @@ record LibUringDispatcher(Arena arena,
 
         long userData = ZeroGcCqe.getUserData(userDataAddress);
         int res = ZeroGcCqe.getRes(userDataAddress);
+        int cqeFlags = ZeroGcCqe.getFlags(userDataAddress);
 
-        Result result = getResultFromCqe(userData, res);
+        Result result = getResultFromCqe(userData, res, cqeFlags);
         cqeSeen.cqeSeen(ring, nativeCqe);
         return result;
     }
 
-    private Result getResultFromCqe(long userDataAddress, long result) {
+    private Result getResultFromCqe(long userDataAddress, long result, int cqeFlags) {
         OperationType type = ZeroGcUserData.getType(userDataAddress);
         long id = ZeroGcUserData.getId(userDataAddress);
 
         return switch (type) {
+            case READ_FIXED -> {
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadResultFixed(id, buffer, result, ZeroGcUserData.getBufferIndex(userDataAddress));
+            }
             case READ -> {
                 MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
                 userDataPool.checkIn(userDataAddress);
@@ -413,6 +505,119 @@ record LibUringDispatcher(Arena arena,
                 yield new OpenResult(id, (int) result);
             }
             case CLOSE -> {
+                userDataPool.checkIn(userDataAddress);
+                yield new CloseResult(id, (int) result);
+            }
+            case READV -> {
+                // block layout: [ long count | iovec[0] | iovec[1] | ... ]
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
+                MemorySegment[] buffers = new MemorySegment[count];
+                for (int i = 0; i < count; i++) {
+                    buffers[i] = ZeroGcIovecBlock.getIovBaseSegment(blockAddr, i);
+                }
+                // return the outer block to pool (count + iovec array); caller owns the data buffers
+                iovecBlockPool.checkIn(blockAddr);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadvResult(id, buffers, result);
+            }
+            case WRITEV -> {
+                // block layout: [ long count | iovec[0] | iovec[1] | ... ]
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
+                for (int i = 0; i < count; i++) {
+                    libCDispatcher.free(ZeroGcIovecBlock.getIovBase(blockAddr, i));
+                }
+                // return the outer block to pool
+                iovecBlockPool.checkIn(blockAddr);
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case READV_FIXED -> {
+                // block layout: [ long count | iovec[0] | iovec[1] | ... ]
+                // iov_base entries point into registered (kernel-pinned) buffers — do NOT free them
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
+                MemorySegment[] buffers = new MemorySegment[count];
+                for (int i = 0; i < count; i++) {
+                    buffers[i] = ZeroGcIovecBlock.getIovBaseSegment(blockAddr, i);
+                }
+                // return the outer iovec wrapper block to pool; registered buffers are owned by the caller
+                iovecBlockPool.checkIn(blockAddr);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadvResult(id, buffers, result);
+            }
+            case WRITEV_FIXED -> {
+                // iov_base entries point into registered buffers — do NOT free them
+                long blockAddr = ZeroGcUserData.getBufferAddress(userDataAddress);
+                // return the outer iovec wrapper block to pool
+                iovecBlockPool.checkIn(blockAddr);
+                userDataPool.checkIn(userDataAddress);
+                yield new WriteResult(id, result);
+            }
+            case ACCEPT -> {
+                // For accept, buffer holds the malloc'd sockaddr_in when address capture
+                // was requested, or 0 (NULL) when called with addr=NULL.
+                long addrAddress = ZeroGcUserData.getBufferAddress(userDataAddress);
+                if (addrAddress != 0L) {
+                    libCDispatcher.free(addrAddress);
+                }
+                userDataPool.checkIn(userDataAddress);
+                // result is the accepted fd (>= 0) or negative errno
+                yield new AcceptResult(id, (int) result);
+            }
+            case MULTISHOT_ACCEPT -> {
+                // IORING_CQE_F_MORE (bit 1) set means the multishot SQE is still active —
+                // do NOT free user_data yet; more CQEs will arrive for this SQE.
+                boolean morecoming = (cqeFlags & IORING_CQE_F_MORE) != 0;
+                if (!morecoming) {
+                    // Multishot is done (cancelled, error, or final completion) — free resources.
+                    long addrAddress = ZeroGcUserData.getBufferAddress(userDataAddress);
+                    if (addrAddress != 0L) {
+                        libCDispatcher.free(addrAddress);
+                    }
+                    userDataPool.checkIn(userDataAddress);
+                }
+                // result is the accepted fd (>= 0) or negative errno
+                yield new AcceptResult(id, (int) result);
+            }
+            case CONNECT -> {
+                // buffer holds the malloc'd sockaddr_in; free it now
+                long connectAddrAddress = ZeroGcUserData.getBufferAddress(userDataAddress);
+                if (connectAddrAddress != 0L) {
+                    libCDispatcher.free(connectAddrAddress);
+                }
+                userDataPool.checkIn(userDataAddress);
+                yield new ConnectResult(id, (int) result);
+            }
+            case RECV -> {
+                // malloc'd buffer — returned to caller in RecvResult; caller frees via freeBuffer()
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new RecvResult(id, buffer, result);
+            }
+            case RECV_EXT -> {
+                // caller-supplied buffer — not freed here
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new RecvResult(id, buffer, result);
+            }
+            case SEND -> {
+                // malloc'd buffer — free it now; caller doesn't need it
+                libCDispatcher.free(ZeroGcUserData.getBufferAddress(userDataAddress));
+                userDataPool.checkIn(userDataAddress);
+                yield new SendResult(id, result);
+            }
+            case SEND_EXT -> {
+                // caller-supplied buffer — not freed here
+                userDataPool.checkIn(userDataAddress);
+                yield new SendResult(id, result);
+            }
+            case CANCEL -> {
+                // CQE for the cancel-request SQE itself.
+                // result == 0: cancellation was submitted successfully.
+                // result == -ENOENT: target not found (already completed).
+                // result == -EALREADY: target is already completing.
                 userDataPool.checkIn(userDataAddress);
                 yield new CloseResult(id, (int) result);
             }
@@ -467,6 +672,7 @@ record LibUringDispatcher(Arena arena,
     public void close() {
         closeRing();
         userDataPool.close();
+        iovecBlockPool.close();
         libCDispatcher.free(cqePtr);
         libCDispatcher.free(cqePtrPtr);
         closeArena();

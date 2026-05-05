@@ -5,6 +5,7 @@ import bench.ExecutionPlanJUring;
 import com.davidvlijmincx.lio.api.*;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.profile.AsyncProfiler;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -34,13 +35,13 @@ public class RandomReadBenchMark {
         Options opt = new OptionsBuilder()
                 .include(RandomReadBenchMark.class.getSimpleName())
                 .forks(1)
-                // .addProfiler("perf")
+             //   .addProfiler(AsyncProfiler.class, "event=wall;simple=true;output=flamegraph;dir=./profiler-results")
                 .build();
 
         new Runner(opt).run();
     }
 
-    // @Benchmark()
+    @Benchmark()
     public void juringBlockingWithVirtualThreads(Blackhole blackhole, ExecutionPlanBlocking plan,
             TaskCreator randomReadTaskCreator) {
         final var jUringBlocking = plan.jUringBlocking;
@@ -67,8 +68,7 @@ public class RandomReadBenchMark {
     }
 
     @Benchmark
-    public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan,
-            TaskCreator randomReadTaskCreator) {
+    public void registeredFiles(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.readTasks;
 
@@ -106,7 +106,50 @@ public class RandomReadBenchMark {
 
     }
 
-    // @Benchmark
+
+    @Benchmark
+    public void registeredFilesAndBuffer(Blackhole blackhole, ExecutionPlanRegisteredFiles plan, TaskCreator randomReadTaskCreator) {
+        final var jUring = plan.jUring;
+        final var readTasks = randomReadTaskCreator.readTasks;
+
+        int submitted = 0;
+        int processed = 0;
+        int taskIndex = 0;
+        final int maxInFlight = 256;
+
+        while (processed < readTasks.length) {
+            while (submitted - processed < maxInFlight && taskIndex < readTasks.length) {
+                Task task = readTasks[taskIndex];
+
+                int fileIndex = plan.taskFileIndices[taskIndex];
+                int bufIdx = jUring.checkOutBuffer();
+
+                jUring.prepareReadFixed(fileIndex, task.bufferSize(), task.offset(), bufIdx);
+                submitted++;
+                taskIndex++;
+
+                if (submitted % 16 == 0) {
+                    jUring.submit();
+                }
+            }
+
+            if (submitted > processed) {
+                jUring.submit();
+            }
+
+            List<Result> results = jUring.peekForBatchResult(16);
+            for (Result result : results) {
+                if (result instanceof ReadResultFixed r) {
+                    blackhole.consume(r.buffer());
+                    jUring.checkInBuffer(r.bufferIdx());
+                }
+            }
+            processed += results.size();
+        }
+
+    }
+
+     @Benchmark
     public void preOpenedFileChannels(Blackhole blackhole, ExecutionPlanPreOpenedFileChannels plan,
             TaskCreator randomReadTaskCreator) throws Throwable {
         final var openFileChannels = plan.openFileChannels;
@@ -121,7 +164,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    // @Benchmark()
+    @Benchmark()
     public void juringOpenReadClose(Blackhole blackhole, ExecutionPlanJUring plan, TaskCreator randomReadTaskCreator) {
         final var jUring = plan.jUring;
         final var readTasks = randomReadTaskCreator.readTasks;
@@ -172,7 +215,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    // @Benchmark
+    @Benchmark
     public void fileChannelOpenReadClose(Blackhole blackhole, TaskCreator randomReadTaskCreator) throws Throwable {
         Task[] readTasks = randomReadTaskCreator.readTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];
@@ -203,7 +246,7 @@ public class RandomReadBenchMark {
         }
     }
 
-    // @Benchmark
+    @Benchmark
     public void fileChannelOpenReadCloseOnVirtualThreads(Blackhole blackhole, TaskCreator randomReadTaskCreator) {
         Task[] readTasks = randomReadTaskCreator.readTasks;
         FileChannel[] fileChannels = new FileChannel[readTasks.length];

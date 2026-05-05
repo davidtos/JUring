@@ -21,8 +21,8 @@ Comparing registered files vs pre-opened FileChannels:
 
 | Buffer Size | Registered Files (ops/ms) | Pre-opened FileChannels (ops/ms) | **Improvement** |
 |-------------|---------------------------|----------------------------------|-----------------|
-| 512 bytes   | 22,332                    | 17,277                           | **+29%**        |
-| 4KB         | 11,777                    | 2,239                            | **+426%**       |
+| 512 bytes   | 25,272                    | 18,769                           | **+29%**        |
+| 4KB         | 12,876                    | 2,275                            | **+466%**       |
 | 16KB        | 631                       | 554                              | **+14%**        |
 | 64KB        | 133                       | 129                              | **+3%**         |
 
@@ -147,87 +147,4 @@ For complete benchmark source code and detailed methodology, see the test files 
 If you want to run the benchmark yourself, you can use the following:
 ```shell
 seq 1 2211 | xargs -P 8 -I {} bash -c 'yes "{} " | head -c 5242880 > "file_{}.bin"'
-```
-
----
-
-*Note: Benchmark results show that JUring's advantages are most pronounced for read operations and single-threaded scenarios. For write-heavy workloads with high concurrency, evaluate both approaches based on your specific use case.*
-
-# The Read benchmarks:
-
-Local file performance @ 25 threads:
-```text
-Benchmark                                                     (bufferSize)   Mode  Cnt     Score    Error   Units
-RandomReadBenchMark.juringBlockingWithVirtualThreads                   512  thrpt    5  1050.689 ±  2.313  ops/ms
-RandomReadBenchMark.juringBlockingWithVirtualThreads                  4096  thrpt    5  1028.819 ±  1.627  ops/ms
-RandomReadBenchMark.juringBlockingWithVirtualThreads                 16386  thrpt    5   787.902 ±  3.424  ops/ms
-RandomReadBenchMark.juringBlockingWithVirtualThreads                 65536  thrpt    5   286.451 ±  2.304  ops/ms
-RandomReadBenchMark.fileChannelOpenReadCloseOnVirtualThreads           512  thrpt    5   923.494 ± 11.217  ops/ms
-RandomReadBenchMark.fileChannelOpenReadCloseOnVirtualThreads          4096  thrpt    5   710.151 ±  3.830  ops/ms
-RandomReadBenchMark.fileChannelOpenReadCloseOnVirtualThreads         16386  thrpt    5   350.201 ±  1.265  ops/ms
-RandomReadBenchMark.fileChannelOpenReadCloseOnVirtualThreads         65536  thrpt    5   120.250 ±  0.845  ops/ms
-RandomReadBenchMark.juringOpenReadClose                                512  thrpt    5  1252.103 ± 72.777  ops/ms
-RandomReadBenchMark.juringOpenReadClose                               4096  thrpt    5  1267.618 ± 61.142  ops/ms
-RandomReadBenchMark.juringOpenReadClose                              16386  thrpt    5   562.698 ± 25.074  ops/ms
-RandomReadBenchMark.juringOpenReadClose                              65536  thrpt    5   141.287 ± 17.662  ops/ms
-RandomReadBenchMark.fileChannelOpenReadClose                           512  thrpt    5   968.433 ±  7.388  ops/ms
-RandomReadBenchMark.fileChannelOpenReadClose                          4096  thrpt    5   854.720 ± 11.367  ops/ms
-RandomReadBenchMark.fileChannelOpenReadClose                         16386  thrpt    5   445.172 ± 11.166  ops/ms
-RandomReadBenchMark.fileChannelOpenReadClose                         65536  thrpt    5   124.710 ±  2.004  ops/ms
-
-```
-
-Performance @ 25 threads
-
-```text
-Benchmark                                  (bufferSize)   Mode  Cnt      Score     Error   Units
-RandomReadBenchMark.preOpenedFileChannels           512  thrpt    5  17276.679 ± 203.531  ops/ms
-RandomReadBenchMark.preOpenedFileChannels          4096  thrpt    5   2238.837 ±  70.137  ops/ms
-RandomReadBenchMark.preOpenedFileChannels         16386  thrpt    5    554.172 ±  19.729  ops/ms
-RandomReadBenchMark.preOpenedFileChannels         65536  thrpt    5    129.320 ±   2.716  ops/ms
-RandomReadBenchMark.registeredFiles                 512  thrpt    5  22331.600 ± 400.126  ops/ms
-RandomReadBenchMark.registeredFiles                4096  thrpt    5  11777.366 ± 763.342  ops/ms
-RandomReadBenchMark.registeredFiles               16386  thrpt    5    631.134 ±  45.910  ops/ms
-RandomReadBenchMark.registeredFiles               65536  thrpt    5    132.891 ±  15.717  ops/ms
-```
-
-# The Write benchmarks:
-
-1 thread
-```text
-Benchmark                                   (bufferSize)   Mode  Cnt    Score    Error   Units
-RandomWriteBenchmark.preOpenedFileChannels           512  thrpt    5  400.075 ± 17.247  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels          4096  thrpt    5  260.327 ±  5.694  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         16386  thrpt    5  143.749 ±  1.424  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         65536  thrpt    5   53.066 ±  1.149  ops/ms
-RandomWriteBenchmark.registeredFiles                 512  thrpt    5  891.473 ± 96.506  ops/ms
-RandomWriteBenchmark.registeredFiles                4096  thrpt    5  860.157 ± 35.019  ops/ms
-RandomWriteBenchmark.registeredFiles               16386  thrpt    5  497.574 ±  3.014  ops/ms
-RandomWriteBenchmark.registeredFiles               65536  thrpt    5  150.941 ± 18.614  ops/ms
-```
-
-8 threads
-```text
-Benchmark                                   (bufferSize)   Mode  Cnt     Score    Error   Units
-RandomWriteBenchmark.preOpenedFileChannels           512  thrpt    5  2428.613 ± 57.373  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels          4096  thrpt    5  1723.750 ± 47.703  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         16386  thrpt    5   894.529 ± 21.969  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         65536  thrpt    5   294.078 ± 16.229  ops/ms
-RandomWriteBenchmark.registeredFiles                 512  thrpt    5  4291.695 ± 34.726  ops/ms
-RandomWriteBenchmark.registeredFiles                4096  thrpt    5  3013.474 ± 43.673  ops/ms
-RandomWriteBenchmark.registeredFiles               16386  thrpt    5  1189.466 ±  6.460  ops/ms
-RandomWriteBenchmark.registeredFiles               65536  thrpt    5   285.783 ± 30.037  ops/ms
-```
-
-20 threads
-```text
-Benchmark                                   (bufferSize)   Mode  Cnt     Score    Error   Units
-RandomWriteBenchmark.preOpenedFileChannels           512  thrpt    5  5204.042 ±  65.680  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels          4096  thrpt    5  3440.433 ±  89.458  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         16386  thrpt    5  1449.132 ± 111.456  ops/ms
-RandomWriteBenchmark.preOpenedFileChannels         65536  thrpt    5   346.176 ±  17.737  ops/ms
-RandomWriteBenchmark.registeredFiles                 512  thrpt    5  5200.068 ± 128.891  ops/ms
-RandomWriteBenchmark.registeredFiles                4096  thrpt    5  3380.841 ±   5.979  ops/ms
-RandomWriteBenchmark.registeredFiles               16386  thrpt    5  1211.093 ±  10.345  ops/ms
-RandomWriteBenchmark.registeredFiles               65536  thrpt    5   232.730 ±  17.184  ops/ms
 ```
