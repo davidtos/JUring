@@ -18,7 +18,8 @@ public enum OperationType {
     RECV_EXT(14),
     MULTISHOT_ACCEPT(15),
     CANCEL(16),
-    READ_FIXED(17);
+    READ_FIXED(17),
+    READ_POOLED(18);
 
     private static final OperationType[] VALUES = values();
 

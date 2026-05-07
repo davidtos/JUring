@@ -14,6 +14,7 @@ public class JUring implements AutoCloseable {
     private final List<MemorySegment> registeredBuffers;
     private int[] freeBufferStack;
     private int freeBufferTop;
+    private ReadBufferPool readBufferPool;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
@@ -40,6 +41,22 @@ public class JUring implements AutoCloseable {
 
     public long prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(indexFD, readSize, offset, sqeOptions, true);
+    }
+
+    public void setupReadBufferPool(int bufferSize, int capacity) {
+        readBufferPool = new ReadBufferPool(capacity, bufferSize);
+    }
+
+    public long prepareReadPooled(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
+        return prepareReadPooledInternal(fd.getFd(), readSize, offset, sqeOptions, false);
+    }
+
+    public long prepareReadPooled(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
+        return prepareReadPooledInternal(indexFD, readSize, offset, sqeOptions, true);
+    }
+
+    public void checkInReadBuffer(long address) {
+        readBufferPool.checkIn(address);
     }
 
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
@@ -251,6 +268,18 @@ public class JUring implements AutoCloseable {
         long address = NativeDispatcher.C.mallocAddress(readSize);
 
         long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ, address);
+
+        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
+        ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
+        ioUring.setUserData(sqe, userData);
+
+        return address;
+    }
+
+    private long prepareReadPooledInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
+        long address = readBufferPool.checkOut();
+
+        long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ_POOLED, address);
 
         MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
@@ -539,6 +568,9 @@ public class JUring implements AutoCloseable {
 
     @Override
     public void close() {
+        if (readBufferPool != null) {
+            readBufferPool.close();
+        }
         ioUring.close();
     }
 }

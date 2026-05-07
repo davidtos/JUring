@@ -485,6 +485,11 @@ record LibUringDispatcher(Arena arena,
                 userDataPool.checkIn(userDataAddress);
                 yield new ReadResultFixed(id, buffer, result, ZeroGcUserData.getBufferIndex(userDataAddress));
             }
+            case READ_POOLED -> {
+                MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
+                userDataPool.checkIn(userDataAddress);
+                yield new ReadResult(id, buffer, result);
+            }
             case READ -> {
                 MemorySegment buffer = ZeroGcUserData.getBufferSegment(userDataAddress);
                 userDataPool.checkIn(userDataAddress);

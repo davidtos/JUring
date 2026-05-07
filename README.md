@@ -8,7 +8,7 @@ JUring is a Java library that provides bindings to Linux's io_uring asynchronous
 ### Key Performance Highlights
 
 **JUring with registered files provides the following performance:**
-- **Up to 426% faster** than pre-opened FileChannels at 4KB buffer sizes for reads
+- **Up to 489% faster** than pre-opened FileChannels at 4KB buffer sizes for reads
 - **29% faster** at 512-byte operations, handling over 22,000 operations per millisecond
 - Write performance matching or exceeding FileChannel performance across buffer sizes
 - Scalability across multiple concurrent threads (1-25 threads tested)
@@ -21,10 +21,10 @@ Comparing registered files vs pre-opened FileChannels:
 
 | Buffer Size | Registered Files (ops/ms) | Pre-opened FileChannels (ops/ms) | **Improvement** |
 |-------------|---------------------------|----------------------------------|-----------------|
-| 512 bytes   | 25,272                    | 18,769                           | **+29%**        |
-| 4KB         | 12,876                    | 2,275                            | **+466%**       |
-| 16KB        | 631                       | 554                              | **+14%**        |
-| 64KB        | 133                       | 129                              | **+3%**         |
+| 512 bytes   | 29,023                    | 18,769                           | **+55%**        |
+| 4KB         | 13,393                    | 2,275                            | **+489%**       |
+| 16KB        | 679                       | 554                              | **+23%**        |
+| 64KB        | 150                       | 129                              | **+16%**        |
 
 #### Read Performance: JUring vs FileChannel Operations (25 threads)
 Comparing different I/O approaches with open/read/close patterns:
