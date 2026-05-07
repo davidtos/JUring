@@ -9,7 +9,7 @@ JUring is a Java library that provides bindings to Linux's io_uring asynchronous
 
 **JUring with registered files provides the following performance:**
 - **Up to 489% faster** than pre-opened FileChannels at 4KB buffer sizes for reads
-- **29% faster** at 512-byte operations, handling over 22,000 operations per millisecond
+- **55% faster** at 512-byte operations, handling over 29,000 operations per millisecond
 - Write performance matching or exceeding FileChannel performance across buffer sizes
 - Scalability across multiple concurrent threads (1-25 threads tested)
 
