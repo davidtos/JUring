@@ -1,6 +1,5 @@
 package bench.random.read;
 
-import com.davidvlijmincx.lio.api.ReadvResult;
 import com.davidvlijmincx.lio.api.Result;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -57,11 +56,8 @@ public class VectoredReadBenchmark {
 
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
-                if (result instanceof ReadvResult r) {
-                    bh.consume(r.buffers());
-                 //   System.out.println(r.result() + new String(r.buffers()[0].asSlice(0,100).getString(0)));
-                    r.freeBuffers();
-                }
+                bh.consume(result.buffers());
+                result.freeBuffers();
             }
             processed += results.size();
         }

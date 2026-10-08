@@ -37,9 +37,8 @@ class SocketTest {
                     ring.submit();
                     Result acceptResult = ring.waitForResult();
 
-                    assertInstanceOf(AcceptResult.class, acceptResult,
-                            "Expected AcceptResult but got: " + acceptResult.getClass().getSimpleName());
-                    int clientFd = ((AcceptResult) acceptResult).fd();
+                    assertEquals(OperationType.ACCEPT, acceptResult.type());
+                    int clientFd = acceptResult.fd();
                     assertTrue(clientFd >= 0, "Accept returned error: " + clientFd);
 
                     // Recv the message
@@ -47,22 +46,20 @@ class SocketTest {
                     ring.submit();
                     Result recvResult = ring.waitForResult();
 
-                    assertInstanceOf(RecvResult.class, recvResult);
-                    RecvResult recv = (RecvResult) recvResult;
-                    assertTrue(recv.bytesRead() > 0, "Recv returned: " + recv.bytesRead());
+                    assertEquals(OperationType.RECV, recvResult.type());
+                    assertTrue(recvResult.bytesRead() > 0, "Recv returned: " + recvResult.bytesRead());
 
                     // Echo back exactly what we received
-                    int bytesRead = (int) recv.bytesRead();
-                    byte[] echoBuf = recv.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE);
-                    recv.freeBuffer();
+                    int bytesRead = (int) recvResult.bytesRead();
+                    byte[] echoBuf = recvResult.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE);
+                    recvResult.freeBuffer();
 
                     ring.prepareSend(clientFd, echoBuf);
                     ring.submit();
                     Result sendResult = ring.waitForResult();
 
-                    assertInstanceOf(SendResult.class, sendResult);
-                    SendResult send = (SendResult) sendResult;
-                    assertTrue(send.bytesSent() > 0, "Send returned: " + send.bytesSent());
+                    assertEquals(OperationType.SEND, sendResult.type());
+                    assertTrue(sendResult.bytesSent() > 0, "Send returned: " + sendResult.bytesSent());
 
                     NativeDispatcher.C.close(clientFd);
                 } finally {
@@ -89,30 +86,28 @@ class SocketTest {
                 clientRing.submit();
                 Result connectResult = clientRing.waitForResult();
 
-                assertInstanceOf(ConnectResult.class, connectResult);
-                ConnectResult connect = (ConnectResult) connectResult;
-                assertEquals(0, connect.result(), "Connect failed with errno: " + (-connect.result()));
+                assertEquals(OperationType.CONNECT, connectResult.type());
+                assertEquals(0, connectResult.result(), "Connect failed with errno: " + (-connectResult.result()));
 
                 // Send
                 clientRing.prepareSend(clientFd, messageBytes);
                 clientRing.submit();
                 Result sendResult = clientRing.waitForResult();
 
-                assertInstanceOf(SendResult.class, sendResult);
-                assertTrue(((SendResult) sendResult).bytesSent() > 0);
+                assertEquals(OperationType.SEND, sendResult.type());
+                assertTrue(sendResult.bytesSent() > 0);
 
                 // Recv echo
                 clientRing.prepareRecv(clientFd, messageBytes.length + 16);
                 clientRing.submit();
                 Result recvResult = clientRing.waitForResult();
 
-                assertInstanceOf(RecvResult.class, recvResult);
-                RecvResult recv = (RecvResult) recvResult;
-                assertTrue(recv.bytesRead() > 0);
+                assertEquals(OperationType.RECV, recvResult.type());
+                assertTrue(recvResult.bytesRead() > 0);
 
-                int bytesRead = (int) recv.bytesRead();
-                byte[] echoedBytes = recv.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE);
-                recv.freeBuffer();
+                int bytesRead = (int) recvResult.bytesRead();
+                byte[] echoedBytes = recvResult.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE);
+                recvResult.freeBuffer();
                 String echoed = new String(echoedBytes, StandardCharsets.UTF_8);
 
                 assertEquals(message, echoed, "Echo mismatch");
@@ -154,8 +149,8 @@ class SocketTest {
                     ring.submit();
                     Result acceptResult = ring.waitForResult();
 
-                    assertInstanceOf(AcceptResult.class, acceptResult);
-                    int clientFd = ((AcceptResult) acceptResult).fd();
+                    assertEquals(OperationType.ACCEPT, acceptResult.type());
+                    int clientFd = acceptResult.fd();
                     assertTrue(clientFd >= 0, "Accept returned error: " + clientFd);
 
                     // Read the HTTP request (we don't validate it, just drain it)
@@ -163,18 +158,17 @@ class SocketTest {
                     ring.submit();
                     Result recvResult = ring.waitForResult();
 
-                    assertInstanceOf(RecvResult.class, recvResult);
-                    RecvResult recv = (RecvResult) recvResult;
+                    assertEquals(OperationType.RECV, recvResult.type());
                     // Free the request buffer — we don't need the content
-                    recv.freeBuffer();
+                    recvResult.freeBuffer();
 
                     // Send the HTTP response
                     ring.prepareSend(clientFd, responseBytes);
                     ring.submit();
                     Result sendResult = ring.waitForResult();
 
-                    assertInstanceOf(SendResult.class, sendResult);
-                    assertTrue(((SendResult) sendResult).bytesSent() > 0);
+                    assertEquals(OperationType.SEND, sendResult.type());
+                    assertTrue(sendResult.bytesSent() > 0);
 
                     NativeDispatcher.C.close(clientFd);
                 } finally {
@@ -203,7 +197,6 @@ class SocketTest {
                     "Expected 'Hello World' in response, got: " + response);
         }
 
-
         assertTrue(serverDone.await(5, TimeUnit.SECONDS), "HTTP server did not finish in time");
         serverThread.join(5000);
         assertNull(serverError.get(), "HTTP server error: " + serverError.get());
@@ -230,8 +223,8 @@ class SocketTest {
                     ring.submit();
                     Result acceptResult = ring.waitForResult();
 
-                    assertInstanceOf(AcceptResult.class, acceptResult);
-                    int clientFd = ((AcceptResult) acceptResult).fd();
+                    assertEquals(OperationType.ACCEPT, acceptResult.type());
+                    int clientFd = acceptResult.fd();
                     assertTrue(clientFd >= 0);
 
                     ring.prepareSend(clientFd, greetingBytes);
@@ -262,25 +255,22 @@ class SocketTest {
                 clientRing.submit();
                 Result connectResult = clientRing.waitForResult();
 
-                assertInstanceOf(ConnectResult.class, connectResult,
-                        "Expected ConnectResult, got: " + connectResult);
-                ConnectResult connect = (ConnectResult) connectResult;
-                assertEquals(0, connect.result(),
-                        "Connect failed with errno " + (-connect.result()));
+                assertEquals(OperationType.CONNECT, connectResult.type());
+                assertEquals(0, connectResult.result(),
+                        "Connect failed with errno " + (-connectResult.result()));
 
                 // Receive the greeting
                 clientRing.prepareRecv(clientFd, 64);
                 clientRing.submit();
                 Result recvResult = clientRing.waitForResult();
 
-                assertInstanceOf(RecvResult.class, recvResult);
-                RecvResult recv = (RecvResult) recvResult;
-                assertTrue(recv.bytesRead() > 0);
+                assertEquals(OperationType.RECV, recvResult.type());
+                assertTrue(recvResult.bytesRead() > 0);
 
-                int bytesRead = (int) recv.bytesRead();
-                String received = new String(recv.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE),
+                int bytesRead = (int) recvResult.bytesRead();
+                String received = new String(recvResult.buffer().asSlice(0, bytesRead).toArray(JAVA_BYTE),
                         StandardCharsets.UTF_8);
-                recv.freeBuffer();
+                recvResult.freeBuffer();
 
                 assertEquals(greeting, received);
             } finally {
@@ -313,12 +303,11 @@ class SocketTest {
                     ring.submit();
 
                     for (int i = 0; i < numClients; i++) {
-                        // Each waitForResult returns an AcceptResult for one connection
+                        // Each waitForResult returns an accept Result for one connection
                         Result result = ring.waitForResult();
 
-                        assertInstanceOf(AcceptResult.class, result,
-                                "Expected AcceptResult, got: " + result.getClass().getSimpleName());
-                        int clientFd = ((AcceptResult) result).fd();
+                        assertEquals(OperationType.MULTISHOT_ACCEPT, result.type());
+                        int clientFd = result.fd();
                         assertTrue(clientFd >= 0, "Accept returned error: " + clientFd);
 
                         // Close the accepted client immediately (we just verify accept works)
@@ -350,8 +339,8 @@ class SocketTest {
                     clientRing.submit();
                     Result connectResult = clientRing.waitForResult();
 
-                    assertInstanceOf(ConnectResult.class, connectResult);
-                    assertEquals(0, ((ConnectResult) connectResult).result(),
+                    assertEquals(OperationType.CONNECT, connectResult.type());
+                    assertEquals(0, connectResult.result(),
                             "Client " + i + " connect failed");
                 } finally {
                     NativeDispatcher.C.close(clientFd);

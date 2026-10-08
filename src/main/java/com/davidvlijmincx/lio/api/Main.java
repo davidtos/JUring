@@ -68,9 +68,9 @@ public class Main {
             while (true) {
                 Result result = ring.waitForResult();
 
-                switch (result) {
-                    case AcceptResult accept -> {
-                        int clientFd = accept.fd();
+                switch (result.type()) {
+                    case ACCEPT, MULTISHOT_ACCEPT -> {
+                        int clientFd = result.fd();
                         if (clientFd < 0) {
                             // Negative result: error or cancellation of the multishot SQE.
                             // On graceful shutdown (-ECANCELED = -125) we exit; otherwise re-arm.
@@ -90,18 +90,18 @@ public class Main {
                         ring.submit();
                     }
 
-                    case RecvResult recv -> {
-                        Integer clientFd = opToClientFd.remove(recv.id());
+                    case RECV, RECV_EXT -> {
+                        Integer clientFd = opToClientFd.remove(result.id());
                         // Always free the recv buffer — we don't need the request content.
-                        recv.freeBuffer();
+                        result.freeBuffer();
 
                         if (clientFd == null) {
                             // Unexpected: no mapping found; nothing we can do.
-                            System.err.println("RecvResult with unknown id=" + recv.id());
+                            System.err.println("Recv with unknown id=" + result.id());
                             break;
                         }
 
-                        if (recv.bytesRead() <= 0) {
+                        if (result.bytesRead() <= 0) {
                             // Client closed connection before sending anything, or an error.
                             NativeDispatcher.C.close(clientFd);
                             break;
@@ -113,11 +113,11 @@ public class Main {
                         ring.submit();
                     }
 
-                    case SendResult send -> {
-                        Integer clientFd = opToClientFd.remove(send.id());
+                    case SEND, SEND_EXT -> {
+                        Integer clientFd = opToClientFd.remove(result.id());
 
                         if (clientFd == null) {
-                            System.err.println("SendResult with unknown id=" + send.id());
+                            System.err.println("Send with unknown id=" + result.id());
                             break;
                         }
 
@@ -126,15 +126,13 @@ public class Main {
                     }
 
                     default -> {
-                        // Ignore CloseResult (from cancel SQE CQE) and any other result types.
+                        // Ignore Close (from cancel SQE CQE) and any other result types.
                     }
                 }
 
                 // Exit the event loop after the cancellation CQE for the multishot accept
-                // has been processed (running was set false and accept.fd() < 0 above).
-                // We use a label-less break inside the AcceptResult case, so we need a
-                // second check here to propagate the exit out of the while loop.
-                if (!running && result instanceof AcceptResult accept && accept.fd() < 0) {
+                // has been processed (running was set false and result.fd() < 0 above).
+                if (!running && (result.type() == OperationType.ACCEPT || result.type() == OperationType.MULTISHOT_ACCEPT) && result.fd() < 0) {
                     break;
                 }
             }

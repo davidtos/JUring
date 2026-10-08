@@ -46,17 +46,13 @@ class JUringTest {
             sharedRing.submit();
             Result result = sharedRing.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.id());
-                assertEquals(13, readResult.result());
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
 
-                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-                String string = readResult.buffer().getString(0);
-                readResult.freeBuffer();
-                assertEquals("Hello, World!", string);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            String string = result.buffer().getString(0);
+            result.freeBuffer();
+            assertEquals("Hello, World!", string);
 
         }
 
@@ -71,17 +67,13 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.id());
-                assertEquals(13, readResult.result());
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
 
-                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-                String string = readResult.buffer().getString(0);
-                readResult.freeBuffer();
-                assertEquals("Hello, World!", string);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            String string = result.buffer().getString(0);
+            result.freeBuffer();
+            assertEquals("Hello, World!", string);
 
         }
     }
@@ -102,12 +94,7 @@ class JUringTest {
             for (int i = 0; i < ids.size(); i++) {
                 Result result = jUring.waitForResult();
                 completedIds.add(Long.valueOf(result.id()));
-
-                if (result instanceof ReadResult readResult) {
-                    readResult.freeBuffer();
-                } else {
-                    fail("Result is not a ReadResult");
-                }
+                result.freeBuffer();
             }
 
             assertEquals(completedIds.size(), ids.size());
@@ -143,8 +130,8 @@ class JUringTest {
             Result result = jUring.waitForResult();
             completedIds.add(result.id());
 
-            if (result instanceof ReadResult readResult) {
-               readResult.freeBuffer();
+            if (result.type() == OperationType.READ) {
+               result.freeBuffer();
             }
         }
 
@@ -190,15 +177,11 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResult readResult) {
-                assertEquals(id, readResult.id());
+            assertEquals(id, result.id());
 
-                String string = readResult.buffer().getString(0);
-                readResult.freeBuffer();
-                assertEquals("World!", string);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            String string = result.buffer().getString(0);
+            result.freeBuffer();
+            assertEquals("World!", string);
 
         }
 
@@ -223,12 +206,8 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a AsyncWriteResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -250,12 +229,8 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a AsyncWriteResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(path);
             assertEquals("Big hello, from Java", writtenContent);
@@ -273,19 +248,15 @@ class JUringTest {
             jUring.submit();
             Result readResult = jUring.waitForResult();
 
-            if (readResult instanceof ReadResult read) {
-                try(read){
-                    assertEquals(id, read.id());
-                    assertEquals(13, read.result());
+            try (readResult) {
+                assertEquals(id, readResult.id());
+                assertEquals(13, readResult.result());
 
-                    read.buffer().set(JAVA_BYTE, read.result(), (byte) 0);
-                    String string = read.buffer().getString(0);
-                    assertEquals("Hello, World!", string);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            } else {
-                fail("Result is not a ReadResult");
+                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
+                String string = readResult.buffer().getString(0);
+                assertEquals("Hello, World!", string);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
         }
     }
@@ -306,12 +277,8 @@ class JUringTest {
             jUring.submit();
             Result writeResult = jUring.waitForResult();
 
-            if (writeResult instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a WriteResult");
-            }
+            assertEquals(id, writeResult.id());
+            assertEquals(inputBytes.length, writeResult.result());
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);
@@ -338,30 +305,22 @@ class JUringTest {
             jUring.submit();
             Result readResult2 = jUring.waitForResult();
 
-            if (readResult2 instanceof ReadResult read) {
-                assertEquals(id2, read.id());
-                read.buffer().set(JAVA_BYTE, (int)read.result(), (byte) 0);
-                String content = read.buffer().getString(0);
-                read.freeBuffer();
-                assertEquals("third file content", content);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            assertEquals(id2, readResult2.id());
+            readResult2.buffer().set(JAVA_BYTE, (int)readResult2.result(), (byte) 0);
+            String content = readResult2.buffer().getString(0);
+            readResult2.freeBuffer();
+            assertEquals("third file content", content);
 
             // Test reading from index 1 (second_read_file) before update
             long id1 = jUring.prepareRead(1, 20, 0);
             jUring.submit();
             Result readResult1 = jUring.waitForResult();
 
-            if (readResult1 instanceof ReadResult read) {
-                assertEquals(id1, read.id());
-                read.buffer().set(JAVA_BYTE, (int)read.result(), (byte) 0);
-                String content = read.buffer().getString(0);
-                read.freeBuffer();
-                assertEquals("second file content", content);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            assertEquals(id1, readResult1.id());
+            readResult1.buffer().set(JAVA_BYTE, (int)readResult1.result(), (byte) 0);
+            content = readResult1.buffer().getString(0);
+            readResult1.freeBuffer();
+            assertEquals("second file content", content);
         }
     }
 
@@ -375,16 +334,12 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
             
-            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
-                assertEquals(id, rId);
-                assertEquals(13, rResult);
-                
-                buffer.set(JAVA_BYTE, rResult, (byte) 0);
-                String string = buffer.getString(0);
-                assertEquals("Hello, World!", string);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
+            
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            String string = result.buffer().getString(0);
+            assertEquals("Hello, World!", string);
         }
     }
 
@@ -400,16 +355,12 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
             
-            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
-                assertEquals(id, rId);
-                assertEquals(13, rResult);
-                
-                buffer.set(JAVA_BYTE, rResult, (byte) 0);
-                String string = buffer.getString(0);
-                assertEquals("Hello, World!", string);
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
+            
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            String string = result.buffer().getString(0);
+            assertEquals("Hello, World!", string);
 
         }
     }
@@ -420,39 +371,27 @@ class JUringTest {
         jUring.submit();
         Result openResult = jUring.waitForResult();
 
-        if (openResult instanceof OpenResult result) {
-            assertEquals(openId, result.id());
-            FileDescriptor fd = result.fileDescriptor();
+        assertEquals(openId, openResult.id());
+        FileDescriptor fd = openResult.fileDescriptor();
 
-            long readId = jUring.prepareRead(fd, 14, 0);
-            jUring.submit();
-            Result readResult = jUring.waitForResult();
+        long readId = jUring.prepareRead(fd, 14, 0);
+        jUring.submit();
+        Result readResult = jUring.waitForResult();
 
-            if (readResult instanceof ReadResult read) {
-                assertEquals(readId, read.id());
-                assertEquals(13, read.result());
+        assertEquals(readId, readResult.id());
+        assertEquals(13, readResult.result());
 
-                read.buffer().set(JAVA_BYTE, read.result(), (byte) 0);
-                String content = read.buffer().getString(0);
-                read.freeBuffer();
-                assertEquals("Hello, World!", content);
+        readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
+        String content = readResult.buffer().getString(0);
+        readResult.freeBuffer();
+        assertEquals("Hello, World!", content);
 
-                long closeId = jUring.prepareClose(fd);
-                jUring.submit();
-                Result closeResult = jUring.waitForResult();
+        long closeId = jUring.prepareClose(fd);
+        jUring.submit();
+        Result closeResult = jUring.waitForResult();
 
-                if (closeResult instanceof CloseResult(long id, int wResult)) {
-                    assertEquals(closeId, id);
-                    assertEquals(0, wResult);
-                } else {
-                    fail("Close result is not a CloseResult");
-                }
-            } else {
-                fail("Read result is not a ReadResult");
-            }
-        } else {
-            fail("Open result is not an OpenResult");
-        }
+        assertEquals(closeId, closeResult.id());
+        assertEquals(0, closeResult.result());
     }
 
     @Test
@@ -464,27 +403,19 @@ class JUringTest {
             jUring.submit();
             Result openResult = jUring.waitForResult();
 
-            if (openResult instanceof OpenResult open) {
-                assertEquals(openId, open.id());
+            assertEquals(openId, openResult.id());
 
-                long readId = jUring.prepareRead(0, 20, 0);
-                jUring.submit();
-                Result readResult = jUring.waitForResult();
+            long readId = jUring.prepareRead(0, 20, 0);
+            jUring.submit();
+            Result readResult = jUring.waitForResult();
 
-                if (readResult instanceof ReadResult read) {
-                    assertEquals(readId, read.id());
-                    assertEquals(19, read.result());
+            assertEquals(readId, readResult.id());
+            assertEquals(19, readResult.result());
 
-                    read.buffer().set(JAVA_BYTE, read.result(), (byte) 0);
-                    String content = read.buffer().getString(0);
-                    read.freeBuffer();
-                    assertEquals("second file content", content);
-                } else {
-                    fail("Read result is not a ReadResult");
-                }
-            } else {
-                fail("Open direct result is not an OpenResult");
-            }
+            readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
+            String content = readResult.buffer().getString(0);
+            readResult.freeBuffer();
+            assertEquals("second file content", content);
         }
     }
 
@@ -497,38 +428,26 @@ class JUringTest {
         jUring.submit();
         Result readResult1 = jUring.waitForResult();
         
-        if (readResult1 instanceof ReadResult read1) {
-            assertEquals(13, read1.result());
-            read1.freeBuffer();
-        } else {
-            fail("Initial read failed");
-        }
+        assertEquals(13, readResult1.result());
+        readResult1.freeBuffer();
         
         // Now close the file descriptor
         long closeId = jUring.prepareClose(fd);
         jUring.submit();
         Result closeResult = jUring.waitForResult();
 
-        if (closeResult instanceof CloseResult(long id, int result)) {
-            assertEquals(closeId, id);
-            assertEquals(0, result);
-            
-            // Verify the file descriptor is actually closed by trying to read from it
-            // This should fail with a bad file descriptor error
-            long readId2 = jUring.prepareRead(fd, 14, 0);
-            jUring.submit();
-            Result readResult2 = jUring.waitForResult();
-            
-            if (readResult2 instanceof ReadResult read2) {
-                // Should get EBADF (Bad file descriptor) error, which is -9
-                assertEquals(-9, read2.result());
-                read2.freeBuffer();
-            } else {
-                fail("Expected ReadResult after attempting to read from closed fd");
-            }
-        } else {
-            fail("Close result is not a CloseResult");
-        }
+        assertEquals(closeId, closeResult.id());
+        assertEquals(0, closeResult.result());
+        
+        // Verify the file descriptor is actually closed by trying to read from it
+        // This should fail with a bad file descriptor error
+        long readId2 = jUring.prepareRead(fd, 14, 0);
+        jUring.submit();
+        Result readResult2 = jUring.waitForResult();
+        
+        // Should get EBADF (Bad file descriptor) error, which is -9
+        assertEquals(-9, readResult2.result());
+        readResult2.freeBuffer();
     }
 
     @Test
@@ -541,38 +460,26 @@ class JUringTest {
             jUring.submit();
             Result readResult1 = jUring.waitForResult();
             
-            if (readResult1 instanceof ReadResult read1) {
-                assertEquals(13, read1.result());
-                read1.freeBuffer();
-            } else {
-                fail("Initial read from registered file failed");
-            }
+            assertEquals(13, readResult1.result());
+            readResult1.freeBuffer();
             
             // Now close the registered file using direct close
             long closeId = jUring.prepareCloseDirect(0);
             jUring.submit();
             Result closeResult = jUring.waitForResult();
 
-            if (closeResult instanceof CloseResult(long id, int result)) {
-                assertEquals(closeId, id);
-                assertEquals(0, result);
-                
-                // Verify the registered file descriptor is actually closed by trying to read from it
-                // This should fail with a bad file descriptor error
-                jUring.prepareRead(0, 14, 0);
-                jUring.submit();
-                Result readResult2 = jUring.waitForResult();
-                
-                if (readResult2 instanceof ReadResult read2) {
-                    // Should get EBADF (Bad file descriptor) error, which is -9
-                    assertEquals(-9, read2.result());
-                    read2.freeBuffer();
-                } else {
-                    fail("Expected ReadResult after attempting to read from closed registered fd");
-                }
-            } else {
-                fail("Close direct result is not a CloseResult");
-            }
+            assertEquals(closeId, closeResult.id());
+            assertEquals(0, closeResult.result());
+            
+            // Verify the registered file descriptor is actually closed by trying to read from it
+            // This should fail with a bad file descriptor error
+            jUring.prepareRead(0, 14, 0);
+            jUring.submit();
+            Result readResult2 = jUring.waitForResult();
+            
+            // Should get EBADF (Bad file descriptor) error, which is -9
+            assertEquals(-9, readResult2.result());
+            readResult2.freeBuffer();
         }
     }
 
@@ -592,12 +499,8 @@ class JUringTest {
             jUring.submit();
             Result writeResult = jUring.waitForResult();
             
-            if (writeResult instanceof WriteResult(long wId, long result)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, result);
-            } else {
-                fail("Result is not a WriteResult");
-            }
+            assertEquals(id, writeResult.id());
+            assertEquals(inputBytes.length, writeResult.result());
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);
@@ -622,12 +525,8 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a WriteResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);
@@ -654,12 +553,8 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a WriteResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);
@@ -675,15 +570,11 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int index)) {
-                assertEquals(id, rId);
-                assertEquals(7, rResult);
+            assertEquals(id, result.id());
+            assertEquals(7, result.result());
 
-                buffer.set(JAVA_BYTE, rResult, (byte) 0);
-                assertEquals("Hello, ", buffer.getString(0));
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            assertEquals("Hello, ", result.buffer().getString(0));
         }
     }
 
@@ -721,16 +612,12 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadResultFixed(long rId, MemorySegment buffer, long rResult, int bufferIndex)) {
-                assertEquals(id, rId);
-                assertEquals(13, rResult);
-                assertEquals(bufIdx, bufferIndex);
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
+            assertEquals(bufIdx, result.bufferIdx());
 
-                buffer.set(JAVA_BYTE, rResult, (byte) 0);
-                assertEquals("Hello, World!", buffer.getString(0));
-            } else {
-                fail("Result is not a ReadResult");
-            }
+            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
+            assertEquals("Hello, World!", result.buffer().getString(0));
 
             jUring.checkInBuffer(bufIdx);
         }
@@ -754,12 +641,8 @@ class JUringTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(inputBytes.length, wResult);
-            } else {
-                fail("Result is not a WriteResult");
-            }
+            assertEquals(id, result.id());
+            assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(Path.of(path));
             assertEquals(input, writtenContent);

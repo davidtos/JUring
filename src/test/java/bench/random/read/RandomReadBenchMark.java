@@ -96,10 +96,8 @@ public class RandomReadBenchMark {
 
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
-                if (result instanceof ReadResult r) {
-                    blackhole.consume(r.buffer());
-                    r.freeBuffer();
-                }
+                blackhole.consume(result.buffer());
+                result.freeBuffer();
             }
             processed += results.size();
         }
@@ -139,10 +137,8 @@ public class RandomReadBenchMark {
 
             List<Result> results = jUring.peekForBatchResult(16);
             for (Result result : results) {
-                if (result instanceof ReadResultFixed r) {
-                    blackhole.consume(r.buffer());
-                    jUring.checkInBuffer(r.bufferIdx());
-                }
+                blackhole.consume(result.buffer());
+                jUring.checkInBuffer(result.bufferIdx());
             }
             processed += results.size();
         }
@@ -198,10 +194,8 @@ public class RandomReadBenchMark {
 
                 List<Result> results = jUring.peekForBatchResult(64);
                 for (Result result : results) {
-                    if (result instanceof ReadResult r) {
-                        blackhole.consume(r.buffer());
-                        r.freeBuffer();
-                    }
+                    blackhole.consume(result.buffer());
+                    result.freeBuffer();
                 }
                 processed += results.size();
             }

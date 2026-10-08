@@ -80,9 +80,7 @@ public class RandomWriteBenchmark {
           //  List<Result> results = jUring.waitForBatchResult(maxToWait);
             List<Result> results = jUring.peekForBatchResult(maxToWait);
             for (Result result : results) {
-                if (result instanceof WriteResult r) {
-                    blackhole.consume(r);
-                }
+                blackhole.consume(result);
             }
             processed += results.size();
         }
@@ -138,9 +136,7 @@ public class RandomWriteBenchmark {
 
                 List<Result> results = jUring.peekForBatchResult(64);
                 for (Result result : results) {
-                    if (result instanceof WriteResult r) {
-                        blackhole.consume(r);
-                    }
+                    blackhole.consume(result);
                 }
                 processed += results.size();
             }

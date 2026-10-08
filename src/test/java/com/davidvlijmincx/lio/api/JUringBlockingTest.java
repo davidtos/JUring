@@ -32,7 +32,7 @@ class JUringBlockingTest {
     @Test
     void readFromFile() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
-            Future<ReadResult> future = jUringBlocking.prepareRead(fd, 14, 0);
+            Future<Result> future = jUringBlocking.prepareRead(fd, 14, 0);
 
             jUringBlocking.submit();
 
@@ -57,9 +57,9 @@ class JUringBlockingTest {
 
             jUringBlocking.submit();
 
-            ReadResult result = future1.get();
-            ReadResult result1 = future2.get();
-            ReadResult result2 = future3.get();
+            Result result = future1.get();
+            Result result1 = future2.get();
+            Result result2 = future3.get();
 
             result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
             result1.buffer().set(JAVA_BYTE, result1.result(), (byte) 0);
@@ -195,7 +195,7 @@ class JUringBlockingTest {
             var future = jUringBlocking.prepareRead(0, 14, 0);
             jUringBlocking.submit();
 
-            try( ReadResult readResult = future.get()){
+            try (Result readResult = future.get()) {
                 assertEquals(13, readResult.result());
                 String string = getString(readResult, readResult.result());
                 assertEquals("Hello, World!", string);
@@ -208,7 +208,7 @@ class JUringBlockingTest {
 
     @Test
     void writeToRegisteredFile() throws IOException, ExecutionException, InterruptedException {
-        Path path = Path.of( "src/test/resources/write_file");
+        Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -220,8 +220,8 @@ class JUringBlockingTest {
 
             var future = jUringBlocking.prepareWrite(0, inputBytes, 0);
             jUringBlocking.submit();
-            
-            WriteResult writeResult = future.get();
+
+            Result writeResult = future.get();
             assertEquals(inputBytes.length, writeResult.result());
 
             String writtenContent = Files.readString(path);
@@ -234,7 +234,7 @@ class JUringBlockingTest {
         try (FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", READ, 0);
              FileDescriptor secondReadFd = new FileDescriptor("src/test/resources/second_read_file", READ, 0);
              FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", READ, 0)) {
-            
+
             int result = jUringBlocking.registerFiles(readFd, secondReadFd);
             assertEquals(0, result);
 
@@ -244,7 +244,7 @@ class JUringBlockingTest {
 
             var future = jUringBlocking.prepareRead(0, 20, 0);
             jUringBlocking.submit();
-            ReadResult readResult = future.get();
+            Result readResult = future.get();
 
             assertEquals(18, readResult.result());
             String content = getString(readResult, (int) readResult.result());
@@ -253,7 +253,7 @@ class JUringBlockingTest {
 
             var futureSecondFile = jUringBlocking.prepareRead(1, 20, 0);
             jUringBlocking.submit();
-            ReadResult readResultSecondFile = futureSecondFile.get();
+            Result readResultSecondFile = futureSecondFile.get();
 
             assertEquals(19, readResultSecondFile.result());
             String content1 = getString(readResultSecondFile, (int) readResultSecondFile.result());
@@ -267,25 +267,20 @@ class JUringBlockingTest {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             MemorySegment[] registerResult = jUringBlocking.registerBuffers(30, 2);
             assertEquals(2, registerResult.length);
-            
+
             var future = jUringBlocking.prepareReadFixed(fd, 13, 0, 0);
             jUringBlocking.submit();
-            ReadResultFixed result = future.get();
-            
+            Result result = future.get();
+
             assertEquals(13, result.result());
 
             registerResult[0].set(JAVA_BYTE, result.result(), (byte) 0);
-            String readResult =  registerResult[0].getString(0);
+            String readResult = registerResult[0].getString(0);
             assertEquals("Hello, World!", readResult);
         }
     }
 
-    private static String getString(ReadResult result, long endOfStringIndex) {
-        result.buffer().set(JAVA_BYTE, endOfStringIndex, (byte) 0);
-        return result.buffer().getString(0);
-    }
-
-    private static String getString(ReadResultFixed result, long endOfStringIndex) {
+    private static String getString(Result result, long endOfStringIndex) {
         result.buffer().set(JAVA_BYTE, endOfStringIndex, (byte) 0);
         return result.buffer().getString(0);
     }
@@ -297,11 +292,11 @@ class JUringBlockingTest {
 
             MemorySegment[] bufferRegisterResult = jUringBlocking.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
-            
+
             var future = jUringBlocking.prepareReadFixed(0, 13, 0, 0);
             jUringBlocking.submit();
-            ReadResultFixed result = future.get();
-            
+            Result result = future.get();
+
             assertEquals(13, result.result());
 
             String string = getString(result, result.result());
@@ -313,13 +308,13 @@ class JUringBlockingTest {
     void prepareOpenAndRead() throws ExecutionException, InterruptedException {
         var openFuture = jUringBlocking.prepareOpen("src/test/resources/read_file", READ.getValue(), 0);
         jUringBlocking.submit();
-        OpenResult openResult = openFuture.get();
+        Result openResult = openFuture.get();
 
         FileDescriptor fd = openResult.fileDescriptor();
 
         var readFuture = jUringBlocking.prepareRead(fd, 14, 0);
         jUringBlocking.submit();
-        ReadResult readResult = readFuture.get();
+        Result readResult = readFuture.get();
 
         assertEquals(13, readResult.result());
 
@@ -329,7 +324,7 @@ class JUringBlockingTest {
 
         var closeFuture = jUringBlocking.prepareClose(fd);
         jUringBlocking.submit();
-        CloseResult closeResult = closeFuture.get();
+        Result closeResult = closeFuture.get();
 
         assertEquals(0, closeResult.result());
     }
@@ -345,7 +340,7 @@ class JUringBlockingTest {
 
             var readFuture = jUringBlocking.prepareRead(0, 20, 0);
             jUringBlocking.submit();
-            ReadResult readResult = readFuture.get();
+            Result readResult = readFuture.get();
 
             assertEquals(19, readResult.result());
 
@@ -358,24 +353,24 @@ class JUringBlockingTest {
     @Test
     void prepareCloseFileDescriptor() throws ExecutionException, InterruptedException {
         FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-        
+
         var readFuture1 = jUringBlocking.prepareRead(fd, 14, 0);
         jUringBlocking.submit();
-        ReadResult readResult1 = readFuture1.get();
-        
+        Result readResult1 = readFuture1.get();
+
         assertEquals(13, readResult1.result());
         readResult1.freeBuffer();
-        
+
         var closeFuture = jUringBlocking.prepareClose(fd);
         jUringBlocking.submit();
-        CloseResult closeResult = closeFuture.get();
+        Result closeResult = closeFuture.get();
 
         assertEquals(0, closeResult.result());
-        
+
         var readFuture2 = jUringBlocking.prepareRead(fd, 14, 0);
         jUringBlocking.submit();
-        ReadResult readResult2 = readFuture2.get();
-        
+        Result readResult2 = readFuture2.get();
+
         assertEquals(-9, readResult2.result());
         readResult2.freeBuffer();
     }
@@ -384,24 +379,24 @@ class JUringBlockingTest {
     void prepareCloseDirectFileDescriptor() throws ExecutionException, InterruptedException {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             jUringBlocking.registerFiles(fd);
-            
+
             var readFuture = jUringBlocking.prepareRead(0, 14, 0);
             jUringBlocking.submit();
-            ReadResult readResult = readFuture.get();
-            
+            Result readResult = readFuture.get();
+
             assertEquals(13, readResult.result());
             readResult.freeBuffer();
-            
+
             var closeFuture = jUringBlocking.prepareCloseDirect(0);
             jUringBlocking.submit();
-            CloseResult closeResult = closeFuture.get();
+            Result closeResult = closeFuture.get();
 
             assertEquals(0, closeResult.result());
-            
+
             var readFuture2 = jUringBlocking.prepareRead(0, 14, 0);
             jUringBlocking.submit();
-            ReadResult readResult2 = readFuture2.get();
-            
+            Result readResult2 = readFuture2.get();
+
             assertEquals(-9, readResult2.result());
             readResult2.freeBuffer();
         }
@@ -418,11 +413,11 @@ class JUringBlockingTest {
         try (FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
             MemorySegment[] registerResult = jUringBlocking.registerBuffers(30, 2);
             assertEquals(2, registerResult.length);
-            
+
             var future = jUringBlocking.prepareWriteFixed(fd, inputBytes, 0, 0);
             jUringBlocking.submit();
-            WriteResult writeResult = future.get();
-            
+            Result writeResult = future.get();
+
             assertEquals(inputBytes.length, writeResult.result());
 
             String writtenContent = Files.readString(path);
@@ -443,11 +438,11 @@ class JUringBlockingTest {
 
             MemorySegment[] bufferRegisterResult = jUringBlocking.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
-            
+
             var future = jUringBlocking.prepareWriteFixed(0, inputBytes, 0, 0);
             jUringBlocking.submit();
-            WriteResult result = future.get();
-            
+            Result result = future.get();
+
             assertEquals(inputBytes.length, result.result());
 
             String writtenContent = Files.readString(path);

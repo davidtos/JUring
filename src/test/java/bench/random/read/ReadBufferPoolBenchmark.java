@@ -1,6 +1,5 @@
 package bench.random.read;
 
-import com.davidvlijmincx.lio.api.ReadResult;
 import com.davidvlijmincx.lio.api.Result;
 import org.openjdk.jmh.annotations.*;
 import org.openjdk.jmh.infra.Blackhole;
@@ -59,10 +58,8 @@ public class ReadBufferPoolBenchmark {
 
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
-                if (result instanceof ReadResult r) {
-                    blackhole.consume(r.buffer());
-                    jUring.checkInReadBuffer(r.buffer().address());
-                }
+                blackhole.consume(result.buffer());
+                jUring.checkInReadBuffer(result.bufferAddress());
             }
             processed += results.size();
         }

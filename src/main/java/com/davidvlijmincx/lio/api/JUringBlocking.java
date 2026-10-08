@@ -1,6 +1,5 @@
 package com.davidvlijmincx.lio.api;
 
-
 import java.lang.foreign.MemorySegment;
 import java.time.Duration;
 import java.util.Map;
@@ -12,7 +11,7 @@ import java.util.function.Supplier;
 public class JUringBlocking implements AutoCloseable {
 
     public final Duration timeout;
-    private final Map<Long, CompletableFuture<? extends Result>> requests;
+    private final Map<Long, CompletableFuture<Result>> requests;
     private final JUring jUring;
     private boolean running = true;
     private Thread pollerThread;
@@ -31,19 +30,10 @@ public class JUringBlocking implements AutoCloseable {
     private void startPoller() {
         pollerThread = Thread.ofPlatform().daemon(true).start(() -> {
             while (running) {
-                jUring.peekForBatchResult(100).forEach(result -> {
+                jUring.peekForBatchResult(100, result -> {
                     var request = requests.remove(result.id());
-                    switch (result) {
-                        case ReadResult r -> ((CompletableFuture<ReadResult>) request).complete(r);
-                        case ReadResultFixed r -> ((CompletableFuture<ReadResultFixed>) request).complete(r);
-                        case WriteResult r -> ((CompletableFuture<WriteResult>) request).complete(r);
-                        case OpenResult r -> ((CompletableFuture<OpenResult>) request).complete(r);
-                        case CloseResult r -> ((CompletableFuture<CloseResult>) request).complete(r);
-                        case ReadvResult r -> ((CompletableFuture<ReadvResult>) request).complete(r);
-                        case AcceptResult r -> ((CompletableFuture<AcceptResult>) request).complete(r);
-                        case ConnectResult r -> ((CompletableFuture<ConnectResult>) request).complete(r);
-                        case RecvResult r -> ((CompletableFuture<RecvResult>) request).complete(r);
-                        case SendResult r -> ((CompletableFuture<SendResult>) request).complete(r);
+                    if (request != null) {
+                        request.complete(new Result(result));
                     }
                 });
                 sleepInterval();
@@ -67,64 +57,60 @@ public class JUringBlocking implements AutoCloseable {
         jUring.submit();
     }
 
-    private <T extends Result> Future<T> prepareAsync(Supplier<Long> prepareOperation) {
+    private Future<Result> prepareAsync(Supplier<Long> prepareOperation) {
         long id = prepareOperation.get();
-        CompletableFuture<T> result = new CompletableFuture<>();
+        CompletableFuture<Result> result = new CompletableFuture<>();
         requests.put(id, result);
         return result;
     }
 
-    public Future<ReadResult> prepareRead(FileDescriptor fd, int size, long offset) {
+    public Future<Result> prepareRead(FileDescriptor fd, int size, long offset) {
         return prepareAsync(() -> jUring.prepareRead(fd, size, offset));
     }
 
-    public Future<WriteResult> prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
+    public Future<Result> prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         return prepareAsync(() -> jUring.prepareWrite(fd, bytes, offset));
     }
 
-    public Future<ReadResult> prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
+    public Future<Result> prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareRead(indexFD, readSize, offset, sqeOptions));
     }
 
-    public Future<ReadResultFixed> prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareReadFixed(fd, readSize, offset, bufferIndex, sqeOptions));
     }
 
-    public Future<ReadResultFixed> prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareReadFixed(indexFD, readSize, offset, bufferIndex, sqeOptions));
     }
 
-    public Future<WriteResult> prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
+    public Future<Result> prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareWrite(indexFD, bytes, offset, sqeOptions));
     }
 
-    public Future<WriteResult> prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareWriteFixed(fd, bytes, offset, bufferIndex, sqeOptions));
     }
 
-    public Future<WriteResult> prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareWriteFixed(indexFD, bytes, offset, bufferIndex, sqeOptions));
     }
 
-    public Future<OpenResult> prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
+    public Future<Result> prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareOpen(filePath, flags, mode, sqeOptions));
     }
 
-    public Future<OpenResult> prepareOpenDirect(String filePath, LinuxOpenOptions flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareOpenDirect(String filePath, LinuxOpenOptions flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareOpenDirect(filePath, flags.getValue(), mode, fileIndex, sqeOptions));
     }
 
-    public Future<CloseResult> prepareClose(FileDescriptor fd, SqeOptions... sqeOptions) {
+    public Future<Result> prepareClose(FileDescriptor fd, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareClose(fd, sqeOptions));
     }
 
-    public Future<CloseResult> prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
+    public Future<Result> prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareCloseDirect(fileIndex, sqeOptions));
     }
-
-    // -------------------------------------------------------------------------
-    // Socket helpers (delegated to inner JUring)
-    // -------------------------------------------------------------------------
 
     public int createServerSocket(int port, int backlog) {
         return jUring.createServerSocket(port, backlog);
@@ -134,11 +120,7 @@ public class JUringBlocking implements AutoCloseable {
         return jUring.createClientSocket();
     }
 
-    // -------------------------------------------------------------------------
-    // Socket async operations
-    // -------------------------------------------------------------------------
-
-    public Future<AcceptResult> prepareAccept(int serverFd, SqeOptions... sqeOptions) {
+    public Future<Result> prepareAccept(int serverFd, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareAccept(serverFd, sqeOptions));
     }
 
@@ -146,23 +128,23 @@ public class JUringBlocking implements AutoCloseable {
         return jUring.prepareMultishotAccept(serverFd, sqeOptions);
     }
 
-    public Future<ConnectResult> prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
+    public Future<Result> prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareConnect(fd, host, port, sqeOptions));
     }
 
-    public Future<RecvResult> prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
+    public Future<Result> prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareRecv(fd, length, sqeOptions));
     }
 
-    public Future<RecvResult> prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+    public Future<Result> prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareRecv(fd, buffer, length, sqeOptions));
     }
 
-    public Future<SendResult> prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
+    public Future<Result> prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareSend(fd, bytes, sqeOptions));
     }
 
-    public Future<SendResult> prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
+    public Future<Result> prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
         return prepareAsync(() -> jUring.prepareSend(fd, buffer, length, sqeOptions));
     }
 

@@ -4,5 +4,5 @@ import java.lang.foreign.MemorySegment;
 
 public interface GetSqe {
 
-    MemorySegment getSqe(MemorySegment ring);
+    long getSqe(MemorySegment ring);
 }
