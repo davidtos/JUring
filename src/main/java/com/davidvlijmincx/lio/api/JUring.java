@@ -10,7 +10,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 public class JUring implements AutoCloseable {
 
-    private final LibUringDispatcher ioUring;
+    private final IoUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
     private int[] freeBufferStack;
     private int freeBufferTop;
@@ -23,7 +23,7 @@ public class JUring implements AutoCloseable {
         freeBufferTop = 0;
     }
 
-    private JUring(LibUringDispatcher ioUring){
+    private JUring(IoUringDispatcher ioUring){
         this.ioUring = ioUring;
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];

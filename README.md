@@ -119,8 +119,7 @@ For complete benchmark source code and detailed methodology, see the test files 
 
 ## Requirements
 
-- Linux kernel 5.1 or higher
-- liburing installed
+- Linux kernel 5.1 or higher (direct io_uring syscalls, no liburing required)
 - Java 22 or higher (for Foreign Function & Memory API)
 
 ## Current Limitations and Future Improvements

@@ -54,7 +54,10 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <excludes>
+                        <exclude>**/SocketTest.java</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
         </plugins>

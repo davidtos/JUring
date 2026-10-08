@@ -5,6 +5,8 @@ import com.davidvlijmincx.lio.api.functions.*;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandleProxies;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -15,7 +17,7 @@ import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 record LibCDispatcher(FreeAddress freeLong,
-        Consumer<MemorySegment> free,
+                      Consumer<MemorySegment> free,
                       Open open,
                       IntConsumer close,
                       Malloc malloc,
@@ -25,7 +27,23 @@ record LibCDispatcher(FreeAddress freeLong,
                       Socket socket,
                       Bind bind,
                       Listen listen,
-                      SetSockOpt setsockopt) {
+                      SetSockOpt setsockopt,
+                      Mmap mmap,
+                      Munmap munmap,
+                      IoUringSetup ioUringSetup,
+                      IoUringEnter ioUringEnter,
+                      IoUringRegister ioUringRegister) {
+
+    // mmap(2) constants (Linux x86-64 / aarch64)
+    static final int PROT_READ = 0x1;
+    static final int PROT_WRITE = 0x2;
+    static final int MAP_SHARED = 0x01;
+    static final int MAP_POPULATE = 0x8000;
+    static final long MAP_FAILED = -1L;
+
+    // Layout of the call state captured with Linker.Option.captureCallState("errno")
+    static final StructLayout CAPTURE_STATE_LAYOUT = Linker.Option.captureStateLayout();
+    private static final VarHandle ERRNO_HANDLE = CAPTURE_STATE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("errno"));
 
     // sockaddr_in layout (Linux x86-64):
     //   uint16_t sin_family  @ offset 0  (2 bytes)
@@ -66,7 +84,12 @@ record LibCDispatcher(FreeAddress freeLong,
                 link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), true),
                 link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
                 link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), true),
-                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true)
+                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
+                linkCaptureErrno(Mmap.class, "mmap", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_LONG)),
+                link(Munmap.class, "munmap", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG), false),
+                linkSyscallCaptureErrno(IoUringSetup.class, 425L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, ADDRESS)),
+                linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG)),
+                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT))
         );
     }
 
@@ -74,6 +97,24 @@ record LibCDispatcher(FreeAddress freeLong,
         MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
         MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    // The resulting function takes the captured call state segment as its first parameter
+    private static <T> T linkCaptureErrno(Class<T> type, String name, FunctionDescriptor descriptor) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.captureCallState("errno"));
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkSyscallCaptureErrno(Class<T> type, long sysno, FunctionDescriptor descriptor) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow("syscall");
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.captureCallState("errno"));
+        MethodHandle bound = MethodHandles.insertArguments(handle, 1, sysno);
+        return MethodHandleProxies.asInterfaceInstance(type, bound);
+    }
+
+    static int errno(MemorySegment callState) {
+        return (int) ERRNO_HANDLE.get(callState, 0L);
     }
 
     void free(long address) {
@@ -106,6 +147,71 @@ record LibCDispatcher(FreeAddress freeLong,
 
     MemorySegment calloc(long size) {
         return calloc.calloc(1L, size).reinterpret(size);
+    }
+
+    /**
+     * Maps {@code length} bytes of {@code fd} at {@code offset}.
+     *
+     * @return the address of the mapping, or {@code -errno} when the mapping failed
+     */
+    long mmap(long length, int prot, int flags, int fd, long offset) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            long address = mmap.mmap(callState, 0L, length, prot, flags, fd, offset);
+            if (address == MAP_FAILED) {
+                return -errno(callState);
+            }
+            return address;
+        }
+    }
+
+    int munmap(long address, long length) {
+        return munmap.munmap(address, length);
+    }
+
+    int ioUringSetup(MemorySegment callState, int entries, MemorySegment params) {
+        long res = ioUringSetup.ioUringSetup(callState, entries, params);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringSetup(int entries, MemorySegment params) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringSetup(callState, entries, params);
+        }
+    }
+
+    int ioUringEnter(MemorySegment callState, int fd, int toSubmit, int minComplete, int flags, MemorySegment arg, long argSize) {
+        long res = ioUringEnter.ioUringEnter(callState, fd, toSubmit, minComplete, flags, arg, argSize);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringEnter(int fd, int toSubmit, int minComplete, int flags, MemorySegment arg, long argSize) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringEnter(callState, fd, toSubmit, minComplete, flags, arg, argSize);
+        }
+    }
+
+    int ioUringRegister(MemorySegment callState, int fd, int opcode, MemorySegment arg, int nrArgs) {
+        long res = ioUringRegister.ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringRegister(int fd, int opcode, MemorySegment arg, int nrArgs) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        }
     }
 
     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
