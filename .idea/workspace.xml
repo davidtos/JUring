@@ -1,0 +1,286 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="SELECTIVE" />
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests.">
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/resources/write_file" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/write_file" afterDir="false" />
+    </list>
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="EmbeddingIndexingInfo">
+    <option name="cachedIndexableFilesCount" value="122" />
+    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+  </component>
+  <component name="Git.Settings">
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="no-alloc-in-hot-path" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+  </component>
+  <component name="GitHubPullRequestSearchHistory">{
+  &quot;lastFilter&quot;: {
+    &quot;state&quot;: &quot;OPEN&quot;,
+    &quot;assignee&quot;: &quot;davidtos&quot;
+  }
+}</component>
+  <component name="GithubPullRequestsUISettings">{
+  &quot;selectedUrlAndAccountId&quot;: {
+    &quot;url&quot;: &quot;https://github.com/davidtos/JUring.git&quot;,
+    &quot;accountId&quot;: &quot;310f8202-0a28-4838-aa3a-c978dba8aece&quot;
+  }
+}</component>
+  <component name="McpProjectServerCommands">
+    <commands />
+    <urls />
+  </component>
+  <component name="NextEditCompletionFeaturesState">
+    <decayedCancelled>
+      <entry key="MS100" value="1.0" />
+      <entry key="MS500" value="1.0" />
+      <entry key="S2" value="1.0" />
+      <entry key="S5" value="1.0" />
+      <entry key="S10" value="1.0" />
+      <entry key="S30" value="1.0" />
+      <entry key="S60" value="1.0" />
+      <entry key="M2" value="1.000000000067862" />
+      <entry key="M5" value="1.0001297955662307" />
+      <entry key="M10" value="1.0161117797911887" />
+      <entry key="M15" value="1.0803721088545226" />
+      <entry key="M30" value="1.4009290483562524" />
+      <entry key="H1" value="1.895465215506261" />
+      <entry key="H2" value="2.33825645909556" />
+      <entry key="H4" value="2.6360051613730855" />
+      <entry key="D1" value="2.9341453484523017" />
+      <entry key="W1" value="2.99045666090122" />
+    </decayedCancelled>
+    <decayedSelected>
+      <entry key="MS100" value="0.0" />
+      <entry key="MS500" value="0.0" />
+      <entry key="S2" value="0.0" />
+      <entry key="S5" value="0.0" />
+      <entry key="S10" value="0.0" />
+      <entry key="S30" value="0.0" />
+      <entry key="S60" value="0.0" />
+      <entry key="M2" value="0.0" />
+      <entry key="M5" value="0.0" />
+      <entry key="M10" value="0.0" />
+      <entry key="M15" value="0.0" />
+      <entry key="M30" value="0.0" />
+      <entry key="H1" value="0.0" />
+      <entry key="H2" value="0.0" />
+      <entry key="H4" value="0.0" />
+      <entry key="D1" value="0.0" />
+      <entry key="W1" value="0.0" />
+    </decayedSelected>
+    <decayedShown>
+      <entry key="MS100" value="0.3737123121587346" />
+      <entry key="MS500" value="0.8213107007520658" />
+      <entry key="S2" value="0.9519779084975315" />
+      <entry key="S5" value="0.980507112001979" />
+      <entry key="S10" value="0.9902055907749557" />
+      <entry key="S30" value="0.9967244796055204" />
+      <entry key="S60" value="0.9983608964725733" />
+      <entry key="M2" value="0.9991801121960547" />
+      <entry key="M5" value="0.9998017346144858" />
+      <entry key="M10" value="1.0159461876806661" />
+      <entry key="M15" value="1.0802575581697713" />
+      <entry key="M30" value="1.4008614070851566" />
+      <entry key="H1" value="1.8954233965950371" />
+      <entry key="H2" value="2.3382319682795814" />
+      <entry key="H4" value="2.635991711727" />
+      <entry key="D1" value="2.9341429058615387" />
+      <entry key="W1" value="2.9904563065365375" />
+    </decayedShown>
+  </component>
+  <component name="ProjectColorInfo">{
+  &quot;associatedIndex&quot;: 7,
+  &quot;fromUser&quot;: false
+}</component>
+  <component name="ProjectId" id="3FUstYBqIw5ecyVX7y1EI3GwPmf" />
+  <component name="ProjectViewState">
+    <option name="hideEmptyMiddlePackages" value="true" />
+    <option name="showLibraryContents" value="true" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "Application.BenchmarkRunner.executor": "Run",
+    "Application.RandomReadBenchMark.executor": "Run",
+    "CidrDebugProfileConversion": "true",
+    "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
+    "JUnit.JUringTest (1).executor": "Run",
+    "JUnit.JUringTest (2).executor": "Run",
+    "JUnit.JUringTest.executor": "Run",
+    "JUnit.JUringTest.readFromFile.executor": "Run",
+    "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
+    "JUnit.SocketTest.executor": "Run",
+    "JUnit.api in JUring (1).executor": "Run",
+    "JUnit.api in JUring.executor": "Run",
+    "JUnit.api in JUring.test.executor": "Run",
+    "JUnit.com.davidvlijmincx.lio.api in JUring.executor": "Run",
+    "KEY_CHAT_IN_TOOLWINDOW": "false",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "kotlin-language-version-configured": "true",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
+  },
+  "keyToStringList": {
+    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
+      "TEXT"
+    ]
+  }
+}]]></component>
+  <component name="RunManager" selected="JUnit.BenchmarkSuiteValidationTest">
+    <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="bench.suite.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="bench.suite" />
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="JUringTest (1)" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring.test" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
+      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.JUringTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="JUringTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
+      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.JUringTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="JUnit" factoryName="JUnit">
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="api in JUring (1)" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <option name="TEST_OBJECT" value="directory" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=ALL-UNNAMED" />
+      <dir value="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="api in JUring" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <option name="TEST_OBJECT" value="directory" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <dir value="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
+        <item itemvalue="JUnit.api in JUring" />
+        <item itemvalue="JUnit.JUringTest (1)" />
+        <item itemvalue="JUnit.JUringTest" />
+        <item itemvalue="JUnit.api in JUring (1)" />
+      </list>
+    </recent_temporary>
+  </component>
+  <component name="SharedIndexes">
+    <attachedChunks>
+      <set>
+        <option value="bundled-jdk-30f59d01ecdd-a203e0a19954-intellij.indexing.shared.core-IU-262.10968.63" />
+        <option value="bundled-js-predefined-d6986cc7102b-4abd2a77f808-JavaScript-IU-262.10968.63" />
+      </set>
+    </attachedChunks>
+  </component>
+  <component name="TaskManager">
+    <task active="true" id="Default" summary="Default task">
+      <changelist id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="" />
+      <created>1782141198867</created>
+      <option name="number" value="Default" />
+      <option name="presentableId" value="Default" />
+      <updated>1782141198867</updated>
+      <workItem from="1782141200149" duration="103000" />
+      <workItem from="1782141316981" duration="212000" />
+      <workItem from="1782204930701" duration="6322000" />
+      <workItem from="1785757383579" duration="80000" />
+      <workItem from="1790101523374" duration="821000" />
+      <workItem from="1790102492389" duration="232000" />
+      <workItem from="1790102751777" duration="367000" />
+      <workItem from="1790705569606" duration="5936000" />
+      <workItem from="1790714266324" duration="30000" />
+    </task>
+    <servers />
+  </component>
+  <component name="TypeScriptGeneratedFilesManager">
+    <option name="version" value="3" />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Remove jdk.unsupported module dependency and comment out ExtendedOpenOption.DIRECT" />
+    <MESSAGE value="Remove specific result types and consolidate into a single `Result` interface" />
+    <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe` and add tests." />
+    <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
+    <option name="LAST_COMMIT_MESSAGE" value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
+  </component>
+  <component name="XSLT-Support.FileAssociations.UIState">
+    <expand />
+    <select />
+  </component>
+</project>
