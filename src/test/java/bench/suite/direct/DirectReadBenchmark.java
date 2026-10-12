@@ -61,7 +61,7 @@ public class DirectReadBenchmark {
         public int reapedCount;
         public ResultConsumer consumer;
 
-        @Setup(Level.Iteration)
+        @Setup(Level.Trial)
         public void setup(BenchmarkState benchState, ThreadParams params) {
             int threadCount = params.getThreadCount();
             int safeBufferCount = Math.max(qd, IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount));
@@ -90,7 +90,7 @@ public class DirectReadBenchmark {
             };
         }
 
-        @TearDown(Level.Iteration)
+        @TearDown(Level.Trial)
         public void tearDown() {
             DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);

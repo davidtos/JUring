@@ -4,9 +4,13 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests.">
-      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/resources/write_file" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/write_file" afterDir="false" />
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation.">
+      <change afterPath="$PROJECT_DIR$/BENCHMARK_PLAN.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -148,7 +152,7 @@
     ]
   }
 }]]></component>
-  <component name="RunManager" selected="JUnit.BenchmarkSuiteValidationTest">
+  <component name="RunManager" selected="JUnit.api in JUring">
     <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
       <module name="JUring" />
       <extension name="coverage">
@@ -223,8 +227,8 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
         <item itemvalue="JUnit.api in JUring" />
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
         <item itemvalue="JUnit.JUringTest (1)" />
         <item itemvalue="JUnit.JUringTest" />
         <item itemvalue="JUnit.api in JUring (1)" />
@@ -277,7 +281,8 @@
     <MESSAGE value="Remove specific result types and consolidate into a single `Result` interface" />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe` and add tests." />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
-    <option name="LAST_COMMIT_MESSAGE" value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
+    <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
+    <option name="LAST_COMMIT_MESSAGE" value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
