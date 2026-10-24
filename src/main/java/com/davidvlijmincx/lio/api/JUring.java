@@ -377,7 +377,8 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
-        long address = NativeDispatcher.C.mallocAddress(readSize);
+        long address = NativeDispatcher.C.mallocAddress(readSize + 1);
+        MemorySegment.ofAddress(address).reinterpret(readSize + 1).set(JAVA_BYTE, readSize, (byte) 0);
         long userData = ZeroGcUserData.encode(OperationType.READ, address);
 
         long sqe = getSqe(flags, fixedFile);

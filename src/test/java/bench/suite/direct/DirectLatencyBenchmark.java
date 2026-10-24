@@ -92,7 +92,12 @@ public class DirectLatencyBenchmark {
         state.ring.prepareReadFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, 0);
         state.ring.submit();
         Result r = state.ring.waitForResult(state.reusableResult);
-        blackhole.consume(r.result());
+        long res = r.result();
+        if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
+            throw new IllegalStateException("Direct read latency failed: expected "
+                    + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+        }
+        blackhole.consume(res);
     }
 
     @Benchmark
@@ -104,6 +109,10 @@ public class DirectLatencyBenchmark {
         FileChannel fc = state.channels[fileIdx];
         state.alignedBuffer.clear();
         int read = fc.read(state.alignedBuffer, offset);
+        if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
+            throw new IllegalStateException("FileChannel direct read latency failed: expected "
+                    + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+        }
         blackhole.consume(read);
     }
 }

@@ -90,6 +90,11 @@ public class BufferedWriteBenchmark {
 
             this.reapedCount = 0;
             this.consumer = result -> {
+                long res = result.result();
+                if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                    throw new IllegalStateException("Buffered write failed: expected "
+                            + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+                }
                 this.reapedCount++;
                 this.ring.checkInBuffer(result.bufferIdx());
             };
@@ -117,6 +122,7 @@ public class BufferedWriteBenchmark {
         int submitted = 0;
         int taskIndex = 0;
         int submitsIssued = 0;
+        int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
             while ((submitted - state.reapedCount) < 128 && taskIndex < totalTasks) {
@@ -130,18 +136,21 @@ public class BufferedWriteBenchmark {
 
                 ring.prepareWriteFixed(fileIdx, state.writeSegment, offset, bufIdx);
                 submitted++;
+                unsubmitted++;
                 taskIndex++;
 
-                if (submitted % batchSize == 0) {
+                if (unsubmitted >= batchSize) {
                     ring.submit();
                     submitsIssued++;
+                    unsubmitted = 0;
                     ring.peekForBatchResult(batchSize, state.consumer);
                 }
             }
 
-            if (submitted > state.reapedCount) {
+            if (unsubmitted > 0) {
                 ring.submit();
                 submitsIssued++;
+                unsubmitted = 0;
             }
 
             int batchToReap = Math.min(submitted - state.reapedCount, batchSize);
@@ -167,6 +176,10 @@ public class BufferedWriteBenchmark {
             FileChannel fc = channels[taskFileIndices[i]];
             buf.position(0);
             int written = fc.write(buf, taskOffsets[i]);
+            if (written != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                throw new IllegalStateException("FileChannel buffered write failed: expected "
+                        + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + written);
+            }
             blackhole.consume(written);
         }
 

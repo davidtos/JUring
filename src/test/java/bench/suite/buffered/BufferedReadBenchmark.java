@@ -83,6 +83,11 @@ public class BufferedReadBenchmark {
 
             this.reapedCount = 0;
             this.consumer = result -> {
+                long res = result.result();
+                if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                    throw new IllegalStateException("Buffered read failed: expected "
+                            + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+                }
                 this.reapedCount++;
                 this.ring.checkInBuffer(result.bufferIdx());
             };
@@ -110,6 +115,7 @@ public class BufferedReadBenchmark {
         int submitted = 0;
         int taskIndex = 0;
         int submitsIssued = 0;
+        int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
             while ((submitted - state.reapedCount) < 128 && taskIndex < totalTasks) {
@@ -123,18 +129,21 @@ public class BufferedReadBenchmark {
 
                 ring.prepareReadFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
                 submitted++;
+                unsubmitted++;
                 taskIndex++;
 
-                if (submitted % batchSize == 0) {
+                if (unsubmitted >= batchSize) {
                     ring.submit();
                     submitsIssued++;
+                    unsubmitted = 0;
                     ring.peekForBatchResult(batchSize, state.consumer);
                 }
             }
 
-            if (submitted > state.reapedCount) {
+            if (unsubmitted > 0) {
                 ring.submit();
                 submitsIssued++;
+                unsubmitted = 0;
             }
 
             int batchToReap = Math.min(submitted - state.reapedCount, batchSize);
@@ -160,6 +169,10 @@ public class BufferedReadBenchmark {
             FileChannel fc = channels[taskFileIndices[i]];
             buf.clear();
             int read = fc.read(buf, taskOffsets[i]);
+            if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                throw new IllegalStateException("FileChannel buffered read failed: expected "
+                        + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+            }
             blackhole.consume(read);
         }
 

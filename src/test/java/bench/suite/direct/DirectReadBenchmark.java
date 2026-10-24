@@ -85,6 +85,11 @@ public class DirectReadBenchmark {
 
             this.reapedCount = 0;
             this.consumer = result -> {
+                long res = result.result();
+                if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                    throw new IllegalStateException("Direct read failed: expected "
+                            + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+                }
                 this.reapedCount++;
                 this.ring.checkInBuffer(result.bufferIdx());
             };
@@ -113,6 +118,7 @@ public class DirectReadBenchmark {
         int submitted = 0;
         int taskIndex = 0;
         int submitsIssued = 0;
+        int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
             // Keep up to qd requests in-flight
@@ -127,18 +133,21 @@ public class DirectReadBenchmark {
 
                 ring.prepareReadFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
                 submitted++;
+                unsubmitted++;
                 taskIndex++;
 
-                if (submitted % submitBatch == 0) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
+                    unsubmitted = 0;
                     ring.peekForBatchResult(submitBatch, state.consumer);
                 }
             }
 
-            if (submitted > state.reapedCount) {
+            if (unsubmitted > 0) {
                 ring.submit();
                 submitsIssued++;
+                unsubmitted = 0;
             }
 
             // Drain completed CQEs
@@ -165,6 +174,10 @@ public class DirectReadBenchmark {
             FileChannel fc = channels[taskFileIndices[i]];
             buf.clear();
             int read = fc.read(buf, taskOffsets[i]);
+            if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                throw new IllegalStateException("FileChannel direct read failed: expected "
+                        + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+            }
             blackhole.consume(read);
         }
 

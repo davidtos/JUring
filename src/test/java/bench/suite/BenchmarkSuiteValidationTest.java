@@ -208,6 +208,7 @@ class BenchmarkSuiteValidationTest {
             };
 
             int submitted = 0;
+            int unsubmitted = 0;
             int taskIdx = 0;
 
             while (reapedCount[0] < numTasks) {
@@ -220,16 +221,19 @@ class BenchmarkSuiteValidationTest {
 
                     ring.prepareReadFixed(fileIdx, 4096, offset, bufIdx);
                     submitted++;
+                    unsubmitted++;
                     taskIdx++;
 
-                    if (submitted % 16 == 0) {
+                    if (unsubmitted >= 16) {
                         ring.submit();
+                        unsubmitted = 0;
                         ring.peekForBatchResult(16, consumer);
                     }
                 }
 
-                if (submitted > reapedCount[0]) {
+                if (unsubmitted > 0) {
                     ring.submit();
+                    unsubmitted = 0;
                 }
 
                 int batch = Math.min(submitted - reapedCount[0], 16);
