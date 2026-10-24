@@ -87,6 +87,7 @@ Hardware & OS:
 | Cycle 5 | Direct In-Place CQE Reaping in `peekForBatchResult` | Direct Read (qd=64) / Write | 315,090 (R) / 322,566 (W) | 314,552 (R) / 320,204 (W) | -8.5% insns (R) / -5.35% insns (W), -4.5% cycles (W) | **KEPT (Active)** |
 | Cycle 6 | Enable `IORING_ENTER_GETEVENTS` in `submit()` for `DEFER_TASKRUN` | Direct Read (qd=64) / Write | 259,770 (R) / 305,132 (W) | 313,256 (R) / 106,419 (W) | **+20.59% (R)** / **-65.13% (W)** | **Rolled back** |
 | Sequel Cycle 1 | Primitive Type-Index Switching and Elimination of Redundant Reaping Indirections | Direct Read (qd=64) / Write | 312,822 (R) / 282,698 (W) | 310,277 (R) / 302,124 (W) | -10.1% cycles (R) / **+6.87% (W)**, -18.9% cycles (W) | **KEPT (Active)** |
+| Sequel Cycle 2 | Kernel Task-Work and Overflow Reaping via `sq_kflags` in `peekForBatchResult` and `submit` | Direct Read (qd=64) / Write | 310,277 (R) / 302,124 (W) | 315,966 (R) / 44,348 (W) | +1.83% (R) / **-85.3% (W)** | **Rolled back** |
 
 ---
 
@@ -110,6 +111,22 @@ Hardware & OS:
     - Allocations: 0.199 B/op (zero heap allocation maintained)
   * Unit/Integration Tests: 62/62 Passed (100%).
 - **Decision:** KEPT (+6.87% throughput on writes, -18.9% cycles on writes, -10.1% cycles on reads, -5.8% instructions on reads, zero allocation preserved, 100% tests passing).
+
+---
+
+## Sequel Cycle 2: Kernel Task-Work and Overflow Reaping via `sq_kflags` in `peekForBatchResult` and `submit`
+- **Hypothesis:** `sqKflagsAddr` was only retained if `IORING_SETUP_SQPOLL` was set, leaving it `0L` for all standard rings. Under `IORING_SETUP_DEFER_TASKRUN` and `COOP_TASKRUN`, the kernel signals pending deferred task work via `IORING_SQ_TASKRUN` (4) and overflow via `IORING_SQ_CQ_OVERFLOW` (2) in `sq_kflags`.
+  By unconditionally retaining `sqKflagsAddr`, and checking `(sqFlags & 6) != 0`:
+  1. In `submit()`, conditionally passing `IORING_ENTER_GETEVENTS` only when task work or overflow is pending (avoiding the unconditional sync write stall from Cycle 6).
+  2. In `peekForBatchResult()`, if `available <= 0` and task work/overflow is pending, issuing a non-blocking `io_uring_enter(0, 0, IORING_ENTER_GETEVENTS)` to run the deferred task work and reap newly posted CQEs immediately without falling back to a blocking `waitForBatchResult(1)` system call.
+- **Expected Improvement:** DirectRead throughput improvement, massive reduction in `DirectReadBenchmark` syscall rate (down from 152,749/s), while keeping DirectWrite throughput stable or improved without regressions, and passing all 62 unit tests.
+- **Empirical Outcome:**
+  * `DirectReadBenchmark.juringDirectRead` (qd=64): **315,965.706 ops/s (+1.83% improvement)**
+  * `DirectWriteBenchmark.juringDirectWrite` (MULTI_FILE): **44,348.202 ops/s (-85.32% regression)**; cycles jumped from 433.9 to 1503.2/op; instructions increased to 1302.4/op. Root cause: Under NVMe block write I/O, `IORING_SQ_TASKRUN` is frequently set by the kernel block layer during write request submission, causing `submit()` and `peekForBatchResult()` to repeatedly enter the kernel with `IORING_ENTER_GETEVENTS`, forcing synchronous NVMe write bio completion serialize and stalling the pipeline.
+  * Unit/Integration Tests: 62/62 Passed.
+- **Decision:** Rolled back immediately via `git checkout -- .`. Baseline remains at Sequel Cycle 1: 310,277 (R) / 302,124 (W).
+
+
 
 
 
