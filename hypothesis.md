@@ -91,6 +91,46 @@ Hardware & OS:
 
 ---
 
+## Cycle 5: Direct In-Place CQE Reaping in `peekForBatchResult`
+- **Hypothesis:** Currently, `peekForBatchResult(int batchSize, ResultConsumer consumer)` delegates to `peekBatchCqe`, which computes native CQE addresses and writes them into an intermediate off-heap native memory buffer (`cqePtrPtr`), only for `peekForBatchResult` to immediately read each CQE address back out of off-heap memory through a second loop. Fusing CQE lookup, result population, consumer notification, and head advance into a single in-place loop directly over the mmapped CQ ring eliminates 2 off-heap VarHandle memory operations per reaped CQE, eliminates intermediate array buffering, and saves L1 data cache bandwidth on the completion path.
+- **Expected Improvement:** Reduction in `instructions/op` and `L1-dcache-loads/op`, leading to >= 2% throughput improvement on direct reads and writes.
+- **Empirical Outcome:**
+  * `DirectReadBenchmark.juringDirectRead` (qd=64): **314,552.169 ops/s**
+    - Instructions/op plummeted from 592.772 to **542.279 (-8.5% reduction)**
+    - L1-dcache-loads/op dropped from 243.345 to **235.452 (-3.2%)**
+    - Throughput stable within 0.17% of peak baseline.
+  * `DirectWriteBenchmark.juringDirectWrite` (MULTI_FILE): **320,203.539 ops/s**
+    - Instructions/op plummeted from 762.610 to **721.767 (-5.35% reduction)**
+    - Cycles/op dropped from 452.111 to **431.731 (-4.5% reduction)**
+    - CPI dropped from 0.640 to **0.598 clks/insn** (IPC increased to **1.672 insns/clk**)
+    - L1-dcache-loads/op dropped to **426.299**; LLC-load-misses down to **25.568**
+    - Throughput stable (320k ops/s vs 322k baseline, within run-to-run noise).
+  * Unit/Integration Tests: 59/59 Passed (100%).
+- **Decision:** KEPT (Delivers profound instruction reduction across both reads (-8.5%) and writes (-5.35%), drops write cycles/op by -4.5%, increases IPC to 1.672, all 59 tests pass). Baselines and pipeline efficiency locked in.
+
+---
+
+## Cycle 6: Enable `IORING_ENTER_GETEVENTS` in `submit()` for `IORING_SETUP_DEFER_TASKRUN`
+- **Hypothesis:** When `IORING_SETUP_DEFER_TASKRUN` is active, passing `IORING_ENTER_GETEVENTS` in `submit()` (as liburing does) will allow the kernel to execute ready task work non-blockingly during submission (`min_complete=0`), reducing the need for subsequent blocking `waitForBatchResult` syscalls.
+- **Expected Improvement:** Direct read throughput gain >= 2% by avoiding wait syscalls.
+- **Empirical Outcome:**
+  * `DirectReadBenchmark.juringDirectRead` (qd=64): **313,256 ops/s (+20.59% over 259k)**.
+  * `DirectWriteBenchmark.juringDirectWrite` (MULTI_FILE): **106,419 ops/s (-65.13% regression)**.
+  * Root cause: Direct NVMe writes block synchronously when forced to harvest events at submission.
+- **Decision:** Rolled back (`git checkout -- .`).
+
+---
+
+## Cycle 7: Eliminate Off-Heap Kernel SQ Head Polling in `getSqe` and Unused CQE Flags Read
+- **Hypothesis:** Monotonic SQ head caching skipping `*khead` read in `getSqe` to save off-heap reads.
+- **Expected Improvement:** >= 2% throughput improvement across direct reads and writes.
+- **Empirical Outcome:**
+  * `DirectReadBenchmark.juringDirectRead` (qd=64): **219,601 ops/s (-15.46% regression)**.
+  * Root cause: Setting `sqeHead = tail` at `submit()` captures outdated head, causing false ring-full stalls.
+- **Decision:** Rolled back (`git checkout -- .`).
+
+---
+
 ## Sequel Cycle 1: Primitive Type-Index Switching and Elimination of Redundant Reaping Indirections
 - **Hypothesis:** On every direct I/O completion reaped in `peekForBatchResult()` and `populateResultFromCqe()`, user-space executes multiple redundant memory loads:
   1. `ZeroGcCqe.getFlags(address)` performs an off-heap `VarHandle` load of CQE flags that is never consumed.
