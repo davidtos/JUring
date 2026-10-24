@@ -94,6 +94,25 @@ public final class IoUringDispatcher implements AutoCloseable {
     private final IoUringRegister ioUringRegister;
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
+    private long[] registeredBufferAddresses;
+
+    // Cached ring fields to avoid off-heap VarHandle reads during the hot path
+    private int ringFd = -1;
+    private int ringFlags;
+    private long sqKheadAddr;
+    private long sqKtailAddr;
+    private long sqKflagsAddr;
+    private long sqSqesAddr;
+    private int sqRingMask;
+    private int sqRingEntries;
+    private int sqeHead;
+    private int sqeTail;
+
+    private long cqKheadAddr;
+    private long cqKtailAddr;
+    private long cqCqesAddr;
+    private int cqRingMask;
+    private int cqRingEntries;
 
     static {
         io_uring_sq_layout = MemoryLayout.structLayout(
@@ -203,6 +222,14 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     public void setRegisteredBuffers(MemorySegment[] registeredBuffers) {
         this.registeredBuffers = registeredBuffers;
+        if (registeredBuffers != null) {
+            this.registeredBufferAddresses = new long[registeredBuffers.length];
+            for (int i = 0; i < registeredBuffers.length; i++) {
+                this.registeredBufferAddresses[i] = registeredBuffers[i] != null ? registeredBuffers[i].address() : 0L;
+            }
+        } else {
+            this.registeredBufferAddresses = null;
+        }
     }
 
     static IoUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
@@ -237,7 +264,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
 
-        int ring_fd = (int) ringFdHandle.get(this.ring, 0L);
+        int ring_fd = this.ringFd;
 
         var result = IoUringOptions.combineOptions(ioUringOptions);
 
@@ -265,21 +292,17 @@ public final class IoUringDispatcher implements AutoCloseable {
      * Returns 0L if the SQ queue is currently full.
      */
     long getSqe() {
-        long khead_addr = (long) sq_khead_handle.get(ring, 0L);
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, khead_addr);
-        int tail = (int) sq_sqe_tail_handle.get(ring, 0L);
-        int ring_entries = (int) sq_ring_entries_handle.get(ring, 0L);
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int tail = sqeTail;
 
-        if (tail - head >= ring_entries) {
+        if (tail - head >= sqRingEntries) {
             return 0L;
         }
 
-        int ring_mask = (int) sq_ring_mask_handle.get(ring, 0L);
-        long sqes_addr = (long) sq_sqes_handle.get(ring, 0L);
-        int index = tail & ring_mask;
-        long sqe_addr = sqes_addr + (long) index * 64L;
+        int index = tail & sqRingMask;
+        long sqe_addr = sqSqesAddr + (long) index * 64L;
 
-        sq_sqe_tail_handle.set(ring, 0L, tail + 1);
+        sqeTail = tail + 1;
 
         ZeroGcSqe.zero(sqe_addr);
         return sqe_addr;
@@ -425,28 +448,23 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     void submit() {
-        long khead_addr = (long) sq_khead_handle.get(ring, 0L);
-        long ktail_addr = (long) sq_ktail_handle.get(ring, 0L);
+        int tail = sqeTail;
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
 
-        int tail = (int) sq_sqe_tail_handle.get(ring, 0L);
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, khead_addr);
-
-        VH_INT.setRelease(GLOBAL_MEMORY, ktail_addr, tail);
-        sq_sqe_head_handle.set(ring, 0L, tail);
+        VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
+        sqeHead = tail;
 
         int toSubmit = tail - head;
         if (toSubmit <= 0) {
             return;
         }
 
-        int flags = (int) ringFlagsHandle.get(ring, 0L);
-        boolean sqpoll = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
+        boolean sqpoll = (ringFlags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
         int enterFlags = 0;
         boolean needEnter = true;
 
         if (sqpoll) {
-            long kflags_addr = (long) sq_kflags_handle.get(ring, 0L);
-            int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, kflags_addr);
+            int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
             if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                 enterFlags |= IORING_ENTER_SQ_WAKEUP;
             } else {
@@ -455,8 +473,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
 
         if (needEnter) {
-            int fd = (int) ringFdHandle.get(ring, 0L);
-            long res = this.ioUringEnter.ioUringEnter(this.callState, fd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
             if (res < 0) {
                 throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(-LibCDispatcher.errno(this.callState)));
             }
@@ -464,23 +481,17 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int waitCqe(MemorySegment ring, MemorySegment cqePtr) {
-        long cq_khead_addr = (long) cq_khead_handle.get(ring, 0L);
-        long cq_ktail_addr = (long) cq_ktail_handle.get(ring, 0L);
-        long cq_cqes_addr = (long) cq_cqes_handle.get(ring, 0L);
-        int cq_ring_mask = (int) cq_ring_mask_handle.get(ring, 0L);
-        int fd = (int) ringFdHandle.get(ring, 0L);
-
         while (true) {
-            int head = (int) VH_INT.get(GLOBAL_MEMORY, cq_khead_addr);
-            int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cq_ktail_addr);
+            int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             if (head != tail) {
-                int index = head & cq_ring_mask;
-                long cqeAddr = cq_cqes_addr + (long) index * 16L;
+                int index = head & cqRingMask;
+                long cqeAddr = cqCqesAddr + (long) index * 16L;
                 cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
                 return 0;
             }
 
-            long res = this.ioUringEnter.ioUringEnter(this.callState, fd, 0, 1, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, 1, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -492,16 +503,11 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int peekCqe(MemorySegment ring, MemorySegment cqePtr) {
-        long cq_khead_addr = (long) cq_khead_handle.get(ring, 0L);
-        long cq_ktail_addr = (long) cq_ktail_handle.get(ring, 0L);
-        long cq_cqes_addr = (long) cq_cqes_handle.get(ring, 0L);
-        int cq_ring_mask = (int) cq_ring_mask_handle.get(ring, 0L);
-
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cq_khead_addr);
-        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cq_ktail_addr);
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         if (head != tail) {
-            int index = head & cq_ring_mask;
-            long cqeAddr = cq_cqes_addr + (long) index * 16L;
+            int index = head & cqRingMask;
+            long cqeAddr = cqCqesAddr + (long) index * 16L;
             cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
             return 0;
         }
@@ -509,18 +515,15 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int peekBatchCqe(MemorySegment ring, MemorySegment cqePtrPtr, int batchSize) {
-        long cq_khead_addr = (long) cq_khead_handle.get(ring, 0L);
-        long cq_ktail_addr = (long) cq_ktail_handle.get(ring, 0L);
-        long cq_cqes_addr = (long) cq_cqes_handle.get(ring, 0L);
-        int cq_ring_mask = (int) cq_ring_mask_handle.get(ring, 0L);
-
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cq_khead_addr);
-        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cq_ktail_addr);
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         int available = tail - head;
         int count = Math.min(available, batchSize);
+        long cqes = cqCqesAddr;
+        int mask = cqRingMask;
         for (int i = 0; i < count; i++) {
-            int index = (head + i) & cq_ring_mask;
-            long cqeAddr = cq_cqes_addr + (long) index * 16L;
+            int index = (head + i) & mask;
+            long cqeAddr = cqes + (long) index * 16L;
             cqePtrPtr.setAtIndex(JAVA_LONG, i, cqeAddr);
         }
         return count;
@@ -532,25 +535,20 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     void cqAdvance(MemorySegment ring, int count) {
         if (count <= 0) return;
-        long cq_khead_addr = (long) cq_khead_handle.get(ring, 0L);
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cq_khead_addr);
-        VH_INT.setRelease(GLOBAL_MEMORY, cq_khead_addr, head + count);
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
     }
 
     int waitCqeNr(MemorySegment ring, MemorySegment cqePtrPtr, int waitNr) {
-        long cq_khead_addr = (long) cq_khead_handle.get(ring, 0L);
-        long cq_ktail_addr = (long) cq_ktail_handle.get(ring, 0L);
-        int fd = (int) ringFdHandle.get(ring, 0L);
-
         while (true) {
-            int head = (int) VH_INT.get(GLOBAL_MEMORY, cq_khead_addr);
-            int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cq_ktail_addr);
+            int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = tail - head;
             if (available >= waitNr) {
                 return 0;
             }
 
-            long res = this.ioUringEnter.ioUringEnter(this.callState, fd, 0, waitNr, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, waitNr, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -696,16 +694,33 @@ public final class IoUringDispatcher implements AutoCloseable {
         cq_ring_mask_handle.set(ring, 0L, cq_mask);
         cq_ring_entries_handle.set(ring, 0L, cq_ents);
 
+        this.ringFd = fd;
+        this.ringFlags = flags;
+        this.sqKheadAddr = sq_khead;
+        this.sqKtailAddr = sq_ktail;
+        this.sqKflagsAddr = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0 ? sq_kflags : 0L;
+        this.sqSqesAddr = sqes_ptr;
+        this.sqRingMask = sq_mask;
+        this.sqRingEntries = sq_ents;
+        this.sqeHead = 0;
+        this.sqeTail = 0;
+
+        this.cqKheadAddr = cq_khead;
+        this.cqKtailAddr = cq_ktail;
+        this.cqCqesAddr = cq_cqes_addr;
+        this.cqRingMask = cq_mask;
+        this.cqRingEntries = cq_ents;
+
         return 0;
     }
 
     void queueExit(MemorySegment ring) {
-        int fd = (int) ringFdHandle.get(ring, 0L);
+        int fd = this.ringFd;
         if (fd < 0) return;
 
-        long sqes_addr = (long) sq_sqes_handle.get(ring, 0L);
-        int sq_entries = (int) sq_ring_entries_handle.get(ring, 0L);
-        int flags = (int) ringFlagsHandle.get(ring, 0L);
+        long sqes_addr = this.sqSqesAddr;
+        int sq_entries = this.sqRingEntries;
+        int flags = this.ringFlags;
         int sqe_shift = ((flags & IoUringOptions.IORING_SETUP_SQE128.value) != 0) ? 1 : 0;
         long sqes_sz = ((long) sq_entries << sqe_shift) * 64L;
         if (sqes_addr != 0L) {
@@ -726,10 +741,11 @@ public final class IoUringDispatcher implements AutoCloseable {
 
         libCDispatcher.close(fd);
         ringFdHandle.set(ring, 0L, -1);
+        this.ringFd = -1;
     }
 
     int registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
-        int fd = (int) ringFdHandle.get(ring, 0L);
+        int fd = this.ringFd;
         long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 0 /* IORING_REGISTER_BUFFERS */, iovecs, nrIovecs);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
@@ -748,7 +764,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
-        int fd = (int) ringFdHandle.get(ring, 0L);
+        int fd = this.ringFd;
         long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 2 /* IORING_REGISTER_FILES */, fdArray, count);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
@@ -772,7 +788,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int registerFilesUpdate(MemorySegment ring, int offset, MemorySegment fdArray, int count) {
-        int fd = (int) ringFdHandle.get(ring, 0L);
+        int fd = this.ringFd;
         MemorySegment up = this.arena.allocate(16L);
         up.set(JAVA_INT, 0L, offset);
         up.set(JAVA_INT, 4L, 0);
@@ -800,7 +816,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     void registerIowqMaxWorkers(int bounded, int unbounded) {
-        int fd = (int) ringFdHandle.get(ring, 0L);
+        int fd = this.ringFd;
         MemorySegment values = this.arena.allocate(JAVA_INT, 2);
         values.setAtIndex(JAVA_INT, 0, bounded);
         values.setAtIndex(JAVA_INT, 1, unbounded);
@@ -811,45 +827,53 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int peekForBatchResult(int batchSize, ResultConsumer consumer) {
-        int count = peekBatchCqe(ring, cqePtrPtr, batchSize);
-        if (count > 0) {
-            for (int i = 0; i < count; i++) {
-                long address = cqePtrPtr.getAtIndex(JAVA_LONG, i);
-                long userData = ZeroGcCqe.getUserData(address);
-                int res = ZeroGcCqe.getRes(address);
-                int cqeFlags = ZeroGcCqe.getFlags(address);
-
-                populateResultFromCqe(reusableResult, userData, res, cqeFlags);
-                consumer.accept(reusableResult);
-            }
-            cqAdvance(ring, count);
-            return count;
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        int available = tail - head;
+        if (available <= 0) {
+            return 0;
         }
-        return 0;
+        int count = Math.min(available, batchSize);
+        long cqes = cqCqesAddr;
+        int mask = cqRingMask;
+        for (int i = 0; i < count; i++) {
+            int index = (head + i) & mask;
+            long address = cqes + (long) index * 16L;
+            long userData = ZeroGcCqe.getUserData(address);
+            int res = ZeroGcCqe.getRes(address);
+            int cqeFlags = ZeroGcCqe.getFlags(address);
+
+            populateResultFromCqe(reusableResult, userData, res, cqeFlags);
+            consumer.accept(reusableResult);
+        }
+        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
+        return count;
     }
 
     List<Result> peekForBatchResult(int batchSize) {
-        int count = peekBatchCqe(ring, cqePtrPtr, batchSize);
-
-        if (count > 0) {
-            List<Result> ret = new ArrayList<>(count);
-
-            for (int i = 0; i < count; i++) {
-                long address = cqePtrPtr.getAtIndex(JAVA_LONG, i);
-
-                long userData = ZeroGcCqe.getUserData(address);
-                int res = ZeroGcCqe.getRes(address);
-                int cqeFlags = ZeroGcCqe.getFlags(address);
-
-                Result r = new Result();
-                populateResultFromCqe(r, userData, res, cqeFlags);
-                ret.add(r);
-            }
-
-            cqAdvance(ring, count);
-            return ret;
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        int available = tail - head;
+        if (available <= 0) {
+            return List.of();
         }
-        return List.of();
+        int count = Math.min(available, batchSize);
+        long cqes = cqCqesAddr;
+        int mask = cqRingMask;
+        List<Result> ret = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int index = (head + i) & mask;
+            long address = cqes + (long) index * 16L;
+            long userData = ZeroGcCqe.getUserData(address);
+            int res = ZeroGcCqe.getRes(address);
+            int cqeFlags = ZeroGcCqe.getFlags(address);
+
+            Result r = new Result();
+            populateResultFromCqe(r, userData, res, cqeFlags);
+            ret.add(r);
+        }
+        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
+        return ret;
     }
 
     List<Result> waitForBatchResult(int batchSize) {
@@ -909,7 +933,9 @@ public final class IoUringDispatcher implements AutoCloseable {
                 int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
                 MemorySegment regBuf = (registeredBuffers != null && bufferIdx >= 0 && bufferIdx < registeredBuffers.length)
                         ? registeredBuffers[bufferIdx] : null;
-                target.set(userData, result, type, regBuf != null ? regBuf.address() : 0L, regBuf, bufferIdx, null);
+                long regBufAddr = (registeredBufferAddresses != null && bufferIdx >= 0 && bufferIdx < registeredBufferAddresses.length)
+                        ? registeredBufferAddresses[bufferIdx] : 0L;
+                target.set(userData, result, type, regBufAddr, regBuf, bufferIdx, null);
             }
             case READ, READ_POOLED -> {
                 long bufferAddr = ZeroGcUserData.getPayload(userData);

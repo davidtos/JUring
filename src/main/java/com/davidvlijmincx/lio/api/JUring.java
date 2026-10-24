@@ -12,10 +12,13 @@ public class JUring implements AutoCloseable {
 
     private final IoUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
+    private MemorySegment[] registeredBuffersArray = new MemorySegment[0];
+    private long[] registeredBufferAddresses = new long[0];
+    private long[] registeredBufferSizes = new long[0];
     private int[] freeBufferStack;
     private int freeBufferTop;
     private ReadBufferPool readBufferPool;
-    private final AtomicLong opSeq = new AtomicLong(1);
+    private long opSeq = 1;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
@@ -247,16 +250,15 @@ public class JUring implements AutoCloseable {
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
-            if (idx < 0 || idx >= registeredBuffers.size()) {
+            if (idx < 0 || idx >= registeredBufferAddresses.length) {
                 ioUring.releaseIovecBlock(blockAddr);
                 throw new IllegalArgumentException("Buffer index out of range: " + idx);
             }
-            MemorySegment registeredBuffer = registeredBuffers.get(idx);
-            if (lengths[i] > registeredBuffer.byteSize()) {
+            if (lengths[i] > registeredBufferSizes[idx]) {
                 ioUring.releaseIovecBlock(blockAddr);
                 throw new IllegalArgumentException("Length " + lengths[i] + " exceeds registered buffer size for index " + idx);
             }
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBufferAddresses[idx]);
             ZeroGcIovecBlock.setIovLen(blockAddr, i, lengths[i]);
         }
 
@@ -364,7 +366,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareCloseDirect(int fileIndex, byte flags) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
 
         long sqe = getSqe(flags, false);
@@ -397,7 +399,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, byte flags, boolean fixedFile) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.WRITE_FIXED, opId);
 
         long sqe = getSqe(flags, fixedFile);
@@ -421,69 +423,67 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, byte flags, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (readSize > registeredBuffer.byteSize()) {
+        if (readSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Read size exceeds registered buffer size");
         }
 
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId);
 
         long sqe = getSqe(flags, fixedFile);
-        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer.address(), readSize, offset, bufferIndex);
+        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], readSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;
     }
 
     private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, byte flags, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (bytes.length > registeredBuffer.byteSize()) {
+        if (bytes.length > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        MemorySegment.copy(bytes, 0, registeredBuffer, JAVA_BYTE, 0, bytes.length);
-        long opId = opSeq.getAndIncrement();
+        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         long sqe = getSqe(flags, fixedFile);
-        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer.address(), bytes.length, offset, bufferIndex);
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], bytes.length, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;
     }
 
     private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, byte flags, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (bytes.byteSize() > registeredBuffer.byteSize()) {
+        long byteSize = bytes.byteSize();
+        if (byteSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        MemorySegment.copy(bytes, 0, registeredBuffer, 0, bytes.byteSize());
-        long opId = opSeq.getAndIncrement();
+        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         long sqe = getSqe(flags, fixedFile);
-        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer.address(), bytes.byteSize(), offset, bufferIndex);
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], byteSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;
     }
 
     private long prepareCloseInternal(int fdOrIndex, byte flags) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
 
         long sqe = getSqe(flags, false);
@@ -513,7 +513,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareAccept(int serverFd, byte flags) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.ACCEPT, opId);
 
         long sqe = getSqe(flags, false);
@@ -532,7 +532,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareMultishotAccept(int serverFd, byte flags) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.MULTISHOT_ACCEPT, opId);
 
         long sqe = getSqe(flags, false);
@@ -628,7 +628,7 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareSend(int fd, MemorySegment buffer, int length, byte flags) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.SEND_EXT, opId);
 
         long sqe = getSqe(flags, false);
@@ -639,7 +639,7 @@ public class JUring implements AutoCloseable {
     }
 
     public long prepareCancel(long targetOpId) {
-        long opId = opSeq.getAndIncrement();
+        long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.CANCEL, opId);
 
         long sqe = getSqe((byte) 0, false);
@@ -696,6 +696,13 @@ public class JUring implements AutoCloseable {
         MemorySegment[] result = ioUring.registerBuffers(size, nrOfBuffers);
         registeredBuffers.clear();
         registeredBuffers.addAll(Arrays.asList(result));
+        this.registeredBuffersArray = result;
+        this.registeredBufferAddresses = new long[result.length];
+        this.registeredBufferSizes = new long[result.length];
+        for (int i = 0; i < result.length; i++) {
+            this.registeredBufferAddresses[i] = result[i].address();
+            this.registeredBufferSizes[i] = result[i].byteSize();
+        }
         ioUring.setRegisteredBuffers(result);
         freeBufferStack = new int[nrOfBuffers];
         freeBufferTop = nrOfBuffers;
