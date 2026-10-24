@@ -147,8 +147,8 @@ public final class IoHelper {
         }
 
         int activeThreads = Math.max(1, threads);
-        // Reserve memory for ring structures and registered file tables (~384KB per thread)
-        long ringOverhead = 384 * 1024L * activeThreads;
+        // Reserve memory for ring structures (~64KB per thread; a 256-entry ring is ~24KB)
+        long ringOverhead = 64 * 1024L * activeThreads;
         long usableLimit = Math.max(0, limit - ringOverhead);
         // Reserve 75% of usable limit across all threads, leave 25% safety margin
         long safeTotalBudget = (usableLimit * 3) / 4;

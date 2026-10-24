@@ -664,4 +664,108 @@ class JUringTest {
         assertEquals(id2, results.get(1).id());
         assertEquals(0L, results.get(1).result());
     }
+
+    @Test
+    void submitAndWaitAndBatchConsumerReapsAllAvailable() {
+        long id1 = jUring.prepareNop();
+        long id2 = jUring.prepareNop();
+        long id3 = jUring.prepareNop();
+        long id4 = jUring.prepareNop();
+
+        List<Long> completedIds = new ArrayList<>();
+        int reaped = jUring.submitAndWaitForBatchResult(1, 4, result -> {
+            assertEquals(0L, result.result());
+            completedIds.add(result.id());
+        });
+
+        assertEquals(4, reaped);
+        assertThat(completedIds).containsExactlyInAnyOrder(id1, id2, id3, id4);
+    }
+
+    @Test
+    void waitForBatchResultRespectsMaxReap() {
+        long id1 = jUring.prepareNop();
+        long id2 = jUring.prepareNop();
+        long id3 = jUring.prepareNop();
+
+        int submitted = jUring.submitAndWait(3);
+        assertEquals(3, submitted);
+
+        List<Long> completedIds = new ArrayList<>();
+        int firstReap = jUring.waitForBatchResult(1, 2, result -> {
+            assertEquals(0L, result.result());
+            completedIds.add(result.id());
+        });
+        assertEquals(2, firstReap);
+
+        int secondReap = jUring.waitForBatchResult(1, 2, result -> {
+            assertEquals(0L, result.result());
+            completedIds.add(result.id());
+        });
+        assertEquals(1, secondReap);
+        assertThat(completedIds).containsExactlyInAnyOrder(id1, id2, id3);
+    }
+
+    @Test
+    void prepareWriteFixedZeroCopyOverloads() throws IOException {
+        Path path = Path.of("src/test/resources/write_file");
+        Files.write(path, "Clean content".getBytes());
+
+        String firstInput = "Zero-copy FD write!";
+        byte[] firstBytes = firstInput.getBytes();
+
+        try (FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
+            jUring.registerFiles(fd);
+            jUring.registerBuffers(64, 2);
+
+            // 1. Zero-copy write via FileDescriptor
+            int bufIdx0 = jUring.checkOutBuffer();
+            MemorySegment buf0 = jUring.getRegisteredBuffer(bufIdx0);
+            MemorySegment.copy(MemorySegment.ofArray(firstBytes), 0, buf0, 0, firstBytes.length);
+
+            long id1 = jUring.prepareWriteFixed(fd, firstBytes.length, 0, bufIdx0);
+            List<Long> completed = new ArrayList<>();
+            int reaped1 = jUring.submitAndWaitForBatchResult(1, result -> {
+                assertEquals(firstBytes.length, result.result());
+                completed.add(result.id());
+            });
+            assertEquals(1, reaped1);
+            assertEquals(List.of(id1), completed);
+            assertEquals(firstInput, Files.readString(path));
+            jUring.checkInBuffer(bufIdx0);
+
+            // 2. Zero-copy write via registered file index
+            String secondInput = "Registered";
+            byte[] secondBytes = secondInput.getBytes();
+            int bufIdx1 = jUring.checkOutBuffer();
+            MemorySegment buf1 = jUring.getRegisteredBuffer(bufIdx1);
+            MemorySegment.copy(MemorySegment.ofArray(secondBytes), 0, buf1, 0, secondBytes.length);
+
+            long id2 = jUring.prepareWriteFixed(0, secondBytes.length, 0, bufIdx1);
+            completed.clear();
+            int reaped2 = jUring.submitAndWaitForBatchResult(1, result -> {
+                assertEquals(secondBytes.length, result.result());
+                completed.add(result.id());
+            });
+            assertEquals(1, reaped2);
+            assertEquals(List.of(id2), completed);
+            assertEquals("RegisteredFD write!", Files.readString(path));
+            jUring.checkInBuffer(bufIdx1);
+        }
+    }
+
+    @Test
+    void registeredBuffersArePageAlignedAndContiguous() {
+        MemorySegment[] buffers = jUring.registerBuffers(4096, 4);
+        assertEquals(4, buffers.length);
+
+        long baseAddr = buffers[0].address();
+        assertEquals(0L, baseAddr & 4095L, "First 4KB registered buffer must be 4096-byte page aligned");
+
+        for (int i = 0; i < buffers.length; i++) {
+            assertEquals(4096L, buffers[i].byteSize());
+            assertEquals(0L, buffers[i].address() & 4095L, "Registered buffer " + i + " must be 4096-byte page aligned");
+            assertEquals(baseAddr + (long) i * 4096L, buffers[i].address(), "Registered buffers must form a contiguous slab");
+        }
+    }
 }

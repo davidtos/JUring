@@ -141,26 +141,20 @@ public class DirectReadBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch) {
+                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
-                    ring.peekForBatchResult(submitBatch, state.consumer);
+                    ring.peekForBatchResult(qd, state.consumer);
                 }
             }
 
-            if (unsubmitted > 0) {
-                ring.submit();
-                submitsIssued++;
-                unsubmitted = 0;
-            }
-
-            // Drain completed CQEs
-            int batchToReap = Math.min(submitted - state.reapedCount, submitBatch);
-            int reaped = ring.peekForBatchResult(batchToReap, state.consumer);
+            // Drain completed CQEs or fuse pending SQE submission with completion wait in a single syscall
+            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
-                ring.waitForBatchResult(1, state.consumer);
+                ring.submitAndWaitForBatchResult(1, qd, state.consumer);
                 waitsIssued++;
+                unsubmitted = 0;
             }
         }
 

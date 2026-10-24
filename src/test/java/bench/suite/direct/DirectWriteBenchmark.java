@@ -128,6 +128,7 @@ public class DirectWriteBenchmark {
         final int totalTasks = taskFileIndices.length;
         final int qd = 64;
         final int submitBatch = 16;
+        final int waitBatch = 8;
 
         state.reapedCount = 0;
         int submitted = 0;
@@ -146,30 +147,26 @@ public class DirectWriteBenchmark {
                 int fileIdx = taskFileIndices[taskIndex];
                 long offset = taskOffsets[taskIndex];
 
-                ring.prepareWriteFixed(fileIdx, state.writeSegment, offset, bufIdx);
+                ring.prepareWriteFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
                 submitted++;
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch) {
+                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
-                    ring.peekForBatchResult(submitBatch, state.consumer);
+                    ring.peekForBatchResult(qd, state.consumer);
                 }
             }
 
-            if (unsubmitted > 0) {
-                ring.submit();
-                submitsIssued++;
-                unsubmitted = 0;
-            }
-
-            int batchToReap = Math.min(submitted - state.reapedCount, submitBatch);
-            int reaped = ring.peekForBatchResult(batchToReap, state.consumer);
+            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
-                ring.waitForBatchResult(1, state.consumer);
+                int inFlight = submitted - state.reapedCount;
+                int minComplete = Math.min(inFlight, waitBatch);
+                ring.submitAndWaitForBatchResult(minComplete, qd, state.consumer);
                 waitsIssued++;
+                unsubmitted = 0;
             }
         }
 

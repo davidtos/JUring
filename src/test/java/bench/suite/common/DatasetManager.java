@@ -50,9 +50,13 @@ public class DatasetManager {
     private final AtomicInteger taskCursor = new AtomicInteger(0);
 
     public DatasetManager(WorkloadType workloadType, FileDistribution distribution) {
+        this(workloadType, distribution, DEFAULT_TASK_COUNT);
+    }
+
+    public DatasetManager(WorkloadType workloadType, FileDistribution distribution, int taskCount) {
         this(workloadType, distribution,
                 workloadType == WorkloadType.READ ? DEFAULT_READ_DIR : DEFAULT_WRITE_DIR,
-                DEFAULT_BUFFER_SIZE, DEFAULT_TASK_COUNT);
+                DEFAULT_BUFFER_SIZE, taskCount);
     }
 
     public static final int MAX_MULTI_FILES = 2211;

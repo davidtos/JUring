@@ -36,6 +36,12 @@ public final class IoUringDispatcher implements AutoCloseable {
     // Enter flags
     private static final int IORING_ENTER_GETEVENTS = 1;
     private static final int IORING_ENTER_SQ_WAKEUP = 2;
+    private static final int IORING_ENTER_REGISTERED_RING = 1 << 4;
+
+    // Register opcodes & internal flags
+    private static final int IORING_REGISTER_RING_FDS = 20;
+    private static final int IORING_UNREGISTER_RING_FDS = 21;
+    private static final byte INT_FLAG_REG_RING = 1;
 
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
@@ -100,7 +106,10 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     // Cached ring fields to avoid off-heap VarHandle reads during the hot path
     private int ringFd = -1;
+    private int enterRingFd = -1;
+    private int enterFlagsBase;
     private int ringFlags;
+    private boolean isSqPoll;
     private long sqKheadAddr;
     private long sqKtailAddr;
     private long sqKflagsAddr;
@@ -466,8 +475,8 @@ public final class IoUringDispatcher implements AutoCloseable {
             return;
         }
 
-        boolean sqpoll = (ringFlags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
-        int enterFlags = 0;
+        boolean sqpoll = this.isSqPoll;
+        int enterFlags = this.enterFlagsBase;
         boolean needEnter = true;
 
         if (sqpoll) {
@@ -483,9 +492,83 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount++;
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
             if (res < 0) {
-                throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(-LibCDispatcher.errno(this.callState)));
+                int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    enterFlags = (enterFlags & ~IORING_ENTER_REGISTERED_RING) | this.enterFlagsBase;
+                    res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                    if (res >= 0) {
+                        return;
+                    }
+                    err = LibCDispatcher.errno(this.callState);
+                }
+                throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(err));
+            }
+        }
+    }
+
+    int submitAndWait(int waitNr) {
+        int tail = sqeTail;
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int toSubmit = tail - head;
+        if (toSubmit > 0) {
+            VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
+            sqeHead = tail;
+        } else {
+            toSubmit = 0;
+        }
+
+        boolean sqpoll = this.isSqPoll;
+        while (true) {
+            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+            int available = cqTail - cqHead;
+            if (available >= waitNr && toSubmit == 0) {
+                return available;
+            }
+
+            int enterFlags = (waitNr > 0 && available < waitNr) ? IORING_ENTER_GETEVENTS : 0;
+            boolean needEnter = (enterFlags != 0);
+            if (toSubmit > 0) {
+                if (sqpoll) {
+                    int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
+                    if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
+                        enterFlags |= IORING_ENTER_SQ_WAKEUP;
+                        needEnter = true;
+                    }
+                } else {
+                    needEnter = true;
+                }
+            }
+
+            if (!needEnter) {
+                return available;
+            }
+
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
+            int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (res < 0) {
+                int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    continue;
+                }
+                if (err == 4 /* EINTR */) {
+                    tail = sqeTail;
+                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    continue;
+                }
+                throw new RuntimeException("Failed in submitAndWait: " + libCDispatcher.strerror(err));
+            }
+            toSubmit = 0;
+            if (waitNr <= 0) {
+                return 0;
             }
         }
     }
@@ -504,9 +587,13 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount++;
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, 1, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    continue;
+                }
                 if (err == 4 /* EINTR */) {
                     continue;
                 }
@@ -564,9 +651,13 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount++;
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, waitNr, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    continue;
+                }
                 if (err == 4 /* EINTR */) {
                     continue;
                 }
@@ -717,10 +808,13 @@ public final class IoUringDispatcher implements AutoCloseable {
         cq_ring_entries_handle.set(ring, 0L, cq_ents);
 
         this.ringFd = fd;
+        this.enterRingFd = fd;
+        this.enterFlagsBase = 0;
         this.ringFlags = flags;
+        this.isSqPoll = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
         this.sqKheadAddr = sq_khead;
         this.sqKtailAddr = sq_ktail;
-        this.sqKflagsAddr = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0 ? sq_kflags : 0L;
+        this.sqKflagsAddr = this.isSqPoll ? sq_kflags : 0L;
         this.sqSqesAddr = sqes_ptr;
         this.sqRingMask = sq_mask;
         this.sqRingEntries = sq_ents;
@@ -733,12 +827,68 @@ public final class IoUringDispatcher implements AutoCloseable {
         this.cqRingMask = cq_mask;
         this.cqRingEntries = cq_ents;
 
+        registerRingFd();
+
         return 0;
+    }
+
+    int registerRingFd() {
+        if (this.ringFd < 0) {
+            return -9; // -EBADF
+        }
+        MemorySegment up = this.arena.allocate(16L, 8L);
+        up.set(JAVA_INT, 0L, -1);
+        up.set(JAVA_INT, 4L, 0);
+        up.set(JAVA_LONG, 8L, this.ringFd);
+        long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
+        if (res == 1L) {
+            int regFd = up.get(JAVA_INT, 0L);
+            this.enterRingFd = regFd;
+            this.enterFlagsBase = IORING_ENTER_REGISTERED_RING;
+            enterRingFdHandle.set(this.ring, 0L, regFd);
+            ringIntFlagsHandle.set(this.ring, 0L, INT_FLAG_REG_RING);
+            return 1;
+        }
+        return -LibCDispatcher.errno(this.callState);
+    }
+
+    int unregisterRingFd() {
+        if (this.ringFd < 0 || this.enterFlagsBase == 0) {
+            return 0;
+        }
+        MemorySegment up = this.arena.allocate(16L, 8L);
+        up.set(JAVA_INT, 0L, this.enterRingFd);
+        up.set(JAVA_INT, 4L, 0);
+        up.set(JAVA_LONG, 8L, 0L);
+        long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
+        this.enterRingFd = this.ringFd;
+        this.enterFlagsBase = 0;
+        enterRingFdHandle.set(this.ring, 0L, this.ringFd);
+        ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
+        if (res < 0) {
+            return -LibCDispatcher.errno(this.callState);
+        }
+        return (int) res;
+    }
+
+    private void fallbackOrReRegisterRingFd() {
+        if (registerRingFd() < 0) {
+            this.enterRingFd = this.ringFd;
+            this.enterFlagsBase = 0;
+            enterRingFdHandle.set(this.ring, 0L, this.ringFd);
+            ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
+        }
+    }
+
+    boolean isRingFdRegistered() {
+        return this.enterFlagsBase != 0;
     }
 
     void queueExit(MemorySegment ring) {
         int fd = this.ringFd;
         if (fd < 0) return;
+
+        unregisterRingFd();
 
         long sqes_addr = this.sqSqesAddr;
         int sq_entries = this.sqRingEntries;
@@ -848,14 +998,11 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    int peekForBatchResult(int batchSize, ResultConsumer consumer) {
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
-        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-        int available = tail - head;
+    private int reapAvailable(int head, int available, int maxReap, ResultConsumer consumer) {
         if (available <= 0) {
             return 0;
         }
-        int count = Math.min(available, batchSize);
+        int count = Math.min(available, maxReap);
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
         for (int i = 0; i < count; i++) {
@@ -869,6 +1016,12 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
         return count;
+    }
+
+    int peekForBatchResult(int batchSize, ResultConsumer consumer) {
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        return reapAvailable(head, tail - head, batchSize, consumer);
     }
 
     List<Result> peekForBatchResult(int batchSize) {
@@ -910,18 +1063,101 @@ public final class IoUringDispatcher implements AutoCloseable {
         return peekForBatchResult(batchSize);
     }
 
-    int waitForBatchResult(int batchSize, ResultConsumer consumer) {
-        int status = waitCqeNr(ring, cqePtrPtr, batchSize);
-        if (status < 0) {
-            status = waitCqeNr(ring, cqePtrPtr, batchSize);
-            if (status < 0) {
-                status = waitCqeNr(ring, cqePtrPtr, batchSize);
-                if (status < 0) {
-                    throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(status));
+    int waitForBatchResult(int minComplete, ResultConsumer consumer) {
+        return waitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
+    }
+
+    int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        while (true) {
+            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+            int available = cqTail - cqHead;
+            if (available >= minComplete) {
+                return reapAvailable(cqHead, available, maxReap, consumer);
+            }
+
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (res < 0) {
+                int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    continue;
                 }
+                if (err == 4 /* EINTR */) {
+                    continue;
+                }
+                throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(err));
             }
         }
-        return peekForBatchResult(batchSize, consumer);
+    }
+
+    int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        int tail = sqeTail;
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int toSubmit = tail - head;
+        if (toSubmit > 0) {
+            VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
+            sqeHead = tail;
+        } else {
+            toSubmit = 0;
+        }
+
+        boolean sqpoll = this.isSqPoll;
+        while (true) {
+            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+            int available = cqTail - cqHead;
+            if (available >= minComplete && toSubmit == 0) {
+                return reapAvailable(cqHead, available, maxReap, consumer);
+            }
+
+            int enterFlags = (minComplete > 0 && available < minComplete) ? IORING_ENTER_GETEVENTS : 0;
+            boolean needEnter = (enterFlags != 0);
+            if (toSubmit > 0) {
+                if (sqpoll) {
+                    int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
+                    if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
+                        enterFlags |= IORING_ENTER_SQ_WAKEUP;
+                        needEnter = true;
+                    }
+                } else {
+                    needEnter = true;
+                }
+            }
+
+            if (!needEnter) {
+                return reapAvailable(cqHead, available, maxReap, consumer);
+            }
+
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
+            int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
+            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (res < 0) {
+                int err = LibCDispatcher.errno(this.callState);
+                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                    fallbackOrReRegisterRingFd();
+                    continue;
+                }
+                if (err == 4 /* EINTR */) {
+                    tail = sqeTail;
+                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    continue;
+                }
+                throw new RuntimeException("Failed in submitAndWaitForBatchResult: " + libCDispatcher.strerror(err));
+            }
+            toSubmit = 0;
+            if (minComplete <= 0) {
+                cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+                cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                return reapAvailable(cqHead, cqTail - cqHead, maxReap, consumer);
+            }
+        }
     }
 
     Result waitForResult() {

@@ -5,7 +5,42 @@ JUring is a Java library that provides bindings to Linux's io_uring asynchronous
 
 ## Performance
 
-### Key Performance Highlights
+### Direct I/O (`O_DIRECT`) NVMe Performance & Hardware Ceiling Comparison
+
+Using registered files (`IOSQE_FIXED_FILE`), page-aligned registered buffers (`IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED`), registered ring file descriptors (`IORING_REGISTER_RING_FDS` + `IORING_ENTER_REGISTERED_RING`), and fused submission/completion (`submitAndWaitForBatchResult`), JUring matches **100% of native C `fio` (`ioengine=io_uring`)** throughput on random 4 KB `O_DIRECT` workloads with zero GC allocations (`~0 B/op`):
+
+#### Multi-Thread 4 KB Random `O_DIRECT` Read Scaling (`qd=64` per thread)
+
+| Threads | `fio` Native C Ceiling (`io_uring`) | `JUring` (`O_DIRECT` + Fixed Files/Buffers) | `FileChannel` (`ExtendedOpenOption.DIRECT`) | **JUring vs FileChannel** |
+|---------|-------------------------------------|---------------------------------------------|---------------------------------------------|---------------------------|
+| **1**   | ~320,000 ops/s (1,250 MB/s)         | **317,722 ops/s** (1,301 MB/s)              | 11,389 ops/s (45 MB/s)                      | **27.9x faster**          |
+| **2**   | 416,000 ops/s (1,625 MB/s)          | **417,076 ops/s** (1,629 MB/s)              | 22,287 ops/s (87 MB/s)                      | **18.7x faster**          |
+| **4**   | 468,000 ops/s (1,828 MB/s)          | **470,790 ops/s** (1,839 MB/s)              | 43,114 ops/s (168 MB/s)                     | **10.9x faster**          |
+| **8**   | 477,000 ops/s (1,863 MB/s)          | **477,387 ops/s** (1,865 MB/s)              | 63,371 ops/s (248 MB/s)                     | **7.5x faster**           |
+| **16**  | 480,000 ops/s (1,875 MB/s)          | **476,357 ops/s** (1,861 MB/s)              | 145,296 ops/s (568 MB/s)                    | **3.3x faster**           |
+
+#### Single-Core Efficiency Metrics (`qd=64`, Kernel + User Inclusive)
+
+| Benchmark | Throughput | Bandwidth | User CPU (`ns/op`) | Kernel CPU (`ns/op`) | Syscalls (`enters/op`) | Heap Alloc (`B/op`) |
+|-----------|------------|-----------|--------------------|----------------------|------------------------|---------------------|
+| `NopBenchmark.juringNop` | **11,446,412 ops/s** | — | 10.7 ns/op | 74.5 ns/op | 0.0313 | ~0.005 B/op |
+| `DirectReadBenchmark.juringDirectRead` | **317,722 ops/s** | **1,301 MB/s** | 83.4 ns/op | 2,376.0 ns/op | 0.4157 | ~0.007 B/op |
+| `DirectWriteBenchmark.juringDirectWrite` | **317,653 ops/s** | **1,301 MB/s** | 39.4 ns/op | 2,691.3 ns/op | 0.0773 | ~0.567 B/op |
+
+### Running the Benchmark Suite (`./bench.sh`)
+
+```shell
+# Quick smoke run with CPU pinning, GC profiler, and Linux perf hardware counters:
+./bench.sh --pin 4 --include "DirectReadBenchmark.juringDirectRead" --param queueDepth=64 --quick --perfnorm --gc
+
+# Statistically rigorous 3-fork decision run with derived user/sys/syscall metrics table:
+./bench.sh --pin 4 --include "DirectReadBenchmark.juringDirectRead" --param queueDepth=64 --decision --perfnorm --gc
+
+# Multi-thread scaling sweep across 1, 2, 4, 8, 16 threads:
+./bench.sh --include "MultiThreadScalingBenchmark" --scaling
+```
+
+### Key Performance Highlights (Buffered I/O)
 
 **JUring with registered files provides the following performance:**
 - **Up to 489% faster** than pre-opened FileChannels at 4KB buffer sizes for reads

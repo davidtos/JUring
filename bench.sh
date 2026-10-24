@@ -29,8 +29,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! -f target/cp.txt || ! -d target/test-classes ]]; then
+if [[ ! -f target/cp.txt ]]; then
     mvn -q test-compile dependency:build-classpath -Dmdep.outputFile=target/cp.txt
+else
+    mvn -q test-compile
 fi
 
 CMD=(java --enable-native-access=ALL-UNNAMED -Djuring.countEnters=true

@@ -188,6 +188,44 @@ public class JUring implements AutoCloseable {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Zero-copy fixed-buffer write using the data already present in the registered buffer at {@code bufferIndex}.
+     */
+    public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex) {
+        return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, (byte) 0, false);
+    }
+
+    /**
+     * Zero-copy fixed-buffer write using the data already present in the registered buffer at {@code bufferIndex}.
+     */
+    public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    /**
+     * Zero-copy fixed-buffer write to a registered file index using the data already present in the registered buffer at {@code bufferIndex}.
+     */
+    public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
+        return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, (byte) 0, true);
+    }
+
+    /**
+     * Zero-copy fixed-buffer write to a registered file index using the data already present in the registered buffer at {@code bufferIndex}.
+     */
+    public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    /**
+     * Returns the registered {@link MemorySegment} buffer at {@code bufferIndex} for in-place population before zero-copy writes.
+     */
+    public MemorySegment getRegisteredBuffer(int bufferIndex) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+        return registeredBuffersArray[bufferIndex];
+    }
+
     public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset) {
         return prepareReadv(fd, bufferSizes, offset, (byte) 0);
     }
@@ -501,12 +539,34 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
+        long targetAddr = registeredBufferAddresses[bufferIndex];
+        if (bytes.address() != targetAddr) {
+            MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
+        }
         long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         long sqe = getSqe(flags, fixedFile);
-        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], byteSize, offset, bufferIndex);
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, targetAddr, byteSize, offset, bufferIndex);
+        ioUring.setUserData(sqe, userData);
+
+        return userData;
+    }
+
+    private long prepareWriteFixedZeroCopyInternal(int fdOrIndex, int writeSize, long offset, int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+
+        if (writeSize < 0 || writeSize > registeredBufferSizes[bufferIndex]) {
+            throw new IllegalArgumentException("Write size exceeds registered buffer size");
+        }
+
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+
+        long sqe = getSqe(flags, fixedFile);
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], writeSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -694,6 +754,42 @@ public class JUring implements AutoCloseable {
         ioUring.submit();
     }
 
+    /**
+     * Submits all queued SQEs and waits until at least {@code minComplete} CQEs are available
+     * in the completion ring using a single {@code io_uring_enter} system call.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @return number of completions currently available in the CQ ring
+     */
+    public int submitAndWait(int minComplete) {
+        return ioUring.submitAndWait(minComplete);
+    }
+
+    /**
+     * Submits all queued SQEs, waits until at least {@code minComplete} CQEs are available,
+     * and reaps all currently available CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int submitAndWaitForBatchResult(int minComplete, ResultConsumer consumer) {
+        return ioUring.submitAndWaitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
+    }
+
+    /**
+     * Submits all queued SQEs, waits until at least {@code minComplete} CQEs are available,
+     * and reaps up to {@code maxReap} CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param maxReap     maximum number of completions to reap
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        return ioUring.submitAndWaitForBatchResult(minComplete, maxReap, consumer);
+    }
+
     public int forEachBatchResult(int batchSize, ResultConsumer consumer) {
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
@@ -710,8 +806,29 @@ public class JUring implements AutoCloseable {
         return ioUring.waitForBatchResult(batchSize);
     }
 
-    public int waitForBatchResult(int batchSize, ResultConsumer consumer) {
-        return ioUring.waitForBatchResult(batchSize, consumer);
+    /**
+     * Waits until at least {@code minComplete} CQEs are available in the completion ring,
+     * then reaps all currently available CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
+        return ioUring.waitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
+    }
+
+    /**
+     * Waits until at least {@code minComplete} CQEs are available in the completion ring,
+     * then reaps up to {@code maxReap} CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param maxReap     maximum number of completions to reap
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        return ioUring.waitForBatchResult(minComplete, maxReap, consumer);
     }
 
     public Result waitForResult() {

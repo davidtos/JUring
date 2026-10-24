@@ -217,13 +217,16 @@ record LibCDispatcher(FreeAddress freeLong,
     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
         MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
+        long alignment = (bufferSize >= 4096 && (bufferSize & 4095L) == 0) ? 4096L
+                : (bufferSize >= 512 && (bufferSize & 511L) == 0) ? 512L : 64L;
+        MemorySegment slab = arena.allocate(Math.multiplyExact(bufferSize, nrIovecs), alignment);
 
         for (int i = 0; i < nrIovecs; i++) {
             MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
-            MemorySegment buffer = malloc(bufferSize);
+            MemorySegment buffer = slab.asSlice((long) i * bufferSize, bufferSize);
 
             Iovec.iov_base(nthIovec, buffer);
-            Iovec.iov_len(nthIovec, buffer.byteSize());
+            Iovec.iov_len(nthIovec, bufferSize);
             buffers[i] = buffer;
         }
 
