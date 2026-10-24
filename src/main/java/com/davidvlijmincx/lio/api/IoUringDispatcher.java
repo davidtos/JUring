@@ -313,7 +313,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     void setSqeFlag(long sqe, byte flags) {
-        ZeroGcSqe.addFlags(sqe, flags);
+        ZeroGcSqe.setFlags(sqe, flags);
     }
 
     void setUserData(long sqe, long userData) {
@@ -841,9 +841,8 @@ public final class IoUringDispatcher implements AutoCloseable {
             long address = cqes + (long) index * 16L;
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
-            int cqeFlags = ZeroGcCqe.getFlags(address);
 
-            populateResultFromCqe(reusableResult, userData, res, cqeFlags);
+            populateResultFromCqe(reusableResult, userData, res, 0);
             consumer.accept(reusableResult);
         }
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
@@ -866,10 +865,9 @@ public final class IoUringDispatcher implements AutoCloseable {
             long address = cqes + (long) index * 16L;
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
-            int cqeFlags = ZeroGcCqe.getFlags(address);
 
             Result r = new Result();
-            populateResultFromCqe(r, userData, res, cqeFlags);
+            populateResultFromCqe(r, userData, res, 0);
             ret.add(r);
         }
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
@@ -918,51 +916,48 @@ public final class IoUringDispatcher implements AutoCloseable {
 
         long userData = ZeroGcCqe.getUserData(cqeAddress);
         int res = ZeroGcCqe.getRes(cqeAddress);
-        int cqeFlags = ZeroGcCqe.getFlags(cqeAddress);
 
-        populateResultFromCqe(target, userData, res, cqeFlags);
+        populateResultFromCqe(target, userData, res, 0);
         cqAdvance(ring, 1);
         return target;
     }
 
     void populateResultFromCqe(Result target, long userData, long result, int cqeFlags) {
-        OperationType type = ZeroGcUserData.getType(userData);
+        int typeIndex = (int) ((userData >>> ZeroGcUserData.TYPE_SHIFT) & ZeroGcUserData.TYPE_MASK);
 
-        switch (type) {
-            case READ_FIXED -> {
+        switch (typeIndex) {
+            case 17 /* READ_FIXED */ -> {
                 int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
-                MemorySegment regBuf = (registeredBuffers != null && bufferIdx >= 0 && bufferIdx < registeredBuffers.length)
-                        ? registeredBuffers[bufferIdx] : null;
                 long regBufAddr = (registeredBufferAddresses != null && bufferIdx >= 0 && bufferIdx < registeredBufferAddresses.length)
                         ? registeredBufferAddresses[bufferIdx] : 0L;
-                target.set(userData, result, type, regBufAddr, regBuf, bufferIdx, null);
+                target.set(userData, result, OperationType.READ_FIXED, regBufAddr, null, bufferIdx, null);
             }
-            case READ, READ_POOLED -> {
+            case 2 /* WRITE_FIXED */ -> {
+                int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
+                target.set(userData, result, OperationType.WRITE_FIXED, 0L, null, bufferIdx, null);
+            }
+            case 0 /* READ */, 18 /* READ_POOLED */ -> {
                 long bufferAddr = ZeroGcUserData.getPayload(userData);
-                target.set(userData, result, type, bufferAddr, null, -1, null);
+                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null);
             }
-            case WRITE -> {
+            case 1 /* WRITE */ -> {
                 long buffAddr = ZeroGcUserData.getPayload(userData);
                 if (buffAddr != 0L) {
                     libCDispatcher.free(buffAddr);
                 }
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITE, 0L, null, -1, null);
             }
-            case WRITE_FIXED -> {
-                int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
-                target.set(userData, result, type, 0L, null, bufferIdx, null);
-            }
-            case OPEN -> {
+            case 3 /* OPEN */ -> {
                 long pathAddr = ZeroGcUserData.getPayload(userData);
                 if (pathAddr != 0L) {
                     libCDispatcher.free(pathAddr);
                 }
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.OPEN, 0L, null, -1, null);
             }
-            case CLOSE -> {
-                target.set(userData, result, type, 0L, null, -1, null);
+            case 4 /* CLOSE */ -> {
+                target.set(userData, result, OperationType.CLOSE, 0L, null, -1, null);
             }
-            case READV, READV_FIXED -> {
+            case 5 /* READV */, 7 /* READV_FIXED */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
                 int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
 
@@ -972,48 +967,48 @@ public final class IoUringDispatcher implements AutoCloseable {
                     buffers[i] = MemorySegment.ofAddress(base).reinterpret(Long.MAX_VALUE);
                 }
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, type, 0L, null, -1, buffers);
+                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers);
             }
-            case WRITEV -> {
+            case 6 /* WRITEV */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
                 int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
                 for (int i = 0; i < count; i++) {
                     libCDispatcher.free(ZeroGcIovecBlock.getIovBase(blockAddr, i));
                 }
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITEV, 0L, null, -1, null);
             }
-            case WRITEV_FIXED -> {
+            case 8 /* WRITEV_FIXED */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITEV_FIXED, 0L, null, -1, null);
             }
-            case ACCEPT, MULTISHOT_ACCEPT -> {
-                target.set(userData, result, type, 0L, null, -1, null);
+            case 9 /* ACCEPT */, 15 /* MULTISHOT_ACCEPT */ -> {
+                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, null);
             }
-            case CONNECT -> {
+            case 10 /* CONNECT */ -> {
                 long connectAddr = ZeroGcUserData.getPayload(userData);
                 if (connectAddr != 0L) {
                     libCDispatcher.free(connectAddr);
                 }
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.CONNECT, 0L, null, -1, null);
             }
-            case RECV, RECV_EXT -> {
+            case 11 /* RECV */, 14 /* RECV_EXT */ -> {
                 long bufferAddr = ZeroGcUserData.getPayload(userData);
-                target.set(userData, result, type, bufferAddr, null, -1, null);
+                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null);
             }
-            case SEND -> {
+            case 12 /* SEND */ -> {
                 long sendBuf = ZeroGcUserData.getPayload(userData);
                 if (sendBuf != 0L) {
                     libCDispatcher.free(sendBuf);
                 }
-                target.set(userData, result, type, 0L, null, -1, null);
+                target.set(userData, result, OperationType.SEND, 0L, null, -1, null);
             }
-            case SEND_EXT -> {
-                target.set(userData, result, type, 0L, null, -1, null);
+            case 13 /* SEND_EXT */ -> {
+                target.set(userData, result, OperationType.SEND_EXT, 0L, null, -1, null);
             }
-            case CANCEL -> {
-                target.set(userData, result, type, 0L, null, -1, null);
+            case 16 /* CANCEL */ -> {
+                target.set(userData, result, OperationType.CANCEL, 0L, null, -1, null);
             }
         }
     }

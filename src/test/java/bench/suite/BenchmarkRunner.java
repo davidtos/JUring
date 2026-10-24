@@ -64,6 +64,15 @@ public class BenchmarkRunner {
             }
         }
 
+        boolean attachPerfnorm = false;
+        List<String> customIncludes = new ArrayList<>();
+        Map<String, List<String>> customParams = new LinkedHashMap<>();
+        Integer customForks = null;
+        Integer customWi = null;
+        Integer customI = null;
+        Integer customR = null;
+        Integer customW = null;
+
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].trim();
             switch (arg) {
@@ -75,6 +84,35 @@ public class BenchmarkRunner {
                 case "--threads-scaling" -> threadsScaling = true;
                 case "--gc" -> attachGc = true;
                 case "--async" -> attachAsync = true;
+                case "--perfnorm" -> attachPerfnorm = true;
+                case "--include" -> {
+                    if (i + 1 < args.length) {
+                        customIncludes.add(args[++i].trim());
+                    }
+                }
+                case "--param" -> {
+                    if (i + 1 < args.length) {
+                        String[] parts = args[++i].trim().split("=", 2);
+                        if (parts.length == 2) {
+                            customParams.computeIfAbsent(parts[0].trim(), k -> new ArrayList<>()).add(parts[1].trim());
+                        }
+                    }
+                }
+                case "--f" -> {
+                    if (i + 1 < args.length) customForks = Integer.parseInt(args[++i]);
+                }
+                case "--wi" -> {
+                    if (i + 1 < args.length) customWi = Integer.parseInt(args[++i]);
+                }
+                case "--i" -> {
+                    if (i + 1 < args.length) customI = Integer.parseInt(args[++i]);
+                }
+                case "--r" -> {
+                    if (i + 1 < args.length) customR = Integer.parseInt(args[++i]);
+                }
+                case "--w" -> {
+                    if (i + 1 < args.length) customW = Integer.parseInt(args[++i]);
+                }
                 case "--threads" -> {
                     if (i + 1 < args.length) {
                         customThreads = Integer.parseInt(args[++i]);
@@ -97,7 +135,19 @@ public class BenchmarkRunner {
         builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
 
         // Execution mode
-        if (quick) {
+        if (customWi != null || customI != null || customForks != null || customR != null || customW != null) {
+            int forks = customForks != null ? customForks : 1;
+            int wi = customWi != null ? customWi : 3;
+            int it = customI != null ? customI : 3;
+            int rSec = customR != null ? customR : 3;
+            int wSec = customW != null ? customW : 3;
+            System.out.printf("Configuring CUSTOM benchmark (-f %d -wi %d -i %d -r %ds -w %ds)...%n", forks, wi, it, rSec, wSec);
+            builder.warmupIterations(wi)
+                    .warmupTime(TimeValue.seconds(wSec))
+                    .measurementIterations(it)
+                    .measurementTime(TimeValue.seconds(rSec))
+                    .forks(forks);
+        } else if (quick) {
             System.out.println("Configuring QUICK smoke test (1 warmup of 2s, 1 measurement of 3s)...");
             builder.warmupIterations(1)
                     .warmupTime(TimeValue.seconds(2))
@@ -121,30 +171,45 @@ public class BenchmarkRunner {
         }
 
         // Benchmark selection
-        List<String> includes = new ArrayList<>();
-        if (directOnly) {
-            includes.add(DirectReadBenchmark.class.getSimpleName());
-            includes.add(DirectWriteBenchmark.class.getSimpleName());
-        } else if (bufferedOnly) {
-            includes.add(BufferedReadBenchmark.class.getSimpleName());
-            includes.add(BufferedWriteBenchmark.class.getSimpleName());
-        } else if (latencyOnly) {
-            includes.add(DirectLatencyBenchmark.class.getSimpleName());
+        if (!customIncludes.isEmpty()) {
+            for (String inc : customIncludes) {
+                builder.include(inc);
+            }
         } else {
-            includes.add(DirectReadBenchmark.class.getSimpleName());
-            includes.add(DirectWriteBenchmark.class.getSimpleName());
-            includes.add(BufferedReadBenchmark.class.getSimpleName());
-            includes.add(BufferedWriteBenchmark.class.getSimpleName());
+            List<String> includes = new ArrayList<>();
+            if (directOnly) {
+                includes.add(DirectReadBenchmark.class.getSimpleName());
+                includes.add(DirectWriteBenchmark.class.getSimpleName());
+            } else if (bufferedOnly) {
+                includes.add(BufferedReadBenchmark.class.getSimpleName());
+                includes.add(BufferedWriteBenchmark.class.getSimpleName());
+            } else if (latencyOnly) {
+                includes.add(DirectLatencyBenchmark.class.getSimpleName());
+            } else {
+                includes.add(DirectReadBenchmark.class.getSimpleName());
+                includes.add(DirectWriteBenchmark.class.getSimpleName());
+                includes.add(BufferedReadBenchmark.class.getSimpleName());
+                includes.add(BufferedWriteBenchmark.class.getSimpleName());
+            }
+
+            for (String inc : includes) {
+                builder.include(inc);
+            }
         }
 
-        for (String inc : includes) {
-            builder.include(inc);
+        for (Map.Entry<String, List<String>> entry : customParams.entrySet()) {
+            builder.param(entry.getKey(), entry.getValue().toArray(new String[0]));
         }
 
         // Profilers
         if (attachGc) {
             System.out.println("Attaching JMH GCProfiler (-prof gc) for zero-allocation verification...");
             builder.addProfiler(GCProfiler.class);
+        }
+
+        if (attachPerfnorm) {
+            System.out.println("Attaching JMH LinuxPerfNormProfiler (-prof perfnorm)...");
+            builder.addProfiler("perfnorm");
         }
 
         if (attachAsync) {
