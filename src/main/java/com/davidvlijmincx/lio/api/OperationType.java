@@ -19,7 +19,8 @@ public enum OperationType {
     MULTISHOT_ACCEPT(15),
     CANCEL(16),
     READ_FIXED(17),
-    READ_POOLED(18);
+    READ_POOLED(18),
+    NOP(19);
 
     private static final OperationType[] VALUES = values();
 

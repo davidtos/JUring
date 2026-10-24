@@ -65,6 +65,7 @@ public class BenchmarkRunner {
         }
 
         boolean attachPerfnorm = false;
+        boolean decision = false;
         List<String> customIncludes = new ArrayList<>();
         Map<String, List<String>> customParams = new LinkedHashMap<>();
         Integer customForks = null;
@@ -78,6 +79,7 @@ public class BenchmarkRunner {
             switch (arg) {
                 case "--quick" -> quick = true;
                 case "--full" -> full = true;
+                case "--decision" -> decision = true;
                 case "--direct" -> directOnly = true;
                 case "--buffered" -> bufferedOnly = true;
                 case "--latency" -> latencyOnly = true;
@@ -127,12 +129,12 @@ public class BenchmarkRunner {
         }
 
         if (threadsScaling) {
-            runScalingSuite(quick, full, attachGc, attachAsync, customThreads);
+            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams);
             return;
         }
 
         OptionsBuilder builder = new OptionsBuilder();
-        builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
+        builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED", "-Djuring.countEnters=true");
 
         // Execution mode
         if (customWi != null || customI != null || customForks != null || customR != null || customW != null) {
@@ -147,6 +149,13 @@ public class BenchmarkRunner {
                     .measurementIterations(it)
                     .measurementTime(TimeValue.seconds(rSec))
                     .forks(forks);
+        } else if (decision) {
+            System.out.println("Configuring DECISION benchmark (-f 3 -wi 3 -i 5 -w 3s -r 5s)...");
+            builder.warmupIterations(3)
+                    .warmupTime(TimeValue.seconds(3))
+                    .measurementIterations(5)
+                    .measurementTime(TimeValue.seconds(5))
+                    .forks(3);
         } else if (quick) {
             System.out.println("Configuring QUICK smoke test (1 warmup of 2s, 1 measurement of 3s)...");
             builder.warmupIterations(1)
@@ -208,6 +217,7 @@ public class BenchmarkRunner {
         }
 
         if (attachPerfnorm) {
+            verifyRealPerfBinary();
             System.out.println("Attaching JMH LinuxPerfNormProfiler (-prof perfnorm)...");
             builder.addProfiler("perfnorm");
         }
@@ -224,17 +234,58 @@ public class BenchmarkRunner {
         }
 
         Options opt = builder.build();
-        new Runner(opt).run();
+        Collection<RunResult> results = new Runner(opt).run();
+        printDerivedMetricsTable(results);
     }
 
-    private static void runScalingSuite(boolean quick, boolean full, boolean attachGc, boolean attachAsync, Integer customThreads) throws RunnerException {
+    private static void printDerivedMetricsTable(Collection<RunResult> results) {
+        if (results == null || results.isEmpty()) {
+            return;
+        }
+        System.out.println("\n==========================================================================================================");
+        System.out.println("                              DERIVED PER-OP METRICS (USER + KERNEL + SYSCALLS)                           ");
+        System.out.println("==========================================================================================================");
+        System.out.printf("%-42s | %18s | %11s | %11s | %10s%n",
+                "Benchmark (params)", "Throughput (ops/s)", "user ns/op", "sys ns/op", "enters/op");
+        System.out.println("-".repeat(106));
+        for (RunResult rr : results) {
+            String fullName = rr.getParams().getBenchmark();
+            String shortName = fullName.substring(fullName.lastIndexOf('.', fullName.lastIndexOf('.') - 1) + 1);
+            StringBuilder paramStr = new StringBuilder();
+            for (String k : rr.getParams().getParamsKeys()) {
+                if (!paramStr.isEmpty()) paramStr.append(",");
+                paramStr.append(k).append("=").append(rr.getParams().getParam(k));
+            }
+            String label = paramStr.isEmpty() ? shortName : shortName + " (" + paramStr + ")";
+            double score = rr.getPrimaryResult().getScore();
+            double err = rr.getPrimaryResult().getScoreError();
+            var sec = rr.getSecondaryResults();
+            double userNsRate = sec.containsKey("userNs") ? sec.get("userNs").getScore() : Double.NaN;
+            double sysNsRate = sec.containsKey("sysNs") ? sec.get("sysNs").getScore() : Double.NaN;
+            double syscallsRate = sec.containsKey("syscalls") ? sec.get("syscalls").getScore() : Double.NaN;
+            double bytesRate = sec.containsKey("bytesProcessed") ? sec.get("bytesProcessed").getScore() : Double.NaN;
+            double denomOps = (!Double.isNaN(bytesRate) && bytesRate > 0) ? (bytesRate / 4096.0) : score;
+            double userNsPerOp = (!Double.isNaN(userNsRate) && denomOps > 0) ? userNsRate / denomOps : Double.NaN;
+            double sysNsPerOp = (!Double.isNaN(sysNsRate) && denomOps > 0) ? sysNsRate / denomOps : Double.NaN;
+            double entersPerOp = (!Double.isNaN(syscallsRate) && denomOps > 0) ? syscallsRate / denomOps : Double.NaN;
+            String scoreCell = Double.isNaN(err) || Double.isInfinite(err)
+                    ? String.format("%,18.0f", score)
+                    : String.format("%,10.0f ± %,6.0f", score, err);
+            System.out.printf("%-42s | %18s | %11.1f | %11.1f | %10.4f%n",
+                    label, scoreCell, userNsPerOp, sysNsPerOp, entersPerOp);
+        }
+        System.out.println("==========================================================================================================\n");
+    }
+
+    private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
+                                        Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams) throws RunnerException {
         System.out.println("================================================================================");
-        System.out.println("            Launching Multi-Thread Scaling Suite (1, 4, 8, 16 Threads)          ");
+        System.out.println("          Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)         ");
         System.out.println("================================================================================");
 
         int[] threadLevels = (customThreads != null && customThreads > 0)
                 ? new int[]{customThreads}
-                : new int[]{1, 4, 8, 16};
+                : new int[]{1, 2, 4, 8, 16};
 
         Map<String, Map<Integer, Double>> matrix = new LinkedHashMap<>();
 
@@ -242,11 +293,28 @@ public class BenchmarkRunner {
             System.out.println("\n>>> Running MultiThreadScalingBenchmark at Concurrency: " + t + " Thread(s) <<<");
 
             OptionsBuilder builder = new OptionsBuilder();
-            builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
-            builder.include(MultiThreadScalingBenchmark.class.getSimpleName());
+            builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED", "-Djuring.countEnters=true");
+            if (customIncludes != null && !customIncludes.isEmpty()) {
+                for (String inc : customIncludes) {
+                    builder.include(inc);
+                }
+            } else {
+                builder.include(MultiThreadScalingBenchmark.class.getSimpleName());
+            }
+            if (customParams != null) {
+                for (Map.Entry<String, List<String>> entry : customParams.entrySet()) {
+                    builder.param(entry.getKey(), entry.getValue().toArray(new String[0]));
+                }
+            }
             builder.threads(t);
 
-            if (quick) {
+            if (decision) {
+                builder.warmupIterations(3)
+                        .warmupTime(TimeValue.seconds(3))
+                        .measurementIterations(5)
+                        .measurementTime(TimeValue.seconds(5))
+                        .forks(3);
+            } else if (quick) {
                 builder.warmupIterations(1)
                         .warmupTime(TimeValue.seconds(2))
                         .measurementIterations(1)
@@ -274,6 +342,7 @@ public class BenchmarkRunner {
             }
 
             Collection<RunResult> results = new Runner(builder.build()).run();
+            printDerivedMetricsTable(results);
             for (RunResult rr : results) {
                 String fullName = rr.getParams().getBenchmark();
                 String shortName = fullName.substring(fullName.lastIndexOf('.') + 1);
@@ -348,6 +417,61 @@ public class BenchmarkRunner {
                 }
             }
             System.out.println("====================================================================================================\n");
+        }
+    }
+
+    /**
+     * Guards against a non-genuine {@code perf} executable being picked up by JMH's perfnorm profiler.
+     * <p>
+     * JMH 1.37 runs the binary named by the {@code JMH_PERF} environment variable, or {@code perf}
+     * from {@code PATH}. A script wrapper (for example a user-space-only shim) silently produces
+     * counters that exclude kernel time, which makes per-op numbers for io_uring meaningless because
+     * most of the cost is in the kernel. This check requires the resolved binary to be an ELF executable.
+     */
+    private static void verifyRealPerfBinary() {
+        String configured = System.getenv("JMH_PERF");
+        String name = (configured != null && !configured.isBlank()) ? configured : "perf";
+        java.nio.file.Path resolved = null;
+        if (name.contains("/")) {
+            resolved = java.nio.file.Path.of(name);
+        } else {
+            String path = System.getenv("PATH");
+            if (path != null) {
+                for (String dir : path.split(java.io.File.pathSeparator)) {
+                    java.nio.file.Path candidate = java.nio.file.Path.of(dir, name);
+                    if (java.nio.file.Files.isExecutable(candidate)) {
+                        resolved = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        if (resolved == null) {
+            throw new IllegalStateException("perfnorm requested but no '" + name + "' executable was found. "
+                    + "Install perf (dnf install perf) or set JMH_PERF=/usr/bin/perf.");
+        }
+        byte[] magic = new byte[4];
+        try (var in = java.nio.file.Files.newInputStream(resolved)) {
+            if (in.readNBytes(magic, 0, 4) != 4) {
+                throw new IllegalStateException("Unable to read perf binary header: " + resolved);
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Unable to read perf binary: " + resolved, e);
+        }
+        boolean elf = magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+        if (!elf) {
+            throw new IllegalStateException("perfnorm would use '" + resolved + "' (real path: "
+                    + safeRealPath(resolved) + "), which is not a genuine perf ELF binary (likely a script shim "
+                    + "that excludes kernel time). Re-run with JMH_PERF=/usr/bin/perf, or use ./bench.sh.");
+        }
+        System.out.println("perfnorm will use perf binary: " + safeRealPath(resolved));
+    }
+
+    private static String safeRealPath(java.nio.file.Path p) {
+        try {
+            return p.toRealPath().toString();
+        } catch (java.io.IOException e) {
+            return p.toString();
         }
     }
 

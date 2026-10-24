@@ -166,6 +166,34 @@ Hardware & OS:
   * Unit/Integration Tests: 62/62 Passed.
 - **Decision:** Rolled back immediately via `git checkout -- .`. Baseline remains at Sequel Cycle 1: 310,277 (R) / 302,124 (W).
 
+---
+
+## Methodology v2 (Phase 0 & Phase 1): Kernel-Inclusive Profiling & Multi-Thread Baselines
+
+### Why the Earlier Loops Plateaued
+1. **94% of CPU time is in the kernel**: Sampling `/proc/<pid>/task/*/stat` and `getrusage(RUSAGE_THREAD)` during `DirectReadBenchmark.juringDirectRead (qd=64)` revealed that the benchmark thread spends **5.5% user CPU (`~134 ns/op`)** and **80.7% kernel CPU (`~2,576 ns/op`)**.
+2. **Earlier `perfnorm` numbers were user-space only**: Prior cycles resolved `perf` to a custom Python shim (`~/.local/bin/perf`) that set `exclude_kernel=1`, reporting ~400 cycles/op and hiding the ~11,500 kernel cycles/op. `BenchmarkRunner` now verifies that `perf` is a genuine ELF binary (`/usr/bin/perf` via `bench.sh` / `JMH_PERF`), and `CpuAuxCounters` (`getrusage(RUSAGE_THREAD)`) + `-Djuring.countEnters=true` report exact `user ns/op`, `sys ns/op`, and `enters/op`.
+3. **True `enters/op` exposed a batch-breaking flaw**: Counting all `io_uring_enter` calls (both `submit` and `waitForBatchResult`) revealed that `DirectReadBenchmark (qd=64)` executes **0.9676 syscalls/op** at 1 thread and **2.02 syscalls/op** at 16 threads, because `waitForBatchResult(1, consumer)` used `1` as both `minComplete` and `maxReap`, draining only 1 CQE and causing the loop to immediately `submit(1)`.
+
+### Phase 1 Ceilings & Multi-Thread Baselines (Before Phase 2 Optimizations)
+
+#### 1. Single-Thread Framework & I/O Baselines (`--pin 4`, real `/usr/bin/perf`)
+| Benchmark | Throughput (ops/s) | Total Cycles/op | Total Insns/op | User (ns/op) | Sys (ns/op) | Enters/op | Alloc (B/op) |
+|---|---|---|---|---|---|---|---|
+| `NopBenchmark.juringNop (qd=64)` | **11,289,514** | 396.2 | 520.4 | 11.7 | 75.6 | **0.0313** | 0.005 |
+| `DirectReadBenchmark.juringDirectRead (qd=64)` | **293,029** | 11,738.9 | 8,723.0 | 134.1 | 2,576.4 | **0.9676** | 0.187 |
+| `DirectWriteBenchmark.juringDirectWrite (MULTI_FILE)` | **300,714** | 13,935.0 | 11,693.8 | 112.2 | 2,980.4 | **0.2107** | 0.218 |
+
+#### 2. Multi-Thread Scaling Baseline (`1, 2, 4, 8, 16` Threads — Primary Metric)
+| Engine | 1 Thread | 2 Threads | 4 Threads | 8 Threads | 16 Threads | Peak Total (ops/s) |
+|---|---|---|---|---|---|---|
+| `fio` Ceiling (`io_uring`, `O_DIRECT`, `qd=64`, fixed bufs/files) | 325,000 | 291,000 | 474,000 | 477,000 | **480,000** | **480,000** (1,965 MB/s) |
+| `MultiThreadScalingBenchmark.fileChannelDirectRead` | 11,389 | 22,287 | 43,114 | 63,371 | 145,296 | 145,296 (568 MB/s) |
+| `MultiThreadScalingBenchmark.juringDirectRead` (Baseline) | 314,234 (`1.10 enters/op`) | 390,796 (`1.45 enters/op`) | 391,063 (`1.63 enters/op`) | 391,282 (`1.86 enters/op`) | 390,830 (`1.96 enters/op`) | **391,282** (1,528 MB/s) |
+| `MultiThreadScalingBenchmark.fileChannelDirectWrite` | 67,876 | 122,147 | 203,755 | 47,952 | 256,667 | 256,667 (1,003 MB/s) |
+| `MultiThreadScalingBenchmark.juringDirectWrite` (Baseline) | 264,756 (`0.24 enters/op`) | **584,297** (`0.24 enters/op`) | 528,105 (`0.69 enters/op`) | 47,193 (`1.99 enters/op`) | 44,051 (`1.99 enters/op`) | **584,297** (2,282 MB/s) |
+
+
 
 
 

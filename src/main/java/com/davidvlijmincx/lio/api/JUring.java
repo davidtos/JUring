@@ -95,6 +95,35 @@ public class JUring implements AutoCloseable {
         return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a no-op ({@code IORING_OP_NOP}) submission queue entry.
+     * Useful for testing ring round-trip overhead and waking a ring without I/O.
+     *
+     * @return the userData token identifying this operation
+     */
+    public long prepareNop() {
+        return prepareNopInternal((byte) 0);
+    }
+
+    /**
+     * Prepares a no-op ({@code IORING_OP_NOP}) submission queue entry with SQE flags.
+     *
+     * @param sqeOptions SQE flags to set on the entry
+     * @return the userData token identifying this operation
+     */
+    public long prepareNop(SqeOptions... sqeOptions) {
+        return prepareNopInternal(SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareNopInternal(byte flags) {
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.NOP, opId);
+        long sqe = getSqe(flags, false);
+        ioUring.prepareNop(sqe);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         return prepareWriteInternal(fd.getFd(), bytes, offset, (byte) 0, false);
     }
@@ -741,6 +770,14 @@ public class JUring implements AutoCloseable {
 
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
         return ioUring.registerFilesUpdate(offset, fileDescriptors);
+    }
+
+    /**
+     * Returns and resets the number of {@code io_uring_enter} syscalls issued on this ring
+     * when {@code -Djuring.countEnters=true} is enabled (0 otherwise).
+     */
+    public int takeEnterCount() {
+        return ioUring.takeEnterCount();
     }
 
     @Override

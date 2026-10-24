@@ -83,8 +83,10 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     private static final VarHandle VH_INT = JAVA_INT.varHandle();
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
+    static final boolean COUNT_ENTERS = Boolean.getBoolean("juring.countEnters");
 
     private final Arena arena;
+    private int enterCount;
     private final IovecBlockPool iovecBlockPool;
     private final MemorySegment ring;
     private final MemorySegment cqePtr;
@@ -447,6 +449,11 @@ public final class IoUringDispatcher implements AutoCloseable {
         ZeroGcSqe.setRwFlags(sqe, flags);
     }
 
+    void prepareNop(long sqe) {
+        ZeroGcSqe.setOpcode(sqe, IORING_OP_NOP);
+        ZeroGcSqe.setFd(sqe, -1);
+    }
+
     void submit() {
         int tail = sqeTail;
         int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
@@ -473,6 +480,9 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
 
         if (needEnter) {
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
             long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
             if (res < 0) {
                 throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(-LibCDispatcher.errno(this.callState)));
@@ -491,6 +501,9 @@ public final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
             long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, 1, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
@@ -548,6 +561,9 @@ public final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
+            if (COUNT_ENTERS) {
+                enterCount++;
+            }
             long res = this.ioUringEnter.ioUringEnter(this.callState, ringFd, 0, waitNr, IORING_ENTER_GETEVENTS, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
@@ -557,6 +573,12 @@ public final class IoUringDispatcher implements AutoCloseable {
                 return -err;
             }
         }
+    }
+
+    int takeEnterCount() {
+        int c = enterCount;
+        enterCount = 0;
+        return c;
     }
 
     int queueInit(int queueDepth, int flags) {
@@ -1009,6 +1031,9 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
             case 16 /* CANCEL */ -> {
                 target.set(userData, result, OperationType.CANCEL, 0L, null, -1, null);
+            }
+            case 19 /* NOP */ -> {
+                target.set(userData, result, OperationType.NOP, 0L, null, -1, null);
             }
         }
     }

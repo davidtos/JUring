@@ -650,4 +650,18 @@ class JUringTest {
             jUring.checkInBuffer(bufIdx);
         }
     }
+
+    @Test
+    void nopCompletesWithZeroResult() {
+        long id1 = jUring.prepareNop();
+        long id2 = jUring.prepareNop();
+        jUring.submit();
+
+        List<Result> results = jUring.waitForBatchResult(2);
+        assertEquals(2, results.size());
+        assertEquals(id1, results.get(0).id());
+        assertEquals(0L, results.get(0).result());
+        assertEquals(id2, results.get(1).id());
+        assertEquals(0L, results.get(1).result());
+    }
 }
