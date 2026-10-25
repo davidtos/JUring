@@ -47,20 +47,16 @@ public class RandomReadBenchMark {
         final var jUringBlocking = plan.jUringBlocking;
         final var readTasks = randomReadTaskCreator.readTasks;
 
-        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofShared()) {
 
             for (Task readTask : readTasks) {
-                FileDescriptor fd = new FileDescriptor(readTask.pathAsString(), LinuxOpenOptions.READ, 0);
-                var r = jUringBlocking.prepareRead(fd, readTask.bufferSize(), readTask.offset());
-                jUringBlocking.submit();
+                java.lang.foreign.MemorySegment buf = arena.allocate(readTask.bufferSize());
                 executor.execute(() -> {
-                    try {
-                        blackhole.consume(r.get().buffer());
-                        r.get().freeBuffer();
-                    } catch (InterruptedException | ExecutionException e) {
-                        throw new RuntimeException(e);
-                    } finally {
-                        fd.close();
+                    try (FileDescriptor fd = new FileDescriptor(readTask.pathAsString(), LinuxOpenOptions.READ, 0)) {
+                        long bytesRead = jUringBlocking.read(fd, buf, readTask.bufferSize(), readTask.offset());
+                        blackhole.consume(bytesRead);
+                        blackhole.consume(buf);
                     }
                 });
             }

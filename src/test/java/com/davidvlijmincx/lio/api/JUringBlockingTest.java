@@ -1,19 +1,23 @@
 package com.davidvlijmincx.lio.api;
 
-import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class JUringBlockingTest {
 
@@ -29,70 +33,54 @@ class JUringBlockingTest {
         jUringBlocking.close();
     }
 
+    private static String getString(MemorySegment buffer, long bytesRead) {
+        return new String(buffer.asSlice(0, bytesRead).toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+    }
+
     @Test
     void readFromFile() {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
-            Future<Result> future = jUringBlocking.prepareRead(fd, 14, 0);
-
-            jUringBlocking.submit();
-
-            var result = future.get();
-
-            String string = getString(result, result.result());
-            result.freeBuffer();
-            assertEquals("Hello, World!", string);
-        } catch (ExecutionException | InterruptedException e) {
-            throw new RuntimeException(e);
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
+            MemorySegment buf = arena.allocate(14);
+            long bytesRead = jUringBlocking.read(fd, buf, 14, 0);
+            assertEquals(13L, bytesRead);
+            assertEquals("Hello, World!", getString(buf, bytesRead));
         }
     }
 
     @Test
-    void multiReadFromFile() throws ExecutionException, InterruptedException {
+    void multiReadFromFile() throws Exception {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofShared();
+             var vts = Executors.newVirtualThreadPerTaskExecutor()) {
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            MemorySegment buf1 = arena.allocate(14);
+            MemorySegment buf2 = arena.allocate(5);
+            MemorySegment buf3 = arena.allocate(7);
 
-            var future1 = jUringBlocking.prepareRead(fd, 14, 0);
-            var future2 = jUringBlocking.prepareRead(fd, 5, 0);
-            var future3 = jUringBlocking.prepareRead(fd, 7, 7);
+            Future<Long> f1 = vts.submit(() -> jUringBlocking.read(fd, buf1, 14, 0));
+            Future<Long> f2 = vts.submit(() -> jUringBlocking.read(fd, buf2, 5, 0));
+            Future<Long> f3 = vts.submit(() -> jUringBlocking.read(fd, buf3, 7, 7));
 
-            jUringBlocking.submit();
-
-            Result result = future1.get();
-            Result result1 = future2.get();
-            Result result2 = future3.get();
-
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            result1.buffer().set(JAVA_BYTE, result1.result(), (byte) 0);
-            result2.buffer().set(JAVA_BYTE, result2.result(), (byte) 0);
-
-            assertEquals("Hello, World!", result.buffer().getString(0));
-            assertEquals("Hello", result1.buffer().getString(0));
-            assertEquals("World!", result2.buffer().getString(0));
-
-            result.freeBuffer();
-            result1.freeBuffer();
-            result2.freeBuffer();
+            assertEquals("Hello, World!", getString(buf1, f1.get()));
+            assertEquals("Hello", getString(buf2, f2.get()));
+            assertEquals("World!", getString(buf3, f3.get()));
         }
     }
 
     @Test
-    void readFromFileAtOffset() throws ExecutionException, InterruptedException {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
-
-            var result = jUringBlocking.prepareRead(fd, 6, 7);
-
-            jUringBlocking.submit();
-
-            String string = result.get().buffer().getString(0);
-            result.get().freeBuffer();
-
-            assertEquals("World!", string);
-
+    void readFromFileAtOffset() {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
+            MemorySegment buf = arena.allocate(6);
+            long bytesRead = jUringBlocking.read(fd, buf, 6, 7);
+            assertEquals(6L, bytesRead);
+            assertEquals("World!", getString(buf, bytesRead));
         }
     }
 
     @Test
-    void writeToFile() throws IOException, ExecutionException, InterruptedException {
+    void writeToFile() throws IOException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content : ".getBytes());
 
@@ -100,12 +88,8 @@ class JUringBlockingTest {
         var inputBytes = input.getBytes();
 
         try (FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
-
-            var future = jUringBlocking.prepareWrite(fd, inputBytes, 0);
-
-            jUringBlocking.submit();
-
-            assertEquals(inputBytes.length, future.get().result());
+            long written = jUringBlocking.write(fd, inputBytes, 0);
+            assertEquals(inputBytes.length, written);
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -113,7 +97,7 @@ class JUringBlockingTest {
     }
 
     @Test
-    void writeToFileAtOffset() throws IOException, ExecutionException, InterruptedException {
+    void writeToFileAtOffset() throws IOException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Big ".getBytes());
 
@@ -121,93 +105,81 @@ class JUringBlockingTest {
         var inputBytes = input.getBytes();
 
         try (FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
-
-            var result = jUringBlocking.prepareWrite(fd, inputBytes, 4);
-
-            jUringBlocking.submit();
-
-            assertEquals(inputBytes.length, result.get().result());
+            long written = jUringBlocking.write(fd, inputBytes, 4);
+            assertEquals(inputBytes.length, written);
 
             String writtenContent = Files.readString(path);
             assertEquals("Big hello, from Java", writtenContent);
-
         }
     }
 
     @Test
-    void multipleWrites() throws IOException, ExecutionException, InterruptedException {
+    void multipleWrites() throws Exception {
         Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", WRITE, 0)) {
-            var future1 = jUringBlocking.prepareWrite(fd, inputBytes, 0);
-            var future2 = jUringBlocking.prepareWrite(fd, inputBytes, 0);
-            var future3 = jUringBlocking.prepareWrite(fd, inputBytes, 0);
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", WRITE, 0);
+             var vts = Executors.newVirtualThreadPerTaskExecutor()) {
+            var future1 = vts.submit(() -> jUringBlocking.write(fd, inputBytes, 0));
+            var future2 = vts.submit(() -> jUringBlocking.write(fd, inputBytes, 0));
+            var future3 = vts.submit(() -> jUringBlocking.write(fd, inputBytes, 0));
 
-            jUringBlocking.submit();
-
-            assertEquals(inputBytes.length, future1.get().result());
-            assertEquals(inputBytes.length, future2.get().result());
-            assertEquals(inputBytes.length, future3.get().result());
+            assertEquals((long) inputBytes.length, future1.get());
+            assertEquals((long) inputBytes.length, future2.get());
+            assertEquals((long) inputBytes.length, future3.get());
         }
     }
 
     @Test
-    void mixedWriteAndReadFromFile() throws ExecutionException, InterruptedException {
+    void mixedWriteAndReadFromFile() throws Exception {
         Path writePath = Path.of("src/test/resources/write_file");
         Path readPath = Path.of("src/test/resources/read_file");
 
         String input = "hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor(readPath.toString(), READ, 0); FileDescriptor writeFd = new FileDescriptor(writePath.toString(), WRITE, 0)) {
+        try (FileDescriptor fd = new FileDescriptor(readPath.toString(), READ, 0);
+             FileDescriptor writeFd = new FileDescriptor(writePath.toString(), WRITE, 0);
+             Arena arena = Arena.ofShared();
+             var vts = Executors.newVirtualThreadPerTaskExecutor()) {
 
-            var readResult = jUringBlocking.prepareRead(fd, 14, 0);
-            var writeResult = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-            var readResult1 = jUringBlocking.prepareRead(fd, 5, 0);
-            var writeResult1 = jUringBlocking.prepareWrite(writeFd, inputBytes, 4);
-            var readResult2 = jUringBlocking.prepareRead(fd, 7, 7);
+            MemorySegment b1 = arena.allocate(14);
+            MemorySegment b2 = arena.allocate(5);
+            MemorySegment b3 = arena.allocate(7);
 
-            jUringBlocking.submit();
+            var readResult = vts.submit(() -> jUringBlocking.read(fd, b1, 14, 0));
+            var writeResult = vts.submit(() -> jUringBlocking.write(writeFd, inputBytes, 4));
+            var readResult1 = vts.submit(() -> jUringBlocking.read(fd, b2, 5, 0));
+            var writeResult1 = vts.submit(() -> jUringBlocking.write(writeFd, inputBytes, 4));
+            var readResult2 = vts.submit(() -> jUringBlocking.read(fd, b3, 7, 7));
 
-            assertEquals(13, readResult.get().result());
-            assertEquals(5, readResult1.get().result());
-            assertEquals(6, readResult2.get().result());
+            assertEquals(13L, readResult.get());
+            assertEquals(5L, readResult1.get());
+            assertEquals(6L, readResult2.get());
 
-            assertEquals(16, writeResult.get().result());
-            assertEquals(16, writeResult1.get().result());
-
-            readResult.get().freeBuffer();
-            readResult1.get().freeBuffer();
-            readResult2.get().freeBuffer();
-
+            assertEquals(16L, writeResult.get());
+            assertEquals(16L, writeResult1.get());
         }
     }
 
     @Test
     void readFromRegisteredFile() {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
             int result = jUringBlocking.registerFiles(fd);
             assertEquals(0, result);
 
-            var future = jUringBlocking.prepareRead(0, 14, 0);
-            jUringBlocking.submit();
-
-            try (Result readResult = future.get()) {
-                assertEquals(13, readResult.result());
-                String string = getString(readResult, readResult.result());
-                assertEquals("Hello, World!", string);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-
+            MemorySegment buf = arena.allocate(14);
+            long bytesRead = jUringBlocking.read(0, buf, 14, 0);
+            assertEquals(13L, bytesRead);
+            assertEquals("Hello, World!", getString(buf, bytesRead));
         }
     }
 
     @Test
-    void writeToRegisteredFile() throws IOException, ExecutionException, InterruptedException {
+    void writeToRegisteredFile() throws IOException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content".getBytes());
 
@@ -218,11 +190,8 @@ class JUringBlockingTest {
             int result = jUringBlocking.registerFiles(fd);
             assertEquals(0, result);
 
-            var future = jUringBlocking.prepareWrite(0, inputBytes, 0);
-            jUringBlocking.submit();
-
-            Result writeResult = future.get();
-            assertEquals(inputBytes.length, writeResult.result());
+            long written = jUringBlocking.write(0, inputBytes, 0);
+            assertEquals(inputBytes.length, written);
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -230,10 +199,11 @@ class JUringBlockingTest {
     }
 
     @Test
-    void updateRegisteredFile() throws ExecutionException, InterruptedException {
+    void updateRegisteredFile() {
         try (FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", READ, 0);
              FileDescriptor secondReadFd = new FileDescriptor("src/test/resources/second_read_file", READ, 0);
-             FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", READ, 0)) {
+             FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
 
             int result = jUringBlocking.registerFiles(readFd, secondReadFd);
             assertEquals(0, result);
@@ -242,168 +212,118 @@ class JUringBlockingTest {
             int updateResult = jUringBlocking.registerFilesUpdate(0, updateFiles);
             assertEquals(1, updateResult);
 
-            var future = jUringBlocking.prepareRead(0, 20, 0);
-            jUringBlocking.submit();
-            Result readResult = future.get();
+            MemorySegment buf1 = arena.allocate(20);
+            long r1 = jUringBlocking.read(0, buf1, 20, 0);
+            assertEquals(18L, r1);
+            assertEquals("third file content", getString(buf1, r1));
 
-            assertEquals(18, readResult.result());
-            String content = getString(readResult, (int) readResult.result());
-            readResult.freeBuffer();
-            assertEquals("third file content", content);
-
-            var futureSecondFile = jUringBlocking.prepareRead(1, 20, 0);
-            jUringBlocking.submit();
-            Result readResultSecondFile = futureSecondFile.get();
-
-            assertEquals(19, readResultSecondFile.result());
-            String content1 = getString(readResultSecondFile, (int) readResultSecondFile.result());
-            readResultSecondFile.freeBuffer();
-            assertEquals("second file content", content1);
+            MemorySegment buf2 = arena.allocate(20);
+            long r2 = jUringBlocking.read(1, buf2, 20, 0);
+            assertEquals(19L, r2);
+            assertEquals("second file content", getString(buf2, r2));
         }
     }
 
     @Test
-    void prepareReadFixed() throws ExecutionException, InterruptedException {
+    void prepareReadFixed() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             MemorySegment[] registerResult = jUringBlocking.registerBuffers(30, 2);
             assertEquals(2, registerResult.length);
 
-            var future = jUringBlocking.prepareReadFixed(fd, 13, 0, 0);
-            jUringBlocking.submit();
-            Result result = future.get();
-
-            assertEquals(13, result.result());
-
-            registerResult[0].set(JAVA_BYTE, result.result(), (byte) 0);
-            String readResult = registerResult[0].getString(0);
-            assertEquals("Hello, World!", readResult);
+            long bytesRead = jUringBlocking.readFixed(fd, 13, 0, 0);
+            assertEquals(13L, bytesRead);
+            assertEquals("Hello, World!", getString(registerResult[0], bytesRead));
         }
     }
 
-    private static String getString(Result result, long endOfStringIndex) {
-        result.buffer().set(JAVA_BYTE, endOfStringIndex, (byte) 0);
-        return result.buffer().getString(0);
-    }
-
     @Test
-    void prepareReadFixedWithRegisteredFileAndBuffer() throws ExecutionException, InterruptedException {
+    void prepareReadFixedWithRegisteredFileAndBuffer() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             jUringBlocking.registerFiles(fd);
 
             MemorySegment[] bufferRegisterResult = jUringBlocking.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
 
-            var future = jUringBlocking.prepareReadFixed(0, 13, 0, 0);
-            jUringBlocking.submit();
-            Result result = future.get();
-
-            assertEquals(13, result.result());
-
-            String string = getString(result, result.result());
-            assertEquals("Hello, World!", string);
+            int bufIdx = jUringBlocking.checkOutBuffer();
+            assertEquals(0, bufIdx);
+            try {
+                long bytesRead = jUringBlocking.readFixed(0, 13, 0, bufIdx);
+                assertEquals(13L, bytesRead);
+                assertEquals("Hello, World!", getString(jUringBlocking.getRegisteredBuffer(bufIdx), bytesRead));
+            } finally {
+                jUringBlocking.checkInBuffer(bufIdx);
+            }
         }
     }
 
     @Test
-    void prepareOpenAndRead() throws ExecutionException, InterruptedException {
-        var openFuture = jUringBlocking.prepareOpen("src/test/resources/read_file", READ.getValue(), 0);
-        jUringBlocking.submit();
-        Result openResult = openFuture.get();
+    void prepareOpenAndRead() {
+        try (Arena arena = Arena.ofConfined()) {
+            FileDescriptor fd = jUringBlocking.openFile("src/test/resources/read_file", READ.getValue(), 0);
 
-        FileDescriptor fd = openResult.fileDescriptor();
+            MemorySegment buf = arena.allocate(14);
+            long bytesRead = jUringBlocking.read(fd, buf, 14, 0);
+            assertEquals(13L, bytesRead);
+            assertEquals("Hello, World!", getString(buf, bytesRead));
 
-        var readFuture = jUringBlocking.prepareRead(fd, 14, 0);
-        jUringBlocking.submit();
-        Result readResult = readFuture.get();
-
-        assertEquals(13, readResult.result());
-
-        String content = getString(readResult, readResult.result());
-        readResult.freeBuffer();
-        assertEquals("Hello, World!", content);
-
-        var closeFuture = jUringBlocking.prepareClose(fd);
-        jUringBlocking.submit();
-        Result closeResult = closeFuture.get();
-
-        assertEquals(0, closeResult.result());
+            int closeResult = jUringBlocking.closeFd(fd);
+            assertEquals(0, closeResult);
+        }
     }
 
     @Test
-    void prepareOpenDirectAndRead() throws ExecutionException, InterruptedException {
-        try (FileDescriptor placeholder = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+    void prepareOpenDirectAndRead() {
+        try (FileDescriptor placeholder = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
             jUringBlocking.registerFiles(placeholder);
 
-            var openFuture = jUringBlocking.prepareOpenDirect("src/test/resources/second_read_file", READ, 0, 0);
-            jUringBlocking.submit();
-            openFuture.get();
+            int openRes = jUringBlocking.openDirect("src/test/resources/second_read_file", READ, 0, 0);
+            assertEquals(0, openRes);
 
-            var readFuture = jUringBlocking.prepareRead(0, 20, 0);
-            jUringBlocking.submit();
-            Result readResult = readFuture.get();
-
-            assertEquals(19, readResult.result());
-
-            String content = getString(readResult, readResult.result());
-            readResult.freeBuffer();
-            assertEquals("second file content", content);
+            MemorySegment buf = arena.allocate(20);
+            long bytesRead = jUringBlocking.read(0, buf, 20, 0);
+            assertEquals(19L, bytesRead);
+            assertEquals("second file content", getString(buf, bytesRead));
         }
     }
 
     @Test
-    void prepareCloseFileDescriptor() throws ExecutionException, InterruptedException {
-        FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+    void prepareCloseFileDescriptor() {
+        try (Arena arena = Arena.ofConfined()) {
+            FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+            MemorySegment buf = arena.allocate(14);
 
-        var readFuture1 = jUringBlocking.prepareRead(fd, 14, 0);
-        jUringBlocking.submit();
-        Result readResult1 = readFuture1.get();
+            long r1 = jUringBlocking.read(fd, buf, 14, 0);
+            assertEquals(13L, r1);
 
-        assertEquals(13, readResult1.result());
-        readResult1.freeBuffer();
+            int closeResult = jUringBlocking.closeFd(fd);
+            assertEquals(0, closeResult);
 
-        var closeFuture = jUringBlocking.prepareClose(fd);
-        jUringBlocking.submit();
-        Result closeResult = closeFuture.get();
-
-        assertEquals(0, closeResult.result());
-
-        var readFuture2 = jUringBlocking.prepareRead(fd, 14, 0);
-        jUringBlocking.submit();
-        Result readResult2 = readFuture2.get();
-
-        assertEquals(-9, readResult2.result());
-        readResult2.freeBuffer();
+            long r2 = jUringBlocking.read(fd, buf, 14, 0);
+            assertEquals(-9L, r2);
+        }
     }
 
     @Test
-    void prepareCloseDirectFileDescriptor() throws ExecutionException, InterruptedException {
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+    void prepareCloseDirectFileDescriptor() {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             Arena arena = Arena.ofConfined()) {
             jUringBlocking.registerFiles(fd);
+            MemorySegment buf = arena.allocate(14);
 
-            var readFuture = jUringBlocking.prepareRead(0, 14, 0);
-            jUringBlocking.submit();
-            Result readResult = readFuture.get();
+            long r1 = jUringBlocking.read(0, buf, 14, 0);
+            assertEquals(13L, r1);
 
-            assertEquals(13, readResult.result());
-            readResult.freeBuffer();
+            int closeResult = jUringBlocking.closeDirect(0);
+            assertEquals(0, closeResult);
 
-            var closeFuture = jUringBlocking.prepareCloseDirect(0);
-            jUringBlocking.submit();
-            Result closeResult = closeFuture.get();
-
-            assertEquals(0, closeResult.result());
-
-            var readFuture2 = jUringBlocking.prepareRead(0, 14, 0);
-            jUringBlocking.submit();
-            Result readResult2 = readFuture2.get();
-
-            assertEquals(-9, readResult2.result());
-            readResult2.freeBuffer();
+            long r2 = jUringBlocking.read(0, buf, 14, 0);
+            assertEquals(-9L, r2);
         }
     }
 
     @Test
-    void prepareWriteFixed() throws IOException, ExecutionException, InterruptedException {
+    void prepareWriteFixed() throws IOException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content".getBytes());
 
@@ -414,11 +334,8 @@ class JUringBlockingTest {
             MemorySegment[] registerResult = jUringBlocking.registerBuffers(30, 2);
             assertEquals(2, registerResult.length);
 
-            var future = jUringBlocking.prepareWriteFixed(fd, inputBytes, 0, 0);
-            jUringBlocking.submit();
-            Result writeResult = future.get();
-
-            assertEquals(inputBytes.length, writeResult.result());
+            long written = jUringBlocking.writeFixed(fd, inputBytes, 0, 0);
+            assertEquals(inputBytes.length, written);
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);
@@ -426,7 +343,7 @@ class JUringBlockingTest {
     }
 
     @Test
-    void prepareWriteFixedWithRegisteredFileAndBuffer() throws IOException, ExecutionException, InterruptedException {
+    void prepareWriteFixedWithRegisteredFileAndBuffer() throws IOException {
         Path path = Path.of("src/test/resources/write_file");
         Files.write(path, "Clean content".getBytes());
 
@@ -439,11 +356,8 @@ class JUringBlockingTest {
             MemorySegment[] bufferRegisterResult = jUringBlocking.registerBuffers(20, 1);
             assertEquals(1, bufferRegisterResult.length);
 
-            var future = jUringBlocking.prepareWriteFixed(0, inputBytes, 0, 0);
-            jUringBlocking.submit();
-            Result result = future.get();
-
-            assertEquals(inputBytes.length, result.result());
+            long written = jUringBlocking.writeFixed(0, inputBytes, 0, 0);
+            assertEquals(inputBytes.length, written);
 
             String writtenContent = Files.readString(path);
             assertEquals(input, writtenContent);

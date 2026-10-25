@@ -18,20 +18,20 @@ public final class IoUringDispatcher implements AutoCloseable {
     static final int IORING_CQE_F_MORE = 1 << 1;
 
     // io_uring opcodes (linux/io_uring.h)
-    private static final byte IORING_OP_NOP = 0;
-    private static final byte IORING_OP_READV = 1;
-    private static final byte IORING_OP_WRITEV = 2;
-    private static final byte IORING_OP_READ_FIXED = 4;
-    private static final byte IORING_OP_WRITE_FIXED = 5;
-    private static final byte IORING_OP_ACCEPT = 13;
-    private static final byte IORING_OP_ASYNC_CANCEL = 14;
-    private static final byte IORING_OP_CONNECT = 16;
-    private static final byte IORING_OP_OPENAT = 18;
-    private static final byte IORING_OP_CLOSE = 19;
-    private static final byte IORING_OP_READ = 22;
-    private static final byte IORING_OP_WRITE = 23;
-    private static final byte IORING_OP_SEND = 26;
-    private static final byte IORING_OP_RECV = 27;
+    static final byte IORING_OP_NOP = 0;
+    static final byte IORING_OP_READV = 1;
+    static final byte IORING_OP_WRITEV = 2;
+    static final byte IORING_OP_READ_FIXED = 4;
+    static final byte IORING_OP_WRITE_FIXED = 5;
+    static final byte IORING_OP_ACCEPT = 13;
+    static final byte IORING_OP_ASYNC_CANCEL = 14;
+    static final byte IORING_OP_CONNECT = 16;
+    static final byte IORING_OP_OPENAT = 18;
+    static final byte IORING_OP_CLOSE = 19;
+    static final byte IORING_OP_READ = 22;
+    static final byte IORING_OP_WRITE = 23;
+    static final byte IORING_OP_SEND = 26;
+    static final byte IORING_OP_RECV = 27;
 
     // Enter flags
     private static final int IORING_ENTER_GETEVENTS = 1;
@@ -1025,8 +1025,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (ret < 0) {
             throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
         }
-        this.registeredBuffers = iovecStructure.buffers();
-        this.reusableResult.setRegisteredBuffers(this.registeredBuffers);
+        setRegisteredBuffers(iovecStructure.buffers());
         return this.registeredBuffers;
     }
 
@@ -1145,6 +1144,45 @@ public final class IoUringDispatcher implements AutoCloseable {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         return reapAvailable(head, tail - head, batchSize, consumer);
+    }
+
+    @FunctionalInterface
+    interface RawCqeConsumer {
+        void accept(long userData, int res, int flags);
+    }
+
+    int sqRingEntries() {
+        return sqRingEntries;
+    }
+
+    long[] registeredBufferAddresses() {
+        return registeredBufferAddresses;
+    }
+
+    MemorySegment[] registeredBuffers() {
+        return registeredBuffers;
+    }
+
+    int reapRawCqes(int maxReap, RawCqeConsumer consumer) {
+        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        int available = tail - head;
+        if (available <= 0) {
+            return 0;
+        }
+        int count = Math.min(available, maxReap);
+        long cqes = cqCqesAddr;
+        int mask = cqRingMask;
+        for (int i = 0; i < count; i++) {
+            int index = (head + i) & mask;
+            long address = cqes + (long) index * 16L;
+            long userData = ZeroGcCqe.getUserData(address);
+            int res = ZeroGcCqe.getRes(address);
+            int flags = ZeroGcCqe.getFlags(address);
+            consumer.accept(userData, res, flags);
+        }
+        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
+        return count;
     }
 
     List<Result> peekForBatchResult(int batchSize) {
