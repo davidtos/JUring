@@ -142,7 +142,7 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     String strerror(int errno) {
-        return strerror.strerror(errno).reinterpret(Long.MAX_VALUE).getString(0);
+        return strerror.strerror(Math.abs(errno)).reinterpret(Long.MAX_VALUE).getString(0);
     }
 
     MemorySegment calloc(long size) {

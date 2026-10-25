@@ -1,5 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
+import java.nio.file.Path;
+
 /**
  * Safe wrapper around a native Linux file descriptor integer.
  * <p>
@@ -18,6 +20,26 @@ public class FileDescriptor implements AutoCloseable {
             throw new RuntimeException("Failed to open '" + path + "': fd=" + opened);
         }
         this.fd = opened;
+    }
+
+    public FileDescriptor(Path path, LinuxOpenOptions flags, int mode) {
+        this(path.toString(), flags, mode);
+    }
+
+    public FileDescriptor(Path path, int mode, LinuxOpenOptions... flags) {
+        this(path.toString(), mode, flags);
+    }
+
+    public FileDescriptor(String path, int mode, LinuxOpenOptions... flags) {
+        int opened = NativeDispatcher.C.open(path, LinuxOpenOptions.combineOptions(flags), mode);
+        if (opened < 0) {
+            throw new RuntimeException("Failed to open '" + path + "': fd=" + opened);
+        }
+        this.fd = opened;
+    }
+
+    public FileDescriptor(Path path, LinuxOpenOptions... flags) {
+        this(path.toString(), 0644, flags);
     }
 
     /**

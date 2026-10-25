@@ -1,6 +1,11 @@
 package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.MemorySegment;
+import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
  * Unified, mutable result class for all {@code io_uring} completion events.
@@ -15,10 +20,10 @@ import java.lang.foreign.MemorySegment;
  * In-place reaping loops (such as {@link IoUringDispatcher#peekForBatchResult(int, ResultConsumer)}) populate a single
  * reused instance and invoke {@link ResultConsumer#accept(Result)}.
  * <p>
- * <b>Lazy Buffer Materialization:</b>
- * For fixed operations, the dispatcher records only the raw primitive {@code bufferAddress}. The higher-level
- * {@link MemorySegment} wrapper is only materialized if the caller explicitly invokes {@link #buffer()},
- * completely eliminating Java heap object creation in tight I/O loops.
+ * <b>Lazy Buffer Materialization & Memory Safety:</b>
+ * For fixed operations, the dispatcher records only the raw primitive {@code bufferAddress} and {@code bufferIdx}.
+ * The higher-level {@link MemorySegment} wrapper is only materialized if the caller explicitly invokes {@link #buffer()},
+ * returning the bounded registered buffer slice and completely eliminating Java heap object creation in tight I/O loops.
  */
 public class Result implements AutoCloseable {
 
@@ -29,11 +34,13 @@ public class Result implements AutoCloseable {
     private MemorySegment buffer;
     private int bufferIdx = -1;
     private MemorySegment[] buffers;
+    private int cqeFlags;
+    private MemorySegment[] registeredBuffers;
 
     public Result() {}
 
     public Result(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
-        set(id, result, type, bufferAddress, buffer, bufferIdx, buffers);
+        set(id, result, type, bufferAddress, buffer, bufferIdx, buffers, 0);
     }
 
     public Result(Result other) {
@@ -44,9 +51,15 @@ public class Result implements AutoCloseable {
         this.buffer = other.buffer;
         this.bufferIdx = other.bufferIdx;
         this.buffers = other.buffers;
+        this.cqeFlags = other.cqeFlags;
+        this.registeredBuffers = other.registeredBuffers;
     }
 
     public void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
+        set(id, result, type, bufferAddress, buffer, bufferIdx, buffers, 0);
+    }
+
+    public void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers, int cqeFlags) {
         this.id = id;
         this.result = result;
         this.type = type;
@@ -54,6 +67,11 @@ public class Result implements AutoCloseable {
         this.buffer = buffer;
         this.bufferIdx = bufferIdx;
         this.buffers = buffers;
+        this.cqeFlags = cqeFlags;
+    }
+
+    void setRegisteredBuffers(MemorySegment[] registeredBuffers) {
+        this.registeredBuffers = registeredBuffers;
     }
 
     public long id() {
@@ -72,6 +90,19 @@ public class Result implements AutoCloseable {
         return result >= 0;
     }
 
+    public int cqeFlags() {
+        return cqeFlags;
+    }
+
+    /**
+     * Returns {@code true} if {@code IORING_CQE_F_MORE} is set on the completion queue entry,
+     * indicating that a multishot operation (e.g. {@code prepareMultishotAccept}) remains active
+     * and will produce further completions.
+     */
+    public boolean hasMore() {
+        return (cqeFlags & IoUringDispatcher.IORING_CQE_F_MORE) != 0;
+    }
+
     public long bufferAddress() {
         return bufferAddress;
     }
@@ -80,11 +111,65 @@ public class Result implements AutoCloseable {
         if (buffer != null) {
             return buffer;
         }
+        if (type == OperationType.READ_FIXED && registeredBuffers != null && bufferIdx >= 0 && bufferIdx < registeredBuffers.length) {
+            buffer = registeredBuffers[bufferIdx];
+            return buffer;
+        }
         if (bufferAddress != 0L) {
-            buffer = MemorySegment.ofAddress(bufferAddress).reinterpret(Long.MAX_VALUE);
+            long len = result > 0
+                    ? (type == OperationType.READ ? result + 1 : result)
+                    : 0L;
+            buffer = MemorySegment.ofAddress(bufferAddress).reinterpret(len);
             return buffer;
         }
         return MemorySegment.NULL;
+    }
+
+    /**
+     * Returns a {@link MemorySegment} sliced to the exact number of bytes transferred ({@code 0..result}).
+     */
+    public MemorySegment validBuffer() {
+        MemorySegment buf = buffer();
+        if (buf.equals(MemorySegment.NULL) || result <= 0) {
+            return MemorySegment.NULL;
+        }
+        long validLen = Math.min(result, buf.byteSize());
+        return buf.byteSize() == validLen ? buf : buf.asSlice(0, validLen);
+    }
+
+    /**
+     * Copies the valid transferred bytes ({@code 0..result}) into a new {@code byte[]}.
+     */
+    public byte[] toByteArray() {
+        MemorySegment valid = validBuffer();
+        if (valid.equals(MemorySegment.NULL)) {
+            return new byte[0];
+        }
+        return valid.toArray(JAVA_BYTE);
+    }
+
+    /**
+     * Decodes the valid transferred bytes ({@code 0..result}) as a UTF-8 {@link String}
+     * without requiring a null-terminator byte.
+     */
+    public String getString() {
+        return getString(StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Decodes the valid transferred bytes ({@code 0..result}) using the specified {@link Charset}
+     * without requiring a null-terminator byte.
+     */
+    public String getString(Charset charset) {
+        return new String(toByteArray(), charset);
+    }
+
+    /**
+     * Wraps the valid transferred bytes ({@code 0..result}) as a direct {@link ByteBuffer}.
+     */
+    public ByteBuffer asByteBuffer() {
+        MemorySegment valid = validBuffer();
+        return valid.equals(MemorySegment.NULL) ? ByteBuffer.allocate(0) : valid.asByteBuffer();
     }
 
     public int bufferIdx() {
@@ -111,7 +196,16 @@ public class Result implements AutoCloseable {
         return result;
     }
 
+    private boolean ownsMallocBuffer() {
+        return type == null || type == OperationType.READ || type == OperationType.RECV;
+    }
+
     public void freeBuffer() {
+        if (!ownsMallocBuffer()) {
+            bufferAddress = 0L;
+            buffer = null;
+            return;
+        }
         if (bufferAddress != 0L) {
             NativeDispatcher.C.free(bufferAddress);
             bufferAddress = 0L;
@@ -124,9 +218,11 @@ public class Result implements AutoCloseable {
 
     public void freeBuffers() {
         if (buffers != null) {
-            for (MemorySegment b : buffers) {
-                if (b != null && !b.equals(MemorySegment.NULL)) {
-                    NativeDispatcher.C.free(b);
+            if (type == null || type == OperationType.READV) {
+                for (MemorySegment b : buffers) {
+                    if (b != null && !b.equals(MemorySegment.NULL)) {
+                        NativeDispatcher.C.free(b);
+                    }
                 }
             }
             buffers = null;
@@ -136,6 +232,7 @@ public class Result implements AutoCloseable {
     @Override
     public void close() {
         freeBuffer();
+        freeBuffers();
     }
 
     @Override
@@ -145,6 +242,7 @@ public class Result implements AutoCloseable {
                 ", result=" + result +
                 ", type=" + type +
                 ", bufferIdx=" + bufferIdx +
+                ", cqeFlags=" + cqeFlags +
                 '}';
     }
 }

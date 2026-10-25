@@ -246,6 +246,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     public void setRegisteredBuffers(MemorySegment[] registeredBuffers) {
         this.registeredBuffers = registeredBuffers;
+        this.reusableResult.setRegisteredBuffers(registeredBuffers);
         if (registeredBuffers != null) {
             this.registeredBufferAddresses = new long[registeredBuffers.length];
             for (int i = 0; i < registeredBuffers.length; i++) {
@@ -262,7 +263,8 @@ public final class IoUringDispatcher implements AutoCloseable {
 
         int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
         if (ret < 0) {
-            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(ret));
+            dispatcher.close();
+            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(-ret));
         }
 
         return dispatcher;
@@ -287,20 +289,24 @@ public final class IoUringDispatcher implements AutoCloseable {
         MemorySegment ring = NativeDispatcher.C.calloc(ring_layout.byteSize());
         IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
+        try {
+            int ring_fd = this.ringFd;
 
-        int ring_fd = this.ringFd;
+            var result = IoUringOptions.combineOptions(ioUringOptions);
 
-        var result = IoUringOptions.combineOptions(ioUringOptions);
+            io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
+            io_uring_params.wq_fd(params, ring_fd);
 
-        io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
-        io_uring_params.wq_fd(params, ring_fd);
+            var ret = dispatcher.queueInitParams(queueDepth, ring, params);
+            if (ret < 0) {
+                dispatcher.close();
+                throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(-ret));
+            }
 
-        var ret = dispatcher.queueInitParams(queueDepth, ring, params);
-        if (ret < 0) {
-            throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(ret));
+            return dispatcher;
+        } finally {
+            NativeDispatcher.C.free(params);
         }
-
-        return dispatcher;
     }
 
     long allocateIovecBlock() {
@@ -915,20 +921,22 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (this.ringFd < 0) {
             return -9; // -EBADF
         }
-        MemorySegment up = this.arena.allocate(16L, 8L);
-        up.set(JAVA_INT, 0L, -1);
-        up.set(JAVA_INT, 4L, 0);
-        up.set(JAVA_LONG, 8L, this.ringFd);
-        long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
-        if (res == 1L) {
-            int regFd = up.get(JAVA_INT, 0L);
-            this.enterRingFd = regFd;
-            this.enterFlagsBase = IORING_ENTER_REGISTERED_RING;
-            enterRingFdHandle.set(this.ring, 0L, regFd);
-            ringIntFlagsHandle.set(this.ring, 0L, INT_FLAG_REG_RING);
-            return 1;
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment up = tempArena.allocate(16L, 8L);
+            up.set(JAVA_INT, 0L, -1);
+            up.set(JAVA_INT, 4L, 0);
+            up.set(JAVA_LONG, 8L, this.ringFd);
+            long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
+            if (res == 1L) {
+                int regFd = up.get(JAVA_INT, 0L);
+                this.enterRingFd = regFd;
+                this.enterFlagsBase = IORING_ENTER_REGISTERED_RING;
+                enterRingFdHandle.set(this.ring, 0L, regFd);
+                ringIntFlagsHandle.set(this.ring, 0L, INT_FLAG_REG_RING);
+                return 1;
+            }
+            return -LibCDispatcher.errno(this.callState);
         }
-        return -LibCDispatcher.errno(this.callState);
     }
 
     /**
@@ -940,19 +948,21 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (this.ringFd < 0 || this.enterFlagsBase == 0) {
             return 0;
         }
-        MemorySegment up = this.arena.allocate(16L, 8L);
-        up.set(JAVA_INT, 0L, this.enterRingFd);
-        up.set(JAVA_INT, 4L, 0);
-        up.set(JAVA_LONG, 8L, 0L);
-        long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
-        this.enterRingFd = this.ringFd;
-        this.enterFlagsBase = 0;
-        enterRingFdHandle.set(this.ring, 0L, this.ringFd);
-        ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
-        if (res < 0) {
-            return -LibCDispatcher.errno(this.callState);
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment up = tempArena.allocate(16L, 8L);
+            up.set(JAVA_INT, 0L, this.enterRingFd);
+            up.set(JAVA_INT, 4L, 0);
+            up.set(JAVA_LONG, 8L, 0L);
+            long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
+            this.enterRingFd = this.ringFd;
+            this.enterFlagsBase = 0;
+            enterRingFdHandle.set(this.ring, 0L, this.ringFd);
+            ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
+            if (res < 0) {
+                return -LibCDispatcher.errno(this.callState);
+            }
+            return (int) res;
         }
-        return (int) res;
     }
 
     private void fallbackOrReRegisterRingFd() {
@@ -1013,9 +1023,10 @@ public final class IoUringDispatcher implements AutoCloseable {
         var iovecStructure = libCDispatcher.allocateIovec(arena, bufferSize, nrIovecs);
         int ret = registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
         if (ret < 0) {
-            throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(ret));
+            throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
         }
         this.registeredBuffers = iovecStructure.buffers();
+        this.reusableResult.setRegisteredBuffers(this.registeredBuffers);
         return this.registeredBuffers;
     }
 
@@ -1030,55 +1041,63 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     int registerFiles(int[] fileDescriptors) {
         int count = fileDescriptors.length;
-        MemorySegment fdArray = arena.allocate(JAVA_INT.byteSize() * count);
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment fdArray = tempArena.allocate(JAVA_INT.byteSize() * count);
 
-        for (int i = 0; i < count; i++) {
-            fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
-        }
+            for (int i = 0; i < count; i++) {
+                fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
+            }
 
-        int ret = registerFiles(ring, fdArray, count);
-        if (ret < 0) {
-            throw new RuntimeException("Failed to register files: " + libCDispatcher.strerror(ret));
+            int ret = registerFiles(ring, fdArray, count);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to register files: " + libCDispatcher.strerror(-ret));
+            }
+            return ret;
         }
-        return ret;
     }
 
     int registerFilesUpdate(MemorySegment ring, int offset, MemorySegment fdArray, int count) {
         int fd = this.ringFd;
-        MemorySegment up = this.arena.allocate(16L);
-        up.set(JAVA_INT, 0L, offset);
-        up.set(JAVA_INT, 4L, 0);
-        up.set(JAVA_LONG, 8L, fdArray.address());
-        long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 6 /* IORING_REGISTER_FILES_UPDATE */, up, count);
-        if (res < 0) {
-            return -LibCDispatcher.errno(this.callState);
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment up = tempArena.allocate(16L);
+            up.set(JAVA_INT, 0L, offset);
+            up.set(JAVA_INT, 4L, 0);
+            up.set(JAVA_LONG, 8L, fdArray.address());
+            long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 6 /* IORING_REGISTER_FILES_UPDATE */, up, count);
+            if (res < 0) {
+                return -LibCDispatcher.errno(this.callState);
+            }
+            return (int) res;
         }
-        return (int) res;
     }
 
     int registerFilesUpdate(int offset, int[] fileDescriptors) {
         int count = fileDescriptors.length;
-        MemorySegment fdArray = arena.allocate(JAVA_INT.byteSize() * count);
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment fdArray = tempArena.allocate(JAVA_INT.byteSize() * count);
 
-        for (int i = 0; i < count; i++) {
-            fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
-        }
+            for (int i = 0; i < count; i++) {
+                fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
+            }
 
-        int ret = registerFilesUpdate(ring, offset, fdArray, count);
-        if (ret < 0) {
-            throw new RuntimeException("Failed to update registered files: " + libCDispatcher.strerror(ret));
+            int ret = registerFilesUpdate(ring, offset, fdArray, count);
+            if (ret < 0) {
+                throw new RuntimeException("Failed to update registered files: " + libCDispatcher.strerror(-ret));
+            }
+            return ret;
         }
-        return ret;
     }
 
     void registerIowqMaxWorkers(int bounded, int unbounded) {
         int fd = this.ringFd;
-        MemorySegment values = this.arena.allocate(JAVA_INT, 2);
-        values.setAtIndex(JAVA_INT, 0, bounded);
-        values.setAtIndex(JAVA_INT, 1, unbounded);
-        long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 19 /* IORING_REGISTER_IOWQ_MAX_WORKERS */, values, 2);
-        if (res < 0) {
-            throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(-LibCDispatcher.errno(this.callState)));
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment values = tempArena.allocate(JAVA_INT, 2);
+            values.setAtIndex(JAVA_INT, 0, bounded);
+            values.setAtIndex(JAVA_INT, 1, unbounded);
+            long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 19 /* IORING_REGISTER_IOWQ_MAX_WORKERS */, values, 2);
+            if (res < 0) {
+                throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(LibCDispatcher.errno(this.callState)));
+            }
         }
     }
 
@@ -1113,8 +1132,9 @@ public final class IoUringDispatcher implements AutoCloseable {
             long address = cqes + (long) index * 16L;
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
+            int flags = ZeroGcCqe.getFlags(address);
 
-            populateResultFromCqe(reusableResult, userData, res, 0);
+            populateResultFromCqe(reusableResult, userData, res, flags);
             consumer.accept(reusableResult);
         }
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
@@ -1143,9 +1163,11 @@ public final class IoUringDispatcher implements AutoCloseable {
             long address = cqes + (long) index * 16L;
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
+            int flags = ZeroGcCqe.getFlags(address);
 
             Result r = new Result();
-            populateResultFromCqe(r, userData, res, 0);
+            r.setRegisteredBuffers(this.registeredBuffers);
+            populateResultFromCqe(r, userData, res, flags);
             ret.add(r);
         }
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
@@ -1159,7 +1181,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (status < 0) {
                 status = waitCqeNr(ring, cqePtrPtr, batchSize);
                 if (status < 0) {
-                    throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(status));
+                    throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-status));
                 }
             }
         }
@@ -1270,15 +1292,17 @@ public final class IoUringDispatcher implements AutoCloseable {
     Result waitForResult(Result target) {
         int ret = waitCqe(ring, cqePtr);
         if (ret < 0) {
-            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(ret));
+            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-ret));
         }
 
         long cqeAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
 
         long userData = ZeroGcCqe.getUserData(cqeAddress);
         int res = ZeroGcCqe.getRes(cqeAddress);
+        int flags = ZeroGcCqe.getFlags(cqeAddress);
 
-        populateResultFromCqe(target, userData, res, 0);
+        target.setRegisteredBuffers(this.registeredBuffers);
+        populateResultFromCqe(target, userData, res, flags);
         cqAdvance(ring, 1);
         return target;
     }
@@ -1307,32 +1331,32 @@ public final class IoUringDispatcher implements AutoCloseable {
                 int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
                 long regBufAddr = (registeredBufferAddresses != null && bufferIdx >= 0 && bufferIdx < registeredBufferAddresses.length)
                         ? registeredBufferAddresses[bufferIdx] : 0L;
-                target.set(userData, result, OperationType.READ_FIXED, regBufAddr, null, bufferIdx, null);
+                target.set(userData, result, OperationType.READ_FIXED, regBufAddr, null, bufferIdx, null, cqeFlags);
             }
             case 2 /* WRITE_FIXED */ -> {
                 int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
-                target.set(userData, result, OperationType.WRITE_FIXED, 0L, null, bufferIdx, null);
+                target.set(userData, result, OperationType.WRITE_FIXED, 0L, null, bufferIdx, null, cqeFlags);
             }
             case 0 /* READ */, 18 /* READ_POOLED */ -> {
                 long bufferAddr = ZeroGcUserData.getPayload(userData);
-                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null);
+                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case 1 /* WRITE */ -> {
                 long buffAddr = ZeroGcUserData.getPayload(userData);
                 if (buffAddr != 0L) {
                     libCDispatcher.free(buffAddr);
                 }
-                target.set(userData, result, OperationType.WRITE, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITE, 0L, null, -1, null, cqeFlags);
             }
             case 3 /* OPEN */ -> {
                 long pathAddr = ZeroGcUserData.getPayload(userData);
                 if (pathAddr != 0L) {
                     libCDispatcher.free(pathAddr);
                 }
-                target.set(userData, result, OperationType.OPEN, 0L, null, -1, null);
+                target.set(userData, result, OperationType.OPEN, 0L, null, -1, null, cqeFlags);
             }
             case 4 /* CLOSE */ -> {
-                target.set(userData, result, OperationType.CLOSE, 0L, null, -1, null);
+                target.set(userData, result, OperationType.CLOSE, 0L, null, -1, null, cqeFlags);
             }
             case 5 /* READV */, 7 /* READV_FIXED */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
@@ -1341,10 +1365,11 @@ public final class IoUringDispatcher implements AutoCloseable {
                 MemorySegment[] buffers = new MemorySegment[count];
                 for (int i = 0; i < count; i++) {
                     long base = ZeroGcIovecBlock.getIovBase(blockAddr, i);
-                    buffers[i] = MemorySegment.ofAddress(base).reinterpret(Long.MAX_VALUE);
+                    long len = ZeroGcIovecBlock.getIovLen(blockAddr, i);
+                    buffers[i] = MemorySegment.ofAddress(base).reinterpret(len + 1);
                 }
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers);
+                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers, cqeFlags);
             }
             case 6 /* WRITEV */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
@@ -1353,42 +1378,42 @@ public final class IoUringDispatcher implements AutoCloseable {
                     libCDispatcher.free(ZeroGcIovecBlock.getIovBase(blockAddr, i));
                 }
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, OperationType.WRITEV, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITEV, 0L, null, -1, null, cqeFlags);
             }
             case 8 /* WRITEV_FIXED */ -> {
                 long blockAddr = ZeroGcUserData.getPayload(userData);
                 iovecBlockPool.checkIn(blockAddr);
-                target.set(userData, result, OperationType.WRITEV_FIXED, 0L, null, -1, null);
+                target.set(userData, result, OperationType.WRITEV_FIXED, 0L, null, -1, null, cqeFlags);
             }
             case 9 /* ACCEPT */, 15 /* MULTISHOT_ACCEPT */ -> {
-                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, null);
+                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, null, cqeFlags);
             }
             case 10 /* CONNECT */ -> {
                 long connectAddr = ZeroGcUserData.getPayload(userData);
                 if (connectAddr != 0L) {
                     libCDispatcher.free(connectAddr);
                 }
-                target.set(userData, result, OperationType.CONNECT, 0L, null, -1, null);
+                target.set(userData, result, OperationType.CONNECT, 0L, null, -1, null, cqeFlags);
             }
             case 11 /* RECV */, 14 /* RECV_EXT */ -> {
                 long bufferAddr = ZeroGcUserData.getPayload(userData);
-                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null);
+                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case 12 /* SEND */ -> {
                 long sendBuf = ZeroGcUserData.getPayload(userData);
                 if (sendBuf != 0L) {
                     libCDispatcher.free(sendBuf);
                 }
-                target.set(userData, result, OperationType.SEND, 0L, null, -1, null);
+                target.set(userData, result, OperationType.SEND, 0L, null, -1, null, cqeFlags);
             }
             case 13 /* SEND_EXT */ -> {
-                target.set(userData, result, OperationType.SEND_EXT, 0L, null, -1, null);
+                target.set(userData, result, OperationType.SEND_EXT, 0L, null, -1, null, cqeFlags);
             }
             case 16 /* CANCEL */ -> {
-                target.set(userData, result, OperationType.CANCEL, 0L, null, -1, null);
+                target.set(userData, result, OperationType.CANCEL, 0L, null, -1, null, cqeFlags);
             }
             case 19 /* NOP */ -> {
-                target.set(userData, result, OperationType.NOP, 0L, null, -1, null);
+                target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
             }
         }
     }
