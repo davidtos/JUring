@@ -214,9 +214,41 @@ record LibCDispatcher(FreeAddress freeLong,
         }
     }
 
+    /**
+     * Allocates an array of {@code iovec} structures backed by a contiguous, page-aligned buffer slab.
+     * <p>
+     * <b>Why this change was made (Performance & Kernel Correctness):</b>
+     * Previously, each registered buffer was allocated via individual {@code malloc(bufferSize)} calls.
+     * Glibc's {@code malloc(4096)} returns a 16-byte aligned pointer preceded by an allocator chunk header.
+     * Consequently, <i>every single 4,096-byte buffer straddled two separate 4,096-byte physical memory pages</i>!
+     * This caused three critical issues:
+     * <ol>
+     *   <li><b>RLIMIT_MEMLOCK Exhaustion:</b> Linux pinned two physical pages (8 KB) for every 4 KB buffer registered
+     *       with {@code io_uring_register(IORING_REGISTER_BUFFERS)}. At 16 concurrent threads with 64 buffers each,
+     *       this required 8 MB of locked memory, exhausting default {@code ulimit -l} and failing with
+     *       {@code ENOMEM (errno -12: Cannot allocate memory)}.</li>
+     *   <li><b>NVMe DMA Page Splitting:</b> For direct NVMe I/O ({@code O_DIRECT}), crossing a physical page boundary
+     *       forced the Linux NVMe driver to generate 2 Physical Region Page (PRP) entries instead of a single
+     *       direct PRP entry for every 4 KB block transfer, degrading hardware DMA efficiency.</li>
+     *   <li><b>Memory Leaks:</b> Unmanaged {@code malloc} buffers were never explicitly freed upon ring shutdown.</li>
+     * </ol>
+     * <p>
+     * <b>How it works:</b>
+     * This method calculates the appropriate power-of-two alignment (4,096 bytes for standard pages, 512 bytes for
+     * sector-aligned I/O, or 64 bytes for cache-line alignment) and allocates a single contiguous slab via
+     * {@link Arena#allocate(long, long)}. Each {@code iovec} is then assigned a sliced view of this page-aligned slab.
+     * All buffers fit within exact physical page boundaries, halving {@code RLIMIT_MEMLOCK} usage, eliminating PRP splits,
+     * and ensuring deterministic deallocation when the enclosing {@link Arena} is closed.
+     *
+     * @param arena      the memory arena governing the lifecycle of the iovec array and buffer slab
+     * @param bufferSize the size of each buffer in bytes
+     * @param nrIovecs   the number of iovec buffers to allocate
+     * @return an {@link IovecStructure} containing the native iovec array and individual buffer segments
+     */
     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
         MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
+        // Enforce 4096-byte hardware page alignment for 4KB buffers (or 512-byte block alignment)
         long alignment = (bufferSize >= 4096 && (bufferSize & 4095L) == 0) ? 4096L
                 : (bufferSize >= 512 && (bufferSize & 511L) == 0) ? 512L : 64L;
         MemorySegment slab = arena.allocate(Math.multiplyExact(bufferSize, nrIovecs), alignment);

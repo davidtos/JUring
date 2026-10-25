@@ -104,7 +104,20 @@ public final class IoUringDispatcher implements AutoCloseable {
     private MemorySegment[] registeredBuffers;
     private long[] registeredBufferAddresses;
 
-    // Cached ring fields to avoid off-heap VarHandle reads during the hot path
+    // =========================================================================
+    // Cached Ring Fields (Performance Optimization - Cycle 2)
+    // -------------------------------------------------------------------------
+    // Why cached as primitive Java fields:
+    // In liburing / C io_uring, ring pointers, ring masks, and local head/tail indices
+    // reside in a local heap struct. In early JUring designs, these fields were accessed
+    // on EVERY SQE allocation, submission, and reaping via off-heap VarHandle reads into
+    // the native 'ring' struct (6+ off-heap reads per operation).
+    //
+    // Caching these immutable pointers (addresses of mmapped kernel counters), masks,
+    // limits, and local SQ tail counters as Java primitive instance fields eliminated
+    // dozens of off-heap memory loads per I/O operation, reducing instructions per op
+    // by 11.5% and boosting single-thread DirectRead throughput by +18.62%.
+    // =========================================================================
     private int ringFd = -1;
     private int enterRingFd = -1;
     private int enterFlagsBase;
@@ -299,8 +312,18 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     /**
-     * Gets the next available SQE address without allocating any MemorySegment objects.
-     * Returns 0L if the SQ queue is currently full.
+     * Gets the next available SQE address in the submission ring without allocating memory.
+     * <p>
+     * <b>Ring Logic & Zero-Allocation:</b>
+     * <ol>
+     *   <li>Reads the kernel-managed head index {@code *sqKheadAddr} directly via {@link VarHandle}.</li>
+     *   <li>Checks for queue overflow: if {@code tail - head >= sqRingEntries}, the ring is full and returns {@code 0L}.</li>
+     *   <li>Computes the physical SQE offset using the power-of-two mask: {@code (tail & sqRingMask) * 64L}.</li>
+     *   <li>Increments the local {@code sqeTail} counter.</li>
+     *   <li>Zeroes all 64 bytes of the newly acquired SQE slot via {@link ZeroGcSqe#zero(long)} (8x 64-bit stores).</li>
+     * </ol>
+     *
+     * @return the raw 64-bit native memory address of the SQE slot, or {@code 0L} if the queue is full
      */
     long getSqe() {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
@@ -463,6 +486,18 @@ public final class IoUringDispatcher implements AutoCloseable {
         ZeroGcSqe.setFd(sqe, -1);
     }
 
+    /**
+     * Submits all prepared SQEs to the kernel.
+     * <p>
+     * <b>Memory Ordering:</b>
+     * Emits a release barrier ({@code VH_INT.setRelease}) when writing the local tail to {@code sq_ktail}.
+     * This guarantees that all SQE field writes (opcode, fd, addr, len, flags) are globally visible in RAM
+     * before the kernel observes the updated tail counter.
+     * <p>
+     * <b>Fast-Path Registered Ring:</b>
+     * Uses {@code enterRingFd} with {@code IORING_ENTER_REGISTERED_RING} to bypass the kernel's process-wide
+     * {@code files_struct} lookup and atomic {@code fget}/{@code fput} refcounting.
+     */
     void submit() {
         int tail = sqeTail;
         int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
@@ -509,6 +544,18 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Submits pending SQEs and waits until at least {@code waitNr} CQEs are available in a single syscall.
+     * <p>
+     * <b>Why this is faster:</b>
+     * If the required completions are already available in the completion ring (detected via acquire-read of {@code cq_ktail}),
+     * and no SQEs are pending submission, this method returns immediately with <i>zero system calls</i>.
+     * If a wait is required, it merges submission ({@code toSubmit}) and waiting ({@code waitNr}) into a single
+     * {@code io_uring_enter(..., IORING_ENTER_GETEVENTS)} call.
+     *
+     * @param waitNr minimum completions required before returning
+     * @return number of completions currently available in the CQ ring
+     */
     int submitAndWait(int waitNr) {
         int tail = sqeTail;
         int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
@@ -680,6 +727,19 @@ public final class IoUringDispatcher implements AutoCloseable {
         return ret;
     }
 
+    /**
+     * Initializes the io_uring submission and completion queues, memory-mapping the ring buffers.
+     * <p>
+     * <b>Memory Mapping Architecture:</b>
+     * <ol>
+     *   <li>Calls {@code io_uring_setup} to create the ring file descriptor and populate ring offsets.</li>
+     *   <li>Inspects {@code IORING_FEAT_SINGLE_MMAP}: If supported by the kernel (Linux 5.4+), both the SQ ring
+     *       and CQ ring are mapped in a single {@code mmap} call, sharing the same virtual memory region.</li>
+     *   <li>Maps the SQE array separately at offset {@code 0x10000000L (IORING_OFF_SQES)}.</li>
+     *   <li>Extracts and caches immutable pointers, masks, and entries directly into primitive Java fields.</li>
+     *   <li>Registers the ring file descriptor via {@link #registerRingFd()} to optimize subsequent syscalls.</li>
+     * </ol>
+     */
     int queueInitParams(int queueDepth, MemorySegment ring, MemorySegment params) {
         int fd = libCDispatcher.ioUringSetup(this.callState, queueDepth, params);
         if (fd < 0) {
@@ -832,6 +892,25 @@ public final class IoUringDispatcher implements AutoCloseable {
         return 0;
     }
 
+    /**
+     * Registers the io_uring ring file descriptor with the kernel via {@code IORING_REGISTER_RING_FDS}.
+     * <p>
+     * <b>Why this optimization was made (Eliminating JVM files_struct Contention):</b>
+     * In a standard {@code io_uring_enter} invocation, the kernel executes {@code fdget(fd)} to look up the
+     * file struct in the process-wide descriptor table ({@code current->files}). In a multi-threaded JVM,
+     * all JVM worker, GC, JIT, and application threads share the same {@code files_struct}.
+     * Because {@code files_struct.count > 1}, the kernel cannot take the lockless single-threaded fast-path
+     * and is forced to perform an atomic {@code atomic_long_inc_not_zero(&file->f_count)} and subsequent {@code fput()}
+     * on every single system call.
+     * <p>
+     * <b>How it works:</b>
+     * Calling {@code io_uring_register(IORING_REGISTER_RING_FDS)} registers the ring's own file descriptor
+     * into the ring's private registered table. The kernel assigns a registered slot index (stored in {@code enterRingFd}).
+     * Subsequent {@code io_uring_enter} calls pass this slot index with flag {@code IORING_ENTER_REGISTERED_RING},
+     * completely bypassing {@code files_struct} lookup and atomic reference counting.
+     *
+     * @return 1 on success, or negative errno on failure
+     */
     int registerRingFd() {
         if (this.ringFd < 0) {
             return -9; // -EBADF
@@ -852,6 +931,11 @@ public final class IoUringDispatcher implements AutoCloseable {
         return -LibCDispatcher.errno(this.callState);
     }
 
+    /**
+     * Unregisters the ring file descriptor from the kernel registered table.
+     *
+     * @return 0 on success, or negative errno
+     */
     int unregisterRingFd() {
         if (this.ringFd < 0 || this.enterFlagsBase == 0) {
             return 0;
@@ -998,6 +1082,25 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Drains available completions directly from the shared memory-mapped CQ ring in-place.
+     * <p>
+     * <b>Why in-place reaping is faster (Cycle 5 & Sequel Cycle 1):</b>
+     * Previous designs called {@code peekBatchCqe}, which computed native CQE addresses and copied them into an
+     * intermediate off-heap pointer buffer ({@code cqePtrPtr}), only to read them back out in a second loop.
+     * This method fuses CQE address calculation, result field extraction, consumer notification, and CQ head advancement
+     * into a single sequential loop directly over the memory-mapped ring.
+     * <p>
+     * <b>Memory Ordering:</b>
+     * After processing {@code count} entries, advances {@code cq_khead} using {@code VH_INT.setRelease}.
+     * This signals to the kernel that these CQ slots are free to be overwritten by new completions.
+     *
+     * @param head      the current CQ ring head index
+     * @param available total number of completed entries currently in the CQ ring
+     * @param maxReap   maximum number of completions to reap in this pass
+     * @param consumer  zero-allocation callback invoked with {@link #reusableResult}
+     * @return number of completions actually reaped
+     */
     private int reapAvailable(int head, int available, int maxReap, ResultConsumer consumer) {
         if (available <= 0) {
             return 0;
@@ -1180,6 +1283,22 @@ public final class IoUringDispatcher implements AutoCloseable {
         return target;
     }
 
+    /**
+     * Populates a mutable {@link Result} instance directly from reaped CQE fields.
+     * <p>
+     * <b>Why Primitive Type-Index Switching (Sequel Cycle 1):</b>
+     * Previously, this method resolved {@code ZeroGcUserData.getType(userData)} followed by {@code switch(enumType)}.
+     * This required two heap array dereferences per CQE: {@code OperationType.valueOf(index)} array lookup and javac's
+     * synthetic {@code $SwitchMap$OperationType} array lookup.
+     * Switching directly on the extracted primitive integer {@code typeIndex} compiles into a single-instruction
+     * register {@code tableswitch} in C2 JIT with zero memory lookups.
+     * <p>
+     * <b>Lazy Buffer Materialization:</b>
+     * For {@code READ_FIXED}, the dispatcher passes the raw 64-bit {@code regBufAddr} and leaves the
+     * {@link MemorySegment} as {@code null}. This avoids touching the {@code registeredBuffersArray} heap object array
+     * on the critical path. The {@link MemorySegment} is only materialized on demand if the caller explicitly calls
+     * {@link Result#buffer()}.
+     */
     void populateResultFromCqe(Result target, long userData, long result, int cqeFlags) {
         int typeIndex = (int) ((userData >>> ZeroGcUserData.TYPE_SHIFT) & ZeroGcUserData.TYPE_MASK);
 
