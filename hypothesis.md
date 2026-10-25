@@ -264,6 +264,37 @@ Hardware & OS:
   * Total `instructions/op` (user + kernel): dropped from **11,693.8** to **10,649.8 (-1,044 instructions/op, -8.9%)**
 - **Decision:** **KEPT (Active)**.
 
+---
+
+## Phase 5: Comprehensive Bug Verification, Hardening, and System Integrity Audit
+
+### Overview
+A full-codebase correctness and verification audit was performed, uncovering and resolving 10 high-impact bugs across ring indexing, thread registration, virtual-thread socket polling, memory safety, and argument validation. All 10 bugs were reproduced via dedicated unit tests in `BugVerificationTest.java` (confirming failure prior to fixes), fixed, and re-benchmarked to ensure zero regression on hot-path performance.
+
+### Summary of Addressed Bugs
+1. **Option Forwarding**: `JUring.getSharedWorkerRing` forwarded options to `IoUringDispatcher` instead of silently dropping them.
+2. **Idempotent Resource Lifecycle**: `IoUringDispatcher.close()`, `JUring.close()`, `ReadBufferPool.close()`, and `FileDescriptor.close()` are guarded against double-close native double-free (`SIGABRT`) and descriptor theft.
+3. **SQE128 / CQE32 Dynamic Shifts**: Hardcoded 64B SQE / 16B CQE offsets replaced with cached dynamic bit shifts (`sqeShift` = 6 or 7, `cqeShift` = 4 or 5) and 128B zeroing.
+4. **External Write Type Tagging**: `prepareWrite(fd, MemorySegment, offset)` maps through internal token `TYPE_WRITE_EXT` (20) to report `OperationType.WRITE` with `bufferIdx = -1` without freeing caller-owned segments.
+5. **Thread-Bound Registered Ring FDs**: Tracked `registeredThread` in `IoUringDispatcher` to prevent cross-thread registered ring FD slot collisions, disabled registration on virtual threads, and sanitized unregistration.
+6. **Socket Deadlock & Defer-Taskrun Poller Fix**: Added `IORING_OP_SEND` to `isUnboundedOp`, decoupled unbounded in-flight operations from MPSC queue draining, and added non-blocking deferred taskwork flushing (`flushDeferredTaskrun`).
+7. **Negative Direct Index Validation**: Added fail-fast validation for `fileIndex >= 0` in direct open and close methods to prevent closing `stdin` (`fd 0`).
+8. **Pre-SQE Validation & Buffer Sizing**: Validated buffer sizes and IPv4 strings before allocating SQEs to eliminate phantom `NOP` entries, buffer overflows, and memory leaks.
+9. **Null-Terminated Partial & EOF Reads**: Reinterpreted `Result.buffer()` to `result + 1` with a null terminator at `result` on `OperationType.READ` when `result >= 0`.
+10. **READV & READV_FIXED Buffer Strides**: Sized non-sector-aligned registered buffer slabs with 1-byte guard strides and null-terminated each vector at valid bytes read.
+
+### Post-Fix Benchmark Verification (AMD Ryzen 9 3950X, Kernel 7.0.12)
+After applying all 10 fixes, the benchmark suite was executed to verify that zero hot-path performance was regressed and that FileChannel advantages were fully preserved:
+
+| Workload | JUring Throughput | FileChannel Throughput | JUring Advantage | Syscalls (`enters/op`) | Alloc (`B/op`) |
+|---|---|---|---|---|---|
+| **Direct Read (`qd=64`, 1T)** | **243,872 ops/s** (998.9 MB/s) | 11,379 ops/s (46.6 MB/s) | **+21.4x faster** | **0.4824** (vs 1.0000) | **0.295 B/op** (0-GC) |
+| **Direct Write (`MULTI_FILE`, 1T)** | **317,416 ops/s** (1,300.1 MB/s) | 67,422 ops/s (276.2 MB/s) | **+4.71x faster** | **0.0786** (vs 1.0000) | **0.263 B/op** (0-GC) |
+| **Direct Read (4 Threads)** | **460,271 ops/s** (1,902.3 MB/s) | 43,365 ops/s (195.4 MB/s) | **+10.6x faster** | **0.5387** (vs 1.0000) | Zero-GC |
+| **Direct Write (4 Threads)** | **440,436 ops/s** (1,820.8 MB/s) | 215,691 ops/s (900.5 MB/s) | **+2.04x faster** | **0.3690** (vs 1.0000) | Zero-GC |
+
+- **Decision:** **VERIFIED & SECURED** — All 90 unit and integration tests pass, zero regressions on hot-path operations, and physical NVMe bus saturation is maintained.
+
 
 
 

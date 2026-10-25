@@ -177,6 +177,12 @@ For complete benchmark source code and detailed methodology, see the test files 
 - Enhanced blocking API performance
 - Improved memory cleanup strategies
 
+## Reliability & Hardening
+- **Zero-GC Virtual Thread Blocking Poller (`JUringBlocking`)**: Non-blocking MPSC queue and unparking poller thread eliminate `CompletableFuture` allocation overhead and ensure deadlock-free socket operations (`accept`, `recv`, `connect`, `send`).
+- **Dynamic SQE128 & CQE32 Ring Support**: Ring initialization dynamically adapts submission and completion entry offsets via bit shifts without hardcoding entry strides.
+- **Cross-Thread Registered Ring FDs**: Thread-aware registered descriptor tracking ensures safe ring transfer across threads without descriptor collision.
+- **Fail-Fast Argument & Lifecycle Validation**: Safe handling of direct file indices, pre-SQE bounds checking to avoid phantom `NOP` entries, and fully idempotent `close()` across `JUring`, `IoUringDispatcher`, and `FileDescriptor`.
+
 ## Creating the benchmark files
 If you want to run the benchmark yourself, you can use the following:
 ```shell
