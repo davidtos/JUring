@@ -236,7 +236,7 @@ public class JUringBlocking implements AutoCloseable {
 
             // 1. Drain ready requests from MPSC ring into SQEs up to SQ ring capacity
             int preparedNow = 0;
-            while (inFlightHolder[0] < sqEntries) {
+            while ((inFlightHolder[0] - inFlightHolder[1]) < sqEntries && preparedNow < sqEntries) {
                 long head = this.mpscHead;
                 int idx = (int) (head & this.slotMask);
                 long seq = (long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx);
@@ -286,13 +286,17 @@ public class JUringBlocking implements AutoCloseable {
                     dispatcher.submitAndWait(1);
                     dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                 } else {
-                    // At least one unbounded socket operation (accept/recv/connect) is in flight:
+                    // At least one unbounded socket operation (accept/recv/connect/send) is in flight:
                     // Submit any newly prepared SQEs non-blockingly so subsequent virtual thread requests
                     // (e.g. a client connect() after a server accept()) are never blocked behind waitNr=1.
                     if (preparedNow > 0) {
                         dispatcher.submit();
                     }
                     int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                    if (reaped == 0 && dispatcher.isDeferTaskrun()) {
+                        dispatcher.flushDeferredTaskrun();
+                        reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                    }
                     if (reaped == 0 && !hasPendingMpsc() && controlTask.get() == null) {
                         VH_POLLER_PARKED.setVolatile(this, 1);
                         if (!hasPendingMpsc() && controlTask.get() == null && running) {
@@ -318,7 +322,7 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     private static boolean isUnboundedOp(byte op) {
-        return op == IORING_OP_ACCEPT || op == IORING_OP_RECV || op == IORING_OP_CONNECT;
+        return op == IORING_OP_ACCEPT || op == IORING_OP_RECV || op == IORING_OP_CONNECT || op == IORING_OP_SEND;
     }
 
     private boolean hasPendingMpsc() {
@@ -870,6 +874,9 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     public int openDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
         byte[] pathBytes = filePath.getBytes();
         MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathAddr, JAVA_BYTE, 0, pathBytes.length);
@@ -911,6 +918,9 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     public int closeDirect(int fileIndex, SqeOptions... sqeOptions) {
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
         return (int) submitAndAwaitSlot(
                 IORING_OP_CLOSE,
                 SqeOptions.combineOptions(sqeOptions),

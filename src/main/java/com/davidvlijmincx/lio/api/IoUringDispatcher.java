@@ -123,6 +123,11 @@ public final class IoUringDispatcher implements AutoCloseable {
     private int enterFlagsBase;
     private int ringFlags;
     private boolean isSqPoll;
+    private boolean isDeferTaskrun;
+    private int sqeShift = 6;
+    private int cqeShift = 4;
+    private Thread registeredThread;
+    private boolean closed;
     private long sqKheadAddr;
     private long sqKtailAddr;
     private long sqKflagsAddr;
@@ -340,11 +345,14 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
 
         int index = tail & sqRingMask;
-        long sqe_addr = sqSqesAddr + (long) index * 64L;
+        long sqe_addr = sqSqesAddr + ((long) index << sqeShift);
 
         sqeTail = tail + 1;
 
         ZeroGcSqe.zero(sqe_addr);
+        if (sqeShift > 6) {
+            ZeroGcSqe.zero(sqe_addr + 64L);
+        }
         return sqe_addr;
     }
 
@@ -517,6 +525,9 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
 
         boolean sqpoll = this.isSqPoll;
+        if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+            fallbackOrReRegisterRingFd();
+        }
         int enterFlags = this.enterFlagsBase;
         boolean needEnter = true;
 
@@ -530,22 +541,51 @@ public final class IoUringDispatcher implements AutoCloseable {
         }
 
         if (needEnter) {
-            if (COUNT_ENTERS) {
-                enterCount++;
-            }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
-            if (res < 0) {
+            while (true) {
+                if (COUNT_ENTERS) {
+                    enterCount++;
+                }
+                long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                if (res >= 0) {
+                    return;
+                }
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
                     fallbackOrReRegisterRingFd();
                     enterFlags = (enterFlags & ~IORING_ENTER_REGISTERED_RING) | this.enterFlagsBase;
-                    res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
-                    if (res >= 0) {
+                    continue;
+                }
+                if (err == 4 /* EINTR */) {
+                    tail = sqeTail;
+                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    if (toSubmit == 0 && !sqpoll) {
                         return;
                     }
-                    err = LibCDispatcher.errno(this.callState);
+                    continue;
                 }
                 throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(err));
+            }
+        }
+    }
+
+    boolean isDeferTaskrun() {
+        return isDeferTaskrun;
+    }
+
+    void flushDeferredTaskrun() {
+        if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+            fallbackOrReRegisterRingFd();
+        }
+        if (COUNT_ENTERS) {
+            enterCount++;
+        }
+        long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        if (res < 0) {
+            int err = LibCDispatcher.errno(this.callState);
+            if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
+                fallbackOrReRegisterRingFd();
+                this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             }
         }
     }
@@ -603,6 +643,9 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount++;
             }
+            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+                fallbackOrReRegisterRingFd();
+            }
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
             long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
@@ -632,13 +675,16 @@ public final class IoUringDispatcher implements AutoCloseable {
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             if (head != tail) {
                 int index = head & cqRingMask;
-                long cqeAddr = cqCqesAddr + (long) index * 16L;
+                long cqeAddr = cqCqesAddr + ((long) index << cqeShift);
                 cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
                 return 0;
             }
 
             if (COUNT_ENTERS) {
                 enterCount++;
+            }
+            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+                fallbackOrReRegisterRingFd();
             }
             long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
@@ -660,7 +706,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         if (head != tail) {
             int index = head & cqRingMask;
-            long cqeAddr = cqCqesAddr + (long) index * 16L;
+            long cqeAddr = cqCqesAddr + ((long) index << cqeShift);
             cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
             return 0;
         }
@@ -674,9 +720,10 @@ public final class IoUringDispatcher implements AutoCloseable {
         int count = Math.min(available, batchSize);
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
+        int shift = cqeShift;
         for (int i = 0; i < count; i++) {
             int index = (head + i) & mask;
-            long cqeAddr = cqes + (long) index * 16L;
+            long cqeAddr = cqes + ((long) index << shift);
             cqePtrPtr.setAtIndex(JAVA_LONG, i, cqeAddr);
         }
         return count;
@@ -703,6 +750,9 @@ public final class IoUringDispatcher implements AutoCloseable {
 
             if (COUNT_ENTERS) {
                 enterCount++;
+            }
+            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+                fallbackOrReRegisterRingFd();
             }
             long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
@@ -878,6 +928,9 @@ public final class IoUringDispatcher implements AutoCloseable {
         this.enterFlagsBase = 0;
         this.ringFlags = flags;
         this.isSqPoll = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
+        this.isDeferTaskrun = (flags & IoUringOptions.IORING_SETUP_DEFER_TASKRUN.value) != 0;
+        this.sqeShift = 6 + sqe_shift;
+        this.cqeShift = 4 + cqe_shift;
         this.sqKheadAddr = sq_khead;
         this.sqKtailAddr = sq_ktail;
         this.sqKflagsAddr = this.isSqPoll ? sq_kflags : 0L;
@@ -918,7 +971,8 @@ public final class IoUringDispatcher implements AutoCloseable {
      * @return 1 on success, or negative errno on failure
      */
     int registerRingFd() {
-        if (this.ringFd < 0) {
+        Thread current = Thread.currentThread();
+        if (this.ringFd < 0 || current.isVirtual()) {
             return -9; // -EBADF
         }
         try (Arena tempArena = Arena.ofConfined()) {
@@ -931,6 +985,7 @@ public final class IoUringDispatcher implements AutoCloseable {
                 int regFd = up.get(JAVA_INT, 0L);
                 this.enterRingFd = regFd;
                 this.enterFlagsBase = IORING_ENTER_REGISTERED_RING;
+                this.registeredThread = current;
                 enterRingFdHandle.set(this.ring, 0L, regFd);
                 ringIntFlagsHandle.set(this.ring, 0L, INT_FLAG_REG_RING);
                 return 1;
@@ -948,16 +1003,22 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (this.ringFd < 0 || this.enterFlagsBase == 0) {
             return 0;
         }
+        int regSlot = this.enterRingFd;
+        Thread regThread = this.registeredThread;
+        this.enterRingFd = this.ringFd;
+        this.enterFlagsBase = 0;
+        this.registeredThread = null;
+        enterRingFdHandle.set(this.ring, 0L, this.ringFd);
+        ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
+        if (Thread.currentThread() != regThread) {
+            return 0;
+        }
         try (Arena tempArena = Arena.ofConfined()) {
             MemorySegment up = tempArena.allocate(16L, 8L);
-            up.set(JAVA_INT, 0L, this.enterRingFd);
+            up.set(JAVA_INT, 0L, regSlot);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, 0L);
             long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
-            this.enterRingFd = this.ringFd;
-            this.enterFlagsBase = 0;
-            enterRingFdHandle.set(this.ring, 0L, this.ringFd);
-            ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -969,6 +1030,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (registerRingFd() < 0) {
             this.enterRingFd = this.ringFd;
             this.enterFlagsBase = 0;
+            this.registeredThread = null;
             enterRingFdHandle.set(this.ring, 0L, this.ringFd);
             ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
         }
@@ -1126,9 +1188,10 @@ public final class IoUringDispatcher implements AutoCloseable {
         int count = Math.min(available, maxReap);
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
+        int shift = cqeShift;
         for (int i = 0; i < count; i++) {
             int index = (head + i) & mask;
-            long address = cqes + (long) index * 16L;
+            long address = cqes + ((long) index << shift);
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
             int flags = ZeroGcCqe.getFlags(address);
@@ -1173,9 +1236,10 @@ public final class IoUringDispatcher implements AutoCloseable {
         int count = Math.min(available, maxReap);
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
+        int shift = cqeShift;
         for (int i = 0; i < count; i++) {
             int index = (head + i) & mask;
-            long address = cqes + (long) index * 16L;
+            long address = cqes + ((long) index << shift);
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
             int flags = ZeroGcCqe.getFlags(address);
@@ -1195,10 +1259,11 @@ public final class IoUringDispatcher implements AutoCloseable {
         int count = Math.min(available, batchSize);
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
+        int shift = cqeShift;
         List<Result> ret = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
             int index = (head + i) & mask;
-            long address = cqes + (long) index * 16L;
+            long address = cqes + ((long) index << shift);
             long userData = ZeroGcCqe.getUserData(address);
             int res = ZeroGcCqe.getRes(address);
             int flags = ZeroGcCqe.getFlags(address);
@@ -1241,6 +1306,9 @@ public final class IoUringDispatcher implements AutoCloseable {
 
             if (COUNT_ENTERS) {
                 enterCount++;
+            }
+            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+                fallbackOrReRegisterRingFd();
             }
             long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
@@ -1297,6 +1365,9 @@ public final class IoUringDispatcher implements AutoCloseable {
 
             if (COUNT_ENTERS) {
                 enterCount++;
+            }
+            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
+                fallbackOrReRegisterRingFd();
             }
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
             long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
@@ -1401,10 +1472,17 @@ public final class IoUringDispatcher implements AutoCloseable {
                 int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
 
                 MemorySegment[] buffers = new MemorySegment[count];
+                long remaining = result > 0 ? result : 0L;
                 for (int i = 0; i < count; i++) {
                     long base = ZeroGcIovecBlock.getIovBase(blockAddr, i);
                     long len = ZeroGcIovecBlock.getIovLen(blockAddr, i);
-                    buffers[i] = MemorySegment.ofAddress(base).reinterpret(len + 1);
+                    long valid = Math.min(len, remaining);
+                    remaining -= valid;
+                    MemorySegment seg = MemorySegment.ofAddress(base).reinterpret(len + 1);
+                    if (typeIndex == 5 /* READV */ || valid < len || (len & 511L) != 0) {
+                        seg.set(JAVA_BYTE, valid, (byte) 0);
+                    }
+                    buffers[i] = seg;
                 }
                 iovecBlockPool.checkIn(blockAddr);
                 target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers, cqeFlags);
@@ -1453,6 +1531,9 @@ public final class IoUringDispatcher implements AutoCloseable {
             case 19 /* NOP */ -> {
                 target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
             }
+            case ZeroGcUserData.TYPE_WRITE_EXT /* 20: WRITE (external MemorySegment) */ -> {
+                target.set(userData, result, OperationType.WRITE, 0L, null, -1, null, cqeFlags);
+            }
         }
     }
 
@@ -1466,6 +1547,10 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     @Override
     public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         closeRing();
         iovecBlockPool.close();
         libCDispatcher.free(cqePtr);

@@ -249,13 +249,15 @@ record LibCDispatcher(FreeAddress freeLong,
         MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
         // Enforce 4096-byte hardware page alignment for 4KB buffers (or 512-byte block alignment)
+        boolean sectorAligned = bufferSize >= 512 && (bufferSize & 511L) == 0;
         long alignment = (bufferSize >= 4096 && (bufferSize & 4095L) == 0) ? 4096L
-                : (bufferSize >= 512 && (bufferSize & 511L) == 0) ? 512L : 64L;
-        MemorySegment slab = arena.allocate(Math.multiplyExact(bufferSize, nrIovecs), alignment);
+                : sectorAligned ? 512L : 64L;
+        long stride = sectorAligned ? bufferSize : Math.addExact(bufferSize, 1L);
+        MemorySegment slab = arena.allocate(Math.addExact(Math.multiplyExact(stride, nrIovecs), sectorAligned ? 1L : 0L), alignment);
 
         for (int i = 0; i < nrIovecs; i++) {
             MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
-            MemorySegment buffer = slab.asSlice((long) i * bufferSize, bufferSize);
+            MemorySegment buffer = slab.asSlice((long) i * stride, bufferSize);
 
             Iovec.iov_base(nthIovec, buffer);
             Iovec.iov_len(nthIovec, bufferSize);
@@ -328,22 +330,38 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     MemorySegment allocSockaddrIn(String host, int port) {
+        if (port < 0 || port > 0xFFFF) {
+            throw new IllegalArgumentException("Invalid port: " + port);
+        }
+        int ip = parseIpv4(host);
         MemorySegment addr = malloc(SOCKADDR_IN_LAYOUT.byteSize());
         addr.fill((byte) 0);
         addr.set(JAVA_SHORT, 0, AF_INET);
         addr.set(JAVA_SHORT, 2, Short.reverseBytes((short) port));
-        addr.set(JAVA_INT, 4, Integer.reverseBytes(parseIpv4(host)));
+        addr.set(JAVA_INT, 4, Integer.reverseBytes(ip));
         return addr;
     }
 
     private static int parseIpv4(String host) {
-        String[] parts = host.split("\\.");
+        if (host == null) {
+            throw new IllegalArgumentException("Invalid IPv4 address: null");
+        }
+        String[] parts = host.split("\\.", -1);
         if (parts.length != 4) {
             throw new IllegalArgumentException("Invalid IPv4 address: " + host);
         }
         int result = 0;
         for (String part : parts) {
-            result = (result << 8) | (Integer.parseInt(part) & 0xFF);
+            int octet;
+            try {
+                octet = Integer.parseInt(part);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid IPv4 address: " + host, e);
+            }
+            if (octet < 0 || octet > 255) {
+                throw new IllegalArgumentException("Invalid IPv4 address: " + host);
+            }
+            result = (result << 8) | octet;
         }
         return result;
     }

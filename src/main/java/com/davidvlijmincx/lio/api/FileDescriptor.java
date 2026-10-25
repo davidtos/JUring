@@ -13,6 +13,7 @@ import java.nio.file.Path;
 public class FileDescriptor implements AutoCloseable {
 
     private final int fd;
+    private boolean closed;
 
     public FileDescriptor(String path, LinuxOpenOptions flags, int mode) {
         int opened = NativeDispatcher.C.open(path, flags.getValue(), mode);
@@ -61,7 +62,10 @@ public class FileDescriptor implements AutoCloseable {
 
     @Override
     public void close() {
-        NativeDispatcher.C.close(fd);
+        if (!closed) {
+            closed = true;
+            NativeDispatcher.C.close(fd);
+        }
     }
 
 }

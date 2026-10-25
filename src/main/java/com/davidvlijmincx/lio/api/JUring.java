@@ -66,7 +66,7 @@ public class JUring implements AutoCloseable {
     }
 
     public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
-        var ring = this.ioUring.getSharedWorkerRing(queueDepth);
+        var ring = this.ioUring.getSharedWorkerRing(queueDepth, ioUringOptions);
         return new JUring(ring);
     }
 
@@ -87,6 +87,12 @@ public class JUring implements AutoCloseable {
     }
 
     public void setupReadBufferPool(int bufferSize, int capacity) {
+        if (bufferSize <= 0 || capacity < 0) {
+            throw new IllegalArgumentException("Invalid read buffer pool configuration: bufferSize=" + bufferSize + ", capacity=" + capacity);
+        }
+        if (readBufferPool != null) {
+            readBufferPool.close();
+        }
         readBufferPool = new ReadBufferPool(capacity, bufferSize);
     }
 
@@ -309,8 +315,13 @@ public class JUring implements AutoCloseable {
 
     private long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, byte flags) {
         int nrVecs = bufferSizes.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            if (bufferSizes[i] < 0) {
+                throw new IllegalArgumentException("Invalid negative buffer size at index " + i + ": " + bufferSizes[i]);
+            }
         }
 
         long sqe = getSqe(flags, false);
@@ -342,8 +353,8 @@ public class JUring implements AutoCloseable {
 
     private long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset, byte flags) {
         int nrVecs = bufferIndices.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
         }
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
@@ -384,15 +395,15 @@ public class JUring implements AutoCloseable {
         if (lengths.length != nrVecs) {
             throw new IllegalArgumentException("lengths array must have the same length as bufferIndices");
         }
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
         }
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
             if (idx < 0 || idx >= registeredBufferAddresses.length) {
                 throw new IllegalArgumentException("Buffer index out of range: " + idx);
             }
-            if (lengths[i] > registeredBufferSizes[idx]) {
+            if (lengths[i] < 0 || lengths[i] > registeredBufferSizes[idx]) {
                 throw new IllegalArgumentException("Length " + lengths[i] + " exceeds registered buffer size for index " + idx);
             }
         }
@@ -425,8 +436,13 @@ public class JUring implements AutoCloseable {
 
     private long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, byte flags) {
         int nrVecs = buffers.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            if (buffers[i] == null) {
+                throw new IllegalArgumentException("Null buffer at index " + i);
+            }
         }
 
         long sqe = getSqe(flags, false);
@@ -487,8 +503,11 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, byte sqeFlags) {
-        long sqe = getSqe(sqeFlags, false);
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
         byte[] pathBytes = filePath.getBytes();
+        long sqe = getSqe(sqeFlags, false);
         MemorySegment pathBuffer = NativeDispatcher.C.alloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
         pathBuffer.set(JAVA_BYTE, pathBytes.length, (byte) 0);
@@ -518,6 +537,9 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareCloseDirect(int fileIndex, byte flags) {
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
@@ -529,9 +551,12 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
+        if (readSize < 0) {
+            throw new IllegalArgumentException("Invalid readSize: " + readSize);
+        }
         long sqe = getSqe(flags, fixedFile);
-        long address = NativeDispatcher.C.mallocAddress(readSize + 1);
-        MemorySegment.ofAddress(address).reinterpret(readSize + 1).set(JAVA_BYTE, readSize, (byte) 0);
+        long address = NativeDispatcher.C.mallocAddress(readSize + 1L);
+        MemorySegment.ofAddress(address).reinterpret(readSize + 1L).set(JAVA_BYTE, readSize, (byte) 0);
         long userData = ZeroGcUserData.encode(OperationType.READ, address);
 
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
@@ -541,6 +566,12 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareReadPooledInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
+        if (readBufferPool == null) {
+            throw new IllegalStateException("Read buffer pool has not been initialized; call setupReadBufferPool() first");
+        }
+        if (readSize < 0 || readSize > readBufferPool.bufferSize()) {
+            throw new IllegalArgumentException("Read size " + readSize + " out of range (0.." + readBufferPool.bufferSize() + ")");
+        }
         long sqe = getSqe(flags, fixedFile);
         long address = readBufferPool.checkOut();
         long userData = ZeroGcUserData.encode(OperationType.READ_POOLED, address);
@@ -554,7 +585,7 @@ public class JUring implements AutoCloseable {
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, byte flags, boolean fixedFile) {
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.WRITE_FIXED, opId);
+        long userData = ZeroGcUserData.encodeWriteExt(opId);
 
         ioUring.prepareWrite(sqe, fdOrIndex, bytes.address(), bytes.byteSize(), offset);
         ioUring.setUserData(sqe, userData);
@@ -580,7 +611,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        if (readSize > registeredBufferSizes[bufferIndex]) {
+        if (readSize < 0 || readSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Read size exceeds registered buffer size");
         }
 
@@ -726,8 +757,14 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareConnect(int fd, String host, int port, byte flags) {
-        long sqe = getSqe(flags, false);
         MemorySegment addr = NativeDispatcher.C.allocSockaddrIn(host, port);
+        final long sqe;
+        try {
+            sqe = getSqe(flags, false);
+        } catch (RuntimeException e) {
+            NativeDispatcher.C.free(addr.address());
+            throw e;
+        }
         long userData = ZeroGcUserData.encode(OperationType.CONNECT, addr.address());
 
         ioUring.prepareConnect(sqe, fd, addr.address(), (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
@@ -745,6 +782,9 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareRecv(int fd, int length, byte flags) {
+        if (length < 0) {
+            throw new IllegalArgumentException("Invalid recv length: " + length);
+        }
         long sqe = getSqe(flags, false);
         MemorySegment buf = NativeDispatcher.C.alloc(length);
         long userData = ZeroGcUserData.encode(OperationType.RECV, buf.address());
@@ -764,6 +804,9 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareRecv(int fd, MemorySegment buffer, int length, byte flags) {
+        if (length < 0 || length > buffer.byteSize()) {
+            throw new IllegalArgumentException("Invalid recv length: " + length);
+        }
         long sqe = getSqe(flags, false);
         long userData = ZeroGcUserData.encode(OperationType.RECV_EXT, buffer.address());
 
@@ -782,6 +825,9 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareSend(int fd, byte[] bytes, byte flags) {
+        if (bytes == null) {
+            throw new IllegalArgumentException("bytes must not be null");
+        }
         long sqe = getSqe(flags, false);
         MemorySegment buf = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buf, JAVA_BYTE, 0, bytes.length);
@@ -803,6 +849,9 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareSend(int fd, MemorySegment buffer, int length, byte flags) {
+        if (length < 0 || length > buffer.byteSize()) {
+            throw new IllegalArgumentException("Invalid send length: " + length);
+        }
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.SEND_EXT, opId);
@@ -1003,6 +1052,7 @@ public class JUring implements AutoCloseable {
     public void close() {
         if (readBufferPool != null) {
             readBufferPool.close();
+            readBufferPool = null;
         }
         ioUring.close();
     }

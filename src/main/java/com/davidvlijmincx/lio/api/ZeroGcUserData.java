@@ -33,6 +33,8 @@ public final class ZeroGcUserData {
     public static final long BUFFER_INDEX_MASK = 0xFFFFL;
     public static final long FIXED_OP_ID_MASK = (1L << BUFFER_INDEX_SHIFT) - 1; // 40 bits
 
+    static final int TYPE_WRITE_EXT = 20;
+
     private ZeroGcUserData() {}
 
     /**
@@ -40,6 +42,10 @@ public final class ZeroGcUserData {
      */
     public static long encode(OperationType type, long payload) {
         return (((long) type.getIndex() & TYPE_MASK) << TYPE_SHIFT) | (payload & PAYLOAD_MASK);
+    }
+
+    static long encodeWriteExt(long opId) {
+        return (((long) TYPE_WRITE_EXT & TYPE_MASK) << TYPE_SHIFT) | (opId & PAYLOAD_MASK);
     }
 
     /**
@@ -56,6 +62,9 @@ public final class ZeroGcUserData {
      */
     public static OperationType getType(long userData) {
         int typeIndex = (int) ((userData >>> TYPE_SHIFT) & TYPE_MASK);
+        if (typeIndex == TYPE_WRITE_EXT) {
+            return OperationType.WRITE;
+        }
         return OperationType.valueOf(typeIndex);
     }
 

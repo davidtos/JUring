@@ -116,9 +116,12 @@ public class Result implements AutoCloseable {
             return buffer;
         }
         if (bufferAddress != 0L) {
-            long len = result > 0
-                    ? (type == OperationType.READ ? result + 1 : result)
-                    : 0L;
+            if (type == OperationType.READ && result >= 0) {
+                buffer = MemorySegment.ofAddress(bufferAddress).reinterpret(result + 1);
+                buffer.set(JAVA_BYTE, result, (byte) 0);
+                return buffer;
+            }
+            long len = result > 0 ? result : 0L;
             buffer = MemorySegment.ofAddress(bufferAddress).reinterpret(len);
             return buffer;
         }
