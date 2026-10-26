@@ -1,5 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
+/**
+ * Types of asynchronous operations supported by io_uring.
+ */
 public enum OperationType {
     READ(0),
     WRITE(1),

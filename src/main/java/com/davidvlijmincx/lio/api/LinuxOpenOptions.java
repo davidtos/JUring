@@ -3,6 +3,9 @@ package com.davidvlijmincx.lio.api;
 import java.nio.file.OpenOption;
 import java.util.Locale;
 
+/**
+ * Linux file open flags.
+ */
 public enum LinuxOpenOptions implements OpenOption {
     READ(0),
     WRITE(1),

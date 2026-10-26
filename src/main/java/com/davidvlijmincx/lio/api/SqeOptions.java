@@ -1,14 +1,17 @@
 package com.davidvlijmincx.lio.api;
 
+/**
+ * Submission queue entry (SQE) flags.
+ */
 public enum SqeOptions {
 
-    IOSQE_FIXED_FILE((byte) (1)),    // 0x01
-    IOSQE_IO_DRAIN((byte) (1 << 1)),     // 0x02
-    IOSQE_IO_LINK((byte) (1 << 2)),      // 0x04
-    IOSQE_IO_HARDLINK((byte) (1 << 3)),  // 0x08
-    IOSQE_ASYNC((byte) (1 << 4)),        // 0x10
-    IOSQE_BUFFER_SELECT((byte) (1 << 5)), // 0x20
-    IOSQE_CQE_SKIP_SUCCESS((byte) (1 << 6)), // 0x40
+    IOSQE_FIXED_FILE((byte) (1)),
+    IOSQE_IO_DRAIN((byte) (1 << 1)),
+    IOSQE_IO_LINK((byte) (1 << 2)),
+    IOSQE_IO_HARDLINK((byte) (1 << 3)),
+    IOSQE_ASYNC((byte) (1 << 4)),
+    IOSQE_BUFFER_SELECT((byte) (1 << 5)),
+    IOSQE_CQE_SKIP_SUCCESS((byte) (1 << 6)),
     WF_NOWAIT((byte) (8));
 
     final byte value;

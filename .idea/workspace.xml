@@ -5,11 +5,38 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation.">
-      <change afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/resources/write_file" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/write_file" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Iovec.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Iovec.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IovecBlockPool.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IovecBlockPool.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LibCDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LibCDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LinuxOpenOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LinuxOpenOptions.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/OperationType.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/OperationType.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ResultConsumer.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ResultConsumer.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcCqe.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcCqe.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcIovecBlock.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcIovecBlock.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcSqe.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcSqe.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Bind.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Bind.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Calloc.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Calloc.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/FreeAddress.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/FreeAddress.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringEnter.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringEnter.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringRegister.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringRegister.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringSetup.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/IoUringSetup.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Listen.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Listen.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Malloc.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Malloc.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/MallocAddress.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/MallocAddress.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Mmap.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Mmap.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Munmap.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Munmap.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Open.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Open.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/SetSockOpt.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/SetSockOpt.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Socket.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Socket.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Strerror.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/functions/Strerror.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -112,52 +139,52 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "Application.BenchmarkRunner.executor": "Run",
-    "Application.DirectReadVisualVerificationTest.executor": "Run",
-    "Application.Phase1BugProofTest.executor": "Run",
-    "Application.RandomReadBenchMark.executor": "Run",
-    "CidrDebugProfileConversion": "true",
-    "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
-    "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
-    "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
-    "JUnit.DirectIoTest.executor": "Run",
-    "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
-    "JUnit.JUringTest (1).executor": "Run",
-    "JUnit.JUringTest (2).executor": "Run",
-    "JUnit.JUringTest.executor": "Run",
-    "JUnit.JUringTest.readFromFile.executor": "Run",
-    "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
-    "JUnit.Phase2VirtualThreadProofTest.executor": "Run",
-    "JUnit.SocketTest.executor": "Run",
-    "JUnit.api in JUring (1).executor": "Run",
-    "JUnit.api in JUring.executor": "Run",
-    "JUnit.api in JUring.test.executor": "Run",
-    "JUnit.com.davidvlijmincx.lio.api in JUring.executor": "Run",
-    "KEY_CHAT_IN_TOOLWINDOW": "false",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "kotlin-language-version-configured": "true",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;Application.BenchmarkRunner.executor&quot;: &quot;Run&quot;,
+    &quot;Application.DirectReadVisualVerificationTest.executor&quot;: &quot;Run&quot;,
+    &quot;Application.Phase1BugProofTest.executor&quot;: &quot;Run&quot;,
+    &quot;Application.RandomReadBenchMark.executor&quot;: &quot;Run&quot;,
+    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.DirectIoTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.DirectIoTest.testDirectIoRead.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.JUringTest (1).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest (2).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.readFromFile.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.sharedWorkerRingCreation.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.Phase2VirtualThreadProofTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.SocketTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring (1).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring.test.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.com.davidvlijmincx.lio.api in JUring.executor&quot;: &quot;Run&quot;,
+    &quot;KEY_CHAT_IN_TOOLWINDOW&quot;: &quot;false&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   },
-  "keyToStringList": {
-    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
-      "TEXT"
+  &quot;keyToStringList&quot;: {
+    &quot;com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File&quot;: [
+      &quot;TEXT&quot;
     ]
   }
-}]]></component>
+}</component>
   <component name="RunManager" selected="Application.DirectReadVisualVerificationTest">
     <configuration name="DirectReadVisualVerificationTest" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadVisualVerificationTest" />
@@ -304,7 +331,8 @@
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
     <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
     <MESSAGE value="test: add DirectIoTest for write, read, zero-copy, and round-trip operations at 4096-byte block size" />
-    <option name="LAST_COMMIT_MESSAGE" value="test: add DirectIoTest for write, read, zero-copy, and round-trip operations at 4096-byte block size" />
+    <MESSAGE value="test(direct-read): add DirectReadVisualVerificationTest for live benchmarks and disk match validation&#10;&#10;- Introduced DirectReadVisualVerificationTest to visually inspect and verify O_DIRECT NVMe reads.&#10;- Enhanced DirectReadBenchmark with debug visuals and detailed console output via `juring.visual`.&#10;- Updated test resource output and added single-file and multifile configurations for benchmarks." />
+    <option name="LAST_COMMIT_MESSAGE" value="test(direct-read): add DirectReadVisualVerificationTest for live benchmarks and disk match validation&#10;&#10;- Introduced DirectReadVisualVerificationTest to visually inspect and verify O_DIRECT NVMe reads.&#10;- Enhanced DirectReadBenchmark with debug visuals and detailed console output via `juring.visual`.&#10;- Updated test resource output and added single-file and multifile configurations for benchmarks." />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

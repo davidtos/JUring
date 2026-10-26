@@ -11,15 +11,6 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Zero-allocation accessor for the iovec block pool slots.
- *
- * Block memory layout (matches what IovecBlockPool allocates):
- *   [long count (8 bytes)] [iov_base_0 (8B)] [iov_len_0 (8B)] [iov_base_1 (8B)] [iov_len_1 (8B)] ...
- *
- * struct iovec on Linux x86-64: { void *iov_base; size_t iov_len; } = 16 bytes each.
- *
- * All methods accept a raw native address (long) and perform typed reads/writes
- * through a single GLOBAL_MEMORY segment — no MemorySegment objects are created
- * on the hot path.
  */
 public final class ZeroGcIovecBlock {
 
@@ -65,7 +56,9 @@ public static void setIovLen(long blockAddr, int index, long len) {
         return (long) VH_LONG.get(GLOBAL_MEMORY, blockAddr + IOVEC_ARRAY_OFFSET + (long) index * IOVEC_SIZE + 8L);
     }
 
-    /** Returns the address of the first iovec entry, i.e. blockAddr + Long.BYTES. */
+    /**
+     * Returns the address of the first iovec entry.
+     */
     public static long iovecArrayAddress(long blockAddr) {
         return blockAddr + IOVEC_ARRAY_OFFSET;
     }

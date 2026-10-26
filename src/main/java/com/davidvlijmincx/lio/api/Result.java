@@ -8,22 +8,7 @@ import java.nio.charset.StandardCharsets;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * Unified, mutable result class for all {@code io_uring} completion events.
- * <p>
- * <b>Why this change was made (Eliminating Polymorphic Allocations):</b>
- * Previously, JUring had over 10 distinct immutable record types (e.g. {@code ReadResult}, {@code WriteResult},
- * {@code OpenResult}, {@code AcceptResult}, etc.). Under high load (>300,000 ops/s), creating a new record instance
- * for every single completion resulted in severe GC allocation pressure (~50-100 MB/s).
- * <p>
- * <b>How it works:</b>
- * This single class consolidates all possible completion fields into a reusable, mutable container.
- * In-place reaping loops (such as {@link IoUringDispatcher#peekForBatchResult(int, ResultConsumer)}) populate a single
- * reused instance and invoke {@link ResultConsumer#accept(Result)}.
- * <p>
- * <b>Lazy Buffer Materialization & Memory Safety:</b>
- * For fixed operations, the dispatcher records only the raw primitive {@code bufferAddress} and {@code bufferIdx}.
- * The higher-level {@link MemorySegment} wrapper is only materialized if the caller explicitly invokes {@link #buffer()},
- * returning the bounded registered buffer slice and completely eliminating Java heap object creation in tight I/O loops.
+ * Unified, mutable result class for {@code io_uring} completion events.
  */
 public class Result implements AutoCloseable {
 
@@ -95,9 +80,9 @@ public class Result implements AutoCloseable {
     }
 
     /**
-     * Returns {@code true} if {@code IORING_CQE_F_MORE} is set on the completion queue entry,
-     * indicating that a multishot operation (e.g. {@code prepareMultishotAccept}) remains active
-     * and will produce further completions.
+     * Returns true if more completion queue entries will be produced by this operation.
+     *
+     * @return true if more completions are expected
      */
     public boolean hasMore() {
         return (cqeFlags & IoUringDispatcher.IORING_CQE_F_MORE) != 0;
@@ -129,7 +114,9 @@ public class Result implements AutoCloseable {
     }
 
     /**
-     * Returns a {@link MemorySegment} sliced to the exact number of bytes transferred ({@code 0..result}).
+     * Returns a {@link MemorySegment} sliced to the exact number of bytes transferred.
+     *
+     * @return memory segment of transferred bytes
      */
     public MemorySegment validBuffer() {
         MemorySegment buf = buffer();
@@ -141,7 +128,9 @@ public class Result implements AutoCloseable {
     }
 
     /**
-     * Copies the valid transferred bytes ({@code 0..result}) into a new {@code byte[]}.
+     * Copies the transferred bytes into a new byte array.
+     *
+     * @return byte array containing transferred bytes
      */
     public byte[] toByteArray() {
         MemorySegment valid = validBuffer();
@@ -152,23 +141,28 @@ public class Result implements AutoCloseable {
     }
 
     /**
-     * Decodes the valid transferred bytes ({@code 0..result}) as a UTF-8 {@link String}
-     * without requiring a null-terminator byte.
+     * Decodes the transferred bytes as a UTF-8 string.
+     *
+     * @return decoded string
      */
     public String getString() {
         return getString(StandardCharsets.UTF_8);
     }
 
     /**
-     * Decodes the valid transferred bytes ({@code 0..result}) using the specified {@link Charset}
-     * without requiring a null-terminator byte.
+     * Decodes the transferred bytes using the specified charset.
+     *
+     * @param charset character set for decoding
+     * @return decoded string
      */
     public String getString(Charset charset) {
         return new String(toByteArray(), charset);
     }
 
     /**
-     * Wraps the valid transferred bytes ({@code 0..result}) as a direct {@link ByteBuffer}.
+     * Wraps the transferred bytes as a direct ByteBuffer.
+     *
+     * @return byte buffer containing transferred bytes
      */
     public ByteBuffer asByteBuffer() {
         MemorySegment valid = validBuffer();

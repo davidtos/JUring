@@ -9,17 +9,6 @@ import static java.lang.foreign.ValueLayout.*;
 
 /**
  * Zero-allocation accessor and mutator for native {@code io_uring_sqe} structures.
- * <p>
- * <b>Why this change was made (Zero-Allocation Hot Path):</b>
- * In early designs, preparing an operation allocated heap wrapper objects (or transient {@link MemorySegment}
- * slices) to represent submission queue entries. At millions of I/O operations per second, this placed immense
- * pressure on the JVM garbage collector, creating GC pauses and cache churn.
- * <p>
- * <b>How it works:</b>
- * {@code ZeroGcSqe} operates directly on raw 64-bit native memory addresses ({@code long sqeAddress}) obtained from the
- * memory-mapped SQ ring. All reads and writes are performed via static {@link VarHandle} handles bound to
- * {@link #GLOBAL_MEMORY} (a boundless root segment spanning the entire native address space). No Java objects
- * or temporary memory segments are allocated during SQE acquisition or configuration.
  */
 public final class ZeroGcSqe {
 
@@ -40,7 +29,7 @@ public final class ZeroGcSqe {
             JAVA_LONG.withName("pad")
     ).withName("io_uring_sqe");
 
-    public static final long SQE_SIZE = SQE_LAYOUT.byteSize(); // 64 bytes
+    public static final long SQE_SIZE = SQE_LAYOUT.byteSize();
 
     private static final VarHandle VH_OPCODE = SQE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("opcode"));
     private static final VarHandle VH_FLAGS = SQE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("flags"));
@@ -62,15 +51,9 @@ public final class ZeroGcSqe {
     private ZeroGcSqe() {}
 
     /**
-     * Zeroes all 64 bytes of an SQE slot in-place using exactly 8 aligned 64-bit store operations.
-     * <p>
-     * <b>Why 8x 64-bit stores instead of memset:</b>
-     * Calling foreign {@code memset} via downcall handles incurs JNI/FFM transition overhead (~10-15 ns),
-     * which exceeds the cost of zeroing 64 bytes. In Java, eight sequential {@code VH_LONG.set} stores
-     * are recognized by the C2 JIT compiler and lowered into 4 AVX/SSE vector stores (or 8 aligned {@code MOV}
-     * instructions on x86_64). This provides zeroing with no JNI transition overhead and zero memory allocation.
+     * Zeroes all 64 bytes of an SQE slot in-place.
      *
-     * @param sqeAddress the 64-bit raw native memory address of the SQE slot
+     * @param sqeAddress the raw native memory address of the SQE slot
      */
     public static void zero(long sqeAddress) {
         VH_LONG.set(GLOBAL_MEMORY, sqeAddress, 0L);

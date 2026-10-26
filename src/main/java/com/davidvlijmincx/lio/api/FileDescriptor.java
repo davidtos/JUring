@@ -4,11 +4,6 @@ import java.nio.file.Path;
 
 /**
  * Safe wrapper around a native Linux file descriptor integer.
- * <p>
- * <b>Why this change was made (Fail-Fast Validation):</b>
- * Prevents invalid or negative descriptors (e.g. from failed syscalls or uninitialized state) from being passed
- * into kernel registration or SQE preparation methods, preventing silent corruption or misleading {@code EBADF}
- * kernel submission errors downstream.
  */
 public class FileDescriptor implements AutoCloseable {
 
@@ -44,10 +39,10 @@ public class FileDescriptor implements AutoCloseable {
     }
 
     /**
-     * Validates that the provided integer descriptor is non-negative before construction.
+     * Creates a file descriptor from a native descriptor value.
      *
-     * @param fd native file descriptor (must be >= 0)
-     * @throws IllegalArgumentException if fd < 0
+     * @param fd native file descriptor
+     * @throws IllegalArgumentException if fd is negative
      */
     FileDescriptor(int fd) {
         if (fd < 0) {
@@ -56,6 +51,11 @@ public class FileDescriptor implements AutoCloseable {
         this.fd = fd;
     }
 
+    /**
+     * Returns the native file descriptor integer.
+     *
+     * @return the file descriptor
+     */
     public int getFd() {
         return fd;
     }

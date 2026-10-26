@@ -17,21 +17,6 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
  * Zero-GC, Virtual-Thread-friendly blocking wrapper over {@code io_uring}.
- * <p>
- * <b>Why this architecture replaces {@code Future<Result>} (Zero-GC Virtual Thread Poller):</b>
- * <ul>
- *   <li><b>Single-Issuer Kernel Affinity:</b> {@code IORING_SETUP_SINGLE_ISSUER} and
- *       {@code IORING_REGISTER_RING_FDS} bind the ring to the OS kernel thread that initializes and submits it.
- *       {@code JUringBlocking} initializes and drives {@link IoUringDispatcher} exclusively from a single dedicated
- *       platform poller thread, preventing {@code EEXIST}/{@code EINVAL}/{@code EBADF} when Virtual Threads hop
- *       across {@code ForkJoinPool} carrier threads.</li>
- *   <li><b>Zero Per-Operation Allocation ({@code 0 B/op}):</b> Instead of allocating {@code CompletableFuture},
- *       {@code ConcurrentHashMap$Node}, {@code Result}, and lambda captures on every I/O operation, Virtual Threads
- *       claim a primitive request slot index from a lock-free pool, publish the slot index to a lock-free MPSC ring,
- *       and park via {@link LockSupport#park(Object)}.</li>
- *   <li><b>Automatic Batching:</b> All Virtual Threads submitting concurrently while the poller reaps or enters the
- *       kernel have their requests drained and submitted in a single batched {@code io_uring_enter} system call.</li>
- * </ul>
  */
 public class JUringBlocking implements AutoCloseable {
 
@@ -234,7 +219,6 @@ public class JUringBlocking implements AutoCloseable {
         while (running) {
             runPendingControlTask();
 
-            // 1. Drain ready requests from MPSC ring into SQEs up to SQ ring capacity
             int preparedNow = 0;
             while ((inFlightHolder[0] - inFlightHolder[1]) < sqEntries && preparedNow < sqEntries) {
                 long head = this.mpscHead;
@@ -272,23 +256,16 @@ public class JUringBlocking implements AutoCloseable {
                 preparedNow++;
             }
 
-            // 2. Reap any already-completed CQEs without a syscall
             dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
 
-            // 3. Submit / Wait strategy
             int totalInFlight = inFlightHolder[0];
             int unboundedInFlight = inFlightHolder[1];
 
             if (totalInFlight > 0) {
                 if (unboundedInFlight == 0) {
-                    // Only bounded operations (e.g. file reads/writes/opens/closes) in flight:
-                    // Fuse submission and wait for >=1 completion into a single io_uring_enter syscall.
                     dispatcher.submitAndWait(1);
                     dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                 } else {
-                    // At least one unbounded socket operation (accept/recv/connect/send) is in flight:
-                    // Submit any newly prepared SQEs non-blockingly so subsequent virtual thread requests
-                    // (e.g. a client connect() after a server accept()) are never blocked behind waitNr=1.
                     if (preparedNow > 0) {
                         dispatcher.submit();
                     }
@@ -306,7 +283,6 @@ public class JUringBlocking implements AutoCloseable {
                     }
                 }
             } else {
-                // Nothing in flight: park until a Virtual Thread enqueues work or closes this instance
                 if (!hasPendingMpsc() && controlTask.get() == null && running) {
                     VH_POLLER_PARKED.setVolatile(this, 1);
                     if (!hasPendingMpsc() && controlTask.get() == null && running) {
@@ -317,7 +293,6 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
 
-        // Drain any remaining control task before closing
         runPendingControlTask();
     }
 
@@ -466,7 +441,6 @@ public class JUringBlocking implements AutoCloseable {
         slotThread[slotId] = Thread.currentThread();
         VH_INT_ARRAY.setRelease(slotState, slotId, STATE_PARKED);
 
-        // Publish slotId to MPSC ring
         long tail = (long) VH_MPSC_TAIL.getAndAdd(this, 1L);
         int idx = (int) (tail & this.slotMask);
         while ((long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx) != tail) {
@@ -502,10 +476,6 @@ public class JUringBlocking implements AutoCloseable {
         releaseSlot(slotId);
         return res;
     }
-
-    // =========================================================================
-    // File Read / Write Operations (Caller-Provided MemorySegment / Zero-GC)
-    // =========================================================================
 
     public long read(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return read(fd, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
@@ -629,10 +599,6 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
-    // =========================================================================
-    // Fixed Buffer Operations & Thread-Safe Registered Buffer Pool
-    // =========================================================================
-
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
         MemorySegment[] buffers = runOnPoller(() -> ioUringDispatcher.registerBuffers(size, nrOfBuffers));
         long[] addrs = new long[buffers.length];
@@ -672,9 +638,9 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     /**
-     * Thread-safe, zero-allocation checkout of a registered buffer index.
+     * Checks out a registered buffer index from the pool.
      *
-     * @return registered buffer index, or {@code -1} if all registered buffers are currently checked out
+     * @return registered buffer index, or {@code -1} if none available
      */
     public int checkOutBuffer() {
         final int[] bufArr = this.freeBufBuffer;
@@ -704,7 +670,9 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     /**
-     * Thread-safe, zero-allocation check-in of a previously checked-out registered buffer index.
+     * Returns a registered buffer index to the pool.
+     *
+     * @param bufferIndex index of the buffer to return
      */
     public void checkInBuffer(int bufferIndex) {
         final int[] bufArr = this.freeBufBuffer;
@@ -818,10 +786,6 @@ public class JUringBlocking implements AutoCloseable {
         return writeFixed(indexFD, bytes.length, offset, bufferIndex, sqeOptions);
     }
 
-    // =========================================================================
-    // Registered File Operations
-    // =========================================================================
-
     public int registerFiles(FileDescriptor... fileDescriptors) {
         int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
         return runOnPoller(() -> ioUringDispatcher.registerFiles(fds));
@@ -830,10 +794,6 @@ public class JUringBlocking implements AutoCloseable {
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
         return runOnPoller(() -> ioUringDispatcher.registerFilesUpdate(offset, fileDescriptors));
     }
-
-    // =========================================================================
-    // Open / Close Operations
-    // =========================================================================
 
     public int open(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
         byte[] pathBytes = filePath.getBytes();
@@ -934,10 +894,6 @@ public class JUringBlocking implements AutoCloseable {
                 0L
         );
     }
-
-    // =========================================================================
-    // Socket Operations
-    // =========================================================================
 
     public int createServerSocket(int port, int backlog) {
         int fd = libc.createSocket();
@@ -1047,7 +1003,6 @@ public class JUringBlocking implements AutoCloseable {
         if (ioUringDispatcher != null) {
             ioUringDispatcher.close();
         }
-        // Wake any virtual threads still parked on slots
         for (int i = 0; i < slotCapacity; i++) {
             Thread t = slotThread[i];
             if (t != null) {

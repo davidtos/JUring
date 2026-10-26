@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api.functions;
 
 /**
- * {@code int munmap(void *addr, size_t length)}.
+ * Downcall interface for {@code munmap(2)}.
  */
 public interface Munmap {
     int munmap(long address, long length);
