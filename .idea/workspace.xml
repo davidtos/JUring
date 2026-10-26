@@ -5,12 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation.">
-      <change afterPath="$PROJECT_DIR$/BENCHMARK_PLAN.md" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -18,7 +14,7 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="122" />
+    <option name="cachedIndexableFilesCount" value="297" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -117,14 +113,20 @@
   "keyToString": {
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "Application.BenchmarkRunner.executor": "Run",
+    "Application.Phase1BugProofTest.executor": "Run",
     "Application.RandomReadBenchMark.executor": "Run",
     "CidrDebugProfileConversion": "true",
     "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
+    "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
+    "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
+    "JUnit.DirectIoTest.executor": "Run",
+    "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
     "JUnit.JUringTest (1).executor": "Run",
     "JUnit.JUringTest (2).executor": "Run",
     "JUnit.JUringTest.executor": "Run",
     "JUnit.JUringTest.readFromFile.executor": "Run",
     "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
+    "JUnit.Phase2VirtualThreadProofTest.executor": "Run",
     "JUnit.SocketTest.executor": "Run",
     "JUnit.api in JUring (1).executor": "Run",
     "JUnit.api in JUring.executor": "Run",
@@ -152,7 +154,7 @@
     ]
   }
 }]]></component>
-  <component name="RunManager" selected="JUnit.api in JUring">
+  <component name="RunManager" selected="JUnit.DirectIoTest.testDirectIoRead">
     <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
       <module name="JUring" />
       <extension name="coverage">
@@ -164,27 +166,46 @@
       <option name="PACKAGE_NAME" value="bench.suite" />
       <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
       <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
     </configuration>
-    <configuration name="JUringTest (1)" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
-      <module name="JUring.test" />
+    <configuration name="BenchmarkSuiteValidationTest.testBitAccurateDirectRead" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
       <extension name="coverage">
         <pattern>
-          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
+          <option name="PATTERN" value="bench.suite.*" />
           <option name="ENABLED" value="true" />
         </pattern>
       </extension>
-      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
-      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.JUringTest" />
-      <option name="TEST_OBJECT" value="class" />
+      <option name="PACKAGE_NAME" value="bench.suite" />
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
+      <option name="METHOD_NAME" value="testBitAccurateDirectRead" />
+      <option name="TEST_OBJECT" value="method" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
     </configuration>
-    <configuration name="JUringTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+    <configuration name="BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="bench.suite.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="bench.suite" />
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
+      <option name="METHOD_NAME" value="testDatasetManagerAlignedTasks" />
+      <option name="TEST_OBJECT" value="method" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="DirectIoTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
@@ -193,45 +214,44 @@
         </pattern>
       </extension>
       <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
-      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.JUringTest" />
+      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.DirectIoTest" />
       <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="DirectIoTest.testDirectIoRead" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
+      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.DirectIoTest" />
+      <option name="METHOD_NAME" value="testDirectIoRead(java.nio.file.Path)" />
+      <option name="TEST_OBJECT" value="method" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
     </configuration>
     <configuration default="true" type="JUnit" factoryName="JUnit">
       <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="api in JUring (1)" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
-      <module name="JUring" />
-      <option name="TEST_OBJECT" value="directory" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=ALL-UNNAMED" />
-      <dir value="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="api in JUring" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
-      <module name="JUring" />
-      <option name="TEST_OBJECT" value="directory" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
-      <dir value="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="JUnit.api in JUring" />
+        <item itemvalue="JUnit.DirectIoTest.testDirectIoRead" />
+        <item itemvalue="JUnit.DirectIoTest" />
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead" />
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
-        <item itemvalue="JUnit.JUringTest (1)" />
-        <item itemvalue="JUnit.JUringTest" />
-        <item itemvalue="JUnit.api in JUring (1)" />
       </list>
     </recent_temporary>
   </component>
@@ -283,6 +303,22 @@
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
     <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
     <option name="LAST_COMMIT_MESSAGE" value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
+  </component>
+  <component name="XDebuggerManager">
+    <breakpoint-manager>
+      <breakpoints>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkSuiteValidationTest.java</url>
+          <line>59</line>
+          <option name="timeStamp" value="1" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" type="java-line">
+          <url>file://$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java</url>
+          <line>107</line>
+          <option name="timeStamp" value="3" />
+        </line-breakpoint>
+      </breakpoints>
+    </breakpoint-manager>
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />
