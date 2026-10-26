@@ -49,6 +49,8 @@ public final class IoUringDispatcher implements AutoCloseable {
     private static final short IORING_ACCEPT_MULTISHOT = 1;
 
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
+    private static final IoUringEnter ioUringEnter = libCDispatcher.ioUringEnter();
+    private static final IoUringRegister ioUringRegister = libCDispatcher.ioUringRegister();
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -98,8 +100,6 @@ public final class IoUringDispatcher implements AutoCloseable {
     private final MemorySegment cqePtr;
     private final MemorySegment cqePtrPtr;
     private final MemorySegment callState;
-    private final IoUringEnter ioUringEnter;
-    private final IoUringRegister ioUringRegister;
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
     private long[] registeredBufferAddresses;
@@ -228,17 +228,24 @@ public final class IoUringDispatcher implements AutoCloseable {
                             MemorySegment ring,
                             MemorySegment cqePtr,
                             MemorySegment cqePtrPtr,
-                            MemorySegment callState,
-                            IoUringEnter ioUringEnter,
-                            IoUringRegister ioUringRegister) {
+                            MemorySegment callState) {
         this.arena = arena;
         this.iovecBlockPool = iovecBlockPool;
         this.ring = ring;
         this.cqePtr = cqePtr;
         this.cqePtrPtr = cqePtrPtr;
         this.callState = callState;
-        this.ioUringEnter = ioUringEnter;
-        this.ioUringRegister = ioUringRegister;
+    }
+
+    public IoUringDispatcher(Arena arena,
+                            IovecBlockPool iovecBlockPool,
+                            MemorySegment ring,
+                            MemorySegment cqePtr,
+                            MemorySegment cqePtrPtr,
+                            MemorySegment callState,
+                            IoUringEnter ioUringEnter,
+                            IoUringRegister ioUringRegister) {
+        this(arena, iovecBlockPool, ring, cqePtr, cqePtrPtr, callState);
     }
 
     public Arena arena() {
@@ -284,9 +291,7 @@ public final class IoUringDispatcher implements AutoCloseable {
                 ring,
                 libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()),
                 libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
-                callState,
-                libCDispatcher.ioUringEnter(),
-                libCDispatcher.ioUringRegister()
+                callState
         );
     }
 
@@ -545,7 +550,7 @@ public final class IoUringDispatcher implements AutoCloseable {
                 if (COUNT_ENTERS) {
                     enterCount++;
                 }
-                long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
                     return;
                 }
@@ -580,12 +585,12 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (COUNT_ENTERS) {
             enterCount++;
         }
-        long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
         if (res < 0) {
             int err = LibCDispatcher.errno(this.callState);
             if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
                 fallbackOrReRegisterRingFd();
-                this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+                ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             }
         }
     }
@@ -647,7 +652,7 @@ public final class IoUringDispatcher implements AutoCloseable {
                 fallbackOrReRegisterRingFd();
             }
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
@@ -686,7 +691,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
@@ -754,7 +759,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
@@ -980,7 +985,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, -1);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, this.ringFd);
-            long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
+            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
             if (res == 1L) {
                 int regFd = up.get(JAVA_INT, 0L);
                 this.enterRingFd = regFd;
@@ -1018,7 +1023,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, regSlot);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, 0L);
-            long res = this.ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
+            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -1074,7 +1079,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     int registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
         int fd = this.ringFd;
-        long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 0 /* IORING_REGISTER_BUFFERS */, iovecs, nrIovecs);
+        long res = ioUringRegister.ioUringRegister(this.callState, fd, 0 /* IORING_REGISTER_BUFFERS */, iovecs, nrIovecs);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1093,7 +1098,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
         int fd = this.ringFd;
-        long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 2 /* IORING_REGISTER_FILES */, fdArray, count);
+        long res = ioUringRegister.ioUringRegister(this.callState, fd, 2 /* IORING_REGISTER_FILES */, fdArray, count);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1124,7 +1129,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, offset);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, fdArray.address());
-            long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 6 /* IORING_REGISTER_FILES_UPDATE */, up, count);
+            long res = ioUringRegister.ioUringRegister(this.callState, fd, 6 /* IORING_REGISTER_FILES_UPDATE */, up, count);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -1155,7 +1160,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             MemorySegment values = tempArena.allocate(JAVA_INT, 2);
             values.setAtIndex(JAVA_INT, 0, bounded);
             values.setAtIndex(JAVA_INT, 1, unbounded);
-            long res = this.ioUringRegister.ioUringRegister(this.callState, fd, 19 /* IORING_REGISTER_IOWQ_MAX_WORKERS */, values, 2);
+            long res = ioUringRegister.ioUringRegister(this.callState, fd, 19 /* IORING_REGISTER_IOWQ_MAX_WORKERS */, values, 2);
             if (res < 0) {
                 throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(LibCDispatcher.errno(this.callState)));
             }
@@ -1310,7 +1315,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
             }
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
@@ -1370,7 +1375,7 @@ public final class IoUringDispatcher implements AutoCloseable {
                 fallbackOrReRegisterRingFd();
             }
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
-            long res = this.ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
