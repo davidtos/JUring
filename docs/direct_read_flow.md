@@ -55,7 +55,9 @@ sequenceDiagram
     Disp-->>JUring: raw sqeAddress (long)
     Note over JUring: Encode bitpacked userData: [OpType: 8b | BufIdx: 16b | OpSeq: 40b]
     JUring->>Disp: prepareReadFixed(sqe, fd, bufAddr, size, offset, bufIndex)
-    Disp->>SQ: Write opcode=IORING_OP_READ_FIXED, fd, off, addr, len, buf_index, userData
+    Disp->>SQ: Write opcode=IORING_OP_READ_FIXED, fd, off, addr, len, buf_index
+    JUring->>Disp: setUserData(sqe, userData)
+    Disp->>SQ: Write user_data (64-bit store)
     JUring-->>App: userData token (long)
 
     Note over App, Kernel: 3. Fused Submission & Wait Phase
@@ -69,7 +71,7 @@ sequenceDiagram
     Note over Disp, Consumer: 4. In-Place CQE Reaping Phase
     Disp->>CQ: Acquire barrier: VH_INT.getAcquire(cq_ktail)
     loop For each available CQE (up to maxReap)
-        Disp->>CQ: Read cqe.user_data and cqe.res
+        Disp->>CQ: Read cqe.user_data, cqe.res, and cqe.flags
         Disp->>Disp: Bit-unpack OpType (READ_FIXED) & BufferIndex
         Disp->>Disp: Populate reusable Result in-place
         Disp->>Consumer: consumer.accept(result)
@@ -94,7 +96,7 @@ sequenceDiagram
 * It computes the SQE slot address: `sqSqesAddr + (sqeTail & sqRingMask) * 64L`.
 * `ZeroGcSqe.zero(sqeAddress)` clears the 64-byte SQE using 8 fast 64-bit integer writes.
 * `ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId)` packs the opcode (8 bits), buffer index (16 bits), and monotonically incrementing primitive `opSeq` (40 bits) into a raw 64-bit `long`.
-* The SQE fields are set directly via `VarHandle` stores to off-heap memory.
+* The SQE fields (opcode, fd, addr, len, off, buf_index) are set directly via `VarHandle` stores to off-heap memory, followed by `ZeroGcSqe.setUserData(sqe, userData)`.
 
 ### Step 3: Fused Submission & Wait (`io_uring_enter`)
 * `submitAndWaitForBatchResult` updates `sq_ktail` with `VarHandle.setRelease` so the kernel can safely read the newly queued SQEs.
@@ -112,7 +114,7 @@ sequenceDiagram
 * User-space reads `cq_khead` and reads `cq_ktail` using `VarHandle.getAcquire`.
 * The loop iterates across all ready completions up to `maxReap`.
 * For each CQE:
-  * Reads `userData` and `res` (bytes read).
+  * Reads `userData`, `res` (bytes read), and `flags` (`ZeroGcCqe.getFlags(address)`).
   * Switches on the primitive 8-bit `typeIndex` (compiles to a fast C2 JIT `tableswitch`).
   * Populates the pre-allocated, reusable [`Result`](file:///home/david/projects/JUring/src/main/java/com/davidvlijmincx/lio/api/Result.java) instance.
   * Dispatches to `ResultConsumer.accept(result)`.

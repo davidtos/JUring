@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.*;
+import java.util.concurrent.locks.LockSupport;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
@@ -68,7 +69,7 @@ class Phase2VirtualThreadProofTest {
                     start.await();
                     int bufIdx;
                     while ((bufIdx = blocking.checkOutBuffer()) < 0) {
-                        Thread.onSpinWait();
+                        LockSupport.parkNanos(50_000L);
                     }
                     try {
                         long bytesRead = blocking.readFixed(0, 13, 0, bufIdx);

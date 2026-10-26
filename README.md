@@ -40,7 +40,10 @@ Using registered files (`IOSQE_FIXED_FILE`), page-aligned registered buffers (`I
 ./bench.sh --include "MultiThreadScalingBenchmark" --scaling
 ```
 
-### Key Performance Highlights (Buffered I/O)
+### Key Performance Highlights (Buffered I/O & Page-Cache)
+
+> [!NOTE]
+> **Workload Classification Note:** The historical benchmarks below reflect **in-memory Linux Page Cache (DRAM)** workloads, where test files are resident in RAM and requests do not hit physical NVMe flash storage. These measurements highlight system call amortization and context switch overhead. For physical NVMe storage controller saturation under true Direct I/O (`O_DIRECT`), see the hardware scaling section above.
 
 **JUring with registered files provides the following performance:**
 - **Up to 489% faster** than pre-opened FileChannels at 4KB buffer sizes for reads
@@ -170,12 +173,12 @@ For complete benchmark source code and detailed methodology, see the test files 
 - **Platform dependency**: Linux-only due to io_uring requirement
 - **High concurrency writes**: FileChannel may perform better with many concurrent writers
 
-### Planned Improvements
-- Ring pooling for reduced initialization costs
-- Write performance optimization for high-concurrency scenarios
-- Additional io_uring features (file modes, flags, sockets)
-- Enhanced blocking API performance
-- Improved memory cleanup strategies
+### Planned Improvements & Roadmap
+- Ring pooling for amortizing initialization and teardown costs in transient services
+- Write performance optimization for high-concurrency shared file descriptors
+- Additional io_uring opcodes (fixed buffer ring pools `IORING_REGISTER_PBUF_RING`, splice, tee)
+- Automatic thread-confinement guard rails and developer diagnostics
+- Scoped lifecycle cleanup strategies (Cleaners / ScopedValue integration)
 
 ## Reliability & Hardening
 - **Zero-GC Virtual Thread Blocking Poller (`JUringBlocking`)**: Non-blocking MPSC queue and unparking poller thread eliminate `CompletableFuture` allocation overhead and ensure deadlock-free socket operations (`accept`, `recv`, `connect`, `send`).

@@ -59,7 +59,9 @@ sequenceDiagram
     Disp-->>JUring: raw sqeAddress (long)
     Note over JUring: Encode bitpacked userData: [OpType: 8b | BufIdx: 16b | OpSeq: 40b]
     JUring->>Disp: prepareWriteFixed(sqe, indexFD, bufAddr, writeSize, offset, bufferIndex)
-    Disp->>SQ: Write opcode=IORING_OP_WRITE_FIXED, fd, off, addr, len, buf_index, userData
+    Disp->>SQ: Write opcode=IORING_OP_WRITE_FIXED, fd, off, addr, len, buf_index
+    JUring->>Disp: setUserData(sqe, userData)
+    Disp->>SQ: Write user_data (64-bit store)
     JUring-->>App: userData token (long)
 
     Note over App, Kernel: 4. Fused Submission & Wait Phase
@@ -73,7 +75,7 @@ sequenceDiagram
     Note over Disp, Consumer: 5. In-Place CQE Reaping Phase
     Disp->>CQ: Acquire barrier: VH_INT.getAcquire(cq_ktail)
     loop For each available CQE (up to maxReap)
-        Disp->>CQ: Read cqe.user_data and cqe.res
+        Disp->>CQ: Read cqe.user_data, cqe.res, and cqe.flags
         Disp->>Disp: Bit-unpack OpType (WRITE_FIXED) & BufferIndex
         Disp->>Disp: Populate reusable Result in-place
         Disp->>Consumer: consumer.accept(result)
@@ -109,6 +111,7 @@ sequenceDiagram
   * `len` = `writeSize`
   * `off` = file offset
   * `buf_index` = short integer index of the registered buffer.
+* Followed by `ZeroGcSqe.setUserData(sqe, userData)` to store the bitpacked 64-bit user data token.
 
 ### Step 4: Submission & Kernel NVMe Processing
 * `submitAndWaitForBatchResult` writes the new SQ tail with release memory semantics (`VH_INT.setRelease(sq_ktail, tail)`).

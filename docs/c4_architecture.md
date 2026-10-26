@@ -116,7 +116,9 @@ flowchart TD
     subgraph JUringLibrary ["JUring Library Architecture (com.davidvlijmincx.lio.api)"]
         direction TB
 
-        JUringFacade["JUring (Facade)<br/>High-level user-facing API.<br/>Provides prepareReadFixed, prepareWriteFixed, submitAndWait,<br/>and buffer pooling."]
+        JUringFacade["JUring (Facade)<br/>High-level single-issuer API.<br/>Provides prepareReadFixed, prepareWriteFixed, submitAndWait,<br/>and buffer pooling."]
+
+        JUringBlockingComp["JUringBlocking<br/>Zero-GC Virtual-Thread wrapper.<br/>Single dedicated platform poller thread.<br/>Lock-free MPSC ring & LockSupport.park/unpark."]
 
         IoUringDisp["IoUringDispatcher<br/>Core ring controller.<br/>Caches ring pointers & masks in Java primitives.<br/>Executes fused submitAndWait and in-place CQE reaping."]
 
@@ -124,7 +126,9 @@ flowchart TD
 
         ZeroGcSqeComp["ZeroGcSqe<br/>Zero-allocation SQE builder.<br/>Operates directly on raw long addresses.<br/>Emits 8x 64-bit aligned stores via VarHandle."]
 
-        ZeroGcUserDataComp["ZeroGcUserData<br/>Bit-packing encoder/decoder.<br/>Packs OperationType (8b), bufferIndex (16b), and opSeq (40b)<br/>into raw 64-bit integer."]
+        ZeroGcCqeComp["ZeroGcCqe<br/>Zero-allocation CQE parser.<br/>Extracts user_data, res, and flags<br/>via primitive VarHandle lookups."]
+
+        ZeroGcUserDataComp["ZeroGcUserData<br/>Bit-packing encoder/decoder.<br/>Packs OperationType, bufferIndex, and opSeq/pointers<br/>into raw 64-bit integer."]
 
         ResultComp["Result & ResultConsumer<br/>Zero-allocation completion model.<br/>Single mutable Result instance reaped in-place<br/>and passed to consumer callback."]
 
@@ -133,9 +137,13 @@ flowchart TD
         JUringFacade --> IoUringDisp
         JUringFacade --> ZeroGcUserDataComp
         JUringFacade --> ResultComp
+
+        JUringBlockingComp --> IoUringDisp
+        JUringBlockingComp --> LibCDisp
         
         IoUringDisp --> LibCDisp
         IoUringDisp --> ZeroGcSqeComp
+        IoUringDisp --> ZeroGcCqeComp
         IoUringDisp --> ZeroGcUserDataComp
         IoUringDisp --> ResultComp
         IoUringDisp --> FFMLinker
@@ -147,8 +155,8 @@ flowchart TD
     classDef compSecondary fill:#00897b,stroke:#004d40,color:#ffffff;
     classDef compUtil fill:#546e7a,stroke:#263238,color:#ffffff;
 
-    class JUringFacade,IoUringDisp compPrimary;
-    class LibCDisp,ZeroGcSqeComp,ZeroGcUserDataComp,ResultComp compSecondary;
+    class JUringFacade,JUringBlockingComp,IoUringDisp compPrimary;
+    class LibCDisp,ZeroGcSqeComp,ZeroGcCqeComp,ZeroGcUserDataComp,ResultComp compSecondary;
     class FFMLinker compUtil;
 ```
 
@@ -181,7 +189,19 @@ The Code-level diagram shows the physical memory layout of data structures mappe
 +---------------------------------------------------------------+
 ```
 
-### B. 64-Bit Bitpacked `user_data` Layout
+### B. 16-Byte Completion Queue Entry (`io_uring_cqe`) Layout
+```
++---------------------------------------------------------------+
+|                          user_data (8B)                       |  Offset 0..7
++-------------------------------+-------------------------------+
+|            res (4B)           |           flags (4B)          |  Offset 8..15
++-------------------------------+-------------------------------+
+```
+* **Why it matters:** In-place reaping loops read `user_data`, `res`, and `flags` directly from this 16-byte memory-mapped ring slot via `ZeroGcCqe` VarHandles bound to primitive `long`/`int` without allocating any intermediate `MemorySegment` objects on the Java heap.
+
+### C. 64-Bit Bitpacked `user_data` Layouts
+
+**1. Fixed-Buffer Operations (`READ_FIXED`, `WRITE_FIXED`):**
 ```
  63           56 55           40 39                            0
 +---------------+---------------+-------------------------------+
@@ -189,9 +209,26 @@ The Code-level diagram shows the physical memory layout of data structures mappe
 |   0..255      |   0..65535    |       Monotonic opSeq         |
 +---------------+---------------+-------------------------------+
 ```
-* **Why it matters:** Eliminates hash maps, off-heap state descriptors, and memory allocation during completion reaping. When a completion arrives, `(userData >>> 56) & 0xFF` extracts the operation type in a single CPU cycle.
 
-### C. Contiguous Page-Aligned Buffer Slab
+**2. General Pointer Operations (`READ`, `WRITE`, `OPEN`, `CONNECT`, `RECV`, `SEND`):**
+```
+ 63           56 55                                            0
++---------------+-----------------------------------------------+
+| OpType (8 bits|            Native Payload Pointer (56 bits)   |
+|   0..255      |           Raw off-heap memory address         |
++---------------+-----------------------------------------------+
+```
+
+**3. External Write Operations (`TYPE_WRITE_EXT = 20`):**
+```
+ 63           56 55                                            0
++---------------+-----------------------------------------------+
+| Type 20 (8 bit|              Operation ID (56 bits)           |
++---------------+-----------------------------------------------+
+```
+* **Why it matters:** Eliminates hash maps, off-heap state descriptors, and memory allocation during completion reaping. When a completion arrives, `(userData >>> 56) & 0xFF` extracts the operation type in a single CPU cycle, compiling directly into a fast C2 JIT `tableswitch`.
+
+### D. Contiguous Page-Aligned Buffer Slab
 ```
 +-----------------------------------+-----------------------------------+
 |     4096-Byte Buffer [0]          |     4096-Byte Buffer [1]          |
