@@ -68,11 +68,25 @@ public class BenchmarkRunner {
         boolean decision = false;
         List<String> customIncludes = new ArrayList<>();
         Map<String, List<String>> customParams = new LinkedHashMap<>();
+        List<String> customJvmArgs = new ArrayList<>();
         Integer customForks = null;
         Integer customWi = null;
         Integer customI = null;
         Integer customR = null;
         Integer customW = null;
+
+        for (int i = 0; i < args.length; i++) {
+            if ("--visual-read".equals(args[i].trim())) {
+                List<String> forwarded = new ArrayList<>();
+                for (int j = 0; j < args.length; j++) {
+                    if (j != i) {
+                        forwarded.add(args[j].trim());
+                    }
+                }
+                bench.suite.direct.DirectReadVisualVerificationTest.main(forwarded.toArray(new String[0]));
+                return;
+            }
+        }
 
         for (int i = 0; i < args.length; i++) {
             String arg = args[i].trim();
@@ -124,7 +138,13 @@ public class BenchmarkRunner {
                     printHelp();
                     return;
                 }
-                default -> System.out.println("Unknown argument: " + arg + " (ignored)");
+                default -> {
+                    if (arg.startsWith("-D")) {
+                        customJvmArgs.add(arg);
+                    } else {
+                        System.out.println("Unknown argument: " + arg + " (ignored)");
+                    }
+                }
             }
         }
 
@@ -135,6 +155,9 @@ public class BenchmarkRunner {
 
         OptionsBuilder builder = new OptionsBuilder();
         builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED", "-Djuring.countEnters=true");
+        if (!customJvmArgs.isEmpty()) {
+            builder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
+        }
 
         // Execution mode
         if (customWi != null || customI != null || customForks != null || customR != null || customW != null) {
@@ -485,6 +508,7 @@ public class BenchmarkRunner {
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");
+        System.out.println("  --visual-read       Run visual direct read verification with live console output");
         System.out.println("  --threads <N>       Set thread concurrency (1, 4, 8, 16)");
         System.out.println("  --help              Display this help message");
     }

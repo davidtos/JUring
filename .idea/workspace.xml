@@ -5,8 +5,11 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation.">
-      <change afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/resources/write_file" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/write_file" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -113,6 +116,7 @@
   "keyToString": {
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "Application.BenchmarkRunner.executor": "Run",
+    "Application.DirectReadVisualVerificationTest.executor": "Run",
     "Application.Phase1BugProofTest.executor": "Run",
     "Application.RandomReadBenchMark.executor": "Run",
     "CidrDebugProfileConversion": "true",
@@ -154,19 +158,16 @@
     ]
   }
 }]]></component>
-  <component name="RunManager" selected="JUnit.DirectIoTest.testDirectIoRead">
-    <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+  <component name="RunManager" selected="Application.DirectReadVisualVerificationTest">
+    <configuration name="DirectReadVisualVerificationTest" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadVisualVerificationTest" />
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
-          <option name="PATTERN" value="bench.suite.*" />
+          <option name="PATTERN" value="bench.suite.direct.*" />
           <option name="ENABLED" value="true" />
         </pattern>
       </extension>
-      <option name="PACKAGE_NAME" value="bench.suite" />
-      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
-      <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
@@ -247,11 +248,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Application.DirectReadVisualVerificationTest" />
         <item itemvalue="JUnit.DirectIoTest.testDirectIoRead" />
         <item itemvalue="JUnit.DirectIoTest" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks" />
-        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
       </list>
     </recent_temporary>
   </component>
@@ -302,7 +303,8 @@
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe` and add tests." />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
     <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
-    <option name="LAST_COMMIT_MESSAGE" value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
+    <MESSAGE value="test: add DirectIoTest for write, read, zero-copy, and round-trip operations at 4096-byte block size" />
+    <option name="LAST_COMMIT_MESSAGE" value="test: add DirectIoTest for write, read, zero-copy, and round-trip operations at 4096-byte block size" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

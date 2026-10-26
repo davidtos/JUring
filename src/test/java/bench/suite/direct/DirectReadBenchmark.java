@@ -13,9 +13,11 @@ import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.infra.ThreadParams;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
@@ -85,12 +87,30 @@ public class DirectReadBenchmark {
             channels = benchState.dataset.openFileChannels(true);
             alignedBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
 
+            final boolean visual = Boolean.getBoolean("juring.visual") || Boolean.getBoolean("juring.printReads");
+            final AtomicInteger debugPrints = new AtomicInteger(0);
+
             this.reapedCount = 0;
             this.consumer = result -> {
                 long res = result.result();
                 if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
                     throw new IllegalStateException("Direct read failed: expected "
                             + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+                }
+                if (visual && debugPrints.get() < 20) {
+                    int printId = debugPrints.incrementAndGet();
+                    if (printId <= 20) {
+                        int bufIdx = result.bufferIdx();
+                        MemorySegment buf = result.validBuffer();
+                        byte[] previewBytes = new byte[Math.min(36, (int) res)];
+                        if (buf != null && !buf.equals(MemorySegment.NULL)) {
+                            MemorySegment.copy(buf, 0L, MemorySegment.ofArray(previewBytes), 0L, previewBytes.length);
+                        }
+                        String snippet = DirectReadVisualVerificationTest.formatAsciiPreview(previewBytes, 36);
+                        System.out.printf("[DirectReadBenchmark JMH #%02d] buf=%-2d (%dB) | Data: \"%s\"%n",
+                                printId, bufIdx, res, snippet);
+                        System.out.flush();
+                    }
                 }
                 this.reapedCount++;
                 this.ring.checkInBuffer(result.bufferIdx());
@@ -187,5 +207,17 @@ public class DirectReadBenchmark {
 
         counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         cpu.end();
+    }
+
+    public static void main(String[] args) throws Exception {
+        if (args.length > 0 && ("--jmh".equals(args[0]) || "-jmh".equals(args[0]))) {
+            org.openjdk.jmh.runner.options.Options opt = new org.openjdk.jmh.runner.options.OptionsBuilder()
+                    .include(DirectReadBenchmark.class.getSimpleName())
+                    .forks(1)
+                    .build();
+            new org.openjdk.jmh.runner.Runner(opt).run();
+        } else {
+            DirectReadVisualVerificationTest.main(args);
+        }
     }
 }
