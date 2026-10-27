@@ -44,19 +44,26 @@ public class MultiThreadScalingBenchmark {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
+
+        @Param({"MULTI_FILE", "SINGLE_FILE"})
+        public String distribution = "MULTI_FILE";
+
         public DatasetManager readDataset;
         public DatasetManager writeDataset;
 
         @Setup(Level.Trial)
         public void setup() {
+            DatasetManager.FileDistribution dist = (distribution != null)
+                    ? DatasetManager.FileDistribution.valueOf(distribution)
+                    : DatasetManager.FileDistribution.MULTI_FILE;
             readDataset = new DatasetManager(
                     DatasetManager.WorkloadType.READ,
-                    DatasetManager.FileDistribution.MULTI_FILE,
+                    dist,
                     SCALING_TASK_POOL_SIZE
             );
             writeDataset = new DatasetManager(
                     DatasetManager.WorkloadType.WRITE,
-                    DatasetManager.FileDistribution.MULTI_FILE,
+                    dist,
                     SCALING_TASK_POOL_SIZE
             );
         }
@@ -236,7 +243,10 @@ public class MultiThreadScalingBenchmark {
 
             int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
-                ring.submitAndWaitForBatchResult(1, qd, state.consumer);
+                int remaining = totalTasks - state.reapedCount;
+                int inFlight = submitted - state.reapedCount;
+                int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+                ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
                 waitsIssued++;
                 unsubmitted = 0;
             }
@@ -290,6 +300,7 @@ public class MultiThreadScalingBenchmark {
         state.threadOffset = (threadOffset + totalTasks) & taskMask;
         final int qd = state.qd;
         final int submitBatch = (qd <= 1) ? 1 : Math.min(qd, 16);
+        final int waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
 
         state.reapedCount = 0;
         int submitted = 0;
@@ -324,7 +335,10 @@ public class MultiThreadScalingBenchmark {
 
             int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
-                ring.submitAndWaitForBatchResult(1, qd, state.consumer);
+                int remaining = totalTasks - state.reapedCount;
+                int inFlight = submitted - state.reapedCount;
+                int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+                ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
                 waitsIssued++;
                 unsubmitted = 0;
             }

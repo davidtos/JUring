@@ -369,8 +369,10 @@ public class BenchmarkRunner {
             for (RunResult rr : results) {
                 String fullName = rr.getParams().getBenchmark();
                 String shortName = fullName.substring(fullName.lastIndexOf('.') + 1);
+                String dist = rr.getParams().getParam("distribution");
+                String rowKey = (dist != null && !dist.isEmpty()) ? (shortName + " [" + dist + "]") : shortName;
                 double score = rr.getPrimaryResult().getScore();
-                matrix.computeIfAbsent(shortName, k -> new TreeMap<>()).put(t, score);
+                matrix.computeIfAbsent(rowKey, k -> new TreeMap<>()).put(t, score);
             }
         }
 
@@ -382,7 +384,7 @@ public class BenchmarkRunner {
         System.out.println("                        MULTI-THREAD SCALING BENCHMARK COMPARISON MATRIX                            ");
         System.out.println("====================================================================================================");
 
-        StringBuilder header = new StringBuilder(String.format("%-26s", "Benchmark Engine"));
+        StringBuilder header = new StringBuilder(String.format("%-34s", "Benchmark Engine"));
         for (int t : threadLevels) {
             header.append(String.format(" | %2d Thread%-2s          ", t, (t == 1 ? "" : "s")));
         }
@@ -390,7 +392,7 @@ public class BenchmarkRunner {
         System.out.println("-".repeat(header.length()));
 
         for (Map.Entry<String, Map<Integer, Double>> entry : matrix.entrySet()) {
-            StringBuilder row = new StringBuilder(String.format("%-26s", entry.getKey()));
+            StringBuilder row = new StringBuilder(String.format("%-34s", entry.getKey()));
             for (int t : threadLevels) {
                 Double score = entry.getValue().get(t);
                 if (score != null) {
@@ -406,10 +408,10 @@ public class BenchmarkRunner {
 
         // Print Key Architectural Findings if full scaling sweep was performed
         if (threadLevels.length >= 4) {
-            Map<Integer, Double> fcRead = matrix.get("fileChannelDirectRead");
-            Map<Integer, Double> juRead = matrix.get("juringDirectRead");
-            Map<Integer, Double> fcWrite = matrix.get("fileChannelDirectWrite");
-            Map<Integer, Double> juWrite = matrix.get("juringDirectWrite");
+            Map<Integer, Double> fcRead = findFirstMatrixEntry(matrix, "fileChannelDirectRead");
+            Map<Integer, Double> juRead = findFirstMatrixEntry(matrix, "juringDirectRead");
+            Map<Integer, Double> fcWrite = findFirstMatrixEntry(matrix, "fileChannelDirectWrite");
+            Map<Integer, Double> juWrite = findFirstMatrixEntry(matrix, "juringDirectWrite");
 
             System.out.println("\nKey Concurrency & Saturation Insights:");
             if (juRead != null && fcRead != null) {
@@ -441,6 +443,15 @@ public class BenchmarkRunner {
             }
             System.out.println("====================================================================================================\n");
         }
+    }
+
+    private static Map<Integer, Double> findFirstMatrixEntry(Map<String, Map<Integer, Double>> matrix, String prefix) {
+        for (Map.Entry<String, Map<Integer, Double>> entry : matrix.entrySet()) {
+            if (entry.getKey().startsWith(prefix)) {
+                return entry.getValue();
+            }
+        }
+        return null;
     }
 
     /**
