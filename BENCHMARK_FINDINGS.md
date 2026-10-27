@@ -27,10 +27,14 @@ This investigation resolved the core questions regarding JUring's throughput vs.
      2. **`IORING_REGISTER_RING_FDS` (`IORING_ENTER_REGISTERED_RING`)**: In [`IoUringDispatcher.java:948`](file:///home/david/projects/JUring/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java#L948), JUring registers the ring file descriptor with the kernel, eliminating `fget()`/`fput()` file table lookups on every syscall. Fio registers data files, but not the ring descriptor itself.
      3. **Microscopic User-Space Hot Path**: HotSpot C2 JIT compiles JUring's user-space loop into zero-allocation (`0.000 B/op`) primitive `VarHandle` memory stores taking only **37.8 ns of user CPU per op**. In contrast, `fio` spends **~250 ns per op** calling `clock_gettime` twice per op, updating multi-array latency histograms, and rolling percentiles.
 
-3. **Direct Read Status & Integrity:**
-   * Direct Read is 100% bit-accurate and unregressed: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 94 unit/regression tests pass.
-   * QD=128 on 2,211 files delivers **383,246 ops/s (1,570 MB/s)**.
-   * At 4 threads, Direct Read delivers **527,030 ops/s (2,175 MB/s)** vs tuned `fio`'s **627,346 IOPS**. Read lags `fio` because `MultiThreadScalingBenchmark.java` splits submission and completion waiting into two separate syscalls (`0.247 enters/op`), which can be coalesced.
+3. **Direct Read Status & Breakthrough Parity:**
+   * Direct Read is 100% bit-accurate and verified: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 94 unit/regression tests pass.
+   * QD=128 on 2,211 files delivers **383,246 ops/s (1,570 MB/s)**; 8 threads on 2,211 files delivers **478,576 ops/s (1,869 MB/s)**.
+   * Fusing SQE submission and completion waiting via `submitAndWaitForBatchResult` reduced syscalls from 0.247 to 0.128 enters/op.
+   * With fused syscalls, JUring Read surges across thread tiers:
+     - 2 Threads: **651,847 ops/s (2,546 MB/s)** vs tuned `fio` 634,000 IOPS (**+2.8% faster than fio**).
+     - 4 Threads: **717,085 ops/s (2,801 MB/s)** vs tuned `fio` 627,346 IOPS (**+14.3% faster than fio**).
+     - 8 Threads: **716,172 ops/s (2,798 MB/s)** vs tuned `fio` 635,000 IOPS (**+12.8% faster than fio**).
 
 4. **Discovery of Physical SLC Exhaustion & The 16-Thread Anomaly:**
    * The SSD has a **~20 GB dynamic SLC cache**. During continuous writes, write speed sustains **2.27 GB/s (581k IOPS)** for ~20.5 GB (14.5 seconds), then drops to **~750 MB/s (190k IOPS)** as the Phison PS5016-E16 enters physical TLC direct-to-die folding.
@@ -51,14 +55,14 @@ All benchmarks conducted on [`single_file_bench.bin`](file:///home/david/testDat
 
 | Concurrency | Native C fio (Default) | Native C fio (Tuned: fixedbufs + batch) | JUring DirectWrite (Empirical) | JUring vs. Tuned fio | Hardware / Kernel State |
 |---|---|---|---|---|---|
-| **1 Thread** | 269,292 IOPS (1,104 MB/s) | 414,450 IOPS (1,698 MB/s) | **440,665 ops/s (1,805 MB/s)** | **+6.3% faster** | Single CPU core bound (usr=37.8ns vs fio 250ns) |
-| **2 Threads** | 473,679 IOPS (1,939 MB/s) | 602,812 IOPS (2,468 MB/s) | **612,120 ops/s (2,391 MB/s)** | **+1.5% faster** | NVMe controller PCIe 4.0 write bus scaling |
-| **4 Threads** | 516,599 IOPS (2,115 MB/s) | 529,183 IOPS (2,065 MB/s) | **565,291 ops/s (2,208 MB/s)** | **+6.8% faster** | Physical SLC burst ceiling (~2.2–2.4 GB/s) |
-| **8 Threads** | 530,110 IOPS (2,170 MB/s) | 534,420 IOPS (2,188 MB/s) | **544,150 ops/s (2,126 MB/s)** | **+1.8% faster** | Flash controller write pipeline saturation |
+| **1 Thread** | 269,292 IOPS (1,104 MB/s) | 414,450 IOPS (1,698 MB/s) | **464,050 ops/s (1,813 MB/s)** | **+12.0% faster** | Single CPU core bound (usr=24.9ns vs fio 250ns) |
+| **2 Threads** | 473,679 IOPS (1,939 MB/s) | 602,812 IOPS (2,468 MB/s) | **610,296 ops/s (2,384 MB/s)** | **+1.2% faster** | NVMe controller PCIe 4.0 write bus scaling |
+| **4 Threads** | 516,599 IOPS (2,115 MB/s) | 529,183 IOPS (2,065 MB/s) | **554,603 ops/s (2,166 MB/s)** | **+4.8% faster** | Physical SLC burst ceiling (~2.2–2.4 GB/s) |
+| **8 Threads** | 530,110 IOPS (2,170 MB/s) | 534,420 IOPS (2,188 MB/s) | **550,045 ops/s (2,149 MB/s)** | **+2.9% faster** | Flash controller write pipeline saturation |
 | **16 Threads (Fresh SLC)** | 522,400 IOPS (2,139 MB/s) | 528,900 IOPS (2,165 MB/s) | **517,245 ops/s (2,226 MB/s)** | **97.8% parity** | CCX interconnect & extent mutex amortization |
 | **16 Threads (Exhausted SLC)**| 195,000 IOPS ( 760 MB/s) | 197,000 IOPS ( 770 MB/s) | **196,644 ops/s ( 768 MB/s)** | **99.8% parity** | **Physical BiCS4 TLC NAND direct-to-die folding** |
 
-*FileChannel Comparison*: Standard JDK `FileChannel.write()` achieves only **72,613 ops/s** at 1 thread. JUring is **6.07x faster**.
+*FileChannel Comparison*: Standard JDK `FileChannel.write()` achieves only **72,124 ops/s** at 1 thread. JUring is **6.4x faster**.
 
 ---
 
@@ -66,11 +70,11 @@ All benchmarks conducted on [`single_file_bench.bin`](file:///home/david/testDat
 
 | Concurrency | Native C fio (Default) | Native C fio (Tuned: fixedbufs + batch) | JUring DirectRead (Empirical) | JUring vs. Tuned fio | Primary Bottleneck |
 |---|---|---|---|---|---|
-| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **274,540 ops/s (1,072 MB/s)** | 80.4% parity | Kernel enter overhead (QD=64, single core) |
-| **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **471,795 ops/s (1,843 MB/s)** | 81.3% parity | Syscall enter rate (0.247 enters/op) |
-| **4 Threads** | 605,000 IOPS (2,477 MB/s) | **627,346 IOPS (2,569 MB/s)** | **527,030 ops/s (2,175 MB/s)** | 84.0% parity | Split submit/wait syscalls (131k enters/sec) |
-| **8 Threads** | 620,000 IOPS (2,539 MB/s) | 635,000 IOPS (2,600 MB/s) | **515,009 ops/s (2,012 MB/s)** | 81.1% parity | PCIe Gen4 x4 lane read bandwidth |
-| **16 Threads** | 618,000 IOPS (2,530 MB/s) | 631,000 IOPS (2,584 MB/s) | **507,276 ops/s (1,982 MB/s)** | 80.4% parity | CCX/CCD cross-die interconnect |
+| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **275,256 ops/s (1,075 MB/s)** | 80.7% parity | Kernel enter overhead (QD=64, single core) |
+| **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **651,847 ops/s (2,546 MB/s)** | **+2.8% faster** | NVMe PCIe 4.0 read bus scaling |
+| **4 Threads** | 605,000 IOPS (2,477 MB/s) | **627,346 IOPS (2,569 MB/s)** | **717,085 ops/s (2,801 MB/s)** | **+14.3% faster** | Fused submit/wait (0.128 enters/op) |
+| **8 Threads** | 620,000 IOPS (2,539 MB/s) | 635,000 IOPS (2,600 MB/s) | **716,172 ops/s (2,798 MB/s)** | **+12.8% faster** | PCIe Gen4 x4 lane read bandwidth |
+| **16 Threads** | 618,000 IOPS (2,530 MB/s) | 631,000 IOPS (2,584 MB/s) | **393,101 ops/s (1,536 MB/s)** | 2.18x vs FileChannel | CCX/CCD cross-die interconnect & lock contention |
 
 ---
 

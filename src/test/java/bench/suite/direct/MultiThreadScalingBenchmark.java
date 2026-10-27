@@ -253,7 +253,7 @@ public class MultiThreadScalingBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch) {
+                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -261,13 +261,7 @@ public class MultiThreadScalingBenchmark {
                 }
             }
 
-            if (unsubmitted > 0) {
-                ring.submit();
-                submitsIssued++;
-                unsubmitted = 0;
-            }
-
-            int reaped = ring.peekForBatchResult(qd, state.consumer);
+            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;
@@ -353,7 +347,7 @@ public class MultiThreadScalingBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch) {
+                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -361,13 +355,7 @@ public class MultiThreadScalingBenchmark {
                 }
             }
 
-            if (unsubmitted > 0) {
-                ring.submit();
-                submitsIssued++;
-                unsubmitted = 0;
-            }
-
-            int reaped = ring.peekForBatchResult(qd, state.consumer);
+            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;

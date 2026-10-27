@@ -40,13 +40,19 @@ public class DirectReadBenchmark {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
+        @Param({"MULTI_FILE", "SINGLE_FILE"})
+        public String distribution = "MULTI_FILE";
+
         public DatasetManager dataset;
 
         @Setup(Level.Trial)
         public void setup() {
+            DatasetManager.FileDistribution dist = (distribution != null)
+                    ? DatasetManager.FileDistribution.valueOf(distribution)
+                    : DatasetManager.FileDistribution.MULTI_FILE;
             dataset = new DatasetManager(
                     DatasetManager.WorkloadType.READ,
-                    DatasetManager.FileDistribution.MULTI_FILE
+                    dist
             );
         }
     }
@@ -161,7 +167,7 @@ public class DirectReadBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch) {
+                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -169,13 +175,7 @@ public class DirectReadBenchmark {
                 }
             }
 
-            if (unsubmitted > 0) {
-                ring.submit();
-                submitsIssued++;
-                unsubmitted = 0;
-            }
-
-            int reaped = ring.peekForBatchResult(qd, state.consumer);
+            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;
