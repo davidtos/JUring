@@ -294,11 +294,18 @@ public class JUringBlocking implements AutoCloseable {
 
                 if (totalInFlight > 0) {
                     if (unboundedInFlight == 0) {
-                        if (reaped == 0 && !hasPendingMpsc() && controlTask.get() == null) {
-                            dispatcher.submitAndWait(1);
-                            dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                        } else if (preparedNow > 0) {
-                            dispatcher.submit();
+                        if (preparedNow > 0) {
+                            if (reaped == 0 && (inFlightHolder[0] - inFlightHolder[1]) >= sqEntries && controlTask.get() == null) {
+                                dispatcher.submitAndWait(1);
+                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                            } else {
+                                dispatcher.submit();
+                            }
+                        } else {
+                            if (reaped == 0 && controlTask.get() == null) {
+                                dispatcher.submitAndWait(1);
+                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                            }
                         }
                     } else {
                         if (preparedNow > 0) {
@@ -308,9 +315,9 @@ public class JUringBlocking implements AutoCloseable {
                             dispatcher.flushDeferredTaskrun();
                             reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                         }
-                        if (reaped == 0 && !hasPendingMpsc() && controlTask.get() == null) {
+                        if (reaped == 0 && (!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= sqEntries) && controlTask.get() == null) {
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
-                            if (!hasPendingMpsc() && controlTask.get() == null && running) {
+                            if ((!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= sqEntries) && controlTask.get() == null && running) {
                                 LockSupport.parkNanos(this, 50_000L);
                             }
                             VH_WORKER_POLLER_PARKED.setRelease(this, 0);
@@ -320,7 +327,7 @@ public class JUringBlocking implements AutoCloseable {
                     if (!hasPendingMpsc() && controlTask.get() == null && running) {
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
                         if (!hasPendingMpsc() && controlTask.get() == null && running) {
-                            LockSupport.park(this);
+                            LockSupport.parkNanos(this, 50_000L);
                         }
                         VH_WORKER_POLLER_PARKED.setRelease(this, 0);
                     }

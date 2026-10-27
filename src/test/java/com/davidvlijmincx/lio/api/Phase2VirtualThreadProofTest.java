@@ -151,4 +151,34 @@ class Phase2VirtualThreadProofTest {
             }
         }
     }
+
+    @Test
+    void proof4_highConcurrencyContentionUnderRingBackpressure() throws Exception {
+        // Force high submission backpressure: ring capacity 32 with 1,000 concurrent Virtual Threads
+        try (JUringBlocking blocking = new JUringBlocking(32, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor(Path.of("src/test/resources/read_file"), READ);
+             Arena arena = Arena.ofShared();
+             ExecutorService vts = Executors.newVirtualThreadPerTaskExecutor()) {
+
+            int tasks = 1_000;
+            CountDownLatch latch = new CountDownLatch(1);
+            List<Future<String>> results = new ArrayList<>(tasks);
+
+            for (int i = 0; i < tasks; i++) {
+                MemorySegment buf = arena.allocate(16);
+                results.add(vts.submit(() -> {
+                    latch.await();
+                    long bytesRead = blocking.read(fd, buf, 13, 0);
+                    assertEquals(13L, bytesRead);
+                    return new String(buf.asSlice(0, bytesRead).toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+                }));
+            }
+
+            latch.countDown();
+
+            for (Future<String> f : results) {
+                assertEquals("Hello, World!", f.get(10, TimeUnit.SECONDS));
+            }
+        }
+    }
 }
