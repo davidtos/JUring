@@ -167,7 +167,7 @@ public class DirectReadBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -175,7 +175,7 @@ public class DirectReadBenchmark {
                 }
             }
 
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
+            int reaped = ring.peekForBatchResult(qd, state.consumer);
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;

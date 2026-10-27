@@ -280,15 +280,15 @@ public class FusedPipelineLoop {
                 unsubmitted++;
 
                 // Mid-pipeline flush while NVMe is working
-                if (unsubmitted >= submitBatch && (submitted - reapedCount[0]) < qd && submitted < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     unsubmitted = 0;
                     ring.peekForBatchResult(qd, consumer);
                 }
             }
 
-            // Non-blocking drain if everything was already submitted
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, consumer) : 0;
+            // Non-blocking drain from user space
+            int reaped = ring.peekForBatchResult(qd, consumer);
 
             // Single fused io_uring_enter syscall: submits unsubmitted SQEs AND waits for completions
             if (reaped == 0 && reapedCount[0] < totalTasks) {

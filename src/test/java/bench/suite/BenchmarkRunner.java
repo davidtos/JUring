@@ -312,7 +312,14 @@ public class BenchmarkRunner {
 
         Map<String, Map<Integer, Double>> matrix = new LinkedHashMap<>();
 
-        for (int t : threadLevels) {
+        for (int i = 0; i < threadLevels.length; i++) {
+            int t = threadLevels[i];
+            if (i > 0) {
+                System.out.println("\n[Cooldown] Pausing 10s between concurrency tiers for NVMe SLC cache recovery...");
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException ignored) {}
+            }
             System.out.println("\n>>> Running MultiThreadScalingBenchmark at Concurrency: " + t + " Thread(s) <<<");
 
             OptionsBuilder builder = new OptionsBuilder();

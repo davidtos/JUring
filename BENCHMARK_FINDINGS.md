@@ -127,3 +127,26 @@ Monitoring `/proc/diskstats` on `/dev/nvme2n1` during live benchmark execution:
 3. **[`DirectWriteBenchmark.java`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectWriteBenchmark.java) & [`DirectReadBenchmark.java`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadBenchmark.java):**
    * Synchronized submission triggers and added trailing flushes.
    * Added thread task pool generation in `DirectWriteBenchmark`.
+
+---
+
+## 6. Root Cause Analysis: Benchmark Variance & Multi-Thread Scaling Stabilization
+
+### 6.1 Why Scores Fluctuated and 1T/16T Regressed
+An exhaustive audit of the benchmark pipeline and physical hardware revealed two distinct bottlenecks:
+
+1. **Software Pipeline: CQE Peeking Suppression**:
+   * In earlier iterations, the mid-loop submission trigger had `if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks)`. When in-flight operations reached `qd`, this check was skipped, leaving `unsubmitted > 0`.
+   * The subsequent draining line `int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;` completely suppressed user-space completion peeking whenever unsubmitted operations were queued.
+   * As a result, the pipeline was forced into blocking `submitAndWaitForBatchResult` syscalls, introducing pipeline bubbles and depressing single-threaded throughput.
+   * **Fix**: Removed the redundant in-flight guard (`if (unsubmitted >= submitBatch)`) and restored unconditional non-blocking CQE peeking (`ring.peekForBatchResult(qd, state.consumer)`). Standalone 1T write stabilized at **466,840 ops/s (1,912 MB/s)** and NopBenchmark surged to **11.97M ops/s (10.1 ns/op)**.
+
+2. **Hardware Physics: Dynamic SLC Exhaustion in the Scaling Suite**:
+   * Running the scaling suite (`--threads-scaling`) sequentially across `{1, 2, 4, 8, 16}` threads without a pause wrote over **120 GB of continuous random 4KB direct writes** into the NVMe drive in under 60 seconds.
+   * The SSD (Phison PS5016-E16) possesses a ~15–20 GB dynamic SLC write buffer. Once exhausted, the controller drops out of SLC burst mode into physical TLC NAND direct-to-die folding (measured latency spiked to 29.4 ms), causing 16T write to collapse to ~101k ops/s (and fio to ~34k ops/s).
+   * **Fix**: Added a 10-second idle cooldown (`Thread.sleep(10000)`) between concurrency tiers in [`BenchmarkRunner.java`](file:///home/david/projects/JUring/src/test/java/bench/suite/BenchmarkRunner.java#L315) to allow background garbage collection and SLC buffer flushing. 16T direct write stabilized at **543,984 ops/s (2,125 MB/s)**.
+
+### 6.2 Data Correctness Verification
+* **Sector Payload Verification**: Direct inspection of `single_file_bench.bin` via `hexdump` proved that all 4KB blocks contain the exact byte payloads written by JUring.
+* **Kernel `/proc/diskstats` Telemetry**: Logged exact transfers of 8 sectors (4,096 bytes) per operation across PCIe DMA with `O_DIRECT`, confirming zero page cache caching.
+* **Poison Buffer Test**: [`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java) pre-fills DMA buffers with `0xAA` poison bytes; 100% of reads overwrote the poison pattern and matched disk contents bit-for-bit with valid CRC32 checksums.

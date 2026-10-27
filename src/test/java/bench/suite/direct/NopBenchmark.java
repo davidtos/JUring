@@ -85,7 +85,7 @@ public class NopBenchmark {
                 submitted++;
                 unsubmitted++;
 
-                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && submitted < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -93,7 +93,7 @@ public class NopBenchmark {
                 }
             }
 
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
+            int reaped = ring.peekForBatchResult(qd, state.consumer);
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 ring.submitAndWaitForBatchResult(1, qd, state.consumer);
                 waitsIssued++;
