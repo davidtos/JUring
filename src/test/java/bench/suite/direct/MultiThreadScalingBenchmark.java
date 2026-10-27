@@ -72,7 +72,11 @@ public class MultiThreadScalingBenchmark {
     @State(Scope.Thread)
     public static class ReadThreadState {
         public int qd;
+        public int submitBatch;
+        public int waitBatch;
         public int threadOffset;
+        public int[] taskFileIndices;
+        public long[] taskOffsets;
         public JUring ring;
         public FileDescriptor[] fileDescriptors;
         public FileChannel[] channels;
@@ -86,7 +90,13 @@ public class MultiThreadScalingBenchmark {
             int threadCount = params.getThreadCount();
             int safeBufferCount = IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount);
             this.qd = Math.max(16, Math.min(64, safeBufferCount));
-            this.threadOffset = (params.getThreadIndex() * 4099) & (SCALING_TASK_POOL_SIZE - 1);
+            this.submitBatch = (qd <= 1) ? 1 : (threadCount >= 16 ? 8 : (threadCount >= 8 ? 16 : Math.min(qd, 32)));
+            this.waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+            DatasetManager.TaskPool pool = benchState.readDataset.generateThreadTasks(
+                    params.getThreadIndex(), threadCount, SCALING_TASK_POOL_SIZE);
+            this.taskFileIndices = pool.fileIndices();
+            this.taskOffsets = pool.offsets();
+            this.threadOffset = 0;
             int ringEntries = Math.max(128, qd * 2);
 
             ring = new JUring(ringEntries,
@@ -130,7 +140,11 @@ public class MultiThreadScalingBenchmark {
     @State(Scope.Thread)
     public static class WriteThreadState {
         public int qd;
+        public int submitBatch;
+        public int waitBatch;
         public int threadOffset;
+        public int[] taskFileIndices;
+        public long[] taskOffsets;
         public JUring ring;
         public FileDescriptor[] fileDescriptors;
         public FileChannel[] channels;
@@ -145,7 +159,13 @@ public class MultiThreadScalingBenchmark {
             int threadCount = params.getThreadCount();
             int safeBufferCount = IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount);
             this.qd = Math.max(16, Math.min(64, safeBufferCount));
-            this.threadOffset = (params.getThreadIndex() * 4099) & (SCALING_TASK_POOL_SIZE - 1);
+            this.submitBatch = (qd <= 1) ? 1 : (threadCount >= 16 ? 8 : (threadCount >= 8 ? 16 : Math.min(qd, 32)));
+            this.waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+            DatasetManager.TaskPool pool = benchState.writeDataset.generateThreadTasks(
+                    params.getThreadIndex(), threadCount, SCALING_TASK_POOL_SIZE);
+            this.taskFileIndices = pool.fileIndices();
+            this.taskOffsets = pool.offsets();
+            this.threadOffset = 0;
             int ringEntries = Math.max(128, qd * 2);
 
             ring = new JUring(ringEntries,
@@ -200,15 +220,15 @@ public class MultiThreadScalingBenchmark {
         cpu.begin();
         final JUring ring = state.ring;
         ring.takeEnterCount();
-        final int[] taskFileIndices = benchState.readDataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.readDataset.getTaskOffsets();
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int threadOffset = state.threadOffset;
-        state.threadOffset = (threadOffset + totalTasks) & taskMask;
+        final int localOffset = state.threadOffset;
+        state.threadOffset = (localOffset + totalTasks) & taskMask;
         final int qd = state.qd;
-        final int submitBatch = (qd <= 1) ? 1 : Math.min(qd, 32);
-        final int waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+        final int submitBatch = state.submitBatch;
+        final int waitBatch = state.waitBatch;
 
         state.reapedCount = 0;
         int submitted = 0;
@@ -224,7 +244,7 @@ public class MultiThreadScalingBenchmark {
                     break;
                 }
 
-                int idx = (threadOffset + taskIndex) & taskMask;
+                int idx = (localOffset + taskIndex) & taskMask;
                 int fileIdx = taskFileIndices[idx];
                 long offset = taskOffsets[idx];
 
@@ -233,7 +253,7 @@ public class MultiThreadScalingBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -241,14 +261,22 @@ public class MultiThreadScalingBenchmark {
                 }
             }
 
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
+            if (unsubmitted > 0) {
+                ring.submit();
+                submitsIssued++;
+                unsubmitted = 0;
+            }
+
+            int reaped = ring.peekForBatchResult(qd, state.consumer);
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;
-                int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
-                ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-                waitsIssued++;
-                unsubmitted = 0;
+                if (inFlight > 0) {
+                    int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+                    ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
+                    waitsIssued++;
+                    unsubmitted = 0;
+                }
             }
         }
 
@@ -263,16 +291,16 @@ public class MultiThreadScalingBenchmark {
     public void fileChannelDirectRead(ReadThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
         cpu.begin();
         final FileChannel[] channels = state.channels;
-        final int[] taskFileIndices = benchState.readDataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.readDataset.getTaskOffsets();
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
         final ByteBuffer buf = state.alignedBuffer;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int threadOffset = state.threadOffset;
-        state.threadOffset = (threadOffset + totalTasks) & taskMask;
+        final int localOffset = state.threadOffset;
+        state.threadOffset = (localOffset + totalTasks) & taskMask;
 
         for (int i = 0; i < totalTasks; i++) {
-            int idx = (threadOffset + i) & taskMask;
+            int idx = (localOffset + i) & taskMask;
             FileChannel fc = channels[taskFileIndices[idx]];
             buf.clear();
             int read = fc.read(buf, taskOffsets[idx]);
@@ -292,15 +320,15 @@ public class MultiThreadScalingBenchmark {
         cpu.begin();
         final JUring ring = state.ring;
         ring.takeEnterCount();
-        final int[] taskFileIndices = benchState.writeDataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.writeDataset.getTaskOffsets();
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int threadOffset = state.threadOffset;
-        state.threadOffset = (threadOffset + totalTasks) & taskMask;
+        final int localOffset = state.threadOffset;
+        state.threadOffset = (localOffset + totalTasks) & taskMask;
         final int qd = state.qd;
-        final int submitBatch = (qd <= 1) ? 1 : Math.min(qd, 16);
-        final int waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+        final int submitBatch = state.submitBatch;
+        final int waitBatch = state.waitBatch;
 
         state.reapedCount = 0;
         int submitted = 0;
@@ -316,7 +344,7 @@ public class MultiThreadScalingBenchmark {
                     break;
                 }
 
-                int idx = (threadOffset + taskIndex) & taskMask;
+                int idx = (localOffset + taskIndex) & taskMask;
                 int fileIdx = taskFileIndices[idx];
                 long offset = taskOffsets[idx];
 
@@ -325,7 +353,7 @@ public class MultiThreadScalingBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -333,14 +361,22 @@ public class MultiThreadScalingBenchmark {
                 }
             }
 
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
+            if (unsubmitted > 0) {
+                ring.submit();
+                submitsIssued++;
+                unsubmitted = 0;
+            }
+
+            int reaped = ring.peekForBatchResult(qd, state.consumer);
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 int remaining = totalTasks - state.reapedCount;
                 int inFlight = submitted - state.reapedCount;
-                int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
-                ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-                waitsIssued++;
-                unsubmitted = 0;
+                if (inFlight > 0) {
+                    int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+                    ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
+                    waitsIssued++;
+                    unsubmitted = 0;
+                }
             }
         }
 
@@ -355,16 +391,16 @@ public class MultiThreadScalingBenchmark {
     public void fileChannelDirectWrite(WriteThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
         cpu.begin();
         final FileChannel[] channels = state.channels;
-        final int[] taskFileIndices = benchState.writeDataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.writeDataset.getTaskOffsets();
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
         final ByteBuffer buf = state.writeBuffer;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int threadOffset = state.threadOffset;
-        state.threadOffset = (threadOffset + totalTasks) & taskMask;
+        final int localOffset = state.threadOffset;
+        state.threadOffset = (localOffset + totalTasks) & taskMask;
 
         for (int i = 0; i < totalTasks; i++) {
-            int idx = (threadOffset + i) & taskMask;
+            int idx = (localOffset + i) & taskMask;
             FileChannel fc = channels[taskFileIndices[idx]];
             buf.position(0);
             int written = fc.write(buf, taskOffsets[idx]);

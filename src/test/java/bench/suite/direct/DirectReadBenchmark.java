@@ -161,7 +161,7 @@ public class DirectReadBenchmark {
                 unsubmitted++;
                 taskIndex++;
 
-                if (unsubmitted >= submitBatch && (submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+                if (unsubmitted >= submitBatch) {
                     ring.submit();
                     submitsIssued++;
                     unsubmitted = 0;
@@ -169,12 +169,23 @@ public class DirectReadBenchmark {
                 }
             }
 
-            // Drain completed CQEs or fuse pending SQE submission with completion wait in a single syscall
-            int reaped = (unsubmitted == 0) ? ring.peekForBatchResult(qd, state.consumer) : 0;
-            if (reaped == 0 && state.reapedCount < totalTasks) {
-                ring.submitAndWaitForBatchResult(1, qd, state.consumer);
-                waitsIssued++;
+            if (unsubmitted > 0) {
+                ring.submit();
+                submitsIssued++;
                 unsubmitted = 0;
+            }
+
+            int reaped = ring.peekForBatchResult(qd, state.consumer);
+            if (reaped == 0 && state.reapedCount < totalTasks) {
+                int remaining = totalTasks - state.reapedCount;
+                int inFlight = submitted - state.reapedCount;
+                if (inFlight > 0) {
+                    int waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+                    int minComplete = Math.max(1, Math.min(inFlight, Math.min(remaining, waitBatch)));
+                    ring.submitAndWaitForBatchResult(minComplete, qd, state.consumer);
+                    waitsIssued++;
+                    unsubmitted = 0;
+                }
             }
         }
 

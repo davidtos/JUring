@@ -4,6 +4,7 @@ import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
@@ -59,6 +60,9 @@ public class DatasetManager {
                 DEFAULT_BUFFER_SIZE, taskCount);
     }
 
+    public static final String SINGLE_BENCH_FILE = "single_file_bench.bin";
+    public static final long DEFAULT_SINGLE_FILE_SIZE = Long.getLong("juring.bench.singleFileSize", 10L * 1024 * 1024 * 1024); // 10 GB
+
     public static final int MAX_MULTI_FILES = 2211;
 
     public DatasetManager(WorkloadType workloadType, FileDistribution distribution, Path baseDir, int bufferSize, int taskCount) {
@@ -68,8 +72,25 @@ public class DatasetManager {
         this.bufferSize = bufferSize;
         this.taskCount = taskCount;
 
-        int maxFiles = (distribution == FileDistribution.SINGLE_FILE) ? 1 : MAX_MULTI_FILES;
-        this.uniquePaths = discoverFiles(baseDir, maxFiles);
+        if (distribution == FileDistribution.SINGLE_FILE) {
+            Path singleFile = null;
+            if (workloadType == WorkloadType.WRITE) {
+                singleFile = ensureSingleBenchFile(baseDir, DEFAULT_SINGLE_FILE_SIZE);
+            } else if (Files.exists(baseDir.resolve(SINGLE_BENCH_FILE))) {
+                singleFile = baseDir.resolve(SINGLE_BENCH_FILE);
+            } else if (baseDir.equals(DEFAULT_READ_DIR) && Files.exists(DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE))) {
+                singleFile = DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE);
+            }
+
+            if (singleFile != null && Files.exists(singleFile)) {
+                this.uniquePaths = new Path[]{ singleFile };
+            } else {
+                this.uniquePaths = discoverFiles(baseDir, 1);
+            }
+        } else {
+            this.uniquePaths = discoverFiles(baseDir, MAX_MULTI_FILES);
+        }
+
         if (this.uniquePaths.length == 0) {
             throw new IllegalStateException("No valid benchmark files (" + FILE_EXTENSION + ") found in " + baseDir);
         }
@@ -88,13 +109,58 @@ public class DatasetManager {
         generateTasks();
     }
 
+    public static Path ensureSingleBenchFile(Path dir, long targetSize) {
+        Path filePath = dir.resolve(SINGLE_BENCH_FILE);
+        try {
+            if (Files.exists(filePath) && Files.size(filePath) >= targetSize) {
+                return filePath;
+            }
+            Files.createDirectories(dir);
+            System.out.printf("Pre-allocating %s (%,d MB) to prevent ext4 extent lock contention...%n",
+                    filePath.getFileName(), targetSize / (1024 * 1024));
+            long start = System.currentTimeMillis();
+            try (FileChannel fc = FileChannel.open(filePath,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.WRITE,
+                    StandardOpenOption.READ)) {
+                int chunkSize = 4 * 1024 * 1024; // 4MB chunks
+                ByteBuffer chunk = ByteBuffer.allocateDirect(chunkSize);
+                byte[] pattern = new byte[chunkSize];
+                for (int i = 0; i < chunkSize; i++) {
+                    pattern[i] = (byte) (i & 0xFF);
+                }
+                chunk.put(pattern);
+                long written = 0;
+                while (written < targetSize) {
+                    chunk.position(0);
+                    long toWrite = Math.min(chunkSize, targetSize - written);
+                    chunk.limit((int) toWrite);
+                    fc.write(chunk, written);
+                    written += toWrite;
+                }
+                fc.force(true);
+            }
+            long elapsed = System.currentTimeMillis() - start;
+            System.out.printf("Successfully pre-allocated %s in %d ms (%,.1f MB/s)%n",
+                    filePath.getFileName(), elapsed, (targetSize / (1024.0 * 1024.0)) / (elapsed / 1000.0));
+            return filePath;
+        } catch (Exception e) {
+            System.err.println("Notice: Could not pre-allocate " + SINGLE_BENCH_FILE + ": " + e.getMessage() + ". Falling back to existing files.");
+            try {
+                Files.deleteIfExists(filePath);
+            } catch (Exception ignored) {}
+            return null;
+        }
+    }
+
     private static Path[] discoverFiles(Path dir, int maxFiles) {
         if (!Files.exists(dir)) {
             return new Path[0];
         }
         try (var stream = Files.walk(dir, 1)) {
             return stream
-                    .filter(p -> p.getFileName().toString().endsWith(FILE_EXTENSION))
+                    .filter(p -> p.getFileName().toString().endsWith(FILE_EXTENSION)
+                            && !p.getFileName().toString().equals(SINGLE_BENCH_FILE))
                     .sorted(Comparator.comparing(Path::toString))
                     .limit(maxFiles)
                     .toArray(Path[]::new);
@@ -103,27 +169,49 @@ public class DatasetManager {
         }
     }
 
-    private void generateTasks() {
-        Random random = new Random(42424242L); // Deterministic seed for repeatable benchmark runs
-        int numFiles = uniquePaths.length;
+    public record TaskPool(int[] fileIndices, long[] offsets) {}
 
-        for (int i = 0; i < taskCount; i++) {
-            int fileIdx = (distribution == FileDistribution.SINGLE_FILE)
-                    ? 0
-                    : (i % numFiles);
+    public TaskPool generateThreadTasks(int threadIndex, int threadCount, int count) {
+        int[] indices = new int[count];
+        long[] offsets = new long[count];
+        Random random = new Random(42424242L + ((long) threadIndex * 31));
 
-            long size = fileSizes[fileIdx];
+        if (distribution == FileDistribution.SINGLE_FILE) {
+            long size = fileSizes[0];
             long maxBlocks = size / bufferSize;
             if (maxBlocks <= 0) {
-                throw new IllegalStateException("File size (" + size + ") smaller than bufferSize (" + bufferSize + ") for: " + uniquePaths[fileIdx]);
+                throw new IllegalStateException("File size (" + size + ") smaller than bufferSize (" + bufferSize + ") for: " + uniquePaths[0]);
             }
+            int intMaxBlocks = (int) Math.min(Integer.MAX_VALUE, maxBlocks);
+            for (int i = 0; i < count; i++) {
+                long blockIndex = (long) random.nextInt(intMaxBlocks);
+                indices[i] = 0;
+                offsets[i] = blockIndex * bufferSize;
+            }
+        } else {
+            int numFiles = uniquePaths.length;
+            int filesPerThread = Math.max(1, numFiles / Math.max(1, threadCount));
+            int startFile = threadIndex * filesPerThread;
+            int endFile = (threadIndex == threadCount - 1) ? numFiles : Math.min(numFiles, startFile + filesPerThread);
+            int localNumFiles = Math.max(1, endFile - startFile);
 
-            long blockIndex = (long) random.nextInt((int) Math.min(Integer.MAX_VALUE, maxBlocks));
-            long offset = blockIndex * bufferSize;
-
-            taskFileIndices[i] = fileIdx;
-            taskOffsets[i] = offset;
+            for (int i = 0; i < count; i++) {
+                int fileIdx = startFile + random.nextInt(localNumFiles);
+                long size = fileSizes[fileIdx];
+                long maxBlocks = size / bufferSize;
+                long blockIndex = (long) random.nextInt((int) Math.min(Integer.MAX_VALUE, maxBlocks));
+                indices[i] = fileIdx;
+                offsets[i] = blockIndex * bufferSize;
+            }
         }
+
+        return new TaskPool(indices, offsets);
+    }
+
+    private void generateTasks() {
+        TaskPool defaultPool = generateThreadTasks(0, 1, taskCount);
+        System.arraycopy(defaultPool.fileIndices(), 0, this.taskFileIndices, 0, taskCount);
+        System.arraycopy(defaultPool.offsets(), 0, this.taskOffsets, 0, taskCount);
     }
 
     public int getTaskCount() {
