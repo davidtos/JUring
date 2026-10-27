@@ -111,7 +111,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     static final boolean COUNT_ENTERS = Boolean.getBoolean("juring.countEnters");
 
     private final Arena arena;
-    private int enterCount;
+    private final java.util.concurrent.atomic.AtomicInteger enterCount = new java.util.concurrent.atomic.AtomicInteger();
     private final IovecBlockPool iovecBlockPool;
     private final MemorySegment ring;
     private final MemorySegment cqePtr;
@@ -534,7 +534,7 @@ public final class IoUringDispatcher implements AutoCloseable {
         if (needEnter) {
             while (true) {
                 if (COUNT_ENTERS) {
-                    enterCount++;
+                    enterCount.incrementAndGet();
                 }
                 long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
@@ -569,7 +569,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             fallbackOrReRegisterRingFd();
         }
         if (COUNT_ENTERS) {
-            enterCount++;
+            enterCount.incrementAndGet();
         }
         long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
         if (res < 0) {
@@ -626,7 +626,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (COUNT_ENTERS) {
-                enterCount++;
+                enterCount.incrementAndGet();
             }
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
@@ -666,7 +666,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (COUNT_ENTERS) {
-                enterCount++;
+                enterCount.incrementAndGet();
             }
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
@@ -734,7 +734,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (COUNT_ENTERS) {
-                enterCount++;
+                enterCount.incrementAndGet();
             }
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
@@ -755,9 +755,7 @@ public final class IoUringDispatcher implements AutoCloseable {
     }
 
     int takeEnterCount() {
-        int c = enterCount;
-        enterCount = 0;
-        return c;
+        return enterCount.getAndSet(0);
     }
 
     int queueInit(int queueDepth, int flags) {
@@ -1042,14 +1040,26 @@ public final class IoUringDispatcher implements AutoCloseable {
         return (int) res;
     }
 
-    MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
+    LibCDispatcher.IovecStructure allocateAndRegisterBuffers(int bufferSize, int nrIovecs) {
         var iovecStructure = libCDispatcher.allocateIovec(arena, bufferSize, nrIovecs);
         int ret = registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
         if (ret < 0) {
             throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
         }
         setRegisteredBuffers(iovecStructure.buffers());
-        return this.registeredBuffers;
+        return iovecStructure;
+    }
+
+    void registerExistingIovecStructure(LibCDispatcher.IovecStructure iovecStructure, int nrIovecs) {
+        int ret = registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
+        if (ret < 0) {
+            throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
+        }
+        setRegisteredBuffers(iovecStructure.buffers());
+    }
+
+    MemorySegment[] registerBuffers(int bufferSize, int nrIovecs) {
+        return allocateAndRegisterBuffers(bufferSize, nrIovecs).buffers();
     }
 
     int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
@@ -1256,7 +1266,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (COUNT_ENTERS) {
-                enterCount++;
+                enterCount.incrementAndGet();
             }
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();
@@ -1315,7 +1325,7 @@ public final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (COUNT_ENTERS) {
-                enterCount++;
+                enterCount.incrementAndGet();
             }
             if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
                 fallbackOrReRegisterRingFd();

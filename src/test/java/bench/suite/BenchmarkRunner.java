@@ -7,6 +7,7 @@ import bench.suite.direct.DirectLatencyBenchmark;
 import bench.suite.direct.DirectReadBenchmark;
 import bench.suite.direct.DirectWriteBenchmark;
 import bench.suite.direct.MultiThreadScalingBenchmark;
+import bench.suite.direct.VirtualThreadBenchmark;
 import org.openjdk.jmh.profile.AsyncProfiler;
 import org.openjdk.jmh.profile.GCProfiler;
 import org.openjdk.jmh.results.RunResult;
@@ -41,6 +42,7 @@ public class BenchmarkRunner {
         boolean directOnly = false;
         boolean bufferedOnly = false;
         boolean latencyOnly = false;
+        boolean virtualOnly = false;
         boolean threadsScaling = false;
         boolean attachGc = false;
         boolean attachAsync = false;
@@ -97,6 +99,7 @@ public class BenchmarkRunner {
                 case "--direct" -> directOnly = true;
                 case "--buffered" -> bufferedOnly = true;
                 case "--latency" -> latencyOnly = true;
+                case "--virtual", "--virtual-threads" -> virtualOnly = true;
                 case "--threads-scaling" -> threadsScaling = true;
                 case "--gc" -> attachGc = true;
                 case "--async" -> attachAsync = true;
@@ -217,6 +220,8 @@ public class BenchmarkRunner {
                 includes.add(BufferedWriteBenchmark.class.getSimpleName());
             } else if (latencyOnly) {
                 includes.add(DirectLatencyBenchmark.class.getSimpleName());
+            } else if (virtualOnly) {
+                includes.add(VirtualThreadBenchmark.class.getSimpleName());
             } else {
                 includes.add(DirectReadBenchmark.class.getSimpleName());
                 includes.add(DirectWriteBenchmark.class.getSimpleName());
@@ -523,6 +528,7 @@ public class BenchmarkRunner {
         System.out.println("  --direct            Run only NVMe Direct I/O (O_DIRECT) benchmarks");
         System.out.println("  --buffered          Run only Buffered / Page Cache benchmarks");
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
+        System.out.println("  --virtual           Run Project Loom Virtual Threads scaling benchmark (50..1000 VTs)");
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");

@@ -150,6 +150,15 @@ public class Result implements AutoCloseable {
     }
 
     /**
+     * Decodes the transferred bytes as a UTF-8 string (alias for {@link #getString()}).
+     *
+     * @return decoded string
+     */
+    public String asString() {
+        return getString(StandardCharsets.UTF_8);
+    }
+
+    /**
      * Decodes the transferred bytes using the specified charset.
      *
      * @param charset character set for decoding

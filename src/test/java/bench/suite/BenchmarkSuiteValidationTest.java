@@ -1,8 +1,12 @@
 package bench.suite;
 
+import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.PreflightCheck;
+import bench.suite.common.StorageAuxCounters;
+import bench.suite.direct.VirtualThreadBenchmark;
+import org.openjdk.jmh.infra.Blackhole;
 import com.davidvlijmincx.lio.api.*;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -298,4 +302,112 @@ class BenchmarkSuiteValidationTest {
         assertTrue(report.isSuccess(), "Preflight checks must pass on Linux testbed");
         assertThat(report.getInfo()).isNotEmpty();
     }
+
+    @Test
+    @DisplayName("Virtual Thread Integrity: 100 concurrent virtual threads read with JUringBlocking and FileChannel")
+    void testVirtualThreadJUringBlockingVsFileChannelValidation() throws Exception {
+        DatasetManager dm = new DatasetManager(DatasetManager.WorkloadType.READ, DatasetManager.FileDistribution.MULTI_FILE);
+        int vts = 100;
+        int tasksPerVt = 5;
+        int totalTasks = vts * tasksPerVt;
+
+        FileDescriptor[] fds = dm.openFileDescriptors(LinuxOpenOptions.READ);
+        FileChannel[] channels = dm.openFileChannels(false);
+
+        try (JUringBlocking blocking = new JUringBlocking(256, IORING_SETUP_SINGLE_ISSUER)) {
+            blocking.registerFiles(fds);
+
+            try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+                List<Future<Boolean>> futures = new ArrayList<>();
+
+                for (int t = 0; t < vts; t++) {
+                    final int vtId = t;
+                    futures.add(executor.submit(() -> {
+                        ByteBuffer fcBuf = ByteBuffer.allocateDirect(4096);
+                        ByteBuffer juBuf = ByteBuffer.allocateDirect(4096);
+                        MemorySegment juSeg = MemorySegment.ofBuffer(juBuf);
+
+                        for (int k = 0; k < tasksPerVt; k++) {
+                            int taskIdx = (vtId * tasksPerVt + k) % dm.getTaskCount();
+                            int fileIdx = dm.getTaskFileIndices()[taskIdx];
+                            long offset = dm.getTaskOffsets()[taskIdx];
+
+                            // Read via FileChannel
+                            fcBuf.clear();
+                            int fcBytes = channels[fileIdx].read(fcBuf, offset);
+                            assertEquals(4096, fcBytes);
+
+                            // Read via JUringBlocking (registered file)
+                            long juBytes = blocking.read(fileIdx, juSeg, offset);
+                            assertEquals(4096L, juBytes);
+
+                            // Bit-accurate comparison
+                            byte[] fcArr = new byte[4096];
+                            byte[] juArr = new byte[4096];
+                            fcBuf.flip();
+                            fcBuf.get(fcArr);
+                            MemorySegment.copy(juSeg, 0L, MemorySegment.ofArray(juArr), 0L, 4096);
+                            assertArrayEquals(fcArr, juArr);
+                        }
+                        return true;
+                    }));
+                }
+
+                for (Future<Boolean> f : futures) {
+                    assertTrue(f.get(10, TimeUnit.SECONDS));
+                }
+            }
+        } finally {
+            DatasetManager.closeFileDescriptors(fds);
+            DatasetManager.closeChannels(channels);
+        }
+    }
+
+    @Test
+    @DisplayName("VirtualThreadBenchmark Pipeline Execution: State lifecycle and benchmark methods execute cleanly")
+    void testVirtualThreadBenchmarkExecution() throws Exception {
+        VirtualThreadBenchmark bench = new VirtualThreadBenchmark();
+        VirtualThreadBenchmark.BenchmarkState bState = new VirtualThreadBenchmark.BenchmarkState();
+        bState.distribution = "MULTI_FILE";
+        bState.setup();
+
+        VirtualThreadBenchmark.ThreadState tState = new VirtualThreadBenchmark.ThreadState();
+        tState.virtualThreads = 100;
+        tState.setup(bState);
+
+        try {
+            StorageAuxCounters storage = new StorageAuxCounters();
+            CpuAuxCounters cpu = new CpuAuxCounters();
+
+            bench.juringVirtualThreadRead(tState, bState, storage, cpu, null);
+            bench.fileChannelVirtualThreadRead(tState, bState, storage, cpu, null);
+            assertTrue(storage.bytesProcessed > 0, "Storage counter should have recorded read bytes");
+        } finally {
+            tState.tearDown();
+        }
+    }
+
+    @Test
+    @DisplayName("Ergonomics & Resilience: Result.asString() and JUringBlocking non-positive poller clamping")
+    void testResultAsStringAndPollerClamping() {
+        try (JUring ring = new JUring(8);
+             FileDescriptor fd = new FileDescriptor(java.nio.file.Path.of("src/test/resources/read_file"), LinuxOpenOptions.READ)) {
+            ring.prepareRead(fd, 13, 0);
+            ring.submit();
+            try (Result res = ring.waitForResult()) {
+                assertEquals("Hello, World!", res.asString());
+                assertEquals(res.getString(), res.asString());
+            }
+        }
+
+        try (JUringBlocking jbZero = new JUringBlocking(16, 0);
+             JUringBlocking jbNeg = new JUringBlocking(16, -2);
+             FileDescriptor fd = new FileDescriptor(java.nio.file.Path.of("src/test/resources/read_file"), LinuxOpenOptions.READ);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment buf = arena.allocate(14);
+            assertEquals(13L, jbZero.read(fd, buf, 14, 0));
+            assertEquals(13L, jbNeg.read(fd, buf, 14, 0));
+        }
+    }
 }
+
