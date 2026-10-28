@@ -7,6 +7,7 @@
 # Usage:
 #   ./bench.sh --pin 4 --include 'DirectReadBenchmark.juringDirectRead' --param qd=64 --decision --gc
 #   ./bench.sh --pin 0-7 --threads-scaling --include 'MultiThreadScalingBenchmark.juringDirectRead'
+#   ./bench.sh --fio
 set -euo pipefail
 cd "$(dirname "$0")"
 

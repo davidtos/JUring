@@ -5,6 +5,7 @@ import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.PreflightCheck;
 import bench.suite.common.StorageAuxCounters;
+import bench.suite.direct.DirectLatencyBenchmark;
 import bench.suite.direct.VirtualThreadBenchmark;
 import org.openjdk.jmh.infra.Blackhole;
 import com.davidvlijmincx.lio.api.*;
@@ -408,6 +409,164 @@ class BenchmarkSuiteValidationTest {
             assertEquals(13L, jbZero.read(fd, buf, 14, 0));
             assertEquals(13L, jbNeg.read(fd, buf, 14, 0));
         }
+    }
+
+    @Test
+    @DisplayName("Verify FioPrng uniform bounds, sector alignment, and 10GB address space coverage")
+    void testFioPrngUniformBoundsAndSectorAlignment() {
+        final long maxBlocks = 2_621_440L; // 10 GB / 4KB
+        final int blockSize = 4096;
+        final long maxFileSize = maxBlocks * blockSize;
+
+        DatasetManager.FioPrng prng = new DatasetManager.FioPrng(42424242L);
+        long minBlock = Long.MAX_VALUE;
+        long maxBlock = Long.MIN_VALUE;
+
+        for (int i = 0; i < 100_000; i++) {
+            long offset = prng.nextOffset(maxBlocks, blockSize);
+            long blockIdx = offset / blockSize;
+
+            assertTrue(blockIdx >= 0 && blockIdx < maxBlocks,
+                    "Block index must be in [0, " + maxBlocks + "): got " + blockIdx);
+            assertEquals(blockIdx * blockSize, offset,
+                    "Offset must equal blockIdx * blockSize");
+            assertTrue(IoHelper.checkOffsetAlignment(offset, blockSize),
+                    "Offset must be 4KB sector aligned: " + offset);
+            assertTrue(offset + blockSize <= maxFileSize,
+                    "Offset + 4KB must not exceed 10GB file size: " + (offset + blockSize));
+
+            if (blockIdx < minBlock) minBlock = blockIdx;
+            if (blockIdx > maxBlock) maxBlock = blockIdx;
+        }
+
+        // Verify broad coverage across the entire 10GB range
+        assertTrue(minBlock < 100_000L, "PRNG should reach the start of the 10GB file");
+        assertTrue(maxBlock > 2_500_000L, "PRNG should reach the end of the 10GB file");
+    }
+
+    @Test
+    @DisplayName("Verify FioLatencyHistogram percentile precision, stddev, and formatting")
+    void testFioLatencyHistogramAccuracyAndPercentiles() {
+        DatasetManager.FioLatencyHistogram hist = new DatasetManager.FioLatencyHistogram();
+        assertEquals(0, hist.getCount());
+        assertEquals(0, hist.getMinNs());
+        assertEquals(0, hist.getMaxNs());
+
+        // Feed uniform values from 100,000 ns (100 µs) to 500,000 ns (500 µs) in steps of 1,000 ns (401 samples)
+        for (long ns = 100_000L; ns <= 500_000L; ns += 1_000L) {
+            hist.record(ns);
+        }
+
+        assertEquals(401, hist.getCount());
+        assertEquals(100_000L, hist.getMinNs());
+        assertEquals(500_000L, hist.getMaxNs());
+        assertEquals(100.0, hist.getMinMicros(), 0.001);
+        assertEquals(500.0, hist.getMaxMicros(), 0.001);
+
+        // Expected mean = 300,000 ns (300.0 µs)
+        assertEquals(300.0, hist.getMeanMicros(), 0.01);
+
+        // Expected p50 ~= 300 µs (within 1.5% bin resolution)
+        double p50 = hist.getPercentileMicros(50.0);
+        assertTrue(Math.abs(p50 - 300.0) < 6.0, "p50 should be ~300 µs, got: " + p50);
+
+        // Expected p99 ~= 496 µs
+        double p99 = hist.getPercentileMicros(99.0);
+        assertTrue(p99 >= 480.0 && p99 <= 505.0, "p99 should be ~496 µs, got: " + p99);
+
+        // Verify summary and percentile string formatting
+        String summary = hist.formatFioSummary("clat");
+        assertNotNull(summary);
+        assertTrue(summary.contains("clat (usec):"));
+        assertTrue(summary.contains("avg=300.00"));
+
+        String pctReport = hist.formatFioPercentiles();
+        assertNotNull(pctReport);
+        assertTrue(pctReport.contains("50.00th="));
+        assertTrue(pctReport.contains("99.00th="));
+    }
+
+    @Test
+    @DisplayName("Verify FioComparisonBenchmark pipeline execution with telemetry ON and OFF")
+    void testFioComparisonBenchmarkPipelineExecution() throws Exception {
+        Path benchFile = DatasetManager.resolveSingleBenchFile();
+        assertNotNull(benchFile, "Single 10GB bench file must resolve");
+        assertTrue(Files.exists(benchFile), "Single 10GB bench file must exist");
+
+        DirectLatencyBenchmark.FioComparisonBenchmark.FioBenchmarkState bState =
+                new DirectLatencyBenchmark.FioComparisonBenchmark.FioBenchmarkState();
+        bState.setup();
+        assertEquals(Files.size(benchFile) / DirectLatencyBenchmark.FioComparisonBenchmark.BLOCK_SIZE,
+                bState.maxBlocks, "File block count must match size / BLOCK_SIZE");
+
+        DirectLatencyBenchmark.FioComparisonBenchmark.FioThreadState tState =
+                new DirectLatencyBenchmark.FioComparisonBenchmark.FioThreadState();
+        tState.qd = 16;
+        tState.telemetry = true;
+
+        try {
+            tState.setup(bState, null);
+            StorageAuxCounters storage = new StorageAuxCounters();
+            CpuAuxCounters cpu = new CpuAuxCounters();
+            DirectLatencyBenchmark.FioComparisonBenchmark bench =
+                    new DirectLatencyBenchmark.FioComparisonBenchmark();
+
+            // Run direct read with telemetry ON
+            bench.juringDirectRead(tState, bState, storage, cpu, null);
+            assertTrue(tState.reapedCount > 0, "Read operations must be reaped");
+            assertTrue(tState.clatHistogram.getCount() > 0, "clat histogram must have recorded samples");
+            assertTrue(tState.slatHistogram.getCount() > 0, "slat histogram must have recorded samples");
+            assertTrue(tState.clatHistogram.getMeanMicros() > 0.0, "clat mean must be positive");
+
+            // Run direct write with telemetry ON
+            bench.juringDirectWrite(tState, bState, storage, cpu, null);
+            assertTrue(tState.reapedCount > 0, "Write operations must be reaped");
+
+            // Run FileChannel reads and writes
+            bench.fileChannelDirectRead(tState, bState, storage, cpu, null);
+            bench.fileChannelDirectWrite(tState, bState, storage, cpu, null);
+        } catch (Exception e) {
+            fail("FioComparisonBenchmark execution failed: " + e.getMessage(), e);
+        } finally {
+            tState.tearDown();
+        }
+    }
+
+    @Test
+    @DisplayName("Verify FioComparisonBenchmark parseFioJson extracts exact metrics from JSON")
+    void testParseFioJsonAccuracy() {
+        String sampleJson = """
+        {
+          "jobs" : [
+            {
+              "jobname" : "fio_bench",
+              "read" : {
+                "io_bytes" : 419430400,
+                "bw_bytes" : 139810133,
+                "iops" : 34133.333333,
+                "slat_ns" : { "mean" : 2540.50 },
+                "clat_ns" : {
+                  "mean" : 185200.75,
+                  "percentile" : {
+                    "50.000000" : 182000,
+                    "99.000000" : 325000,
+                    "99.900000" : 410000
+                  }
+                }
+              }
+            }
+          ]
+        }
+        """;
+        var res = DirectLatencyBenchmark.FioComparisonBenchmark.parseFioJson(sampleJson, "read");
+        assertNotNull(res);
+        assertEquals(34133L, res.iops());
+        assertEquals(139810133.0 / (1024.0 * 1024.0), res.bwMBs(), 0.01);
+        assertEquals(2.5405, res.slatAvgUs(), 0.001);
+        assertEquals(185.20075, res.clatAvgUs(), 0.001);
+        assertEquals(182.0, res.clatP50Us(), 0.001);
+        assertEquals(325.0, res.clatP99Us(), 0.001);
+        assertEquals(410.0, res.clatP99_9Us(), 0.001);
     }
 }
 

@@ -43,6 +43,7 @@ public class BenchmarkRunner {
         boolean bufferedOnly = false;
         boolean latencyOnly = false;
         boolean virtualOnly = false;
+        boolean fioOnly = false;
         boolean threadsScaling = false;
         boolean attachGc = false;
         boolean attachAsync = false;
@@ -88,6 +89,20 @@ public class BenchmarkRunner {
                 bench.suite.direct.DirectReadVisualVerificationTest.main(forwarded.toArray(new String[0]));
                 return;
             }
+            if ("--fio-live".equals(args[i].trim()) || "--compare-fio".equals(args[i].trim())) {
+                List<String> forwarded = new ArrayList<>();
+                for (int j = 0; j < args.length; j++) {
+                    if (j != i) {
+                        forwarded.add(args[j].trim());
+                    }
+                }
+                try {
+                    bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark.main(forwarded.toArray(new String[0]));
+                } catch (Exception e) {
+                    throw new RuntimeException("Fio live benchmark failed: " + e.getMessage(), e);
+                }
+                return;
+            }
         }
 
         for (int i = 0; i < args.length; i++) {
@@ -100,6 +115,7 @@ public class BenchmarkRunner {
                 case "--buffered" -> bufferedOnly = true;
                 case "--latency" -> latencyOnly = true;
                 case "--virtual", "--virtual-threads" -> virtualOnly = true;
+                case "--fio", "--fio-compare", "--fio-workload" -> fioOnly = true;
                 case "--threads-scaling" -> threadsScaling = true;
                 case "--gc" -> attachGc = true;
                 case "--async" -> attachAsync = true;
@@ -212,14 +228,16 @@ public class BenchmarkRunner {
             }
         } else {
             List<String> includes = new ArrayList<>();
-            if (directOnly) {
+            if (fioOnly) {
+                includes.add(".*FioComparisonBenchmark.*");
+            } else if (directOnly) {
                 includes.add(DirectReadBenchmark.class.getSimpleName());
                 includes.add(DirectWriteBenchmark.class.getSimpleName());
             } else if (bufferedOnly) {
                 includes.add(BufferedReadBenchmark.class.getSimpleName());
                 includes.add(BufferedWriteBenchmark.class.getSimpleName());
             } else if (latencyOnly) {
-                includes.add(DirectLatencyBenchmark.class.getSimpleName());
+                includes.add(".*DirectLatencyBenchmark\\.(?!Fio).*");
             } else if (virtualOnly) {
                 includes.add(VirtualThreadBenchmark.class.getSimpleName());
             } else {
@@ -529,6 +547,8 @@ public class BenchmarkRunner {
         System.out.println("  --buffered          Run only Buffered / Page Cache benchmarks");
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
         System.out.println("  --virtual           Run Project Loom Virtual Threads scaling benchmark (50..1000 VTs)");
+        System.out.println("  --fio               Run fio workload parity comparison benchmark (O_DIRECT, 10GB file, 4KB blocks, full latency telemetry)");
+        System.out.println("  --fio-live          Run direct side-by-side comparison against native C fio (randread/randwrite)");
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");

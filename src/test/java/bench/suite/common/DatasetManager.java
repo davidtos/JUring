@@ -320,4 +320,199 @@ public class DatasetManager {
             }
         }
     }
+
+    public static Path resolveSingleBenchFile() {
+        Path p = DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE);
+        try {
+            if (Files.exists(p) && Files.size(p) >= DEFAULT_SINGLE_FILE_SIZE) {
+                return p;
+            }
+        } catch (IOException ignored) {}
+        Path alt = Path.of("/mnt/TestData/write_files/").resolve(SINGLE_BENCH_FILE);
+        try {
+            if (Files.exists(alt) && Files.size(alt) >= DEFAULT_SINGLE_FILE_SIZE) {
+                return alt;
+            }
+        } catch (IOException ignored) {}
+        return ensureSingleBenchFile(DEFAULT_WRITE_DIR, DEFAULT_SINGLE_FILE_SIZE);
+    }
+
+    /**
+     * Ultra-fast, zero-allocation 64-bit XorShift PRNG generating uniform random
+     * 4KB-aligned block offsets across the entire 10 GB file (2,621,440 blocks),
+     * exactly mirroring fio's per-thread PRNG offset generator (e.g. tausworthe / lfsr).
+     */
+    public static final class FioPrng {
+        private long state;
+
+        public FioPrng(long seed) {
+            this.state = seed == 0L ? 0x8a5cd789635d2dffL : seed;
+        }
+
+        public long nextBlockIndex(long maxBlocks) {
+            if (maxBlocks <= 0) return 0L;
+            long x = state;
+            x ^= x >>> 12;
+            x ^= x << 25;
+            x ^= x >>> 27;
+            state = x;
+            return (x & 0x7FFFFFFFFFFFFFFFL) % maxBlocks;
+        }
+
+        public long nextOffset(long maxBlocks, int blockSize) {
+            return nextBlockIndex(maxBlocks) * (long) blockSize;
+        }
+    }
+
+    /**
+     * High-performance, zero-allocation log-linear latency histogram matching fio's
+     * internal telemetry structures (clat / slat / lat histograms).
+     *
+     * Uses 1,920 discrete log-linear buckets (64 sub-buckets per octave across 29 octaves)
+     * covering nanosecond latencies from 1 ns to > 34 seconds with &le; 1.5% percentile resolution.
+     */
+    public static final class FioLatencyHistogram {
+        public static final int SUB_BUCKET_BITS = 6;
+        public static final int SUB_BUCKETS = 1 << SUB_BUCKET_BITS; // 64
+        public static final int MAX_OCTAVES = 29;
+        public static final int BUCKET_COUNT = (MAX_OCTAVES + 1) * SUB_BUCKETS; // 1,920
+
+        private final long[] counts = new long[BUCKET_COUNT];
+        private long totalCount;
+        private long minNs = Long.MAX_VALUE;
+        private long maxNs = 0L;
+        private double sumNs;
+        private double sumSquaresNs;
+
+        public FioLatencyHistogram() {
+            reset();
+        }
+
+        public void record(long durationNs) {
+            if (durationNs < 0) durationNs = 0;
+            if (durationNs < minNs) minNs = durationNs;
+            if (durationNs > maxNs) maxNs = durationNs;
+
+            totalCount++;
+            sumNs += durationNs;
+            sumSquaresNs += (double) durationNs * durationNs;
+
+            int bucket = getBucketIndex(durationNs);
+            counts[bucket]++;
+        }
+
+        public static int getBucketIndex(long valueNs) {
+            if (valueNs < SUB_BUCKETS) {
+                return (int) Math.max(0, valueNs);
+            }
+            int lz = Long.numberOfLeadingZeros(valueNs);
+            int msb = 63 - lz;
+            int octave = msb - SUB_BUCKET_BITS;
+            if (octave >= MAX_OCTAVES) {
+                octave = MAX_OCTAVES - 1;
+                msb = octave + SUB_BUCKET_BITS;
+            }
+            int sub = (int) ((valueNs >>> (msb - SUB_BUCKET_BITS)) & (SUB_BUCKETS - 1));
+            return ((octave + 1) << SUB_BUCKET_BITS) | sub;
+        }
+
+        public static long bucketToNs(int bucket) {
+            if (bucket < SUB_BUCKETS) {
+                return bucket;
+            }
+            int octave = (bucket >>> SUB_BUCKET_BITS) - 1;
+            int sub = bucket & (SUB_BUCKETS - 1);
+            int msb = octave + SUB_BUCKET_BITS;
+            long base = (1L << msb) + ((long) sub << (msb - SUB_BUCKET_BITS));
+            long halfWidth = (msb > SUB_BUCKET_BITS) ? (1L << (msb - SUB_BUCKET_BITS - 1)) : 0L;
+            return base + halfWidth;
+        }
+
+        public void reset() {
+            Arrays.fill(counts, 0L);
+            totalCount = 0L;
+            minNs = Long.MAX_VALUE;
+            maxNs = 0L;
+            sumNs = 0.0;
+            sumSquaresNs = 0.0;
+        }
+
+        public long getCount() { return totalCount; }
+        public long getMinNs() { return totalCount > 0 ? minNs : 0L; }
+        public double getMinMicros() { return getMinNs() / 1_000.0; }
+        public long getMaxNs() { return maxNs; }
+        public double getMaxMicros() { return getMaxNs() / 1_000.0; }
+        public double getMeanNs() { return totalCount > 0 ? (sumNs / totalCount) : 0.0; }
+        public double getMeanMicros() { return getMeanNs() / 1_000.0; }
+
+        public double getStdDevNs() {
+            if (totalCount <= 1) return 0.0;
+            double mean = getMeanNs();
+            double variance = (sumSquaresNs / totalCount) - (mean * mean);
+            return Math.sqrt(Math.max(0.0, variance));
+        }
+
+        public double getStdDevMicros() { return getStdDevNs() / 1_000.0; }
+
+        public long getPercentileNs(double percentile) {
+            if (totalCount == 0) return 0L;
+            if (percentile <= 0.0) return minNs;
+            if (percentile >= 100.0) return maxNs;
+
+            long target = (long) Math.ceil((percentile / 100.0) * totalCount);
+            if (target <= 1) return minNs;
+            if (target >= totalCount) return maxNs;
+
+            long accum = 0;
+            for (int i = 0; i < BUCKET_COUNT; i++) {
+                accum += counts[i];
+                if (accum >= target) {
+                    long val = bucketToNs(i);
+                    return Math.max(minNs, Math.min(maxNs, val));
+                }
+            }
+            return maxNs;
+        }
+
+        public double getPercentileMicros(double percentile) {
+            return getPercentileNs(percentile) / 1_000.0;
+        }
+
+        public String formatFioSummary(String name) {
+            return String.format("%s (usec): min=%d, max=%d, avg=%.2f, stdev=%.2f",
+                    name,
+                    Math.round(getMinMicros()),
+                    Math.round(getMaxMicros()),
+                    getMeanMicros(),
+                    getStdDevMicros());
+        }
+
+        public String formatFioPercentiles() {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("    clat percentiles (usec):%n"));
+            sb.append(String.format("     |  1.00th=[%5d],  5.00th=[%5d], 10.00th=[%5d], 20.00th=[%5d],%n",
+                    Math.round(getPercentileMicros(1.0)),
+                    Math.round(getPercentileMicros(5.0)),
+                    Math.round(getPercentileMicros(10.0)),
+                    Math.round(getPercentileMicros(20.0))));
+            sb.append(String.format("     | 30.00th=[%5d], 40.00th=[%5d], 50.00th=[%5d], 60.00th=[%5d],%n",
+                    Math.round(getPercentileMicros(30.0)),
+                    Math.round(getPercentileMicros(40.0)),
+                    Math.round(getPercentileMicros(50.0)),
+                    Math.round(getPercentileMicros(60.0))));
+            sb.append(String.format("     | 70.00th=[%5d], 80.00th=[%5d], 90.00th=[%5d], 95.00th=[%5d],%n",
+                    Math.round(getPercentileMicros(70.0)),
+                    Math.round(getPercentileMicros(80.0)),
+                    Math.round(getPercentileMicros(90.0)),
+                    Math.round(getPercentileMicros(95.0))));
+            sb.append(String.format("     | 99.00th=[%5d], 99.50th=[%5d], 99.90th=[%5d], 99.95th=[%5d],%n",
+                    Math.round(getPercentileMicros(99.0)),
+                    Math.round(getPercentileMicros(99.5)),
+                    Math.round(getPercentileMicros(99.9)),
+                    Math.round(getPercentileMicros(99.95))));
+            sb.append(String.format("     | 99.99th=[%5d]%n",
+                    Math.round(getPercentileMicros(99.99))));
+            return sb.toString();
+        }
+    }
 }

@@ -12,7 +12,7 @@ In standard Java, file I/O operations on `FileChannel` perform synchronous kerne
 
 I built **JUring** to solve this problem.
 
-JUring is a pure-Java library that provides direct native bindings to Linux's high-performance **`io_uring`** asynchronous I/O subsystem using Java's **Foreign Function & Memory (FFM) API** (JEP 454). No JNI code, no external `.so` dependencies (not even `liburing`), and zero heap allocations on the hot path (`0.000 B/op`). It turns blocking file I/O into non-blocking, yielding operations for Virtual Threads, and delivers asynchronous direct NVMe throughput that beats tuned native C `fio` while outperforming standard Java `FileChannel` by up to **31x**.
+JUring is a pure-Java library that provides direct native bindings to Linux's high-performance **`io_uring`** asynchronous I/O subsystem using Java's **Foreign Function & Memory (FFM) API** (JEP 454). No JNI code, no external `.so` dependencies (not even `liburing`), and zero heap allocations on the hot path (`0.000 B/op`). It turns blocking file I/O into non-blocking, yielding operations for Virtual Threads, delivers verified parity and competitive advantages against native C `fio` (`ioengine=io_uring`), and outperforms standard Java `FileChannel` by up to **31x**.
 
 ---
 
@@ -30,6 +30,7 @@ JUring is a pure-Java library that provides direct native bindings to Linux's hi
   - [6. Buffered Page-Cache I/O (DRAM Resident)](#6-buffered-page-cache-io-dram-resident)
   - [7. Physical NAND Flash Cell Latency (QD=1)](#7-physical-nand-flash-cell-latency-qd1)
   - [8. Pure Project Panama (FFM API) Downcall Overhead](#8-pure-project-panama-ffm-api-downcall-overhead)
+  - [9. Head-to-Head Parity vs. Native C fio (Telemetry & Latency Audit)](#9-head-to-head-parity-vs-native-c-fio-telemetry--latency-audit)
 - [Code Examples: Using JUring in Your Application](#code-examples-using-juring-in-your-application)
   - [1. High-Throughput Direct Read (Registered Files & Fixed Buffers)](#1-high-throughput-direct-read-registered-files--fixed-buffers)
   - [2. High-Throughput Direct Write](#2-high-throughput-direct-write)
@@ -67,11 +68,18 @@ By integrating Linux **`io_uring`** via **Project Panama (FFM API)**, JUring fix
 
 Here is what the empirical measurements on physical PCIe Gen4 NVMe flash storage show:
 
-* **Faster than Tuned Native C `fio`:** JUring beats tuned native C `fio` (v3.40) on direct NVMe I/O across multi-thread scaling tiers:
-  * **Direct Read (4 Threads):** **718,277 ops/s (2,806 MB/s)** vs. tuned `fio` **627,346 IOPS** (**+14.5% faster**).
-  * **Direct Read (8 Threads):** **716,658 ops/s (2,799 MB/s)** vs. tuned `fio` **635,000 IOPS** (**+12.9% faster**).
-  * **Direct Write (16 Threads):** **639,026 ops/s (2,496 MB/s)** vs. tuned `fio` **528,900 IOPS** (**+20.8% faster**, beating 16-thread FileChannel 578k ops/s).
-* **Multi-File Scalability (`IOSQE_FIXED_FILE`):** Across 2,211 discrete pre-allocated files, JUring sustains **473,970 ops/s read (1,851 MB/s)** and **404,329 ops/s write (1,579 MB/s)**. Native C `fio` completely crashed under this workload with `EMFILE (Too many open files)`.
+* **Verified Parity & Hardware Bus Saturation vs. Native C `fio` (`ioengine=io_uring`):**
+  * **Single-Thread Parity at QD=64:** JUring delivers **~352k–366k IOPS** single-threaded with full latency telemetry, within **2.6%** of native C fio (~361k IOPS). With telemetry off (measuring pure engine speed), JUring reaches **385k ops/s (+8.7% over fio's 354k IOPS)**.
+  * **Completion Latency (`clat`) Parity:** JUring closely matches native C fio completion latency (`clat` avg **172.8 µs** vs fio **174.1 µs**, p50 at **168.0 µs** vs **172.0 µs**, and p99 at **329.7 µs** vs **331.2 µs**).
+  * **PCIe 4.0 x4 Bus Saturation:** Across multi-threaded scaling tiers (4–16 threads), both JUring and fio completely saturate the physical NVMe PCIe 4.0 x4 bus limit (~2.8 GB/s read, ~2.5 GB/s write) with zero JVM heap allocations (`0.000 B/op`).
+* **Transparent Accounting: Where Native C `fio` Holds the Edge:**
+  * **Submission Latency (`slat`):** Native C fio maintains lower submission latency (~**2.4 µs** vs JUring ~**8.7 µs**) due to direct C struct mutation on the stack compared to Java FFM method handle dispatch.
+  * **Unbatched QD=1 Round-Trip Latency:** On single, unbatched round trips, native C fio edges out JUring (~**60.0–62.7 µs** vs JUring ~**64.2 µs**) through zero-abstraction compiler inlining.
+  * **Buffered In-Memory Writes:** Standard synchronous POSIX `pwrite` is **~33% faster** than `io_uring` (514k vs 386k ops/s) for DRAM-resident writes, as immediate memory copying (`memcpy`) bypasses asynchronous ring coordination.
+* **JUring's Genuine Architectural Optimizations:**
+  * **`IORING_SETUP_DEFER_TASKRUN` + `COOP_TASKRUN`:** Keeps execution strictly single-issuer on the calling thread, eliminating kernel completion queue spinlocks and cross-core IPIs.
+  * **`IORING_REGISTER_RING_FDS`:** Registers the ring file descriptor with the kernel (`IORING_ENTER_REGISTERED_RING`), eliminating POSIX file table lookups and atomic `fget()`/`fput()` refcounting on every enter syscall.
+  * **Registered File Handling (`io_uring_register_files`):** Bypasses shell default `ulimit -n` (1024) bottlenecks to sustain **473,970 ops/s read (1,851 MB/s)** and **404,329 ops/s write (1,579 MB/s)** across 2,211 discrete files where native C fio crashes with `EMFILE (Too many open files)`.
 * **Single-Thread Dominance over `FileChannel`:** A single JUring thread delivers **324,606 read ops/s** and **441,522 write ops/s**, easily outperforming **8–16 concurrent platform threads** of standard Java `FileChannel`.
 * **Microscopic User CPU Cost:** Only **11.9 – 77.6 ns** of user CPU per op. HotSpot's C2 JIT compiles the ring submission and completion loops into zero-allocation (`0.000 B/op`) primitive `VarHandle` memory operations.
 * **Fused System Call Amortization:** By combining SQE submission and completion waiting into single `io_uring_enter` system calls, syscall frequency drops to **0.031 – 0.363 enters/op** (over 3 to 32 operations per syscall).
@@ -136,7 +144,7 @@ Default fio: ██████████████████████�
 FileChannel: █                                 59,209 ops/s (  231 MB/s)
 ```
 
-At 4 threads, JUring hits **2.81 GB/s (718,277 ops/s)**, completely saturating the PCIe 4.0 read lanes and outperforming tuned C `fio` by **+14.5%**.
+At 4–16 threads, both JUring and tuned native C `fio` saturate the physical NVMe PCIe 4.0 x4 bus limit (~2.8 GB/s read lanes), with JUring delivering **2.81 GB/s (718,277 ops/s)** at 4 threads with zero JVM heap allocations (`0.000 B/op`).
 
 ---
 
@@ -226,7 +234,7 @@ What happens when files are already cached in Linux host RAM (Page Cache)? Here 
 | Page Cache Write (4KB) | `FileChannel` | 513,734 ops/s | 2,007 MB/s | 1.0000 enters/op | Direct memory copy (`memcpy`) |
 
 > [!NOTE]
-> For page-cache resident writes, synchronous `FileChannel.write()` is slightly faster (514k vs 386k ops/s) because Linux's `pwrite` is an immediate in-memory copy into page buffers. In contrast, `io_uring` introduces SQE/CQE ring coordination overhead that truly pays off when I/O touches physical storage or operates under high concurrency.
+> For page-cache resident writes, synchronous POSIX `pwrite` via `FileChannel.write()` is **~33% faster** than asynchronous `io_uring` (513,734 vs 386,247 ops/s, 2,007 MB/s vs 1,509 MB/s). Linux's `pwrite` executes an immediate in-memory copy (`memcpy`) into host page buffers. In contrast, `io_uring` introduces SQE/CQE ring coordination, memory barrier synchronization, and completion polling overhead. Asynchronous `io_uring` delivers massive gains when I/O touches physical NVMe storage or operates under high concurrency, whereas synchronous `pwrite` retains the edge for DRAM writes.
 
 ---
 
@@ -248,6 +256,9 @@ To confirm we are genuinely measuring physical hardware and eliminate batch-smoo
 
 > [!NOTE]
 > If these reads were hitting the Linux Page Cache (RAM), latency would be **< 1.0 µs**. Measuring an 82.8 µs median round trip proves 100% genuine bus-master DMA transfers from physical BiCS4 3D TLC flash cells over the PCIe bus.
+> 
+> **Unbatched QD=1 Round-Trip Latency vs. Native C `fio`:**
+> When executing isolated, unbatched single operations at QD=1, native C `fio` holds a slight edge (**~60.0–62.7 µs** round trip vs. JUring **~64.2 µs** in direct execution). Native C benefits from zero foreign-function wrapper overhead and direct compiler struct registers on single isolated system calls.
 > 
 > **Why Fused Submission Matters:**
 > In unfused mode (`submit()` followed by `waitForResult()`), the thread issues two separate `io_uring_enter` syscalls: one to flush the SQ ring, and a second to block waiting on the CQ ring. In fused mode (`submitAndWait(1)`), JUring executes a single `io_uring_enter(to_submit=1, min_complete=1, flags=IORING_ENTER_GETEVENTS)` syscall matching native C `fio`. The completion is reaped directly from user-space memory during `waitForResult(state.reusableResult)` without an additional context switch.
@@ -280,6 +291,75 @@ methodHandleProxies_standard:       ████████ 8.44 ns/op [Interfa
 
 > [!TIP]
 > **Key Panama Takeaway:** Marking leaf foreign functions with `Linker.Option.critical(true)` allows HotSpot C2 to generate a direct native branch instruction without transitioning thread states or polling JVM safepoints. At **2.67 ns per downcall**, Java invokes native Linux kernel symbols faster than traditional JNI while preserving complete type safety. For the full deep-dive on these mechanics, see my blog post: [Critical Foreign Methods in Java Project Panama](https://davidvlijmincx.com/posts/critical-foreign-methods/).
+
+---
+
+### 9. Head-to-Head Parity vs. Native C fio (Telemetry & Latency Audit)
+
+To answer the fundamental question—*“Can pure Java really match or beat tuned native C fio?”*—we implemented an exact head-to-head benchmark harness comparing JUring directly against the storage industry standard, native C `fio` (v3.40, configured with `ioengine=io_uring`, `direct=1`, `bs=4k`, `fixedbufs=1`, `registerfiles=1`).
+
+Both engines ran on the identical physical hardware (AMD Ryzen 9 3950X, 1TB NVMe PCIe 4.0 SSD, ext4 filesystem on `/dev/nvme2n1p1`) against the same contiguous 10 GB pre-allocated direct I/O binary file (`single_file_bench.bin`):
+
+#### 1. Empirical Workload Comparison Matrix (Single Thread, QD=64, 4KB O_DIRECT)
+
+| Metric | Native C `fio` (Default Telemetry) | JUring (Matching Telemetry) | Parity / Delta | Native C `fio` (No Telemetry) | JUring (Raw / Telemetry OFF) | Delta |
+|---|---|---|---|---|---|---|
+| **Random Read Throughput** | 361,400 IOPS | **352,100 – 366,400 ops/s** | **Within 2.6% Parity** | 354,200 IOPS | **385,100 – 385,436 ops/s** | **+8.7% faster** |
+| **Random Read Bandwidth** | 1,411 MB/s | **1,375 – 1,431 MB/s** | Parity | 1,383 MB/s | **1,505 MB/s** | **+8.7% faster** |
+| **Completion Latency (`clat` avg)** | 174.1 µs | **172.8 µs** | **-0.7% (Matched)** | N/A | N/A | — |
+| **Completion Latency (`clat` p50)** | 172.0 µs | **168.0 µs** | **Matched** | N/A | N/A | — |
+| **Completion Latency (`clat` p99)** | 331.2 µs | **329.7 µs** | **Matched** | N/A | N/A | — |
+| **Submission Latency (`slat` avg)** | **2.4 µs** | 8.7 µs | *fio holds edge* | N/A | N/A | — |
+| **Multi-Thread Saturation (4–16T)** | **~2.8 GB/s** | **~2.8 GB/s** | **Equal (PCIe Gen4 limit)** | **~2.8 GB/s** | **~2.8 GB/s** | **Equal** |
+| **Heap Memory Allocation** | N/A | **0.000 B/op** | **Zero Allocation** | N/A | **0.000 B/op** | **Zero Allocation** |
+
+```
+Head-to-Head Single-Thread Throughput (QD=64, 4KB O_DIRECT):
+JUring (Telemetry OFF):   ████████████████████ 385,436 ops/s (+8.7% vs fio)
+Native C fio (Default):  ██████████████████   361,400 IOPS
+JUring (Telemetry ON):   ██████████████████   355,485 ops/s (-1.6% parity)
+Native C fio (No Telem): ██████████████████   354,200 IOPS
+```
+
+#### 2. Transparent Audit: Where Native C `fio` Holds the Edge
+
+Rigorous benchmarking requires complete honesty about where abstractions impose a cost:
+
+1. **Submission Latency (`slat` ~2.4 µs vs. ~8.7 µs):**
+   `fio`'s submission loop is written in bare C with zero intermediate abstractions. It mutates the ring's 64-byte SQE structs directly in CPU stack memory. In contrast, JUring coordinates submissions through Java's Foreign Function & Memory (FFM) API and uses `VarHandle` accessors to off-heap memory. While HotSpot C2 compiles the loop with zero allocations (`0.000 B/op`), foreign downcall preparation and timestamp recording introduce ~6 µs of additional submission latency.
+2. **Unbatched QD=1 Round-Trip Latency (fio ~60.0–62.7 µs vs. JUring ~64.2 µs):**
+   When executing isolated, unbatched single operations (`QD=1`), native C fio achieves ~60.0–62.7 µs round-trip latency versus JUring's ~64.2 µs. Native C benefits from direct compiler register inlining and zero runtime wrappers on individual system calls.
+3. **Buffered In-Memory Writes (POSIX `pwrite` is ~33% faster):**
+   When files reside in the host Linux Page Cache (DRAM), standard synchronous POSIX `pwrite` via `FileChannel` reaches **513,734 ops/s**, outperforming `io_uring`'s **386,247 ops/s** by **~33%**. For DRAM writes, the kernel performs an immediate synchronous `memcpy` directly into page cache pages; setting up asynchronous SQEs, issuing ring enter calls, and reaping CQEs adds unnecessary synchronization overhead. `io_uring` is engineered for physical storage I/O and high concurrency, not DRAM copies.
+
+#### 3. JUring's Genuine Architectural Optimizations
+
+JUring achieves parity with native C fio and pulls ahead in raw engine speed (+8.7%) due to three key architectural optimizations:
+
+1. **`IORING_SETUP_DEFER_TASKRUN` + `COOP_TASKRUN`:**
+   In [`JUring.java`](src/main/java/com/davidvlijmincx/lio/api/JUring.java). Confines submission and completion processing strictly to the owning thread. The Linux kernel skips internal completion queue spinlocks, thread wakeup mutexes, and cross-CPU Inter-Processor Interrupts (IPIs). Older fio versions or default configurations often omit `DEFER_TASKRUN`, incurring kernel locking overhead.
+2. **`IORING_REGISTER_RING_FDS` (`IORING_ENTER_REGISTERED_RING`):**
+   In [`IoUringDispatcher.java`](src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java). JUring registers the ring file descriptor with the kernel (`io_uring_register(IORING_REGISTER_RING_FDS)`). Subsequent `io_uring_enter` syscalls pass `IORING_ENTER_REGISTERED_RING`, allowing the kernel to bypass the POSIX file descriptor table, skip `fget()`/`fput()` atomic reference counter increments, and eliminate descriptor lock contention.
+3. **Registered File Handling Avoiding Shell `ulimit` Bottlenecks:**
+   In multi-file workloads (2,211 discrete files), native C fio abruptly crashes with `EMFILE (Too many open files)` because default Linux shells cap open file descriptors at `RLIMIT_NOFILE = 1024`. JUring pre-registers files into the kernel's internal descriptor table (`io_uring_register_files` / `IOSQE_FIXED_FILE`), avoiding process descriptor table exhaustion and sustaining **473,970 ops/s read** and **404,329 ops/s write**.
+
+#### 4. Running the Head-to-Head Comparison Commands
+
+To run this head-to-head comparison on your machine:
+
+```shell
+# 1. Direct side-by-side comparison against native C fio (randread, QD=64, full telemetry):
+./bench.sh --fio-live
+
+# 2. Live comparison for direct writes with custom runtime:
+./bench.sh --fio-live --mode write --qd 64 --runtime 5
+
+# 3. Print detailed per-percentile latency distribution (p50, p90, p99, p99.9, p99.99):
+./bench.sh --fio-live --verbose
+
+# 4. Run the JMH fio workload parity benchmark harness:
+./bench.sh --fio --quick
+```
 
 ---
 
@@ -525,11 +605,11 @@ public class VirtualThreadExample {
 To get C-level throughput in pure Java, JUring leverages several Linux kernel features and Java FFM internals:
 
 1. **`IORING_SETUP_DEFER_TASKRUN` + `COOP_TASKRUN`:**
-   In [`JUring.java`](src/main/java/com/davidvlijmincx/lio/api/JUring.java). Confines submission and completion processing strictly to the calling thread. The Linux kernel never acquires cross-core spinlocks or triggers inter-processor interrupts (IPIs).
+   In [`JUring.java`](src/main/java/com/davidvlijmincx/lio/api/JUring.java). Confines submission and completion processing strictly to the calling thread. The Linux kernel never acquires cross-core spinlocks, mutexes, or triggers inter-processor interrupts (IPIs).
 2. **`IORING_REGISTER_RING_FDS` (`IORING_ENTER_REGISTERED_RING`):**
-   In [`IoUringDispatcher.java`](src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java), JUring registers the ring file descriptor itself with the kernel. This eliminates kernel `fget()`/`fput()` file descriptor table lookups on every single enter syscall.
-3. **`IOSQE_FIXED_FILE` Pre-Registered Descriptor Tables:**
-   Data files are registered directly into the kernel's internal descriptor table (`io_uring_register_files`), preventing file table mutex locks. This is why JUring easily handles **2,211 files** where native C `fio` crashes with `EMFILE`.
+   In [`IoUringDispatcher.java`](src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java), JUring registers the ring file descriptor itself with the kernel (`io_uring_register(IORING_REGISTER_RING_FDS)`). This eliminates kernel `fget()`/`fput()` file descriptor table lookups and atomic reference counter contention on every single enter syscall.
+3. **Registered File Handling Avoiding Shell `ulimit` Bottlenecks (`IOSQE_FIXED_FILE`):**
+   Data files are registered directly into the kernel's internal descriptor table (`io_uring_register_files`), preventing file table mutex locks and bypassing default shell `ulimit -n` (`RLIMIT_NOFILE = 1024`) limits. This is why JUring easily handles **2,211 files** where native C `fio` crashes with `EMFILE (Too many open files)`.
 4. **Fused Submission & Completion Syscalls:**
    `ring.submitAndWaitForBatchResult(minWait, qd, consumer)` executes SQE submission and event reaping in a single `io_uring_enter` syscall, cutting syscall frequency down to **0.05 – 0.12 enters/op**.
 5. **Zero-Allocation Hot Path:**
@@ -546,34 +626,43 @@ To get C-level throughput in pure Java, JUring leverages several Linux kernel fe
 JUring includes [`bench.sh`](bench.sh) to execute the benchmark suite with automatic classpath resolution, CPU pinning, and profiler attachments:
 
 ```shell
-# 1. Quick smoke run of DirectRead pinned to CPU core 4:
+# 1. Direct side-by-side comparison against native C fio (randread, QD=64, full telemetry):
+./bench.sh --fio-live
+
+# 2. Live fio comparison for direct writes with custom queue depth and duration:
+./bench.sh --fio-live --mode write --qd 64 --runtime 10 --verbose
+
+# 3. JMH fio workload parity benchmark (O_DIRECT, 10GB file, 4KB blocks, full latency telemetry):
+./bench.sh --fio --quick
+
+# 4. Quick smoke run of DirectRead pinned to CPU core 4:
 ./bench.sh --pin 4 --include "DirectReadBenchmark.juringDirectRead" --param qd=64 --quick
 
-# 2. Direct Write benchmark across both SINGLE_FILE and MULTI_FILE distributions:
+# 5. Direct Write benchmark across both SINGLE_FILE and MULTI_FILE distributions:
 ./bench.sh --pin 4 --include "DirectWriteBenchmark.juringDirectWrite" --quick
 
-# 3. Multi-Thread Scaling Suite across 1, 2, 4, 8, 16 threads (Single File):
+# 6. Multi-Thread Scaling Suite across 1, 2, 4, 8, 16 threads (Single File):
 ./bench.sh --threads-scaling --quick --param distribution=SINGLE_FILE
 
-# 4. Multi-Thread Scaling Suite across 2,211 discrete files:
+# 7. Multi-Thread Scaling Suite across 2,211 discrete files:
 ./bench.sh --threads-scaling --quick --param distribution=MULTI_FILE
 
-# 5. Measure pure Foreign Function & Memory (FFM) dispatch overhead:
+# 8. Measure pure Foreign Function & Memory (FFM) dispatch overhead:
 ./bench.sh --pin 4 --include "NopBenchmark" --quick
 
-# 6. Verify zero-allocation heap behavior (-prof gc) and hardware counters:
+# 9. Verify zero-allocation heap behavior (-prof gc) and hardware counters:
 ./bench.sh --pin 4 --include "DirectReadBenchmark.juringDirectRead" --param qd=64 --gc --perfnorm
 
-# 7. Project Loom Virtual Threads scaling sweep (50 to 1,000 Virtual Threads):
+# 10. Project Loom Virtual Threads scaling sweep (50 to 1,000 Virtual Threads):
 ./bench.sh --virtual --quick
 
-# 8. Unbatched physical NAND flash cell latency distribution (P50, P90, P99, P99.9):
+# 11. Unbatched physical NAND flash cell latency distribution (P50, P90, P99, P99.9):
 ./bench.sh --latency --quick
 
-# 9. Buffered / Page-Cache resident benchmark:
+# 12. Buffered / Page-Cache resident benchmark:
 ./bench.sh --buffered --quick
 
-# 10. Measure Project Panama downcall dispatch overhead (standard vs critical vs proxies):
+# 13. Measure Project Panama downcall dispatch overhead (standard vs critical vs proxies):
 ./bench.sh --include "FfmInvocationBenchmark" --quick
 ```
 
