@@ -101,6 +101,23 @@ public class DirectLatencyBenchmark {
     }
 
     @Benchmark
+    public void juringDirectReadLatencyFused(ThreadState state, BenchmarkState benchState, Blackhole blackhole) {
+        int idx = benchState.dataset.nextTaskIndex();
+        int fileIdx = benchState.dataset.getTaskFileIndices()[idx];
+        long offset = benchState.dataset.getTaskOffsets()[idx];
+
+        state.ring.prepareReadFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, 0);
+        state.ring.submitAndWait(1);
+        Result r = state.ring.waitForResult(state.reusableResult);
+        long res = r.result();
+        if (res != DatasetManager.DEFAULT_BUFFER_SIZE) {
+            throw new IllegalStateException("Direct read latency fused failed: expected "
+                    + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + res);
+        }
+        blackhole.consume(res);
+    }
+
+    @Benchmark
     public void fileChannelDirectReadLatency(ThreadState state, BenchmarkState benchState, Blackhole blackhole) throws IOException {
         int idx = benchState.dataset.nextTaskIndex();
         int fileIdx = benchState.dataset.getTaskFileIndices()[idx];

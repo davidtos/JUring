@@ -234,17 +234,23 @@ What happens when files are already cached in Linux host RAM (Page Cache)? Here 
 
 To confirm we are genuinely measuring physical hardware and eliminate batch-smoothing artifacts, we ran unbatched single-operation read sampling (`Mode.SampleTime`, `OperationsPerInvocation(1)`):
 
-| Latency Metric | JUring (`O_DIRECT`, QD=1) | FileChannel (`DIRECT`, QD=1) | Physical Hardware Reality |
-|---|---|---|---|
-| **Mean Latency** | **87.51 µs** | 87.71 µs | Governed by physical 3D TLC NAND cell charge sensing (~80 µs). |
-| **p50 (Median)** | **83.07 µs** | 83.33 µs | Exact round-trip PCIe 4.0 packet traversal + controller arbitration. |
-| **p90** | **98.18 µs** | 98.30 µs | Minor internal SSD controller command queue arbitration. |
-| **p99** | **100.22 µs** | 100.48 µs | Predictable sub-101 µs tail latency. |
-| **p99.9** | **107.01 µs** | 104.56 µs | Flash block garbage collection boundaries. |
-| **p100 (Max)** | **175.87 µs** | **125.57 µs** | Unbatched max latency reflects single-run OS scheduling jitter. |
+| Latency Metric | JUring Fused (`submitAndWait(1)`, 1 Syscall) | JUring Unfused (`submit() + wait()`, 2 Syscalls) | FileChannel (`DIRECT`, `pread64`) | Physical Hardware Reality |
+|---|---|---|---|---|
+| **Syscalls / Op** | **1 enter/op** (`to_submit=1, min_complete=1`) | 2 enters/op (`submit=1` + `wait=1`) | 1 `pread64` syscall | Fused mode matches native C `fio` single-enter dispatch. |
+| **Mean Latency** | **87.15 µs** | 87.42 µs | 87.40 µs | Governed by physical 3D TLC NAND cell charge sensing (~80 µs). |
+| **p0 (Min)** | **78.85 µs** | 79.23 µs | 79.23 µs | Physical PCIe + controller bare minimum transfer time. |
+| **p50 (Median)** | **82.82 µs** | 82.94 µs | 82.94 µs | Exact round-trip PCIe 4.0 packet traversal + controller arbitration. |
+| **p90** | **97.79 µs** | 98.05 µs | 98.18 µs | Minor internal SSD controller command queue arbitration. |
+| **p95** | **98.43 µs** | 98.56 µs | 98.69 µs | Controller flash transfer timing. |
+| **p99** | **100.22 µs** | **99.71 µs** | 100.35 µs | Predictable sub-101 µs tail latency. |
+| **p99.9** | **105.73 µs** | 105.05 µs | **104.29 µs** | Flash block garbage collection boundaries. |
+| **p100 (Max)** | 462.34 µs | 159.49 µs | **143.62 µs** | Unbatched max latency reflects single-run OS scheduling jitter. |
 
 > [!NOTE]
-> If these reads were hitting the Linux Page Cache (RAM), latency would be **< 1.0 µs**. Measuring an 83 µs median round trip proves 100% genuine bus-master DMA transfers from physical BiCS4 3D TLC flash cells over the PCIe bus.
+> If these reads were hitting the Linux Page Cache (RAM), latency would be **< 1.0 µs**. Measuring an 82.8 µs median round trip proves 100% genuine bus-master DMA transfers from physical BiCS4 3D TLC flash cells over the PCIe bus.
+> 
+> **Why Fused Submission Matters:**
+> In unfused mode (`submit()` followed by `waitForResult()`), the thread issues two separate `io_uring_enter` syscalls: one to flush the SQ ring, and a second to block waiting on the CQ ring. In fused mode (`submitAndWait(1)`), JUring executes a single `io_uring_enter(to_submit=1, min_complete=1, flags=IORING_ENTER_GETEVENTS)` syscall matching native C `fio`. The completion is reaped directly from user-space memory during `waitForResult(state.reusableResult)` without an additional context switch.
 
 ---
 

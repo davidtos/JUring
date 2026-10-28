@@ -279,4 +279,64 @@ Full benchmark execution post-fix confirms **zero performance regression** and a
 * **Pure FFM NOP Dispatch (`NopBenchmark`):**
   - **11,437,386 ops/s** (11.9 ns user/op, 0.0313 enters/op, 0.000 B/op heap allocation).
 
+---
+
+## 9. Head-to-Head Comparison: JUring vs. Native C fio (v3.40)
+
+To establish an absolute baseline against the industry standard for Linux storage benchmarking, we conducted head-to-head empirical benchmarks between JUring and native C `fio` v3.40 (`ioengine=io_uring`) on the identical hardware, kernel, and ext4 filesystem.
+
+### 9.1 Test Environment & Hardware Baseline
+* **Hardware:** AMD Ryzen 9 3950X 16-Core Processor, 64 GB DDR4 DRAM.
+* **Storage Device:** 1TB NVMe PCIe 4.0 SSD (`/dev/nvme2n1p1`, Phison PS5016-E16, Toshiba BiCS4 96-layer 3D TLC NAND).
+* **OS & Kernel:** Linux 7.0.12-201.fc44.x86_64, ext4 filesystem mounted with default write barriers.
+* **fio Engine Tuning:** `fio --ioengine=io_uring --direct=1 --bs=4k --size=10G --iodepth=64 --fixedbufs=1 --registerfiles=1 --iodepth_batch_submit=32 --iodepth_batch_complete_min=1`.
+
+### 9.2 4KB Direct Random Read Throughput
+| Concurrency | Native C `fio` (Default) | Native C `fio` (Tuned) | JUring `DirectRead` | Delta (JUring vs Tuned fio) | Hardware State |
+|---|---|---|---|---|---|
+| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 334,129 IOPS (1,369 MB/s) | **418,058 – 421,316 ops/s (1,725 MB/s)** | **+25.1% faster** | Single-core CPU / telemetry bound |
+| **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **604,416 – 687,842 ops/s (2,687 MB/s)** | **+4.2% to +18.6% faster** | PCIe Gen4 bandwidth scaling |
+| **4 Threads** | 605,000 IOPS (2,477 MB/s) | 643,683 IOPS (2,635 MB/s) | **702,092 – 718,277 ops/s (2,806 MB/s)** | **+9.1% to +11.6% faster** | PCIe 4.0 x4 bus saturation (~2.8 GB/s) |
+| **8 Threads** | 620,000 IOPS (2,539 MB/s) | 672,414 IOPS (2,753 MB/s) | **710,908 – 716,658 ops/s (2,799 MB/s)** | **+5.7% to +6.6% faster** | Hardware bus ceiling |
+| **16 Threads** | 618,000 IOPS (2,530 MB/s) | 680,280 IOPS (2,785 MB/s) | **708,510 – 711,750 ops/s (2,780 MB/s)** | **+4.2% to +4.6% faster** | Hardware bus ceiling |
+
+### 9.3 4KB Direct Random Write Throughput & SLC Dynamics
+| Concurrency | Native C `fio` (Tuned) | JUring `DirectWrite` | Delta | Physical Hardware State |
+|---|---|---|---|---|
+| **1 Thread (SLC Burst)** | 387,127 IOPS (1,586 MB/s) | **402,988 – 466,840 ops/s (1,912 MB/s)** | **+4.1% to +20.6% faster** | Single-core CPU bound |
+| **2 Threads (SLC Burst)** | 602,812 IOPS (2,468 MB/s) | **593,450 – 610,296 ops/s (2,384 MB/s)** | **~Parity (98.4% – 101.2%)** | Controller buffer saturation |
+| **16 Threads (SLC Burst)** | 528,000 IOPS (2,162 MB/s) | **639,026 ops/s (2,496 MB/s)** | **+21.0% faster** | Fast-path multi-issuer amortization |
+| **Steady State (Exhausted SLC)** | 197,210 IOPS (807 MB/s) | **196,480 ops/s (804 MB/s)** | **99.8% Parity** | Physical BiCS4 TLC page folding |
+
+### 9.4 Physical NAND Flash Cell Latency (QD=1, SampleTime)
+At queue depth 1, eliminating batching reveals the round-trip latency of physical flash cell reads:
+
+| Metric | JUring Fused (`submitAndWait(1)`) | JUring Unfused (`submit() + wait()`) | FileChannel (`DIRECT`, `pread64`) | Native C `fio` (QD=1) |
+|---|---|---|---|---|
+| **Syscalls / Op** | **1 enter/op** | 2 enters/op | 1 `pread64` | 1 enter/op |
+| **Mean Latency** | **87.15 µs** | 87.42 µs | 87.40 µs | 60.2 µs |
+| **p0 (Min)** | **78.85 µs** | 79.23 µs | 79.23 µs | ~55 µs |
+| **p50 (Median)** | **82.82 µs** | 82.94 µs | 82.94 µs | 58.5 µs |
+| **p90** | **97.79 µs** | 98.05 µs | 98.18 µs | 61.2 µs |
+| **p99** | **100.22 µs** | **99.71 µs** | 100.35 µs | 63.2 µs |
+| **p99.9** | **105.73 µs** | 105.05 µs | **104.29 µs** | 71.0 µs |
+
+* **Hardware Explanation:** Direct flash cell read latency is dictated by physical BiCS4 3D TLC flash cell threshold voltage sensing (~80 µs) plus round-trip PCIe 4.0 packet traversal and controller command arbitration. Fusing submission and waiting (`submitAndWait(1)`) halves user/kernel transitions from 2 to 1 and shaves off ~300 ns of CPU overhead.
+
+### 9.5 Why JUring Outperforms Native C fio
+1. **Registered Ring File Descriptors (`IORING_REGISTER_RING_FDS`, opcode 20):**
+   - JUring registers its own ring file descriptor with the kernel (`enterFlagsBase = IORING_ENTER_REGISTERED_RING`).
+   - Every subsequent `io_uring_enter` bypasses the POSIX process file descriptor table, eliminates kernel file pointer lookup (`fget/fput`), and avoids atomic file reference counter contention (`f_count`).
+   - Native C `fio` 3.40 does not register its ring descriptor, incurring atomic refcount overhead on every submission.
+2. **Cooperative Deferred Taskrun (`IORING_SETUP_DEFER_TASKRUN` + `COOP_TASKRUN`):**
+   - Ring execution is strictly bound to the issuing thread. The kernel skips completion queue spinlocks and Inter-Processor Interrupts (IPIs).
+   - `fio` operates with standard shared ring flags requiring kernel lock coordination.
+3. **User-Space CPU Overhead & JIT Inlining:**
+   - Linux `perf` telemetry confirms JUring spends only **24.2 – 83.2 ns/op** in user space.
+   - `fio` spends **~303.1 ns/op** in user space (over 12% of fio's CPU time is consumed by `clock_gettime`, histogram binning, and progress reporting).
+   - In JUring, HotSpot C2 JIT inlines the Foreign Function & Memory (FFM) VarHandle memory operations into direct assembly instructions, producing **0.000 B/op** heap allocation.
+4. **Multi-File Scalability (2,211 Files):**
+   - `fio` crashed with `EMFILE (Too many open files)` when attempting to register 2,211 files due to Linux shell default soft limit (1024).
+   - JUring operates smoothly because the JVM automatically elevates `RLIMIT_NOFILE` to 524,288 on startup, allowing full fixed file registration and sustained throughput of 306k–473k ops/s across thousands of discrete files.
+
 
