@@ -317,19 +317,21 @@ public class JUringBlocking implements AutoCloseable {
                         }
                         if (reaped == 0 && (!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= sqEntries) && controlTask.get() == null) {
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
+                            VarHandle.fullFence();
                             if ((!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= sqEntries) && controlTask.get() == null && running) {
                                 LockSupport.parkNanos(this, 50_000L);
                             }
-                            VH_WORKER_POLLER_PARKED.setRelease(this, 0);
+                            VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                         }
                     }
                 } else {
                     if (!hasPendingMpsc() && controlTask.get() == null && running) {
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
+                        VarHandle.fullFence();
                         if (!hasPendingMpsc() && controlTask.get() == null && running) {
                             LockSupport.parkNanos(this, 50_000L);
                         }
-                        VH_WORKER_POLLER_PARKED.setRelease(this, 0);
+                        VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                     }
                 }
             }
@@ -407,7 +409,8 @@ public class JUringBlocking implements AutoCloseable {
         }
 
         private void wakePoller() {
-            if ((int) VH_WORKER_POLLER_PARKED.getAcquire(this) != 0) {
+            VarHandle.fullFence();
+            if ((int) VH_WORKER_POLLER_PARKED.getVolatile(this) != 0) {
                 LockSupport.unpark(pollerThread);
             }
         }
@@ -805,14 +808,23 @@ public class JUringBlocking implements AutoCloseable {
      * @param bufferIndex index of the buffer to return
      */
     public void checkInBuffer(int bufferIndex) {
+        final MemorySegment[] bufs = this.registeredBuffers;
         final int[] bufArr = this.freeBufBuffer;
         final long[] seqArr = this.freeBufSeq;
-        if (bufArr == null || seqArr == null) {
+        if (bufs == null || bufArr == null || seqArr == null) {
             throw new IllegalStateException("Buffers have not been registered");
+        }
+        final int totalBuffers = bufs.length;
+        if (bufferIndex < 0 || bufferIndex >= totalBuffers) {
+            throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
         final int mask = this.registeredBufMask;
         while (true) {
             long pos = (long) VH_FREE_BUF_TAIL.getVolatile(this);
+            long head = (long) VH_FREE_BUF_HEAD.getVolatile(this);
+            if (pos - head >= totalBuffers) {
+                throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
+            }
             int idx = (int) (pos & mask);
             long seq = (long) VH_LONG_ARRAY.getAcquire(seqArr, idx);
             long dif = seq - pos;
@@ -822,6 +834,12 @@ public class JUringBlocking implements AutoCloseable {
                     VH_LONG_ARRAY.setRelease(seqArr, idx, pos + 1);
                     return;
                 }
+            } else if (dif < 0) {
+                long currentHead = (long) VH_FREE_BUF_HEAD.getVolatile(this);
+                if (pos - currentHead >= totalBuffers) {
+                    throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
+                }
+                Thread.onSpinWait();
             } else {
                 Thread.onSpinWait();
             }

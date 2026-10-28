@@ -39,6 +39,12 @@
             <version>5.12.1</version>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.openjdk.jcstress</groupId>
+            <artifactId>jcstress-core</artifactId>
+            <version>0.16</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <properties>
@@ -62,6 +68,11 @@
                             <groupId>org.openjdk.jmh</groupId>
                             <artifactId>jmh-generator-annprocess</artifactId>
                             <version>1.37</version>
+                        </path>
+                        <path>
+                            <groupId>org.openjdk.jcstress</groupId>
+                            <artifactId>jcstress-core</artifactId>
+                            <version>0.16</version>
                         </path>
                     </annotationProcessorPaths>
                 </configuration>

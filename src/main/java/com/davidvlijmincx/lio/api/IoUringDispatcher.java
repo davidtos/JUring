@@ -337,7 +337,7 @@ public final class IoUringDispatcher implements AutoCloseable {
      * @return the raw native memory address of the SQE slot, or {@code 0L} if the queue is full
      */
     long getSqe() {
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int tail = sqeTail;
 
         if (tail - head >= sqRingEntries) {
@@ -505,7 +505,7 @@ public final class IoUringDispatcher implements AutoCloseable {
      */
     void submit() {
         int tail = sqeTail;
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
 
         VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
         sqeHead = tail;
@@ -538,7 +538,12 @@ public final class IoUringDispatcher implements AutoCloseable {
                 }
                 long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
-                    return;
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    if (toSubmit == 0) {
+                        return;
+                    }
+                    continue;
                 }
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
@@ -546,9 +551,17 @@ public final class IoUringDispatcher implements AutoCloseable {
                     enterFlags = (enterFlags & ~IORING_ENTER_REGISTERED_RING) | this.enterFlagsBase;
                     continue;
                 }
+                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    if (toSubmit == 0 && !sqpoll) {
+                        return;
+                    }
+                    continue;
+                }
                 if (err == 4 /* EINTR */) {
                     tail = sqeTail;
-                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     if (toSubmit == 0 && !sqpoll) {
                         return;
@@ -589,7 +602,7 @@ public final class IoUringDispatcher implements AutoCloseable {
      */
     int submitAndWait(int waitNr) {
         int tail = sqeTail;
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int toSubmit = tail - head;
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
@@ -600,7 +613,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
-            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
             if (available >= waitNr && toSubmit == 0) {
@@ -639,17 +652,25 @@ public final class IoUringDispatcher implements AutoCloseable {
                     fallbackOrReRegisterRingFd();
                     continue;
                 }
+                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    continue;
+                }
                 if (err == 4 /* EINTR */) {
                     tail = sqeTail;
-                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 throw new RuntimeException("Failed in submitAndWait: " + libCDispatcher.strerror(err));
             }
-            toSubmit = 0;
-            if (waitNr <= 0) {
-                return 0;
+            head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            toSubmit = Math.max(0, tail - head);
+            if (waitNr <= 0 && toSubmit == 0) {
+                cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                return cqTail - cqHead;
             }
         }
     }
@@ -1258,7 +1279,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         while (true) {
-            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
             if (available >= minComplete) {
@@ -1288,7 +1309,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         int tail = sqeTail;
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int toSubmit = tail - head;
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
@@ -1299,7 +1320,7 @@ public final class IoUringDispatcher implements AutoCloseable {
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
-            int cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
             if (available >= minComplete && toSubmit == 0) {
@@ -1338,17 +1359,23 @@ public final class IoUringDispatcher implements AutoCloseable {
                     fallbackOrReRegisterRingFd();
                     continue;
                 }
+                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    continue;
+                }
                 if (err == 4 /* EINTR */) {
                     tail = sqeTail;
-                    head = (int) VH_INT.get(GLOBAL_MEMORY, sqKheadAddr);
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 throw new RuntimeException("Failed in submitAndWaitForBatchResult: " + libCDispatcher.strerror(err));
             }
-            toSubmit = 0;
-            if (minComplete <= 0) {
-                cqHead = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+            head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            toSubmit = Math.max(0, tail - head);
+            if (minComplete <= 0 && toSubmit == 0) {
+                cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                 cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
                 return reapAvailable(cqHead, cqTail - cqHead, maxReap, consumer);
             }

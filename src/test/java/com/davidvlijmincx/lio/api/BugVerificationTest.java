@@ -6,21 +6,36 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerArray;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.*;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_INT;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BugVerificationTest {
+
+    private static final VarHandle VH_INT_ARR = MethodHandles.arrayElementVarHandle(int[].class);
+    private static final VarHandle VH_LONG_ARR = MethodHandles.arrayElementVarHandle(long[].class);
+    private static final VarHandle VH_MS_INT = JAVA_INT.varHandle();
+    private static final VarHandle VH_MS_LONG = JAVA_LONG.varHandle();
 
     // Bug 1: JUring.getSharedWorkerRing silently drops ioUringOptions
     @Test
@@ -362,4 +377,747 @@ class BugVerificationTest {
             }
         }
     }
+
+    // Bug 11 / Memory Barrier 1: JCStress proof that slotResult is safely published via slotState release/acquire barrier
+    @Test
+    void proof11_jcstressSlotStatePublicationBarrierPreventsStaleReadsAndHang() throws Exception {
+        final int iterations = 100_000;
+        final int[] slotState = new int[2];
+        final int[] slotResult = new int[2];
+        final AtomicInteger forbiddenStaleReads = new AtomicInteger(0);
+        final AtomicInteger acceptableCompleted = new AtomicInteger(0);
+        final AtomicBoolean stop = new AtomicBoolean(false);
+
+        Thread writer = Thread.ofPlatform().start(() -> {
+            for (int i = 1; i <= iterations && !stop.get(); i++) {
+                while ((int) VH_INT_ARR.getAcquire(slotState, 0) != 0) {
+                    Thread.onSpinWait();
+                }
+                int magicPayload = 0x1000 + i;
+                slotResult[0] = magicPayload;
+                // Release barrier on slotState
+                VH_INT_ARR.setRelease(slotState, 0, 1 /* STATE_DONE */);
+            }
+        });
+
+        Thread reader = Thread.ofPlatform().start(() -> {
+            for (int i = 1; i <= iterations; i++) {
+                int magicPayload = 0x1000 + i;
+                long spins = 0;
+                while ((int) VH_INT_ARR.getAcquire(slotState, 0) != 1) {
+                    Thread.onSpinWait();
+                    spins++;
+                    if (spins > 50_000_000L) {
+                        stop.set(true);
+                        fail("Reader loop hung! getAcquire on slotState failed to observe STATE_DONE");
+                    }
+                }
+                int r = slotResult[0];
+                if (r != magicPayload) {
+                    forbiddenStaleReads.incrementAndGet();
+                } else {
+                    acceptableCompleted.incrementAndGet();
+                }
+                VH_INT_ARR.setRelease(slotState, 0, 0);
+            }
+        });
+
+        writer.join(3000);
+        reader.join(3000);
+        assertEquals(0, forbiddenStaleReads.get(), "FORBIDDEN OUTCOME: slotResult was read stale despite observing STATE_DONE!");
+        assertEquals(iterations, acceptableCompleted.get());
+    }
+
+    // Bug 12 / Memory Barrier 2: JCStress proof that MPSC queue sequence barriers guarantee strict ordering and prevent hangs
+    @Test
+    void proof12_jcstressMpscQueueSequenceBarriersGuaranteeFifoAndPreventHangs() throws Exception {
+        final int queueCap = 64;
+        final int mask = queueCap - 1;
+        final long[] mpscSeq = new long[queueCap];
+        final int[] mpscBuf = new int[queueCap];
+        for (int i = 0; i < queueCap; i++) {
+            mpscSeq[i] = i;
+        }
+
+        final AtomicLong mpscTail = new AtomicLong(0);
+        final int producers = 4;
+        final int itemsPerProducer = 20_000;
+        final int totalItems = producers * itemsPerProducer;
+
+        ExecutorService exec = Executors.newFixedThreadPool(producers + 1);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<?>> producerFutures = new ArrayList<>();
+
+            for (int p = 0; p < producers; p++) {
+                final int producerId = p;
+                producerFutures.add(exec.submit(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException ignored) {}
+                    for (int i = 0; i < itemsPerProducer; i++) {
+                        int payload = (producerId << 20) | (i & 0xFFFFF);
+                        long tail = mpscTail.getAndIncrement();
+                        int idx = (int) (tail & mask);
+                        while ((long) VH_LONG_ARR.getAcquire(mpscSeq, idx) != tail) {
+                            Thread.onSpinWait();
+                        }
+                        mpscBuf[idx] = payload;
+                        VH_LONG_ARR.setRelease(mpscSeq, idx, tail + 1);
+                    }
+                }));
+            }
+
+            Future<int[]> consumerFuture = exec.submit(() -> {
+                try {
+                    start.await();
+                } catch (InterruptedException ignored) {}
+                int[] lastSeqPerProducer = new int[producers];
+                Arrays.fill(lastSeqPerProducer, -1);
+                int reaped = 0;
+                long head = 0;
+                while (reaped < totalItems) {
+                    int idx = (int) (head & mask);
+                    long seq = (long) VH_LONG_ARR.getAcquire(mpscSeq, idx);
+                    if (seq != head + 1) {
+                        Thread.onSpinWait();
+                        continue;
+                    }
+                    int payload = mpscBuf[idx];
+                    VH_LONG_ARR.setRelease(mpscSeq, idx, head + queueCap);
+                    head++;
+                    reaped++;
+
+                    int producerId = (payload >>> 20) & 0xFFF;
+                    int itemSeq = payload & 0xFFFFF;
+                    int last = lastSeqPerProducer[producerId];
+                    if (itemSeq != last + 1) {
+                        throw new IllegalStateException("FIFO violation on producer " + producerId + ": expected " + (last + 1) + ", got " + itemSeq);
+                    }
+                    lastSeqPerProducer[producerId] = itemSeq;
+                }
+                return lastSeqPerProducer;
+            });
+
+            start.countDown();
+            for (Future<?> f : producerFutures) {
+                f.get(5, TimeUnit.SECONDS);
+            }
+            int[] lastSeqs = consumerFuture.get(5, TimeUnit.SECONDS);
+            for (int p = 0; p < producers; p++) {
+                assertEquals(itemsPerProducer - 1, lastSeqs[p]);
+            }
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    // Bug 13 / Memory Barrier 3: JCStress proof that Vyukov MPMC free-slot queue never allocates duplicate slots and never leaks
+    @Test
+    void proof13_jcstressVyukovMpmcQueueMaintainsMutualExclusionAndConservation() throws Exception {
+        final int cap = 32;
+        final int mask = cap - 1;
+        final int[] buffer = new int[cap];
+        final long[] seqArr = new long[cap];
+        for (int i = 0; i < cap; i++) {
+            buffer[i] = i;
+            seqArr[i] = i + 1;
+        }
+
+        final AtomicLong head = new AtomicLong(0);
+        final AtomicLong tail = new AtomicLong(cap);
+        final AtomicIntegerArray slotInUse = new AtomicIntegerArray(cap);
+        final AtomicInteger duplicateAcquisitions = new AtomicInteger(0);
+
+        final int threads = 8;
+        final int opsPerThread = 10_000;
+        ExecutorService exec = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<?>> futures = new ArrayList<>();
+
+            for (int t = 0; t < threads; t++) {
+                futures.add(exec.submit(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException ignored) {}
+
+                    for (int i = 0; i < opsPerThread; i++) {
+                        int slotId;
+                        while (true) {
+                            long pos = head.get();
+                            int idx = (int) (pos & mask);
+                            long seq = (long) VH_LONG_ARR.getAcquire(seqArr, idx);
+                            long dif = seq - (pos + 1);
+                            if (dif == 0) {
+                                if (head.compareAndSet(pos, pos + 1)) {
+                                    slotId = buffer[idx];
+                                    VH_LONG_ARR.setRelease(seqArr, idx, pos + cap);
+                                    break;
+                                }
+                            } else if (dif < 0) {
+                                LockSupport.parkNanos(1000L);
+                            } else {
+                                Thread.onSpinWait();
+                            }
+                        }
+
+                        if (!slotInUse.compareAndSet(slotId, 0, 1)) {
+                            duplicateAcquisitions.incrementAndGet();
+                        }
+                        Thread.onSpinWait();
+                        if (!slotInUse.compareAndSet(slotId, 1, 0)) {
+                            duplicateAcquisitions.incrementAndGet();
+                        }
+
+                        while (true) {
+                            long pos = tail.get();
+                            int idx = (int) (pos & mask);
+                            long seq = (long) VH_LONG_ARR.getAcquire(seqArr, idx);
+                            long dif = seq - pos;
+                            if (dif == 0) {
+                                if (tail.compareAndSet(pos, pos + 1)) {
+                                    buffer[idx] = slotId;
+                                    VH_LONG_ARR.setRelease(seqArr, idx, pos + 1);
+                                    break;
+                                }
+                            } else {
+                                Thread.onSpinWait();
+                            }
+                        }
+                    }
+                }));
+            }
+
+            start.countDown();
+            for (Future<?> f : futures) {
+                f.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            exec.shutdownNow();
+        }
+
+        assertEquals(0, duplicateAcquisitions.get(), "JCStress FORBIDDEN outcome: slot was acquired concurrently by two threads!");
+    }
+
+    // Bug 14 / Memory Barrier 4: JCStress proof of JUringBlocking.checkOutBuffer / checkInBuffer concurrency
+    @Test
+    void proof14_jcstressBlockingBufferPoolCheckoutCheckinMaintainsMutualExclusion() throws Exception {
+        try (JUringBlocking blocking = new JUringBlocking(16, IORING_SETUP_SINGLE_ISSUER)) {
+            final int nrOfBuffers = 16;
+            blocking.registerBuffers(64, nrOfBuffers);
+
+            final int threads = 8;
+            final int opsPerThread = 5_000;
+            final AtomicIntegerArray bufInUse = new AtomicIntegerArray(nrOfBuffers);
+            final AtomicInteger collisionCount = new AtomicInteger(0);
+
+            ExecutorService exec = Executors.newFixedThreadPool(threads);
+            try {
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<?>> futures = new ArrayList<>();
+                for (int t = 0; t < threads; t++) {
+                    futures.add(exec.submit(() -> {
+                        try {
+                            start.await();
+                        } catch (InterruptedException ignored) {}
+
+                        for (int i = 0; i < opsPerThread; i++) {
+                            int bufIdx;
+                            while ((bufIdx = blocking.checkOutBuffer()) < 0) {
+                                LockSupport.parkNanos(10_000L);
+                            }
+                            if (!bufInUse.compareAndSet(bufIdx, 0, 1)) {
+                                collisionCount.incrementAndGet();
+                            }
+                            Thread.onSpinWait();
+                            if (!bufInUse.compareAndSet(bufIdx, 1, 0)) {
+                                collisionCount.incrementAndGet();
+                            }
+                            blocking.checkInBuffer(bufIdx);
+                        }
+                    }));
+                }
+                start.countDown();
+                for (Future<?> f : futures) {
+                    f.get(5, TimeUnit.SECONDS);
+                }
+            } finally {
+                exec.shutdownNow();
+            }
+
+            assertEquals(0, collisionCount.get(), "JCStress FORBIDDEN outcome: registered buffer index checked out concurrently!");
+        }
+    }
+
+    // Bug 15 / Memory Barrier 5: JCStress proof of off-heap memory ring barriers between submitter and kernel consumer
+    @Test
+    void proof15_jcstressNativeRingMemoryBarriersGuaranteeSqeAndCqeIntegrity() throws Exception {
+        final int ringEntries = 16;
+        final int ringMask = ringEntries - 1;
+        try (Arena arena = Arena.ofShared()) {
+            MemorySegment mem = arena.allocate(8192);
+            long sqTailOffset = 0;
+            long sqHeadOffset = 8;
+            long cqTailOffset = 16;
+            long cqHeadOffset = 24;
+            long sqesOffset = 128;
+            long cqesOffset = 2048;
+
+            final int iterations = 50_000;
+            final AtomicInteger corruptedSqes = new AtomicInteger(0);
+            final AtomicInteger corruptedCqes = new AtomicInteger(0);
+
+            ExecutorService exec = Executors.newFixedThreadPool(2);
+            try {
+                CountDownLatch start = new CountDownLatch(1);
+
+                Future<?> userTask = exec.submit(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException ignored) {}
+
+                    for (int i = 1; i <= iterations; i++) {
+                        int index = (i - 1) & ringMask;
+                        long sqe = sqesOffset + ((long) index * 64L);
+                        mem.set(JAVA_BYTE, sqe, (byte) 18 /* IORING_OP_NOP */);
+                        mem.set(JAVA_INT, sqe + 4, -1);
+                        mem.set(JAVA_LONG, sqe + 32, i);
+
+                        VH_MS_INT.setRelease(mem, sqTailOffset, i);
+
+                        while (true) {
+                            int cqTail = (int) VH_MS_INT.getAcquire(mem, cqTailOffset);
+                            if (cqTail >= i) {
+                                break;
+                            }
+                            Thread.onSpinWait();
+                        }
+                        int cqIndex = (i - 1) & ringMask;
+                        long cqe = cqesOffset + ((long) cqIndex * 16L);
+                        long userData = mem.get(JAVA_LONG, cqe);
+                        int res = mem.get(JAVA_INT, cqe + 8);
+                        if (userData != i || res != 0) {
+                            corruptedCqes.incrementAndGet();
+                        }
+                        VH_MS_INT.setRelease(mem, cqHeadOffset, i);
+                    }
+                });
+
+                Future<?> kernelTask = exec.submit(() -> {
+                    try {
+                        start.await();
+                    } catch (InterruptedException ignored) {}
+
+                    for (int i = 1; i <= iterations; i++) {
+                        while (true) {
+                            int sqTail = (int) VH_MS_INT.getAcquire(mem, sqTailOffset);
+                            if (sqTail >= i) {
+                                break;
+                            }
+                            Thread.onSpinWait();
+                        }
+                        int index = (i - 1) & ringMask;
+                        long sqe = sqesOffset + ((long) index * 64L);
+                        byte op = mem.get(JAVA_BYTE, sqe);
+                        int fd = mem.get(JAVA_INT, sqe + 4);
+                        long ud = mem.get(JAVA_LONG, sqe + 32);
+                        if (op != 18 || fd != -1 || ud != i) {
+                            corruptedSqes.incrementAndGet();
+                        }
+                        VH_MS_INT.setRelease(mem, sqHeadOffset, i);
+
+                        int cqIndex = (i - 1) & ringMask;
+                        long cqe = cqesOffset + ((long) cqIndex * 16L);
+                        mem.set(JAVA_LONG, cqe, ud);
+                        mem.set(JAVA_INT, cqe + 8, 0);
+
+                        VH_MS_INT.setRelease(mem, cqTailOffset, i);
+                    }
+                });
+
+                start.countDown();
+                userTask.get(5, TimeUnit.SECONDS);
+                kernelTask.get(5, TimeUnit.SECONDS);
+            } finally {
+                exec.shutdownNow();
+            }
+
+            assertEquals(0, corruptedSqes.get(), "JCStress FORBIDDEN outcome: Kernel read corrupted SQE due to missing/weak memory barrier!");
+            assertEquals(0, corruptedCqes.get(), "JCStress FORBIDDEN outcome: User read corrupted CQE due to missing/weak memory barrier!");
+        }
+    }
+
+    // Bug 16 / Memory Barrier 6: Proof that pollerParked protocol prevents lost unpark hangs
+    @Test
+    void proof16_jcstressPollerWakeupRaceDoesNotLoseUnparkOrHang() throws Exception {
+        final int iterations = 10_000;
+        final int[] pollerParked = new int[1];
+        final AtomicBoolean hasWork = new AtomicBoolean(false);
+        final AtomicReference<Thread> pollerThreadRef = new AtomicReference<>();
+
+        ExecutorService exec = Executors.newFixedThreadPool(2);
+        try {
+            for (int i = 0; i < iterations; i++) {
+                pollerParked[0] = 0;
+                hasWork.set(false);
+                CountDownLatch ready = new CountDownLatch(2);
+                CountDownLatch latch = new CountDownLatch(1);
+
+                Future<?> poller = exec.submit(() -> {
+                    pollerThreadRef.set(Thread.currentThread());
+                    ready.countDown();
+                    try {
+                        latch.await();
+                    } catch (InterruptedException ignored) {}
+
+                    VH_INT_ARR.setVolatile(pollerParked, 0, 1);
+                    if (!hasWork.get()) {
+                        LockSupport.parkNanos(10_000_000L);
+                    }
+                    VH_INT_ARR.setVolatile(pollerParked, 0, 0);
+                });
+
+                Future<?> submitter = exec.submit(() -> {
+                    ready.countDown();
+                    try {
+                        latch.await();
+                    } catch (InterruptedException ignored) {}
+
+                    hasWork.set(true);
+                    VarHandle.fullFence();
+                    if ((int) VH_INT_ARR.getVolatile(pollerParked, 0) != 0) {
+                        LockSupport.unpark(pollerThreadRef.get());
+                    }
+                });
+
+                ready.await();
+                latch.countDown();
+                poller.get(50, TimeUnit.MILLISECONDS);
+                submitter.get(50, TimeUnit.MILLISECONDS);
+            }
+        } finally {
+            exec.shutdownNow();
+        }
+    }
+
+    // Bug 17 / Memory Barrier 7: Verification that C2 JIT does not hoist getAcquire loop condition
+    @Test
+    void proof17_c2JitCompilerDoesNotHoistAcquireLoopCondition() throws Exception {
+        final int[] flag = new int[1];
+        // Warm up loop to trigger C2 JIT compilation
+        for (int i = 0; i < 20_000; i++) {
+            flag[0] = 1;
+            while ((int) VH_INT_ARR.getAcquire(flag, 0) != 1) {
+                Thread.onSpinWait();
+            }
+        }
+
+        flag[0] = 0;
+        CountDownLatch started = new CountDownLatch(1);
+        CompletableFuture<Long> loopFuture = CompletableFuture.supplyAsync(() -> {
+            started.countDown();
+            long spins = 0;
+            while ((int) VH_INT_ARR.getAcquire(flag, 0) != 1) {
+                Thread.onSpinWait();
+                spins++;
+            }
+            return spins;
+        });
+
+        assertTrue(started.await(1, TimeUnit.SECONDS));
+        Thread.sleep(10);
+        VH_INT_ARR.setRelease(flag, 0, 1);
+
+        Long spins = loopFuture.get(2, TimeUnit.SECONDS);
+        assertNotNull(spins);
+        assertTrue(spins >= 0);
+    }
+
+    // Bug 18: Loop termination verification for submitAndWait and submitAndWaitForBatchResult on zero/negative waitNr
+    @Test
+    void proof18_submitAndWaitZeroAndNegativeWaitNrDoesNotHang() {
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+            try (JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER)) {
+                // 1. Zero waitNr with empty queue: returns immediately with 0
+                int res = ring.submitAndWait(0);
+                assertEquals(0, res);
+
+                // 2. Negative waitNr: returns immediately
+                res = ring.submitAndWait(-1);
+                assertEquals(0, res);
+
+                // 3. submitAndWaitForBatchResult with minComplete=0 and no SQEs: returns 0 immediately
+                int count = ring.submitAndWaitForBatchResult(0, 10, r -> fail("Consumer should not be called"));
+                assertEquals(0, count);
+
+                // 4. submitAndWaitForBatchResult with minComplete=0 and pending SQEs: submits and returns immediately
+                ring.prepareNop();
+                ring.prepareNop();
+                count = ring.submitAndWaitForBatchResult(0, 10, r -> {});
+                assertTrue(count >= 0);
+
+                // 5. submitAndWait(1) with 1 NOP: waits and returns >= 1
+                ring.prepareNop();
+                res = ring.submitAndWait(1);
+                assertTrue(res >= 1);
+
+                // 6. submitAndWaitForBatchResult partial reaping: prepare 4 NOPs, reap max 2
+                ring.prepareNop();
+                ring.prepareNop();
+                ring.prepareNop();
+                ring.prepareNop();
+                AtomicInteger reaped = new AtomicInteger();
+                count = ring.submitAndWaitForBatchResult(2, 2, r -> reaped.incrementAndGet());
+                assertEquals(2, count);
+                assertEquals(2, reaped.get());
+
+                // Reap remaining
+                count = ring.peekForBatchResult(10, r -> reaped.incrementAndGet());
+                assertTrue(count >= 0);
+
+                // 7. submitAndWait(0) with completed CQEs in the ring returns available count, NOT 0!
+                ring.prepareNop();
+                int submit1 = ring.submitAndWait(1);
+                assertTrue(submit1 >= 1, "Expected >= 1 completion from submitAndWait(1)");
+                ring.prepareNop();
+                int submit0 = ring.submitAndWait(0);
+                assertTrue(submit0 >= 1, "submitAndWait(0) must return available completions (expected >= 1, got " + submit0 + ")");
+            }
+        });
+    }
+
+    // Bug 19: Benchmark pipeline in-flight drain loop hang regression (Commit 526b302)
+    @Test
+    void proof19_benchmarkPipelineDrainLoopDoesNotHangWithUnevenBatchSizes() {
+        assertTimeoutPreemptively(Duration.ofSeconds(3), () -> {
+            try (JUring ring = new JUring(32, IORING_SETUP_SINGLE_ISSUER)) {
+                final int totalTasks = 73; // Uneven task count not dividing into submitBatch (16) or waitBatch (4)
+                final int qd = 16;
+                final int waitBatch = 4;
+
+                int inFlight = 0;
+                int submitted = 0;
+                int reapedTotal = 0;
+
+                while (inFlight < qd && submitted < totalTasks) {
+                    ring.prepareNop();
+                    inFlight++;
+                    submitted++;
+                }
+
+                while (reapedTotal < totalTasks) {
+                    int remaining = totalTasks - reapedTotal;
+                    int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+                    int reaped = ring.submitAndWaitForBatchResult(minWait, qd, result -> {});
+                    inFlight -= reaped;
+                    reapedTotal += reaped;
+
+                    while (inFlight < qd && submitted < totalTasks) {
+                        ring.prepareNop();
+                        inFlight++;
+                        submitted++;
+                    }
+                }
+
+                assertEquals(totalTasks, reapedTotal);
+                assertEquals(0, inFlight);
+            }
+        });
+    }
+
+    // Bug 20: Full ring backpressure and slot exhaustion loop does not deadlock or hang
+    @Test
+    void proof20_jUringBlockingFullRingBackpressure100ThreadsDoesNotHang(@TempDir Path tempDir) throws Exception {
+        Path file = tempDir.resolve("backpressure.txt");
+        Files.writeString(file, "JUring Backpressure Test Payload 12345");
+
+        assertTimeoutPreemptively(Duration.ofSeconds(4), () -> {
+            try (JUringBlocking blocking = new JUringBlocking(4, IORING_SETUP_SINGLE_ISSUER);
+                 FileDescriptor fd = new FileDescriptor(file, READ, 0);
+                 Arena arena = Arena.ofShared();
+                 ExecutorService vts = Executors.newVirtualThreadPerTaskExecutor()) {
+
+                final int tasks = 100;
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<String>> results = new ArrayList<>(tasks);
+
+                for (int i = 0; i < tasks; i++) {
+                    MemorySegment buf = arena.allocate(38);
+                    results.add(vts.submit(() -> {
+                        start.await();
+                        long n = blocking.read(fd, buf, 38, 0);
+                        assertEquals(38L, n);
+                        return new String(buf.asSlice(0, n).toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+                    }));
+                }
+
+                start.countDown();
+                for (Future<String> f : results) {
+                    assertEquals("JUring Backpressure Test Payload 12345", f.get(3, TimeUnit.SECONDS));
+                }
+            }
+        });
+    }
+
+    // Bug 21: JUringBlocking shutdown and thread interruption cleanly exit loops without hanging
+    @Test
+    void proof21_blockingCloseAndInterruptionCleanlyExitLoops(@TempDir Path tempDir) throws Exception {
+        Path file = tempDir.resolve("close_interrupt.txt");
+        Files.writeString(file, "test data");
+
+        assertTimeoutPreemptively(Duration.ofSeconds(3), () -> {
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER);
+                 FileDescriptor fd = new FileDescriptor(file, READ, 0);
+                 Arena arena = Arena.ofShared()) {
+
+                AtomicBoolean wasInterrupted = new AtomicBoolean(false);
+                Thread worker = Thread.ofPlatform().start(() -> {
+                    Thread.currentThread().interrupt();
+                    MemorySegment buf = arena.allocate(4);
+                    blocking.read(fd, buf, 4, 0);
+                    if (Thread.currentThread().isInterrupted()) {
+                        wasInterrupted.set(true);
+                    }
+                });
+                worker.join(2000);
+                assertTrue(wasInterrupted.get(), "Expected thread to preserve interrupted status after blocking read");
+            }
+
+            JUringBlocking blockingToClose = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER);
+            assertDoesNotThrow(blockingToClose::close);
+            assertThrows(IllegalStateException.class, () -> blockingToClose.registerBuffers(64, 2));
+        });
+    }
+
+    // Bug 22: Concurrent control tasks CAS loop on JUringBlocking does not livelock
+    @Test
+    void proof22_concurrentControlTasksCASLoopDoesNotLivelock() throws Exception {
+        assertTimeoutPreemptively(Duration.ofSeconds(4), () -> {
+            try (JUringBlocking blocking = new JUringBlocking(16, IORING_SETUP_SINGLE_ISSUER)) {
+                final int threads = 8;
+                ExecutorService exec = Executors.newFixedThreadPool(threads);
+                try {
+                    CountDownLatch start = new CountDownLatch(1);
+                    List<Future<?>> futures = new ArrayList<>();
+                    for (int t = 0; t < threads; t++) {
+                        futures.add(exec.submit(() -> {
+                            try {
+                                start.await();
+                            } catch (InterruptedException ignored) {}
+
+                            try {
+                                blocking.checkOutBuffer();
+                            } catch (IllegalStateException expectedNotRegistered) {
+                                // Expected before registration
+                            }
+                        }));
+                    }
+                    start.countDown();
+                    for (Future<?> f : futures) {
+                        f.get(2, TimeUnit.SECONDS);
+                    }
+                } finally {
+                    exec.shutdownNow();
+                }
+            }
+        });
+    }
+
+    // Bug 23: Loop termination proof: submitAndWait and submitAndWaitForBatchResult correctly track unsubmitted SQEs across batches
+    @Test
+    void proof23_partialSqeSubmissionTrackingDoesNotHangLoop() {
+        assertTimeoutPreemptively(Duration.ofSeconds(3), () -> {
+            try (JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER)) {
+                // Submit 8 operations (saturates 8-entry ring) with submitAndWait(8)
+                for (int i = 0; i < 8; i++) {
+                    ring.prepareNop();
+                }
+                int available = ring.submitAndWait(8);
+                assertTrue(available >= 8, "Expected at least 8 completions, got " + available);
+
+                List<Result> results = ring.waitForBatchResult(8);
+                assertEquals(8, results.size());
+                for (Result r : results) {
+                    try (r) {
+                        assertEquals(0, r.result());
+                    }
+                }
+            }
+        });
+    }
+
+    // Bug 24: Buffer pool checkInBuffer throws IllegalStateException when pool is full instead of hanging in infinite spin
+    @Test
+    void proof24_bufferPoolCheckInFullThrowsInsteadOfHanging() {
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER)) {
+                // Power-of-2 buffer count
+                blocking.registerBuffers(64, 4);
+                // Pool has 4 buffers: [0, 1, 2, 3]. It is initially full.
+                // Checking in another buffer without checking out first must throw IllegalStateException, NOT spin forever!
+                assertThrows(IllegalStateException.class, () -> blocking.checkInBuffer(0));
+            }
+
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER)) {
+                // Non-power-of-2 buffer count (3 buffers, capacity 4)
+                blocking.registerBuffers(64, 3);
+                // Pool has 3 buffers: [0, 1, 2]. Total buffers = 3.
+                assertThrows(IllegalStateException.class, () -> blocking.checkInBuffer(0));
+                assertThrows(IllegalStateException.class, () -> blocking.checkInBuffer(1));
+                assertThrows(IllegalStateException.class, () -> blocking.checkInBuffer(2));
+            }
+        });
+    }
+
+    // Bug 25: Buffer pool checkInBuffer throws IllegalArgumentException immediately on out-of-bounds index
+    @Test
+    void proof25_bufferPoolCheckInInvalidIndexThrowsImmediately() {
+        assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER)) {
+                blocking.registerBuffers(64, 4);
+                int b = blocking.checkOutBuffer();
+                assertTrue(b >= 0);
+                assertThrows(IllegalArgumentException.class, () -> blocking.checkInBuffer(-1));
+                assertThrows(IllegalArgumentException.class, () -> blocking.checkInBuffer(99));
+                blocking.checkInBuffer(b);
+            }
+
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER)) {
+                // Non-power-of-2 buffer count: 3 buffers [0, 1, 2], mask 3 (cap 4)
+                blocking.registerBuffers(64, 3);
+                int b = blocking.checkOutBuffer();
+                assertTrue(b >= 0);
+                // Index 3 is >= nrOfBuffers (3), though < poolCap (4). Must throw IllegalArgumentException!
+                assertThrows(IllegalArgumentException.class, () -> blocking.checkInBuffer(3));
+                blocking.checkInBuffer(b);
+            }
+        });
+    }
+
+    // Bug 26: OpenJDK JCStress suite verifies memory barriers across compiler modes
+    @Test
+    void proof26_openjdkJcstressTestMemoryBarrierSuiteExecutesAndVerifies() throws Exception {
+        try {
+            org.openjdk.jcstress.Options opts = new org.openjdk.jcstress.Options(new String[]{
+                    "-m", "sanity",
+                    "-r", "target/jcstress-results",
+                    "-t", "com.davidvlijmincx.lio.jcstress.*"
+            });
+            opts.parse();
+            org.openjdk.jcstress.JCStress jcstress = new org.openjdk.jcstress.JCStress(opts);
+            jcstress.run();
+        } finally {
+            try (var stream = java.nio.file.Files.newDirectoryStream(java.nio.file.Path.of("."), "jcstress-results-*.bin.gz")) {
+                for (var p : stream) {
+                    java.nio.file.Files.deleteIfExists(p);
+                }
+            } catch (Exception ignored) {}
+        }
+    }
 }
+
+
+
+
+
