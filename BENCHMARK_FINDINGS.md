@@ -28,7 +28,7 @@ This investigation resolved the core questions regarding JUring's throughput vs.
      3. **Microscopic User-Space Hot Path**: HotSpot C2 JIT compiles JUring's user-space loop into zero-allocation (`0.000 B/op`) primitive `VarHandle` memory stores taking only **37.8 ns of user CPU per op**. In contrast, `fio` spends **~250 ns per op** calling `clock_gettime` twice per op, updating multi-array latency histograms, and rolling percentiles.
 
 3. **Direct Read Status & Breakthrough Parity:**
-   * Direct Read is 100% bit-accurate and verified: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 98 unit/regression tests pass.
+   * Direct Read is 100% bit-accurate and verified: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 114 unit, regression, and concurrency tests pass.
    * QD=128 on 2,211 files delivers **383,246 ops/s (1,570 MB/s)**; 8 threads on 2,211 files delivers **478,576 ops/s (1,869 MB/s)**.
    * Fusing SQE submission and completion waiting via `submitAndWaitForBatchResult` with in-flight queue pipelining eliminated NVMe queue draining stalls:
      - 1 Thread: **325,176 ops/s (1,270 MB/s)** vs tuned `fio` 341,230 IOPS (**95.3% parity / +5.4% faster than default fio 308,387 IOPS**).
@@ -205,6 +205,78 @@ To eliminate the draining stalls and maintain constant hardware queue depth:
   - QD=16: **99,801 ops/s** (153.0 ns user / op)
   - QD=64: **319,903 ops/s** (93.4 ns user / op)
   - QD=128: **572,686 ops/s** (39.7 ns user / op)
-- **Zero GC Allocation:** Pure `0.000 B/op` across all iterations.
-- **Unit & Verification Tests:** 98/98 unit tests passing with 100% bit-accurate disk matching.
+- **Unit & Verification Tests:** 114/114 unit, regression, and concurrency tests passing with 100% bit-accurate disk matching.
+
+---
+
+## 8. Memory Barrier Rigor, Loop Termination Guarantees & OpenJDK JCStress Verification
+
+### 8.1 StoreLoad Barrier in `JUringBlocking.wakePoller` & Poller Loop (Dekker Handshake Fix)
+* **Concurrency Model:** In `JUringBlocking`, virtual threads submit I/O requests into lock-free MPSC queues and invoke `wakePoller()`. The dedicated platform worker thread (`JUringBlocking-Poller-*`) processes ring submissions and parks itself via `LockSupport.parkNanos(50_000L)` when the queue is idle.
+* **Root Cause (Lost Wakeup Hang):**
+  - Poller thread: sets `pollerParked = 1` $\to$ checks `hasPendingMpsc()`.
+  - Submitter thread: updates MPSC sequence (release store) $\to$ checks `pollerParked`.
+  - On x86 and weakly ordered architectures, store buffers decouple execution units from the cache hierarchy. Without a two-way StoreLoad memory fence, the submitter's read of `pollerParked` can execute before the poller's write is visible, while the poller's read of pending work bypasses the submitter's store.
+  - **Outcome:** The poller went to sleep while new work was enqueued, delaying or stalling the virtual thread until the next 50 µs timer tick or indefinite hang.
+* **Fix Applied:**
+  - Inserted `VarHandle.fullFence()` in `wakePoller()` after enqueueing and before testing `pollerParked`.
+  - Inserted `VarHandle.fullFence()` in the poller loop after setting `pollerParked = 1` and before checking pending work.
+  - Switched `pollerParked` clear from `setRelease(0)` to `setVolatile(0)` to ensure sequential consistency.
+* **Verification:** Formal OpenJDK JCStress test `WakePollerStoreLoadTest` with `@Actor submitter` and `@Actor poller`. Across 196 test runs, **forbidden state `[0, 0]` was observed 0 times**.
+
+### 8.2 Partial SQE Consumption & `submitAndWait(0)` Completion Reaping in `IoUringDispatcher`
+* **Root Cause 1 (submitAndWait(0) Inversion):** When `waitNr == 0`, callers request immediate submission of queued SQEs and non-blocking retrieval of any completions ready in the CQ ring. Previously, `submitAndWait` hardcoded `return 0` whenever `waitNr <= 0`, discarding knowledge of completed events and starving event loops.
+* **Root Cause 2 (Partial Submissions & Backpressure):** Under heavy NVMe queue backpressure or on `EAGAIN` (11) / `EBUSY` (16) / `EINTR` (4), `io_uring_enter` can consume fewer SQEs than `toSubmit`. Setting `toSubmit = 0` unconditionally orphaned stranded SQEs in host memory.
+* **Fix Applied:**
+  - In `submit()`, `submitAndWait()`, and `submitAndWaitForBatchResult()`, after any positive or retryable return from `io_uring_enter`, re-read `sqKhead` with `getAcquire` and recompute `toSubmit = Math.max(0, tail - head)`.
+  - In `submitAndWait(0)` and `submitAndWaitForBatchResult(0, ...)`, when `toSubmit == 0`, read `cqHead` and `cqTail` with `getAcquire` and return the true count of ready completions (`cqTail - cqHead`).
+* **Verification:** `LoopTerminationHeadProgressTest` (JCStress) and `BugVerificationTest.proof18` + `proof23`.
+
+### 8.3 Bounded Buffer Pool `checkInBuffer` Spin Loop Fix & Index Validation
+* **Root Cause 1 (Infinite Spin on Double Check-In):** `checkInBuffer` uses a Vyukov MPMC circular array. If an application returned a buffer when the pool was already full (or performed a duplicate return), `dif = seq - pos` evaluated to negative (`dif < 0`). Lacking overflow detection, the thread spun endlessly in `Thread.onSpinWait()`, locking a CPU core at 100%.
+* **Root Cause 2 (Non-Power-of-Two Overflow):** Non-power-of-two buffer pools (e.g. 3 buffers with power-of-two capacity 4) allowed invalid indices (e.g. 3) to pass modulo masking.
+* **Fix Applied:**
+  - Added strict bounds checking: `if (bufferIndex < 0 || bufferIndex >= bufs.length) throw new IllegalArgumentException(...)`.
+  - Added full pool detection: `if (pos - head >= totalBuffers) throw new IllegalStateException("Buffer pool is full")`.
+  - In the `dif < 0` branch, re-verify `pos - currentHead >= totalBuffers` and throw immediately instead of spinning forever.
+* **Verification:** `BufferPoolCheckoutCheckinTest` (JCStress) and `BugVerificationTest.proof24` + `proof25`.
+
+### 8.4 OpenJDK JCStress Suite & Concurrency Proof Verification Matrix
+* **OpenJDK JCStress 0.16 Integration:** Added to `pom.xml` with full annotation processor and compilation support.
+* **`WakePollerStoreLoadTest` (7 Concurrency Tests):**
+  1. `WakePollerStoreLoadTest`: Dekker StoreLoad barrier prevents lost wakeup hangs (`0, 0` forbidden $\to$ 0 matches).
+  2. `MpscSlotTest`: Release-acquire barrier on MPSC slot sequence prevents reading uninitialized payload (`1, 0, 0` forbidden $\to$ 0 matches).
+  3. `IoUringSqeSubmissionTest`: Release barrier on `sqTail` ensures 64-byte SQE integrity before kernel reads (`1, 0, 0, 0` forbidden $\to$ 0 matches).
+  4. `IoUringCqeReapTest`: Acquire barrier on `cqTail` guarantees 16-byte CQE visibility (`1, 0, 0` forbidden $\to$ 0 matches).
+  5. `BufferPoolCheckoutCheckinTest`: Bounded buffer sequence handoff prevents stale buffer reads (`2, 0` forbidden $\to$ 0 matches).
+  6. `LoopTerminationHeadProgressTest`: Acquire on `sqHead` guarantees submit loop termination (`-1` forbidden $\to$ 0 matches).
+  7. `ControlTaskHandoffTest`: Control task completion barrier guarantees result visibility (`1, 0` forbidden $\to$ 0 matches).
+* **JCStress Execution Result:** **196 planned configs, 196 passed, 0 failed, 0 errors, 0 soft errors**.
+* **JUnit Concurrency Proofs:** 16 targeted proofs in `BugVerificationTest` (`proof11` through `proof26`) passing 100%.
+
+### 8.5 Benchmark Regression Verification Across All Workloads
+Full benchmark execution post-fix confirms **zero performance regression** and all-time record throughput:
+* **Multi-Thread NVMe Saturation (`MultiThreadScalingBenchmark`, SINGLE_FILE):**
+  - **Direct Read 1T:** **324,606 ops/s (1,268 MB/s)**
+  - **Direct Read 2T:** **687,842 ops/s (2,687 MB/s)**
+  - **Direct Read 4T:** **718,277 ops/s (2,806 MB/s)** (PCIe 4.0 read lane saturation)
+  - **Direct Read 8T:** **716,658 ops/s (2,799 MB/s)**
+  - **Direct Read 16T:** **711,750 ops/s (2,780 MB/s)**
+  - **Direct Write 1T:** **441,522 ops/s (1,725 MB/s)**
+  - **Direct Write 2T:** **593,450 ops/s (2,318 MB/s)**
+  - **Direct Write 4T:** **527,334 ops/s (2,060 MB/s)**
+  - **Direct Write 8T:** **572,150 ops/s (2,235 MB/s)**
+  - **Direct Write 16T:** **639,026 ops/s (2,496 MB/s)** (+10.4% faster than 16T FileChannel 578k ops/s)
+* **Direct Read QD Scaling (`DirectReadBenchmark`):**
+  - QD=64 (SINGLE_FILE): **416,213 ops/s** (77.6 ns user/op, 0.3626 enters/op)
+  - QD=128 (SINGLE_FILE): **587,136 ops/s** (23.4 ns user/op, 0.0953 enters/op)
+  - QD=128 (MULTI_FILE, 2,211 files): **425,937 ops/s** (64.9 ns user/op)
+* **Direct Write (`DirectWriteBenchmark`):**
+  - SINGLE_FILE: **441,522 ops/s** (27.9 ns user/op, 0.0520 enters/op)
+  - MULTI_FILE (2,211 files): **313,231 ops/s** (36.0 ns user/op, 0.0520 enters/op)
+* **Project Loom Virtual Threads (`VirtualThreadBenchmark`):**
+  - 1,000 VTs: **564,100 ops/s** with **3.2 ns/op kernel CPU** vs FileChannel 300,989 ops/s with 28.8 ns/op kernel CPU (**+87.4% faster / 1.87x over FileChannel, 88.9% less kernel overhead**).
+* **Pure FFM NOP Dispatch (`NopBenchmark`):**
+  - **11,437,386 ops/s** (11.9 ns user/op, 0.0313 enters/op, 0.000 B/op heap allocation).
+
 
