@@ -83,6 +83,7 @@ public class MultiThreadScalingBenchmark {
         public ByteBuffer alignedBuffer;
 
         public int reapedCount;
+        public int inFlight;
         public ResultConsumer consumer;
 
         @Setup(Level.Trial)
@@ -90,14 +91,15 @@ public class MultiThreadScalingBenchmark {
             int threadCount = params.getThreadCount();
             int safeBufferCount = IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount);
             this.qd = Math.max(16, Math.min(64, safeBufferCount));
-            this.submitBatch = (qd <= 1) ? 1 : (threadCount >= 16 ? 8 : (threadCount >= 8 ? 16 : Math.min(qd, 32)));
-            this.waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
+            this.submitBatch = (qd <= 1) ? 1 : 8;
+            this.waitBatch = 1;
             DatasetManager.TaskPool pool = benchState.readDataset.generateThreadTasks(
                     params.getThreadIndex(), threadCount, SCALING_TASK_POOL_SIZE);
             this.taskFileIndices = pool.fileIndices();
             this.taskOffsets = pool.offsets();
             this.threadOffset = 0;
-            int ringEntries = Math.max(128, qd * 2);
+            this.inFlight = 0;
+            int ringEntries = Math.max(256, qd * 2);
 
             ring = new JUring(ringEntries,
                     IORING_SETUP_SINGLE_ISSUER,
@@ -110,7 +112,8 @@ public class MultiThreadScalingBenchmark {
                 throw new RuntimeException("Failed to register files in JUring: " + regRet);
             }
 
-            ring.registerBuffers(DatasetManager.DEFAULT_BUFFER_SIZE, qd);
+            int bufCount = Math.min(safeBufferCount, Math.max(128, qd * 2));
+            ring.registerBuffers(DatasetManager.DEFAULT_BUFFER_SIZE, bufCount);
 
             channels = benchState.readDataset.openFileChannels(true);
             alignedBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
@@ -129,6 +132,16 @@ public class MultiThreadScalingBenchmark {
 
         @TearDown(Level.Trial)
         public void tearDown() {
+            if (ring != null && inFlight > 0) {
+                try {
+                    while (inFlight > 0) {
+                        int reaped = ring.submitAndWaitForBatchResult(1, qd, result -> {
+                            this.ring.checkInBuffer(result.bufferIdx());
+                        });
+                        inFlight = Math.max(0, inFlight - reaped);
+                    }
+                } catch (Exception ignored) {}
+            }
             DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);
             if (ring != null) {
@@ -224,58 +237,48 @@ public class MultiThreadScalingBenchmark {
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int localOffset = state.threadOffset;
-        state.threadOffset = (localOffset + totalTasks) & taskMask;
         final int qd = state.qd;
         final int submitBatch = state.submitBatch;
         final int waitBatch = state.waitBatch;
 
-        state.reapedCount = 0;
-        int submitted = 0;
-        int taskIndex = 0;
-        int submitsIssued = 0;
-        int waitsIssued = 0;
+        int inFlight = state.inFlight;
+        int threadOffset = state.threadOffset;
         int unsubmitted = 0;
+        int reapedTotal = 0;
+        int enters = 0;
 
-        while (state.reapedCount < totalTasks) {
-            while ((submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+        while (inFlight < qd) {
+            int bufIdx = ring.checkOutBuffer();
+            if (bufIdx < 0) break;
+            int idx = threadOffset++ & taskMask;
+            ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+            inFlight++;
+            unsubmitted++;
+        }
+
+        while (reapedTotal < totalTasks) {
+            int remaining = totalTasks - reapedTotal;
+            int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+            int reaped = ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
+            enters++;
+            inFlight -= reaped;
+            reapedTotal += reaped;
+
+            while (inFlight < qd) {
                 int bufIdx = ring.checkOutBuffer();
-                if (bufIdx < 0) {
-                    break;
-                }
-
-                int idx = (localOffset + taskIndex) & taskMask;
-                int fileIdx = taskFileIndices[idx];
-                long offset = taskOffsets[idx];
-
-                ring.prepareReadFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
-                submitted++;
-                unsubmitted++;
-                taskIndex++;
-
-                if (unsubmitted >= submitBatch) {
-                    ring.submit();
-                    submitsIssued++;
-                    unsubmitted = 0;
-                    ring.peekForBatchResult(qd, state.consumer);
-                }
-            }
-
-            int reaped = ring.peekForBatchResult(qd, state.consumer);
-            if (reaped == 0 && state.reapedCount < totalTasks) {
-                int remaining = totalTasks - state.reapedCount;
-                int inFlight = submitted - state.reapedCount;
-                if (inFlight > 0) {
-                    int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
-                    ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-                    waitsIssued++;
-                    unsubmitted = 0;
-                }
+                if (bufIdx < 0) break;
+                int idx = threadOffset++ & taskMask;
+                ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+                inFlight++;
             }
         }
 
+        state.inFlight = inFlight;
+        state.threadOffset = threadOffset;
+        state.reapedCount = reapedTotal;
+
         int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
+        int totalEnters = countedEnters > 0 ? countedEnters : enters;
         counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         cpu.end();
         blackhole.consume(state.reapedCount);

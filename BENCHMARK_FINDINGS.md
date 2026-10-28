@@ -28,13 +28,14 @@ This investigation resolved the core questions regarding JUring's throughput vs.
      3. **Microscopic User-Space Hot Path**: HotSpot C2 JIT compiles JUring's user-space loop into zero-allocation (`0.000 B/op`) primitive `VarHandle` memory stores taking only **37.8 ns of user CPU per op**. In contrast, `fio` spends **~250 ns per op** calling `clock_gettime` twice per op, updating multi-array latency histograms, and rolling percentiles.
 
 3. **Direct Read Status & Breakthrough Parity:**
-   * Direct Read is 100% bit-accurate and verified: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 94 unit/regression tests pass.
+   * Direct Read is 100% bit-accurate and verified: 100/100 poison-buffer reads bit-for-bit matched disk content ([`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java)); all 98 unit/regression tests pass.
    * QD=128 on 2,211 files delivers **383,246 ops/s (1,570 MB/s)**; 8 threads on 2,211 files delivers **478,576 ops/s (1,869 MB/s)**.
-   * Fusing SQE submission and completion waiting via `submitAndWaitForBatchResult` reduced syscalls from 0.247 to 0.128 enters/op.
-   * With fused syscalls, JUring Read surges across thread tiers:
-     - 2 Threads: **651,847 ops/s (2,546 MB/s)** vs tuned `fio` 634,000 IOPS (**+2.8% faster than fio**).
-     - 4 Threads: **717,085 ops/s (2,801 MB/s)** vs tuned `fio` 627,346 IOPS (**+14.3% faster than fio**).
-     - 8 Threads: **716,172 ops/s (2,798 MB/s)** vs tuned `fio` 635,000 IOPS (**+12.8% faster than fio**).
+   * Fusing SQE submission and completion waiting via `submitAndWaitForBatchResult` with in-flight queue pipelining eliminated NVMe queue draining stalls:
+     - 1 Thread: **325,176 ops/s (1,270 MB/s)** vs tuned `fio` 341,230 IOPS (**95.3% parity / +5.4% faster than default fio 308,387 IOPS**).
+     - 2 Threads: **604,416 ops/s (2,361 MB/s)** vs tuned `fio` 580,200 IOPS (**+4.2% faster than fio**).
+     - 4 Threads: **710,147 ops/s (2,774 MB/s)** vs tuned `fio` 627,346 IOPS (**+13.2% faster than fio**).
+     - 8 Threads: **710,908 ops/s (2,777 MB/s)** vs tuned `fio` 635,000 IOPS (**+11.9% faster than fio**).
+     - 16 Threads: **708,510 ops/s (2,768 MB/s)** vs tuned `fio` 631,000 IOPS (**+12.3% faster than fio**).
 
 4. **Discovery of Physical SLC Exhaustion & The 16-Thread Anomaly:**
    * The SSD has a **~20 GB dynamic SLC cache**. During continuous writes, write speed sustains **2.27 GB/s (581k IOPS)** for ~20.5 GB (14.5 seconds), then drops to **~750 MB/s (190k IOPS)** as the Phison PS5016-E16 enters physical TLC direct-to-die folding.
@@ -70,11 +71,11 @@ All benchmarks conducted on [`single_file_bench.bin`](file:///home/david/testDat
 
 | Concurrency | Native C fio (Default) | Native C fio (Tuned: fixedbufs + batch) | JUring DirectRead (Empirical) | JUring vs. Tuned fio | Primary Bottleneck |
 |---|---|---|---|---|---|
-| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **275,256 ops/s (1,075 MB/s)** | 80.7% parity | Kernel enter overhead (QD=64, single core) |
-| **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **651,847 ops/s (2,546 MB/s)** | **+2.8% faster** | NVMe PCIe 4.0 read bus scaling |
-| **4 Threads** | 605,000 IOPS (2,477 MB/s) | **627,346 IOPS (2,569 MB/s)** | **717,085 ops/s (2,801 MB/s)** | **+14.3% faster** | Fused submit/wait (0.128 enters/op) |
-| **8 Threads** | 620,000 IOPS (2,539 MB/s) | 635,000 IOPS (2,600 MB/s) | **716,172 ops/s (2,798 MB/s)** | **+12.8% faster** | PCIe Gen4 x4 lane read bandwidth |
-| **16 Threads** | 618,000 IOPS (2,530 MB/s) | 631,000 IOPS (2,584 MB/s) | **393,101 ops/s (1,536 MB/s)** | 2.18x vs FileChannel | CCX/CCD cross-die interconnect & lock contention |
+| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **325,176 ops/s (1,270 MB/s)** | **95.3% parity (+5.4% vs default fio)** | Pipelined submitAndWait (waitBatch=1) |
+| **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **604,416 ops/s (2,361 MB/s)** | **+4.2% faster** | NVMe PCIe 4.0 read bus scaling |
+| **4 Threads** | 605,000 IOPS (2,477 MB/s) | **627,346 IOPS (2,569 MB/s)** | **710,147 ops/s (2,774 MB/s)** | **+13.2% faster** | NVMe hardware lane saturation |
+| **8 Threads** | 620,000 IOPS (2,539 MB/s) | 635,000 IOPS (2,600 MB/s) | **710,908 ops/s (2,777 MB/s)** | **+11.9% faster** | PCIe Gen4 x4 lane read bandwidth |
+| **16 Threads** | 618,000 IOPS (2,530 MB/s) | 631,000 IOPS (2,584 MB/s) | **708,510 ops/s (2,768 MB/s)** | **+12.3% faster** | PCIe Gen4 bus ceiling saturation |
 
 ---
 
@@ -150,3 +151,60 @@ An exhaustive audit of the benchmark pipeline and physical hardware revealed two
 * **Sector Payload Verification**: Direct inspection of `single_file_bench.bin` via `hexdump` proved that all 4KB blocks contain the exact byte payloads written by JUring.
 * **Kernel `/proc/diskstats` Telemetry**: Logged exact transfers of 8 sectors (4,096 bytes) per operation across PCIe DMA with `O_DIRECT`, confirming zero page cache caching.
 * **Poison Buffer Test**: [`DirectReadVisualVerificationTest`](file:///home/david/projects/JUring/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java) pre-fills DMA buffers with `0xAA` poison bytes; 100% of reads overwrote the poison pattern and matched disk contents bit-for-bit with valid CRC32 checksums.
+
+---
+
+## 7. Deep Dive: 1-Thread Direct Read Deficit & The Pipelined Saturation Fix
+
+### 7.1 Diagnostic Audit: Why Was 1T Read Stuck at 275k ops/s?
+Native C `fio` achieved **341,230 IOPS** with tuned fixed buffers and batching, while JUring initially recorded **275,463 ops/s** (an 80.7% parity deficit). Detailed profiling uncovered three interrelated root causes:
+
+1. **JMH Invocation Queue Draining Stalls (The Primary Culprit):**
+   * The benchmark loop in `MultiThreadScalingBenchmark` operated over fixed chunks of 2,048 tasks (`DEFAULT_TASK_COUNT`).
+   * When `taskIndex == totalTasks`, submission ceased, and the remaining 64 in-flight requests were sequentially drained to 0:
+     $64 \to 56 \to 48 \to \dots \to 0$.
+   * At 275k ops/s, 2,048 tasks completed every **7.4 milliseconds**. Draining the hardware queue to 0 and re-priming it from 0 to 64 every 7.4 ms caused the NVMe controller's internal command pipeline to stall completely.
+   * Empirical profiling revealed that **over 16% of total iteration time was spent draining and restarting the controller pipeline**, capping throughput around 275k ops/s. In contrast, native `fio` maintains a steady queue depth of 64 continuously throughout the entire benchmark duration.
+
+2. **Stranded SQEs under High Submission Batching:**
+   * In the inner loop, requests were submitted only when `unsubmitted >= submitBatch`.
+   * When completions arrived in trickles (e.g., 8–16 completions reaped), new requests were prepared, but `unsubmitted` never reached the threshold (32). As a result, those SQEs remained in host memory, unsubmitted to the kernel, starving the NVMe controller.
+
+3. **Queue Draining Induced by Large `waitBatch`:**
+   * Systematically testing `waitBatch` values from 16 down to 1 revealed inverse throughput scaling:
+     - `waitBatch = 16`: **247,433 ops/s**
+     - `waitBatch = 8`:  **280,076 ops/s**
+     - `waitBatch = 4`:  **304,188 ops/s**
+     - `waitBatch = 2`:  **311,791 ops/s**
+     - `waitBatch = 1`:  **326,505 ops/s**
+   * Waiting for large completion batches (e.g., 8 or 16) allowed the NVMe hardware queue to drain from 64 down to 48 while blocked in `io_uring_enter`, starving hardware parallelism.
+
+### 7.2 The Pipelining Solution
+To eliminate the draining stalls and maintain constant hardware queue depth:
+1. **Pipelined In-Flight State Across Invocations:**
+   - Instead of draining the ring to 0 at the end of every JMH invocation, `inFlight` and `threadOffset` are preserved across invocations in `ThreadState`.
+   - Remaining requests are gracefully drained only once per benchmark trial in `@TearDown(Level.Trial)`.
+2. **Immediate Request Replenishment (`waitBatch = 1`):**
+   - The ring uses `minWait = 1` in `submitAndWaitForBatchResult(minWait, qd, consumer)`.
+   - As soon as completions are reaped, new SQEs are immediately prepared and submitted, keeping the hardware queue saturated at 63–64 at all times.
+3. **Registered Direct Buffer Headroom:**
+   - Single-thread registered buffer pools were expanded to `Math.max(128, qd * 2)` (128 buffers for QD=64) within OS `RLIMIT_MEMLOCK` boundaries, preventing any buffer allocation stalls.
+4. **Local Register Caching & Bitwise Task Indexing:**
+   - Task offsets and indices are mapped via power-of-two bitwise masks (`idx = threadOffset++ & taskMask`).
+   - `inFlight`, `threadOffset`, and `reapedTotal` are kept in local JVM CPU registers throughout the hot loop.
+
+### 7.3 Verified Empirical Results
+- **MultiThreadScalingBenchmark (Decision Mode, 3 Forks, 15 Iterations):**
+  - **1 Thread:** **325,176 ± 855 ops/s (1,270 MB/s)**, achieving **95.3% parity with tuned fio (341,230 IOPS)** and **+5.4% faster than default fio (308,387 IOPS)**.
+  - **2 Threads:** **604,416 ops/s (2,361 MB/s)** vs tuned fio 580,200 IOPS (**+4.2% faster**).
+  - **4 Threads:** **710,147 ops/s (2,774 MB/s)** vs tuned fio 627,346 IOPS (**+13.2% faster**).
+  - **8 Threads:** **710,908 ops/s (2,777 MB/s)** vs tuned fio 635,000 IOPS (**+11.9% faster**).
+  - **16 Threads:** **708,510 ops/s (2,768 MB/s)** vs tuned fio 631,000 IOPS (**+12.3% faster**).
+- **DirectReadBenchmark (Standalone):**
+  - QD=1: **15,990 ops/s** (141.6 ns user / op)
+  - QD=16: **99,801 ops/s** (153.0 ns user / op)
+  - QD=64: **319,903 ops/s** (93.4 ns user / op)
+  - QD=128: **572,686 ops/s** (39.7 ns user / op)
+- **Zero GC Allocation:** Pure `0.000 B/op` across all iterations.
+- **Unit & Verification Tests:** 98/98 unit tests passing with 100% bit-accurate disk matching.
+

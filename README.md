@@ -72,7 +72,7 @@ Here is what the empirical measurements on physical PCIe Gen4 NVMe flash storage
   * **Direct Read (8 Threads):** **715,163 ops/s (2,794 MB/s)** vs. tuned `fio` **635,000 IOPS** (**+12.6% faster**).
   * **Direct Write (1 Thread):** **475,094 ops/s (1,856 MB/s)** vs. tuned `fio` **414,450 IOPS** (**+14.6% faster**).
 * **Multi-File Scalability (`IOSQE_FIXED_FILE`):** Across 2,211 discrete pre-allocated files, JUring sustains **473,970 ops/s read (1,851 MB/s)** and **404,329 ops/s write (1,579 MB/s)**. Native C `fio` completely crashed under this workload with `EMFILE (Too many open files)`.
-* **Single-Thread Dominance over `FileChannel`:** A single JUring thread delivers **275,463 read ops/s** and **475,094 write ops/s**, easily outperforming **16 concurrent platform threads** of standard Java `FileChannel` (199,364 read ops/s, 239,030 write ops/s).
+* **Single-Thread Dominance over `FileChannel`:** A single JUring thread delivers **325,176 read ops/s** and **475,094 write ops/s**, easily outperforming **16 concurrent platform threads** of standard Java `FileChannel` (199,364 read ops/s, 239,030 write ops/s).
 * **Microscopic User CPU Cost:** Only **24.6 – 53.1 ns** of user CPU per op. HotSpot's C2 JIT compiles the ring submission and completion loops into zero-allocation (`0.000 B/op`) primitive `VarHandle` memory operations.
 * **Fused System Call Amortization:** By combining SQE submission and completion waiting into single `io_uring_enter` system calls, syscall frequency drops to **0.05 – 0.12 enters/op** (up to 20 operations per syscall).
 * **Project Loom Virtual Thread Dominance:** At 1,000 concurrent Virtual Threads on direct NVMe storage, standard `FileChannel` collapses to 256,395 ops/s due to carrier pool exhaustion. `JUringBlocking` sustains **617,735 ops/s (+140.9% faster / 2.41x over FileChannel)** while slashing kernel CPU time by **75.8%** (23.0 ns vs. 95.1 ns/op).
@@ -105,7 +105,7 @@ To measure the pure framework overhead of JUring and the FFM API, we first evalu
 | Benchmark Target | Throughput (ops/s) | Bandwidth | User CPU | Kernel CPU | Syscalls (`enters/op`) | Syscall Reduction | Heap Alloc |
 |---|---|---|---|---|---|---|---|
 | **`NopBenchmark.juringNop`** | **11,521,856 ops/s** | — | **11.3 ns/op** | 74.6 ns/op | **0.0313** | 32.0 ops / syscall | **0.000 B/op** |
-| **`DirectRead.juringDirectRead`** | **269,591 ops/s** | **1,053 MB/s** | **53.1 ns/op** | 2,166.4 ns/op | **0.1258** | **8.0x fewer syscalls** | **0.000 B/op** |
+| **`DirectRead.juringDirectRead`** | **319,903 ops/s** | **1,250 MB/s** | **93.4 ns/op** | 2,410.4 ns/op | **0.5830** | **1.7x fewer syscalls** | **0.000 B/op** |
 | `DirectRead.fileChannelDirectRead` | 15,731 ops/s | 61 MB/s | 572.5 ns/op | 3,664.1 ns/op | 1.0000 | 1.0 ops / syscall | 0.000 B/op |
 | **`DirectWrite.juringDirectWrite`** | **441,176 ops/s** | **1,723 MB/s** | **24.6 ns/op** | 1,953.0 ns/op | **0.0507** | **19.7x fewer syscalls**| **0.000 B/op** |
 | `DirectWrite.fileChannelDirectWrite` | 71,667 ops/s | 280 MB/s | 314.8 ns/op | 4,935.7 ns/op | 1.0000 | 1.0 ops / syscall | 0.000 B/op |
@@ -121,7 +121,7 @@ We scale platform thread concurrency across 1, 2, 4, 8, and 16 threads issuing p
 
 | Concurrency | Native C fio (Default) | Native C fio (Tuned: fixedbufs + batch) | JUring DirectRead (Empirical) | FileChannel (`DIRECT`) | JUring vs. Tuned fio | JUring vs. FileChannel |
 |---|---|---|---|---|---|---|
-| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **275,463 ops/s (1,076 MB/s)** | 15,958 ops/s ( 62 MB/s) | 80.7% parity | **17.3x faster** |
+| **1 Thread** | 308,387 IOPS (1,263 MB/s) | 341,230 IOPS (1,397 MB/s) | **325,176 ops/s (1,270 MB/s)** | 15,958 ops/s ( 62 MB/s) | 95.3% parity (+5.4% vs default fio) | **20.4x faster** |
 | **2 Threads** | 548,175 IOPS (2,244 MB/s) | 580,200 IOPS (2,376 MB/s) | **652,162 ops/s (2,548 MB/s)** | 30,859 ops/s (121 MB/s) | **+12.4% faster** | **21.1x faster** |
 | **4 Threads** | 605,000 IOPS (2,477 MB/s) | 627,346 IOPS (2,569 MB/s) | **716,882 ops/s (2,800 MB/s)** | 22,755 ops/s ( 89 MB/s) | **+14.3% faster** | **31.5x faster** |
 | **8 Threads** | 620,000 IOPS (2,539 MB/s) | 635,000 IOPS (2,600 MB/s) | **715,163 ops/s (2,794 MB/s)** | 112,413 ops/s ( 439 MB/s) | **+12.6% faster** | **6.4x faster** |
