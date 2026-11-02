@@ -371,18 +371,28 @@ class BenchmarkSuiteValidationTest {
         bState.distribution = "MULTI_FILE";
         bState.setup();
 
-        VirtualThreadBenchmark.ThreadState tState = new VirtualThreadBenchmark.ThreadState();
-        tState.virtualThreads = 100;
-        tState.setup(bState);
+        VirtualThreadBenchmark.JuringVirtualThreadState jState = new VirtualThreadBenchmark.JuringVirtualThreadState();
+        jState.virtualThreads = 100;
+        jState.setup(bState);
 
         try {
             StorageAuxCounters storage = new StorageAuxCounters();
-
-            bench.juringVirtualThreadRead(tState, bState, storage, null);
-            bench.fileChannelVirtualThreadRead(tState, bState, storage, null);
-            assertTrue(storage.bytesProcessed > 0, "Storage counter should have recorded read bytes");
+            bench.juringVirtualThreadRead(jState, bState, storage, null);
+            assertTrue(storage.bytesProcessed > 0, "Storage counter should have recorded read bytes for JUring");
         } finally {
-            tState.tearDown();
+            jState.tearDown();
+        }
+
+        VirtualThreadBenchmark.FileChannelVirtualThreadState fcState = new VirtualThreadBenchmark.FileChannelVirtualThreadState();
+        fcState.virtualThreads = 100;
+        fcState.setup(bState);
+
+        try {
+            StorageAuxCounters storage = new StorageAuxCounters();
+            bench.fileChannelVirtualThreadRead(fcState, bState, storage, null);
+            assertTrue(storage.bytesProcessed > 0, "Storage counter should have recorded read bytes for FileChannel");
+        } finally {
+            fcState.tearDown();
         }
     }
 

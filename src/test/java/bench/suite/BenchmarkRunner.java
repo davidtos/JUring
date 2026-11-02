@@ -103,6 +103,7 @@ public class BenchmarkRunner {
                 case "--buffered" -> bufferedOnly = true;
                 case "--latency" -> latencyOnly = true;
                 case "--virtual", "--virtual-threads" -> virtualOnly = true;
+                case "--max-pool-size", "--vt-1024" -> customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=1024");
                 case "--fio", "--fio-compare", "--fio-workload" -> fioOnly = true;
                 case "--threads-scaling" -> threadsScaling = true;
                 case "--gc" -> attachGc = true;
@@ -655,6 +656,7 @@ public class BenchmarkRunner {
         System.out.println("  --buffered          Run only Buffered / Page Cache benchmarks");
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
         System.out.println("  --virtual           Run Project Loom Virtual Threads scaling benchmark (50..1000 VTs)");
+        System.out.println("  --max-pool-size     Run with -Djdk.virtualThreadScheduler.maxPoolSize=1024");
         System.out.println("  --fio               Run fio workload parity comparison benchmark (O_DIRECT, 10GB file, 4KB blocks, full latency telemetry)");
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
