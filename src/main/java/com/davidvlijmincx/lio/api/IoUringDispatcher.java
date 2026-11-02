@@ -80,6 +80,15 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     private static final IoUringRegister ioUringRegister = libCDispatcher.ioUringRegister();
+    static volatile IoUringRegister REGISTER_HOOK = null;
+
+    private long callIoUringRegister(MemorySegment callState, int fd, int opcode, MemorySegment arg, int nrArgs) {
+        IoUringRegister hook = REGISTER_HOOK;
+        if (hook != null) {
+            return hook.ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        }
+        return ioUringRegister.ioUringRegister(callState, fd, opcode, arg, nrArgs);
+    }
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -287,6 +296,65 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    private static final int IORING_REGISTER_PROBE = 8;
+    private static final int IO_URING_OP_SUPPORTED = 1;
+
+    static final byte[] REQUIRED_OPCODES = {
+            IORING_OP_NOP,
+            IORING_OP_READV,
+            IORING_OP_WRITEV,
+            IORING_OP_READ_FIXED,
+            IORING_OP_WRITE_FIXED,
+            IORING_OP_ASYNC_CANCEL,
+            IORING_OP_OPENAT,
+            IORING_OP_CLOSE,
+            IORING_OP_READ,
+            IORING_OP_WRITE
+    };
+
+    static String getOpcodeName(byte op) {
+        return switch (op) {
+            case IORING_OP_NOP -> "IORING_OP_NOP";
+            case IORING_OP_READV -> "IORING_OP_READV";
+            case IORING_OP_WRITEV -> "IORING_OP_WRITEV";
+            case IORING_OP_READ_FIXED -> "IORING_OP_READ_FIXED";
+            case IORING_OP_WRITE_FIXED -> "IORING_OP_WRITE_FIXED";
+            case IORING_OP_ASYNC_CANCEL -> "IORING_OP_ASYNC_CANCEL";
+            case IORING_OP_OPENAT -> "IORING_OP_OPENAT";
+            case IORING_OP_CLOSE -> "IORING_OP_CLOSE";
+            case IORING_OP_READ -> "IORING_OP_READ";
+            case IORING_OP_WRITE -> "IORING_OP_WRITE";
+            default -> "OP_" + Byte.toUnsignedInt(op);
+        };
+    }
+
+    void probeSupportedOpcodes() {
+        int nrOps = 256;
+        long probeSize = 16L + (long) nrOps * 8L;
+        MemorySegment probeBuf = libCDispatcher.calloc(probeSize);
+        try {
+            long res = callIoUringRegister(this.callState, this.ringFd, IORING_REGISTER_PROBE, probeBuf, nrOps);
+            if (res < 0) {
+                int err = LibCDispatcher.errno(this.callState);
+                throw new UnsupportedOperationException("Kernel does not support IORING_REGISTER_PROBE (Linux 5.6+ required): errno=" + err + " - " + libCDispatcher.strerror(err));
+            }
+            int opsLen = Byte.toUnsignedInt(probeBuf.get(JAVA_BYTE, 1L));
+            for (byte op : REQUIRED_OPCODES) {
+                int opIndex = Byte.toUnsignedInt(op);
+                if (opIndex >= opsLen) {
+                    throw new UnsupportedOperationException("Kernel does not support required io_uring opcode: " + getOpcodeName(op) + " (op=" + opIndex + ", kernel 5.6+ required)");
+                }
+                long opOffset = 16L + (long) opIndex * 8L;
+                short flags = probeBuf.get(JAVA_SHORT, opOffset + 2L);
+                if ((flags & IO_URING_OP_SUPPORTED) == 0) {
+                    throw new UnsupportedOperationException("Kernel does not support required io_uring opcode: " + getOpcodeName(op) + " (op=" + opIndex + ", kernel 5.6+ required)");
+                }
+            }
+        } finally {
+            libCDispatcher.free(probeBuf);
+        }
+    }
+
     static IoUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
         return create(queueDepth, 0, ioUringOptions);
     }
@@ -295,10 +363,25 @@ final class IoUringDispatcher implements AutoCloseable {
         MemorySegment ring = NativeDispatcher.C.calloc(ring_layout.byteSize());
         IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
 
-        int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, IoUringOptions.combineOptions(ioUringOptions));
+        int combinedFlags = IoUringOptions.combineOptions(ioUringOptions);
+        int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, combinedFlags);
         if (ret < 0) {
             dispatcher.close();
-            throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(-ret));
+            int err = -ret;
+            String detail = libCDispatcher.strerror(err);
+            if (err == 22 /* EINVAL */ || err == 95 /* EOPNOTSUPP */ || err == 38 /* ENOSYS */) {
+                throw new IllegalArgumentException("Failed to initialize io_uring queue (" + detail + ", errno=" + err +
+                        "): requested flags 0x" + Integer.toHexString(combinedFlags) +
+                        " or queueDepth=" + queueDepth + " not supported by this kernel (Linux 6.1+ recommended for DEFER_TASKRUN / SINGLE_ISSUER)");
+            }
+            throw new RuntimeException("Failed to initialize queue: " + detail + " (errno=" + err + ")");
+        }
+
+        try {
+            dispatcher.probeSupportedOpcodes();
+        } catch (Throwable t) {
+            dispatcher.close();
+            throw t;
         }
 
         return dispatcher;
@@ -979,7 +1062,7 @@ final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, -1);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, this.ringFd);
-            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
+            long res = callIoUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
             if (res == 1L) {
                 int regFd = up.get(JAVA_INT, 0L);
                 this.enterRingFd = regFd;
@@ -1071,7 +1154,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
         int fd = this.ringFd;
-        long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_BUFFERS, iovecs, nrIovecs);
+        long res = callIoUringRegister(this.callState, fd, IORING_REGISTER_BUFFERS, iovecs, nrIovecs);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1102,7 +1185,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
         int fd = this.ringFd;
-        long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
+        long res = callIoUringRegister(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1133,7 +1216,7 @@ final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, offset);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, fdArray.address());
-            long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_FILES_UPDATE, up, count);
+            long res = callIoUringRegister(this.callState, fd, IORING_REGISTER_FILES_UPDATE, up, count);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -1164,7 +1247,7 @@ final class IoUringDispatcher implements AutoCloseable {
             MemorySegment values = tempArena.allocate(JAVA_INT, 2);
             values.setAtIndex(JAVA_INT, 0, bounded);
             values.setAtIndex(JAVA_INT, 1, unbounded);
-            long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_IOWQ_MAX_WORKERS, values, 2);
+            long res = callIoUringRegister(this.callState, fd, IORING_REGISTER_IOWQ_MAX_WORKERS, values, 2);
             if (res < 0) {
                 throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(LibCDispatcher.errno(this.callState)));
             }

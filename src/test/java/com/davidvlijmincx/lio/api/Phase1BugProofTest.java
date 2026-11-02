@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -623,6 +624,42 @@ class Phase1BugProofTest {
             } finally {
                 IoUringDispatcher.ENTER_HOOK = null;
             }
+        }
+    }
+
+    @Test
+    void step1_10_probeOpcodesAndUnsupportedFlags() {
+        // 1. Test ring creation with an unsupported setup flag -> readable IllegalArgumentException
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                new JUring(4, IoUringOptions.UNSUPPORTED_TEST_FLAG));
+        assertThat(ex.getMessage())
+                .contains("Failed to initialize io_uring queue")
+                .contains("not supported by this kernel")
+                .contains("0x40000000");
+
+        // 2. Test ring creation failing when required opcode is reported unsupported by IORING_REGISTER_PROBE
+        IoUringDispatcher.REGISTER_HOOK = (callState, fd, opcode, arg, nrArgs) -> {
+            if (opcode == 8 /* IORING_REGISTER_PROBE */) {
+                // Populate probe buffer with opsLen = 30, but clear flags for IORING_OP_WRITE (23)
+                arg.set(JAVA_BYTE, 1L, (byte) 30);
+                for (int i = 0; i < 30; i++) {
+                    long opOffset = 16L + (long) i * 8L;
+                    arg.set(JAVA_BYTE, opOffset, (byte) i);
+                    if (i != 23) { // IORING_OP_WRITE unsupported
+                        arg.set(JAVA_SHORT, opOffset + 2L, (short) 1); // SUPPORTED
+                    }
+                }
+                return 0L;
+            }
+            return 0L;
+        };
+        try {
+            UnsupportedOperationException probeEx = assertThrows(UnsupportedOperationException.class, () ->
+                    new JUring(4, IORING_SETUP_SINGLE_ISSUER));
+            assertThat(probeEx.getMessage())
+                    .contains("Kernel does not support required io_uring opcode: IORING_OP_WRITE");
+        } finally {
+            IoUringDispatcher.REGISTER_HOOK = null;
         }
     }
 
