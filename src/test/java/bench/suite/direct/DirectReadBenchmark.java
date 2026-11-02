@@ -1,6 +1,5 @@
 package bench.suite.direct;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.StorageAuxCounters;
@@ -159,8 +158,7 @@ public class DirectReadBenchmark {
     }
 
     @Benchmark
-    public void juringDirectRead(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
-        cpu.begin();
+    public void juringDirectRead(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
         ring.takeEnterCount();
         final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();
@@ -212,13 +210,11 @@ public class DirectReadBenchmark {
         int countedEnters = ring.takeEnterCount();
         int totalEnters = countedEnters > 0 ? countedEnters : enters;
         counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
         blackhole.consume(state.reapedCount);
     }
 
     @Benchmark
-    public void fileChannelDirectRead(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
-        cpu.begin();
+    public void fileChannelDirectRead(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();
         final long[] taskOffsets = benchState.dataset.getTaskOffsets();
@@ -237,7 +233,6 @@ public class DirectReadBenchmark {
         }
 
         counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
     }
 
     public static void main(String[] args) throws Exception {

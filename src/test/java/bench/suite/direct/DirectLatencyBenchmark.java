@@ -1,6 +1,5 @@
 package bench.suite.direct;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.StorageAuxCounters;
@@ -325,8 +324,7 @@ public class DirectLatencyBenchmark {
         }
 
         @Benchmark
-        public void juringDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
-            cpu.begin();
+        public void juringDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
             ring.takeEnterCount();
             final long maxBlocks = benchState.maxBlocks;
@@ -396,13 +394,11 @@ public class DirectLatencyBenchmark {
             int countedEnters = ring.takeEnterCount();
             int totalEnters = countedEnters > 0 ? countedEnters : enters;
             counters.record(totalEnters, (long) totalTasks * BLOCK_SIZE);
-            cpu.end();
             if (blackhole != null) blackhole.consume(state.reapedCount);
         }
 
         @Benchmark
-        public void juringDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
-            cpu.begin();
+        public void juringDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
             ring.takeEnterCount();
             final long maxBlocks = benchState.maxBlocks;
@@ -472,13 +468,11 @@ public class DirectLatencyBenchmark {
             int countedEnters = ring.takeEnterCount();
             int totalEnters = countedEnters > 0 ? countedEnters : enters;
             counters.record(totalEnters, (long) totalTasks * BLOCK_SIZE);
-            cpu.end();
             if (blackhole != null) blackhole.consume(state.reapedCount);
         }
 
         @Benchmark
-        public void fileChannelDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
-            cpu.begin();
+        public void fileChannelDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
             final FileChannel fc = state.readChannel;
             final ByteBuffer buf = state.alignedBuf;
             final long maxBlocks = benchState.maxBlocks;
@@ -507,12 +501,10 @@ public class DirectLatencyBenchmark {
             }
 
             counters.record(totalTasks, (long) totalTasks * BLOCK_SIZE);
-            cpu.end();
         }
 
         @Benchmark
-        public void fileChannelDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
-            cpu.begin();
+        public void fileChannelDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
             final FileChannel fc = state.writeChannel;
             final ByteBuffer buf = state.alignedBuf;
             final long maxBlocks = benchState.maxBlocks;
@@ -541,7 +533,6 @@ public class DirectLatencyBenchmark {
             }
 
             counters.record(totalTasks, (long) totalTasks * BLOCK_SIZE);
-            cpu.end();
         }
 
         public record BenchResult(long iops, double bwMBs, DatasetManager.FioLatencyHistogram slatHist, DatasetManager.FioLatencyHistogram clatHist, DatasetManager.FioLatencyHistogram latHist) {}

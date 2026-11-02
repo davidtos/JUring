@@ -1,6 +1,5 @@
 package bench.suite.direct;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.StorageAuxCounters;
@@ -125,8 +124,7 @@ public class VirtualThreadBenchmark {
     }
 
     @Benchmark
-    public void juringVirtualThreadRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws Exception {
-        cpu.begin();
+    public void juringVirtualThreadRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws Exception {
         final JUringBlocking ring = state.ring;
         ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
@@ -185,12 +183,10 @@ public class VirtualThreadBenchmark {
         int countedEnters = ring.takeEnterCount();
         int totalEnters = countedEnters > 0 ? countedEnters : 1;
         counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
     }
 
     @Benchmark
-    public void fileChannelVirtualThreadRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws Exception {
-        cpu.begin();
+    public void fileChannelVirtualThreadRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws Exception {
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
@@ -247,6 +243,5 @@ public class VirtualThreadBenchmark {
         }
 
         counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
     }
 }

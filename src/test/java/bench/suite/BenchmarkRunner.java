@@ -265,7 +265,7 @@ public class BenchmarkRunner {
         if (attachPerfnorm) {
             verifyRealPerfBinary();
             System.out.println("Attaching JMH LinuxPerfNormProfiler (-prof perfnorm)...");
-            builder.addProfiler("perfnorm");
+            builder.addProfiler(org.openjdk.jmh.profile.LinuxPerfNormProfiler.class, "events=task-clock,cycles,instructions,cycles:u,cycles:k");
         }
 
         if (attachAsync) {
@@ -284,16 +284,28 @@ public class BenchmarkRunner {
         printDerivedMetricsTable(results);
     }
 
+    private static double findSecondaryMetric(Map<String, ? extends org.openjdk.jmh.results.Result> sec, String name) {
+        if (sec == null || sec.isEmpty()) return Double.NaN;
+        if (sec.containsKey(name)) return sec.get(name).getScore();
+        for (Map.Entry<String, ? extends org.openjdk.jmh.results.Result> entry : sec.entrySet()) {
+            String k = entry.getKey();
+            if (k.equals(name) || k.endsWith(":" + name) || k.endsWith("." + name) || k.endsWith("#" + name)) {
+                return entry.getValue().getScore();
+            }
+        }
+        return Double.NaN;
+    }
+
     private static void printDerivedMetricsTable(Collection<RunResult> results) {
         if (results == null || results.isEmpty()) {
             return;
         }
-        System.out.println("\n==========================================================================================================");
-        System.out.println("                              DERIVED PER-OP METRICS (USER + KERNEL + SYSCALLS)                           ");
-        System.out.println("==========================================================================================================");
-        System.out.printf("%-42s | %18s | %11s | %11s | %10s%n",
-                "Benchmark (params)", "Throughput (ops/s)", "user ns/op", "sys ns/op", "enters/op");
-        System.out.println("-".repeat(106));
+        System.out.println("\n==================================================================================================================");
+        System.out.println("                               DERIVED PER-OP METRICS (CPU + HARDWARE CYCLES + SYSCALLS)                          ");
+        System.out.println("==================================================================================================================");
+        System.out.printf("%-42s | %18s | %14s | %13s | %13s | %10s%n",
+                "Benchmark (params)", "Throughput (ops/s)", "task-clock/op", "cycles:u/op", "cycles:k/op", "enters/op");
+        System.out.println("-".repeat(122));
         for (RunResult rr : results) {
             String fullName = rr.getParams().getBenchmark();
             String shortName = fullName.substring(fullName.lastIndexOf('.', fullName.lastIndexOf('.') - 1) + 1);
@@ -306,21 +318,31 @@ public class BenchmarkRunner {
             double score = rr.getPrimaryResult().getScore();
             double err = rr.getPrimaryResult().getScoreError();
             var sec = rr.getSecondaryResults();
-            double userNsRate = sec.containsKey("userNs") ? sec.get("userNs").getScore() : Double.NaN;
-            double sysNsRate = sec.containsKey("sysNs") ? sec.get("sysNs").getScore() : Double.NaN;
+
+            // From perfnorm: task-clock is reported in msec, so * 1_000_000.0 gives ns/op.
+            // Note: perfnorm results are already normalized per-op by JMH, do NOT divide by score/denomOps!
+            double taskClockMsec = findSecondaryMetric(sec, "task-clock");
+            double taskClockNsPerOp = !Double.isNaN(taskClockMsec) ? taskClockMsec * 1_000_000.0 : Double.NaN;
+            double cyclesU = findSecondaryMetric(sec, "cycles:u");
+            double cyclesK = findSecondaryMetric(sec, "cycles:k");
+
+            // Storage / syscalls counters (only @AuxCounters are per-second rates divided by primary score)
             double syscallsRate = sec.containsKey("syscalls") ? sec.get("syscalls").getScore() : Double.NaN;
-            double bytesRate = sec.containsKey("bytesProcessed") ? sec.get("bytesProcessed").getScore() : Double.NaN;
-            double denomOps = (!Double.isNaN(bytesRate) && bytesRate > 0) ? (bytesRate / 4096.0) : score;
-            double userNsPerOp = (!Double.isNaN(userNsRate) && denomOps > 0) ? userNsRate / denomOps : Double.NaN;
-            double sysNsPerOp = (!Double.isNaN(sysNsRate) && denomOps > 0) ? sysNsRate / denomOps : Double.NaN;
-            double entersPerOp = (!Double.isNaN(syscallsRate) && denomOps > 0) ? syscallsRate / denomOps : Double.NaN;
+            double entersPerOp = (!Double.isNaN(syscallsRate) && score > 0) ? syscallsRate / score : Double.NaN;
+
             String scoreCell = Double.isNaN(err) || Double.isInfinite(err)
                     ? String.format("%,18.0f", score)
                     : String.format("%,10.0f ± %,6.0f", score, err);
-            System.out.printf("%-42s | %18s | %11.1f | %11.1f | %10.4f%n",
-                    label, scoreCell, userNsPerOp, sysNsPerOp, entersPerOp);
+
+            String taskClockCell = !Double.isNaN(taskClockNsPerOp) ? String.format("%,10.1f ns", taskClockNsPerOp) : "             -";
+            String cyclesUCell = !Double.isNaN(cyclesU) ? String.format("%,13.1f", cyclesU) : "            -";
+            String cyclesKCell = !Double.isNaN(cyclesK) ? String.format("%,13.1f", cyclesK) : "            -";
+            String entersCell = !Double.isNaN(entersPerOp) ? String.format("%10.4f", entersPerOp) : "         -";
+
+            System.out.printf("%-42s | %18s | %14s | %13s | %13s | %10s%n",
+                    label, scoreCell, taskClockCell, cyclesUCell, cyclesKCell, entersCell);
         }
-        System.out.println("==========================================================================================================\n");
+        System.out.println("==================================================================================================================\n");
     }
 
     private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
@@ -528,6 +550,19 @@ public class BenchmarkRunner {
                     + safeRealPath(resolved) + "), which is not a genuine perf ELF binary (likely a script shim "
                     + "that excludes kernel time). Re-run with JMH_PERF=/usr/bin/perf, or use ./bench.sh.");
         }
+
+        java.nio.file.Path paranoidPath = java.nio.file.Path.of("/proc/sys/kernel/perf_event_paranoid");
+        if (java.nio.file.Files.exists(paranoidPath)) {
+            try {
+                int paranoid = Integer.parseInt(java.nio.file.Files.readString(paranoidPath).trim());
+                if (paranoid > 1) {
+                    throw new IllegalStateException("/proc/sys/kernel/perf_event_paranoid is " + paranoid
+                            + " (> 1). Kernel perf events would be silently dropped or stripped. "
+                            + "Run: sudo sysctl kernel.perf_event_paranoid=1 (or <= 1)");
+                }
+            } catch (java.io.IOException | NumberFormatException ignored) {}
+        }
+
         System.out.println("perfnorm will use perf binary: " + safeRealPath(resolved));
     }
 

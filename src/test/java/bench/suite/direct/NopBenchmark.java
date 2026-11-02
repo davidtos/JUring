@@ -1,6 +1,5 @@
 package bench.suite.direct;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.StorageAuxCounters;
 import com.davidvlijmincx.lio.api.JUring;
@@ -65,8 +64,7 @@ public class NopBenchmark {
     }
 
     @Benchmark
-    public void juringNop(ThreadState state, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
-        cpu.begin();
+    public void juringNop(ThreadState state, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
         ring.takeEnterCount();
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
@@ -104,7 +102,6 @@ public class NopBenchmark {
         int countedEnters = ring.takeEnterCount();
         int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
         counters.record(totalEnters, 0L);
-        cpu.end();
         blackhole.consume(state.reapedCount);
     }
 }

@@ -1,6 +1,5 @@
 package bench.suite.direct;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.StorageAuxCounters;
@@ -152,8 +151,7 @@ public class DirectWriteBenchmark {
     }
 
     @Benchmark
-    public void juringDirectWrite(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
-        cpu.begin();
+    public void juringDirectWrite(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
         ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
@@ -213,13 +211,11 @@ public class DirectWriteBenchmark {
         int countedEnters = ring.takeEnterCount();
         int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
         counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
         blackhole.consume(state.reapedCount);
     }
 
     @Benchmark
-    public void fileChannelDirectWrite(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
-        cpu.begin();
+    public void fileChannelDirectWrite(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
@@ -242,6 +238,5 @@ public class DirectWriteBenchmark {
         }
 
         counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
-        cpu.end();
     }
 }

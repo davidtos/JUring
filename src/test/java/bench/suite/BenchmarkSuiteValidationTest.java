@@ -1,6 +1,5 @@
 package bench.suite;
 
-import bench.suite.common.CpuAuxCounters;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.PreflightCheck;
@@ -378,10 +377,9 @@ class BenchmarkSuiteValidationTest {
 
         try {
             StorageAuxCounters storage = new StorageAuxCounters();
-            CpuAuxCounters cpu = new CpuAuxCounters();
 
-            bench.juringVirtualThreadRead(tState, bState, storage, cpu, null);
-            bench.fileChannelVirtualThreadRead(tState, bState, storage, cpu, null);
+            bench.juringVirtualThreadRead(tState, bState, storage, null);
+            bench.fileChannelVirtualThreadRead(tState, bState, storage, null);
             assertTrue(storage.bytesProcessed > 0, "Storage counter should have recorded read bytes");
         } finally {
             tState.tearDown();
@@ -507,24 +505,23 @@ class BenchmarkSuiteValidationTest {
         try {
             tState.setup(bState, null);
             StorageAuxCounters storage = new StorageAuxCounters();
-            CpuAuxCounters cpu = new CpuAuxCounters();
             DirectLatencyBenchmark.FioComparisonBenchmark bench =
                     new DirectLatencyBenchmark.FioComparisonBenchmark();
 
             // Run direct read with telemetry ON
-            bench.juringDirectRead(tState, bState, storage, cpu, null);
+            bench.juringDirectRead(tState, bState, storage, null);
             assertTrue(tState.reapedCount > 0, "Read operations must be reaped");
             assertTrue(tState.clatHistogram.getCount() > 0, "clat histogram must have recorded samples");
             assertTrue(tState.slatHistogram.getCount() > 0, "slat histogram must have recorded samples");
             assertTrue(tState.clatHistogram.getMeanMicros() > 0.0, "clat mean must be positive");
 
             // Run direct write with telemetry ON
-            bench.juringDirectWrite(tState, bState, storage, cpu, null);
+            bench.juringDirectWrite(tState, bState, storage, null);
             assertTrue(tState.reapedCount > 0, "Write operations must be reaped");
 
             // Run FileChannel reads and writes
-            bench.fileChannelDirectRead(tState, bState, storage, cpu, null);
-            bench.fileChannelDirectWrite(tState, bState, storage, cpu, null);
+            bench.fileChannelDirectRead(tState, bState, storage, null);
+            bench.fileChannelDirectWrite(tState, bState, storage, null);
         } catch (Exception e) {
             fail("FioComparisonBenchmark execution failed: " + e.getMessage(), e);
         } finally {
