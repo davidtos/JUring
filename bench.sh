@@ -15,6 +15,11 @@ if [[ -z "${JMH_PERF:-}" && -x /usr/bin/perf ]]; then
     export JMH_PERF=/usr/bin/perf
 fi
 
+# Raise soft file descriptor limit to hard limit (matches HotSpot -XX:+MaxFDLimit, prevents EMFILE in multi-file runs)
+if [[ $(ulimit -Sn) -lt $(ulimit -Hn) ]]; then
+    ulimit -n "$(ulimit -Hn)" 2>/dev/null || ulimit -n 65536 2>/dev/null || true
+fi
+
 PIN_CPUS=""
 FIO_COMPARE=false
 REPEATS=3
