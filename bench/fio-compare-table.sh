@@ -99,6 +99,17 @@ F_P50_STD=$(echo "$STATS" | jq -r '.fio_lat_p50_stddev')
 F_P99_MEAN=$(echo "$STATS" | jq -r '.fio_lat_p99_mean')
 F_P99_STD=$(echo "$STATS" | jq -r '.fio_lat_p99_stddev')
 
+# Pinning status
+PIN_INFO="Unpinned"
+if [[ -f "$DIR/meta.json" ]]; then
+    PIN_TYPE=$(jq -r '.pinning // "unpinned"' "$DIR/meta.json")
+    if [[ "$PIN_TYPE" == "pinned" ]]; then
+        PIN_CPUS_VAL=$(jq -r '.pin_cpus // "N/A"' "$DIR/meta.json")
+        PIN_APC_VAL=$(jq -r '.active_processor_count // "N/A"' "$DIR/meta.json")
+        PIN_INFO="Pinned (CPUs: $PIN_CPUS_VAL, -XX:ActiveProcessorCount=$PIN_APC_VAL, -XX:+UseG1GC)"
+    fi
+fi
+
 # Calculate percentage delta
 DELTA=$(awk -v j="$J_IOPS_MEAN" -v f="$F_IOPS_MEAN" 'BEGIN {
   if (f > 0) printf "%+.2f%%", ((j / f) - 1.0) * 100.0;
@@ -109,6 +120,7 @@ echo "==========================================================================
 echo "                             JUring vs Native C fio Head-to-Head Workload Comparison                                    "
 echo "========================================================================================================================"
 printf " Results Directory: %s (%d JMH runs, %d fio runs)\n" "$DIR" "$J_COUNT" "$F_COUNT"
+printf " Pinning Status:    %s\n" "$PIN_INFO"
 printf " Target File:       %s\n" "$FILE"
 printf " Block Size:        %s (O_DIRECT, fixed buffers, registered files)\n" "$BS"
 printf " Queue Depth (QD):  %s\n" "$QD"

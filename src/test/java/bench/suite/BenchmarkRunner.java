@@ -48,6 +48,10 @@ public class BenchmarkRunner {
         boolean attachGc = false;
         boolean attachAsync = false;
         Integer customThreads = null;
+        String pinCpus = System.getProperty("juring.pin", null);
+        if ("unpinned".equalsIgnoreCase(pinCpus) || "none".equalsIgnoreCase(pinCpus)) {
+            pinCpus = null;
+        }
 
         // Ensure java.class.path contains full test classpath when invoked via Maven exec:java
         String currentCp = System.getProperty("java.class.path", "");
@@ -143,6 +147,11 @@ public class BenchmarkRunner {
                         customThreads = Integer.parseInt(args[++i]);
                     }
                 }
+                case "--pin" -> {
+                    if (i + 1 < args.length) {
+                        pinCpus = args[++i].trim();
+                    }
+                }
                 case "--help" -> {
                     printHelp();
                     return;
@@ -157,8 +166,25 @@ public class BenchmarkRunner {
             }
         }
 
+        int totalCpus = Runtime.getRuntime().availableProcessors();
+        boolean isPinned = pinCpus != null && !pinCpus.isEmpty() && !pinCpus.equalsIgnoreCase("unpinned") && !pinCpus.equalsIgnoreCase("none");
+        if (isPinned) {
+            customJvmArgs.add("-XX:ActiveProcessorCount=" + totalCpus);
+            customJvmArgs.add("-XX:+UseG1GC");
+            customJvmArgs.add("-Dbenchmark.pinned=" + pinCpus);
+            customJvmArgs.add("-Djuring.pin=" + pinCpus);
+            System.setProperty("benchmark.pinned", pinCpus);
+            System.setProperty("juring.pin", pinCpus);
+            System.out.printf("Pinning active (CPUs: %s) -> passing -XX:ActiveProcessorCount=%d and -XX:+UseG1GC to JVM forks%n", pinCpus, totalCpus);
+        } else {
+            customJvmArgs.add("-Dbenchmark.pinned=unpinned");
+            customJvmArgs.add("-Djuring.pin=unpinned");
+            System.setProperty("benchmark.pinned", "unpinned");
+            System.setProperty("juring.pin", "unpinned");
+        }
+
         if (threadsScaling) {
-            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams);
+            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs);
             return;
         }
 
@@ -311,9 +337,16 @@ public class BenchmarkRunner {
             }
         }
 
+        String pinProp = System.getProperty("benchmark.pinned", System.getProperty("juring.pin", "unpinned"));
+        boolean isPinned = pinProp != null && !pinProp.equalsIgnoreCase("unpinned") && !pinProp.equalsIgnoreCase("none");
+        String pinStatus = isPinned
+                ? "PINNED (CPUs: " + pinProp + ") [-XX:ActiveProcessorCount=" + Runtime.getRuntime().availableProcessors() + ", -XX:+UseG1GC]"
+                : "UNPINNED";
+
         if (hasTracepoints) {
             System.out.println("\n==================================================================================================================================");
             System.out.println("                                      HARDWARE / KERNEL SYSCALL TRACEPOINTS PER OP (--syscalls)                                   ");
+            System.out.println(" Environment: Pinning = " + pinStatus);
             System.out.println("==================================================================================================================================");
             System.out.printf("%-42s | %18s | %14s | %16s | %12s | %12s | %10s%n",
                     "Benchmark (params)", "Throughput (ops/s)", "all sys_enter", "io_uring_enter", "pread64/op", "pwrite64/op", "futex/op");
@@ -361,6 +394,7 @@ public class BenchmarkRunner {
 
         System.out.println("\n==================================================================================================================");
         System.out.println("                               DERIVED PER-OP METRICS (CPU + HARDWARE CYCLES)                                     ");
+        System.out.println(" Environment: Pinning = " + pinStatus);
         System.out.println("==================================================================================================================");
         System.out.printf("%-42s | %18s | %14s | %13s | %13s%n",
                 "Benchmark (params)", "Throughput (ops/s)", "task-clock/op", "cycles:u/op", "cycles:k/op");
@@ -400,7 +434,8 @@ public class BenchmarkRunner {
     }
 
     private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
-                                        Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams) throws RunnerException {
+                                        Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
+                                        List<String> customJvmArgs) throws RunnerException {
         System.out.println("================================================================================");
         System.out.println("          Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)         ");
         System.out.println("================================================================================");
@@ -423,6 +458,9 @@ public class BenchmarkRunner {
 
             OptionsBuilder builder = new OptionsBuilder();
             builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
+            if (customJvmArgs != null && !customJvmArgs.isEmpty()) {
+                builder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
+            }
             if (customIncludes != null && !customIncludes.isEmpty()) {
                 for (String inc : customIncludes) {
                     builder.include(inc);
@@ -664,6 +702,7 @@ public class BenchmarkRunner {
         System.out.println("  --perfnorm          Attach LinuxPerfNormProfiler for hardware cycles and CPU task-clock");
         System.out.println("  --syscalls          Attach LinuxPerfNormProfiler to measure exact hardware/kernel syscall tracepoints");
         System.out.println("  --visual-read       Run visual direct read verification with live console output");
+        System.out.println("  --pin <cpus>        Pin benchmark JVM to specified CPUs (passes -XX:ActiveProcessorCount and -XX:+UseG1GC)");
         System.out.println("  --threads <N>       Set thread concurrency (1, 4, 8, 16)");
         System.out.println("  --help              Display this help message");
     }

@@ -87,6 +87,8 @@ else
     mvn -q test-compile
 fi
 
+TOTAL_CPUS=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+
 if [[ "$FIO_COMPARE" == "true" ]]; then
     if ! command -v jq &>/dev/null; then
         echo "Error: jq is required for --fio-compare but was not found in PATH." >&2
@@ -117,10 +119,24 @@ if [[ "$FIO_COMPARE" == "true" ]]; then
         BENCH_METHOD="juringDirectWrite"
     fi
 
+    cat <<EOF > "$RESULTS_DIR/meta.json"
+{
+  "pinning": "$([[ -n "$PIN_CPUS" ]] && echo "pinned" || echo "unpinned")",
+  "pin_cpus": $([[ -n "$PIN_CPUS" ]] && echo "\"$PIN_CPUS\"" || echo "null"),
+  "active_processor_count": $TOTAL_CPUS,
+  "gc": "$([[ -n "$PIN_CPUS" ]] && echo "G1GC" || echo "default")",
+  "mode": "rand$MODE",
+  "qd": $QD,
+  "runtime": $RUNTIME,
+  "target_file": "$TARGET_FILE"
+}
+EOF
+
     echo "=================================================================================="
     echo "       Starting JUring vs Native C fio Head-to-Head Comparison Suite             "
     echo "=================================================================================="
     echo " Results Directory: $RESULTS_DIR"
+    echo " Pinning:           $([[ -n "$PIN_CPUS" ]] && echo "Pinned ($PIN_CPUS)" || echo "Unpinned")"
     echo " Repeats (N):       $REPEATS"
     echo " Workload Mode:     rand$MODE"
     echo " Queue Depth (QD):  $QD"
@@ -135,11 +151,21 @@ if [[ "$FIO_COMPARE" == "true" ]]; then
 
         run_jmh() {
             echo " [Repeat $rep/$REPEATS] Running JMH FioComparisonBenchmark ($BENCH_METHOD)..."
-            local jmh_cmd=(java --enable-native-access=ALL-UNNAMED
+            local jvm_args=(java --enable-native-access=ALL-UNNAMED)
+            local fork_jvm_args=""
+            if [[ -n "$PIN_CPUS" ]]; then
+                jvm_args+=(-XX:ActiveProcessorCount="$TOTAL_CPUS" -XX:+UseG1GC -Djuring.pin="$PIN_CPUS")
+                fork_jvm_args="-XX:ActiveProcessorCount=$TOTAL_CPUS -XX:+UseG1GC -Djuring.pin=$PIN_CPUS"
+            else
+                jvm_args+=(-Djuring.pin="unpinned")
+                fork_jvm_args="-Djuring.pin=unpinned"
+            fi
+            local jmh_cmd=("${jvm_args[@]}"
                 -cp "target/test-classes:target/classes:$(cat target/cp.txt)"
                 org.openjdk.jmh.Main ".*FioComparisonBenchmark\\.${BENCH_METHOD}$"
                 -f 1 -wi 1 -w "${WARMUP}s" -i 1 -r "${RUNTIME}s"
                 -p qd="$QD" -p telemetry=true
+                -jvmArgsAppend "$fork_jvm_args"
                 -rf json -rff "$JMH_OUT")
             if [[ -n "$PIN_CPUS" ]]; then
                 taskset -c "$PIN_CPUS" "${jmh_cmd[@]}"
@@ -217,12 +243,20 @@ if [[ "$FIO_COMPARE" == "true" ]]; then
     exit 0
 fi
 
-CMD=(java --enable-native-access=ALL-UNNAMED
+LAUNCHER_JVM_FLAGS=(--enable-native-access=ALL-UNNAMED)
+if [[ -n "$PIN_CPUS" ]]; then
+    LAUNCHER_JVM_FLAGS+=(-XX:ActiveProcessorCount="$TOTAL_CPUS" -XX:+UseG1GC -Djuring.pin="$PIN_CPUS")
+    ARGS+=(--pin "$PIN_CPUS")
+else
+    LAUNCHER_JVM_FLAGS+=(-Djuring.pin="unpinned")
+fi
+
+CMD=(java "${LAUNCHER_JVM_FLAGS[@]}"
      -cp "target/test-classes:target/classes:$(cat target/cp.txt)"
      bench.suite.BenchmarkRunner "${ARGS[@]}")
 
 if [[ -n "$PIN_CPUS" ]]; then
-    echo "Pinning benchmark JVM to CPUs: $PIN_CPUS"
+    echo "Pinning benchmark JVM to CPUs: $PIN_CPUS (-XX:ActiveProcessorCount=$TOTAL_CPUS, -XX:+UseG1GC)"
     exec taskset -c "$PIN_CPUS" "${CMD[@]}"
 else
     exec "${CMD[@]}"
