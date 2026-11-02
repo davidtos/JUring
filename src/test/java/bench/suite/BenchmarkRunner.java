@@ -74,6 +74,8 @@ public class BenchmarkRunner {
         boolean attachPerfnorm = false;
         boolean attachSyscalls = false;
         boolean decision = false;
+        String customRff = null;
+        String resultsDir = System.getProperty("juring.results.dir", null);
         List<String> customIncludes = new ArrayList<>();
         Map<String, List<String>> customParams = new LinkedHashMap<>();
         List<String> customJvmArgs = new ArrayList<>();
@@ -100,6 +102,18 @@ public class BenchmarkRunner {
                 case "--async" -> attachAsync = true;
                 case "--perfnorm" -> attachPerfnorm = true;
                 case "--syscalls" -> attachSyscalls = true;
+                case "--rff", "--result" -> {
+                    if (i + 1 < args.length) {
+                        customRff = args[++i].trim();
+                    }
+                }
+                case "--results-dir" -> {
+                    if (i + 1 < args.length) {
+                        resultsDir = args[++i].trim();
+                        System.setProperty("juring.results.dir", resultsDir);
+                        customJvmArgs.add("-Djuring.results.dir=" + resultsDir);
+                    }
+                }
                 case "--include" -> {
                     if (i + 1 < args.length) {
                         customIncludes.add(args[++i].trim());
@@ -170,7 +184,7 @@ public class BenchmarkRunner {
         }
 
         if (threadsScaling) {
-            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs);
+            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs, customRff, resultsDir);
             return;
         }
 
@@ -178,6 +192,24 @@ public class BenchmarkRunner {
         builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
         if (!customJvmArgs.isEmpty()) {
             builder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
+        }
+
+        if (customRff != null) {
+            java.nio.file.Path p = java.nio.file.Path.of(customRff);
+            if (p.getParent() != null) {
+                try {
+                    java.nio.file.Files.createDirectories(p.getParent());
+                } catch (Exception ignored) {}
+            }
+            builder.result(customRff);
+            builder.resultFormat(org.openjdk.jmh.results.format.ResultFormatType.JSON);
+        } else if (resultsDir != null) {
+            java.nio.file.Path p = java.nio.file.Path.of(resultsDir, "jmh-result.json");
+            try {
+                if (p.getParent() != null) java.nio.file.Files.createDirectories(p.getParent());
+            } catch (Exception ignored) {}
+            builder.result(p.toString());
+            builder.resultFormat(org.openjdk.jmh.results.format.ResultFormatType.JSON);
         }
 
         // Execution mode
@@ -421,7 +453,7 @@ public class BenchmarkRunner {
 
     private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
                                         Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
-                                        List<String> customJvmArgs) throws RunnerException {
+                                        List<String> customJvmArgs, String customRff, String resultsDir) throws RunnerException {
         System.out.println("================================================================================");
         System.out.println("          Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)         ");
         System.out.println("================================================================================");
@@ -492,6 +524,22 @@ public class BenchmarkRunner {
             }
             if (attachAsync) {
                 builder.addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results-threads-" + t);
+            }
+
+            String effectiveRff = customRff;
+            if (effectiveRff == null && resultsDir != null) {
+                effectiveRff = java.nio.file.Path.of(resultsDir, "scaling.json").toString();
+            }
+            if (effectiveRff != null) {
+                String tierRff = effectiveRff.endsWith(".json")
+                        ? effectiveRff.substring(0, effectiveRff.length() - 5) + "-t" + t + ".json"
+                        : effectiveRff + "-t" + t + ".json";
+                java.nio.file.Path p = java.nio.file.Path.of(tierRff);
+                try {
+                    if (p.getParent() != null) java.nio.file.Files.createDirectories(p.getParent());
+                } catch (Exception ignored) {}
+                builder.result(tierRff);
+                builder.resultFormat(org.openjdk.jmh.results.format.ResultFormatType.JSON);
             }
 
             Collection<RunResult> results = new Runner(builder.build()).run();

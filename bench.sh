@@ -74,6 +74,13 @@ while [[ $# -gt 0 ]]; do
             ARGS+=("-Djuring.data.dir=$DATA_DIR")
             shift 2
             ;;
+        --results-dir)
+            RESULTS_DIR="$2"
+            export RESULTS_DIR
+            export JURING_RESULTS_DIR="$RESULTS_DIR"
+            ARGS+=("--results-dir" "$RESULTS_DIR")
+            shift 2
+            ;;
         --quick)
             RUNTIME=2
             REPEATS=2
@@ -121,8 +128,7 @@ if [[ "$FIO_COMPARE" == "true" ]]; then
         fi
     fi
 
-    DATE=$(date +%Y-%m-%d_%H%M%S)
-    RESULTS_DIR="results/$DATE"
+    RESULTS_DIR="${RESULTS_DIR:-results/$(date +%Y-%m-%d_%H%M%S)}"
     mkdir -p "$RESULTS_DIR"
 
     BENCH_METHOD="juringDirectRead"
@@ -157,7 +163,7 @@ EOF
     echo "----------------------------------------------------------------------------------"
 
     for ((rep = 1; rep <= REPEATS; rep++)); do
-        JMH_OUT="$RESULTS_DIR/jmh-$rep.json"
+        JMH_OUT="$RESULTS_DIR/jmh-${MODE}-$rep.json"
         FIO_OUT="$RESULTS_DIR/fio-${MODE}-$rep.json"
 
         run_jmh() {
@@ -230,7 +236,11 @@ EOF
             fi
 
             local fio_iops
-            fio_iops=$(jq -r '.jobs[0].read.iops // .jobs[0].write.iops // 0' "$FIO_OUT")
+            if [[ "$MODE" == "write" ]]; then
+                fio_iops=$(jq -r '.jobs[0].write.iops // 0' "$FIO_OUT")
+            else
+                fio_iops=$(jq -r '.jobs[0].read.iops // 0' "$FIO_OUT")
+            fi
             if awk "BEGIN {exit !($fio_iops <= 0)}"; then
                 echo "Error: fio reported zero IOPS ($fio_iops) in $FIO_OUT" >&2
                 exit 1
@@ -250,13 +260,16 @@ EOF
     done
 
     echo
-    ./bench/fio-compare-table.sh "$RESULTS_DIR"
+    ./bench/fio-compare-table.sh "$RESULTS_DIR" "$MODE"
     exit 0
 fi
 
 LAUNCHER_JVM_FLAGS=(--enable-native-access=ALL-UNNAMED)
 if [[ -n "${JURING_DATA_DIR:-}" ]]; then
     LAUNCHER_JVM_FLAGS+=("-Djuring.data.dir=$JURING_DATA_DIR")
+fi
+if [[ -n "${RESULTS_DIR:-}" ]]; then
+    LAUNCHER_JVM_FLAGS+=("-Djuring.results.dir=$RESULTS_DIR")
 fi
 if [[ -n "$PIN_CPUS" ]]; then
     LAUNCHER_JVM_FLAGS+=(-XX:ActiveProcessorCount="$TOTAL_CPUS" -XX:+UseG1GC -Djuring.pin="$PIN_CPUS")

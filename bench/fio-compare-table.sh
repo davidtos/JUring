@@ -12,8 +12,14 @@ if [[ -z "$DIR" || ! -d "$DIR" ]]; then
     exit 1
 fi
 
-JMH_FILES=("$DIR"/jmh-*.json)
-FIO_FILES=("$DIR"/fio-*.json)
+MODE_FILTER="${2:-}"
+if [[ -n "$MODE_FILTER" && -f "$DIR/jmh-$MODE_FILTER-1.json" ]]; then
+    JMH_FILES=("$DIR"/jmh-"$MODE_FILTER"-*.json)
+    FIO_FILES=("$DIR"/fio-"$MODE_FILTER"-*.json)
+else
+    JMH_FILES=("$DIR"/jmh-*.json)
+    FIO_FILES=("$DIR"/fio-*.json)
+fi
 
 if [[ ! -f "${JMH_FILES[0]:-}" ]]; then
     echo "Error: No JMH result files (jmh-*.json) found in $DIR" >&2
@@ -42,11 +48,11 @@ STATS=$(jq -s '
   ($jmh_runs | map(.primaryMetric.score)) as $j_iops |
   ($jmh_runs | map((.secondaryMetrics.bytesProcessed.score // (.primaryMetric.score * 4096.0)) / 1048576.0)) as $j_bw |
 
-  ($fio_runs | map(.jobs[0].read.iops // .jobs[0].write.iops // 0)) as $f_iops |
-  ($fio_runs | map((.jobs[0].read.bw_bytes // .jobs[0].write.bw_bytes // 0) / 1048576.0)) as $f_bw |
-  ($fio_runs | map((.jobs[0].read.lat_ns.mean // .jobs[0].write.lat_ns.mean // 0) / 1000.0)) as $f_lat_mean |
-  ($fio_runs | map((((.jobs[0].read.lat_ns.percentile["50.000000"] // .jobs[0].write.lat_ns.percentile["50.000000"] // 0) | tonumber) / 1000.0))) as $f_lat_p50 |
-  ($fio_runs | map((((.jobs[0].read.lat_ns.percentile["99.000000"] // .jobs[0].write.lat_ns.percentile["99.000000"] // 0) | tonumber) / 1000.0))) as $f_lat_p99 |
+  ($fio_runs | map(if ((.jobs[0].write.iops // 0) > 0) then .jobs[0].write.iops else .jobs[0].read.iops end)) as $f_iops |
+  ($fio_runs | map((if ((.jobs[0].write.bw_bytes // 0) > 0) then .jobs[0].write.bw_bytes else .jobs[0].read.bw_bytes end) / 1048576.0)) as $f_bw |
+  ($fio_runs | map((if ((.jobs[0].write.lat_ns.mean // 0) > 0) then .jobs[0].write.lat_ns.mean else .jobs[0].read.lat_ns.mean end) / 1000.0)) as $f_lat_mean |
+  ($fio_runs | map((((if ((.jobs[0].write.lat_ns.percentile["50.000000"] // 0) > 0) then .jobs[0].write.lat_ns.percentile["50.000000"] else .jobs[0].read.lat_ns.percentile["50.000000"] end) | tonumber) / 1000.0))) as $f_lat_p50 |
+  ($fio_runs | map((((if ((.jobs[0].write.lat_ns.percentile["99.000000"] // 0) > 0) then .jobs[0].write.lat_ns.percentile["99.000000"] else .jobs[0].read.lat_ns.percentile["99.000000"] end) | tonumber) / 1000.0))) as $f_lat_p99 |
 
   {
     jmh_count: ($j_iops | length),

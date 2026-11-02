@@ -494,7 +494,10 @@ public class JUringBlocking implements AutoCloseable {
                 if (!running && !task.done) {
                     throw new IllegalStateException("JUringBlocking is closed");
                 }
-                LockSupport.park(this);
+                LockSupport.parkNanos(this, 10_000_000L);
+                if (!task.done) {
+                    wakePoller();
+                }
                 if (Thread.interrupted()) {
                     interrupted = true;
                 }
@@ -616,7 +619,10 @@ public class JUringBlocking implements AutoCloseable {
                         spins++;
                         continue;
                     }
-                    LockSupport.park(this);
+                    LockSupport.parkNanos(this, 10_000_000L);
+                    if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
+                        wakePoller();
+                    }
                     if (Thread.interrupted()) {
                         interrupted = true;
                     }
