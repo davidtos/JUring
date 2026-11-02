@@ -58,15 +58,13 @@ public class DirectReadBenchmark {
     }
 
     @State(Scope.Thread)
-    public static class ThreadState {
+    public static class JuringThreadState {
 
         @Param({"1", "16", "64", "128"})
         public int qd;
 
         public JUring ring;
         public FileDescriptor[] fileDescriptors;
-        public FileChannel[] channels;
-        public ByteBuffer alignedBuffer;
 
         public int reapedCount;
         public int inFlight;
@@ -93,9 +91,6 @@ public class DirectReadBenchmark {
             }
 
             ring.registerBuffers(DatasetManager.DEFAULT_BUFFER_SIZE, safeBufferCount);
-
-            channels = benchState.dataset.openFileChannels(true);
-            alignedBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
 
             final boolean visual = Boolean.getBoolean("juring.visual") || Boolean.getBoolean("juring.printReads");
             final AtomicInteger debugPrints = new AtomicInteger(0);
@@ -139,7 +134,6 @@ public class DirectReadBenchmark {
                     }
                 } catch (Exception ignored) {}
             }
-            DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);
             if (ring != null) {
                 ring.close();
@@ -147,8 +141,25 @@ public class DirectReadBenchmark {
         }
     }
 
+    @State(Scope.Thread)
+    public static class FileChannelThreadState {
+        public FileChannel[] channels;
+        public ByteBuffer alignedBuffer;
+
+        @Setup(Level.Trial)
+        public void setup(BenchmarkState benchState) {
+            channels = benchState.dataset.openFileChannels(true);
+            alignedBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
+        }
+
+        @TearDown(Level.Trial)
+        public void tearDown() {
+            DatasetManager.closeChannels(channels);
+        }
+    }
+
     @Benchmark
-    public void juringDirectRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
+    public void juringDirectRead(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
         cpu.begin();
         final JUring ring = state.ring;
         ring.takeEnterCount();
@@ -206,7 +217,7 @@ public class DirectReadBenchmark {
     }
 
     @Benchmark
-    public void fileChannelDirectRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
+    public void fileChannelDirectRead(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
         cpu.begin();
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();

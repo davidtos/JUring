@@ -55,13 +55,13 @@ public class DirectWriteBenchmark {
     }
 
     @State(Scope.Thread)
-    public static class ThreadState {
+    public static class JuringThreadState {
+
+        @Param({"1", "64"})
+        public int qd = 64;
 
         public JUring ring;
         public FileDescriptor[] fileDescriptors;
-        public FileChannel[] channels;
-        public ByteBuffer writeBuffer;
-        public MemorySegment writeSegment;
         public int[] taskFileIndices;
         public long[] taskOffsets;
         public int threadOffset;
@@ -72,7 +72,7 @@ public class DirectWriteBenchmark {
         @Setup(Level.Trial)
         public void setup(BenchmarkState benchState, ThreadParams params) {
             int threadCount = params.getThreadCount();
-            int safeBufferCount = Math.max(16, Math.min(64, IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount)));
+            int safeBufferCount = Math.max(qd, Math.min(64, IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount)));
 
             DatasetManager.TaskPool pool = benchState.dataset.generateThreadTasks(
                     params.getThreadIndex(), threadCount, 65536);
@@ -80,7 +80,7 @@ public class DirectWriteBenchmark {
             this.taskOffsets = pool.offsets();
             this.threadOffset = 0;
 
-            ring = new JUring(256,
+            ring = new JUring(Math.max(256, qd * 2),
                     IORING_SETUP_SINGLE_ISSUER,
                     IORING_SETUP_COOP_TASKRUN,
                     IORING_SETUP_DEFER_TASKRUN);
@@ -96,15 +96,6 @@ public class DirectWriteBenchmark {
                 regBuf.fill((byte) 0x5A);
             }
 
-            channels = benchState.dataset.openFileChannels(true);
-
-            writeBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
-            for (int i = 0; i < DatasetManager.DEFAULT_BUFFER_SIZE; i++) {
-                writeBuffer.put((byte) 0x5A);
-            }
-            writeBuffer.flip();
-            writeSegment = MemorySegment.ofBuffer(writeBuffer);
-
             this.reapedCount = 0;
             this.consumer = result -> {
                 long res = result.result();
@@ -119,7 +110,6 @@ public class DirectWriteBenchmark {
 
         @TearDown(Level.Trial)
         public void tearDown() {
-            DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);
             if (ring != null) {
                 ring.close();
@@ -127,8 +117,42 @@ public class DirectWriteBenchmark {
         }
     }
 
+    @State(Scope.Thread)
+    public static class FileChannelThreadState {
+        public FileChannel[] channels;
+        public ByteBuffer writeBuffer;
+        public MemorySegment writeSegment;
+        public int[] taskFileIndices;
+        public long[] taskOffsets;
+        public int threadOffset;
+
+        @Setup(Level.Trial)
+        public void setup(BenchmarkState benchState, ThreadParams params) {
+            int threadCount = params.getThreadCount();
+            DatasetManager.TaskPool pool = benchState.dataset.generateThreadTasks(
+                    params.getThreadIndex(), threadCount, 65536);
+            this.taskFileIndices = pool.fileIndices();
+            this.taskOffsets = pool.offsets();
+            this.threadOffset = 0;
+
+            channels = benchState.dataset.openFileChannels(true);
+
+            writeBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
+            for (int i = 0; i < DatasetManager.DEFAULT_BUFFER_SIZE; i++) {
+                writeBuffer.put((byte) 0x5A);
+            }
+            writeBuffer.flip();
+            writeSegment = MemorySegment.ofBuffer(writeBuffer);
+        }
+
+        @TearDown(Level.Trial)
+        public void tearDown() {
+            DatasetManager.closeChannels(channels);
+        }
+    }
+
     @Benchmark
-    public void juringDirectWrite(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
+    public void juringDirectWrite(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) {
         cpu.begin();
         final JUring ring = state.ring;
         ring.takeEnterCount();
@@ -138,9 +162,9 @@ public class DirectWriteBenchmark {
         final int taskMask = taskFileIndices.length - 1;
         final int localOffset = state.threadOffset;
         state.threadOffset = (localOffset + totalTasks) & taskMask;
-        final int qd = 64;
-        final int submitBatch = 32;
-        final int waitBatch = 8;
+        final int qd = state.qd;
+        final int submitBatch = (qd <= 1) ? 1 : Math.min(qd, 32);
+        final int waitBatch = (qd <= 1) ? 1 : Math.max(1, Math.min(8, qd >> 3));
 
         state.reapedCount = 0;
         int submitted = 0;
@@ -194,7 +218,7 @@ public class DirectWriteBenchmark {
     }
 
     @Benchmark
-    public void fileChannelDirectWrite(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
+    public void fileChannelDirectWrite(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, CpuAuxCounters cpu, Blackhole blackhole) throws IOException {
         cpu.begin();
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = state.taskFileIndices;
