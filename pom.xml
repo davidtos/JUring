@@ -109,6 +109,7 @@
                                 </goals>
                                 <configuration>
                                     <executable>java</executable>
+                                    <classpathScope>test</classpathScope>
                                     <arguments>
                                         <argument>--enable-native-access=ALL-UNNAMED</argument>
                                         <argument>-classpath</argument>
@@ -116,6 +117,8 @@
                                         <argument>org.openjdk.jcstress.Main</argument>
                                         <argument>-m</argument>
                                         <argument>sanity</argument>
+                                        <argument>-r</argument>
+                                        <argument>target/jcstress-results</argument>
                                         <argument>-t</argument>
                                         <argument>com.davidvlijmincx.lio.api.WakePollerStoreLoadTest.*</argument>
                                     </arguments>
