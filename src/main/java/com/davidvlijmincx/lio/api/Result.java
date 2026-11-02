@@ -24,7 +24,7 @@ public class Result implements AutoCloseable {
 
     public Result() {}
 
-    public Result(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
+    Result(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
         set(id, result, type, bufferAddress, buffer, bufferIdx, buffers, 0);
     }
 
@@ -40,11 +40,11 @@ public class Result implements AutoCloseable {
         this.registeredBuffers = other.registeredBuffers;
     }
 
-    public void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
+    void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers) {
         set(id, result, type, bufferAddress, buffer, bufferIdx, buffers, 0);
     }
 
-    public void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers, int cqeFlags) {
+    void set(long id, long result, OperationType type, long bufferAddress, MemorySegment buffer, int bufferIdx, MemorySegment[] buffers, int cqeFlags) {
         this.id = id;
         this.result = result;
         this.type = type;

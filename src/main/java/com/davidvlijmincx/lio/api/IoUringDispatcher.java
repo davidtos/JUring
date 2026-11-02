@@ -15,7 +15,7 @@ import static java.lang.foreign.ValueLayout.*;
 /**
  * Low-level dispatcher providing direct memory-mapped access to Linux {@code io_uring}.
  */
-public final class IoUringDispatcher implements AutoCloseable {
+final class IoUringDispatcher implements AutoCloseable {
 
     /**
      * Set in CQE flags when a multishot SQE will generate more CQEs.

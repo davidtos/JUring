@@ -3,7 +3,7 @@ package com.davidvlijmincx.lio.api;
 /**
  * Zero-allocation {@code user_data} bit-packer and unpacker.
  */
-public final class ZeroGcUserData {
+final class ZeroGcUserData {
 
     public static final int TYPE_SHIFT = 56;
     public static final long TYPE_MASK = 0xFFL;

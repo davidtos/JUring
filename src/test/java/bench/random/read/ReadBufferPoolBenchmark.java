@@ -59,7 +59,7 @@ public class ReadBufferPoolBenchmark {
             List<Result> results = jUring.peekForBatchResult(64);
             for (Result result : results) {
                 blackhole.consume(result.buffer());
-                jUring.checkInReadBuffer(result.bufferAddress());
+                jUring.checkInReadBuffer(result);
             }
             processed += results.size();
         }

@@ -91,8 +91,23 @@ public class JUring implements AutoCloseable {
         return prepareReadPooledInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
-    public void checkInReadBuffer(long address) {
-        readBufferPool.checkIn(address);
+    public void checkInReadBuffer(Result result) {
+        if (result == null) {
+            throw new IllegalArgumentException("Result cannot be null");
+        }
+        if (result.type() != OperationType.READ_POOLED) {
+            throw new IllegalArgumentException("Result must be of type READ_POOLED");
+        }
+        long address = result.bufferAddress();
+        if (address != 0L) {
+            checkInReadBuffer(address);
+        }
+    }
+
+    void checkInReadBuffer(long address) {
+        if (readBufferPool != null) {
+            readBufferPool.checkIn(address);
+        }
     }
 
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex) {

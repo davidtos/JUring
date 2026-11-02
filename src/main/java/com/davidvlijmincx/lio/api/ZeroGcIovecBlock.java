@@ -12,7 +12,7 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 /**
  * Zero-allocation accessor for the iovec block pool slots.
  */
-public final class ZeroGcIovecBlock {
+final class ZeroGcIovecBlock {
 
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
 

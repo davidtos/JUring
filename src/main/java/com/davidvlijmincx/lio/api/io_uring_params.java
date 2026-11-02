@@ -27,7 +27,7 @@ import static java.lang.foreign.ValueLayout.OfInt;
  * }
  * }
  */
-public class io_uring_params {
+class io_uring_params {
 
     io_uring_params() {
         // Should not be called directly

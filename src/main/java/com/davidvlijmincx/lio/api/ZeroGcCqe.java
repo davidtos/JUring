@@ -11,7 +11,7 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 /**
  * Zero-allocation accessor for native {@code io_uring_cqe} structures.
  */
-public class ZeroGcCqe {
+class ZeroGcCqe {
 
     static final GroupLayout CQE_LAYOUT = MemoryLayout.structLayout(
             JAVA_LONG.withName("user_data"),

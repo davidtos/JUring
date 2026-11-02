@@ -53,12 +53,10 @@ class Phase1BugProofTest {
             // READ_POOLED
             ring.prepareReadPooled(fd, 13, 0);
             ring.submit();
-            long pooledAddr;
             try (Result r = ring.waitForResult()) {
-                pooledAddr = r.bufferAddress();
                 assertEquals("Hello, World!", r.getString());
+                ring.checkInReadBuffer(r);
             }
-            ring.checkInReadBuffer(pooledAddr);
 
             // READV_FIXED
             ring.prepareReadvFixed(fd, new int[]{0, 1}, 0);
@@ -244,6 +242,63 @@ class Phase1BugProofTest {
             ring.submit();
             try (Result r = ring.waitForResult()) {
                 assertEquals(testData.length, r.result());
+            }
+        }
+    }
+
+    @Test
+    void step1_4_exportedPackagePublicApiEncapsulation() throws Exception {
+        java.util.Set<String> allowedPublicClasses = java.util.Set.of(
+                "FileDescriptor",
+                "IoUringOptions",
+                "JUring",
+                "JUringBlocking",
+                "LinuxOpenOptions",
+                "OperationType",
+                "Result",
+                "ResultConsumer",
+                "SqeOptions"
+        );
+
+        // Scan all classes in com.davidvlijmincx.lio.api package
+        java.io.File packageDir = new java.io.File("src/main/java/com/davidvlijmincx/lio/api");
+        java.io.File[] javaFiles = packageDir.listFiles((dir, name) -> name.endsWith(".java"));
+        assertNotNull(javaFiles);
+
+        java.util.List<String> disallowedPublicClasses = new java.util.ArrayList<>();
+        for (java.io.File file : javaFiles) {
+            String className = file.getName().replace(".java", "");
+            Class<?> clazz = Class.forName("com.davidvlijmincx.lio.api." + className);
+            if (java.lang.reflect.Modifier.isPublic(clazz.getModifiers())) {
+                if (!allowedPublicClasses.contains(className)) {
+                    disallowedPublicClasses.add(className);
+                }
+            }
+        }
+
+        assertTrue(disallowedPublicClasses.isEmpty(),
+                "Found internal classes that are unexpectedly public in exported package: " + disallowedPublicClasses);
+
+        // Verify Result full constructor and set() methods are not public
+        for (java.lang.reflect.Constructor<?> c : Result.class.getDeclaredConstructors()) {
+            if (c.getParameterCount() > 1) {
+                assertFalse(java.lang.reflect.Modifier.isPublic(c.getModifiers()),
+                        "Result full constructor must be package-private, but was public: " + c);
+            }
+        }
+        for (java.lang.reflect.Method m : Result.class.getDeclaredMethods()) {
+            if (m.getName().equals("set")) {
+                assertFalse(java.lang.reflect.Modifier.isPublic(m.getModifiers()),
+                        "Result.set() must be package-private, but was public: " + m);
+            }
+        }
+
+        // Verify JUring does not expose checkInReadBuffer(long) publicly
+        for (java.lang.reflect.Method m : JUring.class.getDeclaredMethods()) {
+            if (m.getName().equals("checkInReadBuffer") && m.getParameterCount() == 1
+                    && m.getParameterTypes()[0] == long.class) {
+                assertFalse(java.lang.reflect.Modifier.isPublic(m.getModifiers()),
+                        "JUring.checkInReadBuffer(long) must be package-private, but was public: " + m);
             }
         }
     }

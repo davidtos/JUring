@@ -10,7 +10,7 @@ import static java.lang.foreign.ValueLayout.*;
 /**
  * Zero-allocation accessor and mutator for native {@code io_uring_sqe} structures.
  */
-public final class ZeroGcSqe {
+final class ZeroGcSqe {
 
     static final GroupLayout SQE_LAYOUT = MemoryLayout.structLayout(
             JAVA_BYTE.withName("opcode"),
