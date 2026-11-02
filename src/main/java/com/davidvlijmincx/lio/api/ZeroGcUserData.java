@@ -2,6 +2,12 @@ package com.davidvlijmincx.lio.api;
 
 /**
  * Zero-allocation {@code user_data} bit-packer and unpacker.
+ * <p>
+ * <b>Architecture and Pointer Limits:</b> Pointers encoded into {@code user_data} are truncated
+ * to 56 bits (leaving 8 bits for the {@link OperationType} tag). This design assumes 64-bit platforms
+ * with at most 56-bit virtual addressing, including standard x86-64 (48-bit 4-level or 57-bit 5-level paging)
+ * and untagged aarch64. Platforms using aarch64 Memory Tagging Extension (MTE) or Top-Byte Ignore (TBI)
+ * with active tags in bits 56-63 are not supported as tag bits will be stripped on decode.
  */
 final class ZeroGcUserData {
 

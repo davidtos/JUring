@@ -11,6 +11,11 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 /**
  * High-performance Java facade for Linux {@code io_uring}.
  * <p>
+ * <b>Thread Safety:</b> {@code JUring} is <b>NOT</b> thread-safe. A single instance must only be
+ * accessed by one thread at a time (e.g. pinned to a dedicated event loop or worker thread).
+ * Internal submission state ({@code sqeTail}, {@code opSeq}, {@code freeBufferStack}) is not synchronized.
+ * For concurrent access across multiple threads or virtual threads, use {@link JUringBlocking}.
+ * <p>
  * <b>MemorySegment Lifetime Contract:</b> Any {@link MemorySegment} passed to {@code prepareWrite}
  * or other async operations accepting segments must be native, alive, and accessible by the calling thread.
  * Callers must ensure the underlying memory stays alive and valid until the corresponding CQE is reaped.
@@ -23,6 +28,7 @@ public class JUring implements AutoCloseable {
     private MemorySegment[] registeredBuffersArray = new MemorySegment[0];
     private long[] registeredBufferAddresses = new long[0];
     private long[] registeredBufferSizes = new long[0];
+    private boolean[] bufferInUse;
 
     private int[] freeBufferStack;
     private int freeBufferTop;
@@ -463,14 +469,14 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareOpen(String filePath, int flags, int mode, byte sqeFlags) {
-        byte[] pathBytes = filePath.getBytes();
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
         MemorySegment pathBuffer = NativeDispatcher.C.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
         long sqe = getSqe(sqeFlags, false);
         long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
 
-        ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags, mode);
+        ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags | 0x80000 /* O_CLOEXEC */, mode);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -492,7 +498,7 @@ public class JUring implements AutoCloseable {
         if (fileIndex < 0) {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
         }
-        byte[] pathBytes = filePath.getBytes();
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
         long sqe = getSqe(sqeFlags, false);
         MemorySegment pathBuffer = NativeDispatcher.C.alloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
@@ -500,7 +506,7 @@ public class JUring implements AutoCloseable {
 
         long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
 
-        ioUring.prepareOpenDirectAt(sqe, pathBuffer.address(), flags, mode, fileIndex);
+        ioUring.prepareOpenDirectAt(sqe, pathBuffer.address(), flags & ~0x80000 /* O_CLOEXEC not allowed for direct */, mode, fileIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -983,12 +989,16 @@ public class JUring implements AutoCloseable {
     }
 
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
+        if (this.registeredBuffersArray != null && this.registeredBuffersArray.length > 0) {
+            throw new IllegalStateException("Buffers are already registered; cannot register twice");
+        }
         MemorySegment[] result = ioUring.registerBuffers(size, nrOfBuffers);
         registeredBuffers.clear();
         registeredBuffers.addAll(Arrays.asList(result));
         this.registeredBuffersArray = result;
         this.registeredBufferAddresses = new long[result.length];
         this.registeredBufferSizes = new long[result.length];
+        this.bufferInUse = new boolean[nrOfBuffers];
         for (int i = 0; i < result.length; i++) {
             this.registeredBufferAddresses[i] = result[i].address();
             this.registeredBufferSizes[i] = result[i].byteSize();
@@ -1011,7 +1021,11 @@ public class JUring implements AutoCloseable {
         if (freeBufferTop == 0) {
             return -1;
         }
-        return freeBufferStack[--freeBufferTop];
+        int idx = freeBufferStack[--freeBufferTop];
+        if (bufferInUse != null && idx >= 0 && idx < bufferInUse.length) {
+            bufferInUse[idx] = true;
+        }
+        return idx;
     }
 
     /**
@@ -1020,6 +1034,13 @@ public class JUring implements AutoCloseable {
      * @param bufferIndex index of the buffer to return
      */
     public void checkInBuffer(int bufferIndex) {
+        if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
+            throw new IllegalArgumentException("Invalid bufferIndex: " + bufferIndex);
+        }
+        if (!bufferInUse[bufferIndex]) {
+            throw new IllegalStateException("Buffer index " + bufferIndex + " is already checked in (double check-in)");
+        }
+        bufferInUse[bufferIndex] = false;
         freeBufferStack[freeBufferTop++] = bufferIndex;
     }
 

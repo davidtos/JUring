@@ -561,6 +561,71 @@ class Phase1BugProofTest {
         }
     }
 
+    @Test
+    void step1_9_ebusyAndApiFootguns() throws Exception {
+        // 1. checkInBuffer bounds and double check-in
+        try (JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER)) {
+            ring.registerBuffers(64, 4);
+
+            // Bounds check
+            assertThrows(IllegalArgumentException.class, () -> ring.checkInBuffer(-1), "Negative bufferIndex should throw");
+            assertThrows(IllegalArgumentException.class, () -> ring.checkInBuffer(4), "Out of bounds bufferIndex should throw");
+
+            // Double check-in: buffers start in the pool. Checking in an index that wasn't checked out must throw
+            assertThrows(IllegalStateException.class, () -> ring.checkInBuffer(0), "Double check-in without checkOut should throw");
+
+            int b0 = ring.checkOutBuffer();
+            assertEquals(3, b0);
+            ring.checkInBuffer(b0);
+            assertThrows(IllegalStateException.class, () -> ring.checkInBuffer(b0), "Checking in the same buffer twice must throw");
+
+            // 2. registerBuffers twice throws
+            assertThrows(IllegalStateException.class, () -> ring.registerBuffers(64, 2), "registerBuffers twice must throw IllegalStateException");
+        }
+
+        // 3. Path NUL check in all open entry points
+        assertThrows(IllegalArgumentException.class, () -> new FileDescriptor("bad\0path", READ, 0));
+        try (JUring ring = new JUring(4, IORING_SETUP_SINGLE_ISSUER)) {
+            assertThrows(IllegalArgumentException.class, () -> ring.prepareOpen("bad\0path", 0, 0));
+            assertThrows(IllegalArgumentException.class, () -> ring.prepareOpenDirect("bad\0path", 0, 0, 0));
+        }
+        try (JUringBlocking blocking = new JUringBlocking(4, IORING_SETUP_SINGLE_ISSUER)) {
+            assertThrows(IllegalArgumentException.class, () -> blocking.open("bad\0path", 0, 0));
+            assertThrows(IllegalArgumentException.class, () -> blocking.openDirect("bad\0path", 0, 0, 0));
+        }
+
+        // 4. O_CLOEXEC set on FileDescriptor and regular open, stripped on openDirect
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            int flags = NativeDispatcher.C.fcntl(fd.getFd(), 1 /* F_GETFD */);
+            assertEquals(1 /* FD_CLOEXEC */, flags & 1, "O_CLOEXEC must be set on opened FileDescriptor");
+        }
+
+        // 5. Unused timeout removed from JUringBlocking
+        assertThrows(NoSuchFieldException.class, () -> JUringBlocking.class.getDeclaredField("timeout"),
+                "Unused public timeout field should be removed from JUringBlocking");
+
+        // 6. EBUSY returns or throws instead of spinning in submit, submitAndWait, submitAndWaitForBatchResult
+        try (JUring ring = new JUring(4, IORING_SETUP_SINGLE_ISSUER)) {
+            IoUringDispatcher.ENTER_HOOK = (callState, fd, toSubmit, minComplete, flags, sig, sigsz) -> {
+                NativeDispatcher.C.setErrno(callState, 16 /* EBUSY */);
+                return -16;
+            };
+            try {
+                ring.prepareNop();
+                assertThrows(IllegalStateException.class, ring::submit, "submit on EBUSY must throw instead of spinning");
+
+                ring.prepareNop();
+                assertThrows(IllegalStateException.class, () -> ring.submitAndWait(1), "submitAndWait on EBUSY must throw instead of spinning");
+
+                ring.prepareNop();
+                assertThrows(IllegalStateException.class, () -> ring.submitAndWaitForBatchResult(1, r -> {}),
+                        "submitAndWaitForBatchResult on EBUSY must throw instead of spinning");
+            } finally {
+                IoUringDispatcher.ENTER_HOOK = null;
+            }
+        }
+    }
+
     public static void main(String[] args) {
         if (args.length == 0) return;
         switch (args[0]) {

@@ -18,7 +18,8 @@ public enum LinuxOpenOptions implements OpenOption {
     DIRECT(resolveDirectFlag()),
     READ_DIRECT(resolveDirectFlag()),
     WRITE_DIRECT(1 | resolveDirectFlag()),
-    SYNC(0x101000);
+    SYNC(0x101000),
+    CLOEXEC(0x80000);
 
     private final int flag;
 

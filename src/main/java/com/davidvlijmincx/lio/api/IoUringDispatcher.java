@@ -69,6 +69,16 @@ final class IoUringDispatcher implements AutoCloseable {
 
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
     private static final IoUringEnter ioUringEnter = libCDispatcher.ioUringEnter();
+    static volatile IoUringEnter ENTER_HOOK = null;
+
+    private long callIoUringEnter(MemorySegment callState, int fd, int toSubmit, int minComplete, int flags, MemorySegment sig, long sigsz) {
+        IoUringEnter hook = ENTER_HOOK;
+        if (hook != null) {
+            return hook.ioUringEnter(callState, fd, toSubmit, minComplete, flags, sig, sigsz);
+        }
+        return ioUringEnter.ioUringEnter(callState, fd, toSubmit, minComplete, flags, sig, sigsz);
+    }
+
     private static final IoUringRegister ioUringRegister = libCDispatcher.ioUringRegister();
 
     private static final GroupLayout ring_layout;
@@ -550,7 +560,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 if (COUNT_ENTERS) {
                     enterCount.incrementAndGet();
                 }
-                long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -560,7 +570,10 @@ final class IoUringDispatcher implements AutoCloseable {
                     continue;
                 }
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                if (err == 16 /* EBUSY */) {
+                    throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
+                }
+                if (err == 11 /* EAGAIN */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     if (toSubmit == 0 && !sqpoll) {
@@ -590,7 +603,7 @@ final class IoUringDispatcher implements AutoCloseable {
         if (COUNT_ENTERS) {
             enterCount.incrementAndGet();
         }
-        ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        callIoUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
     }
 
     /**
@@ -649,10 +662,19 @@ final class IoUringDispatcher implements AutoCloseable {
                 enterCount.incrementAndGet();
             }
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                if (err == 16 /* EBUSY */) {
+                    cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                    cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                    int avail = cqTail - cqHead;
+                    if (avail > 0) {
+                        return avail;
+                    }
+                    throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
+                }
+                if (err == 11 /* EAGAIN */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
@@ -689,7 +711,7 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = callIoUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -751,7 +773,7 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = callIoUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -1306,7 +1328,7 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = callIoUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -1359,6 +1381,15 @@ final class IoUringDispatcher implements AutoCloseable {
                 }
             }
 
+            if (available > 0 && available >= cqRingEntries) {
+                int reaped = reapAvailable(cqHead, available, maxReap, consumer);
+                if (reaped > 0) {
+                    cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                    cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                    available = cqTail - cqHead;
+                }
+            }
+
             if (!needEnter) {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
@@ -1367,10 +1398,24 @@ final class IoUringDispatcher implements AutoCloseable {
                 enterCount.incrementAndGet();
             }
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
+                if (err == 16 /* EBUSY */) {
+                    cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                    cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                    int avail = cqTail - cqHead;
+                    if (avail > 0) {
+                        int reaped = reapAvailable(cqHead, avail, maxReap, consumer);
+                        if (reaped > 0) {
+                            head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                            toSubmit = Math.max(0, tail - head);
+                            continue;
+                        }
+                    }
+                    throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
+                }
+                if (err == 11 /* EAGAIN */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
@@ -1548,7 +1593,7 @@ final class IoUringDispatcher implements AutoCloseable {
                     submit();
                 }
                 while (inFlightCount > 0) {
-                    long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+                    long res = callIoUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
                     if (res < 0) {
                         int err = LibCDispatcher.errno(this.callState);
                         if (err != 11 /* EAGAIN */ && err != 16 /* EBUSY */ && err != 4 /* EINTR */) {

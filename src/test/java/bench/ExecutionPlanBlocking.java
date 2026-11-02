@@ -17,7 +17,7 @@ public class ExecutionPlanBlocking {
 
     @Setup
     public void setup() {
-        jUringBlocking = new JUringBlocking(2500, Duration.ofMillis(1), IORING_SETUP_SINGLE_ISSUER);
+        jUringBlocking = new JUringBlocking(2500, IORING_SETUP_SINGLE_ISSUER);
 
     }
 

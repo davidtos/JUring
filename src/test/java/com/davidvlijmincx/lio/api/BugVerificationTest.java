@@ -210,7 +210,7 @@ class BugVerificationTest {
             }
 
             // Test 2: JUringBlocking with IORING_SETUP_DEFER_TASKRUN and socket operations
-            try (JUringBlocking blocking = new JUringBlocking(8, Duration.ofMillis(2000), IORING_SETUP_SUBMIT_ALL, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_DEFER_TASKRUN)) {
+            try (JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SUBMIT_ALL, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_DEFER_TASKRUN)) {
                 int[] fds = createLoopbackPair(19402);
                 int serverConn = fds[0];
                 int clientConn = fds[1];

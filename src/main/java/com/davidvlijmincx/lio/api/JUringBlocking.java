@@ -76,7 +76,6 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
-    public final Duration timeout;
     private final LibCDispatcher libc = NativeDispatcher.C;
     private final Worker[] workers;
     private final int workerMask;
@@ -696,19 +695,10 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     public JUringBlocking(int queueDepth, IoUringOptions... ioUringFlags) {
-        this(queueDepth, defaultWorkerCount(queueDepth), Duration.ofMillis(-1), ioUringFlags);
-    }
-
-    public JUringBlocking(int queueDepth, Duration timeout, IoUringOptions... ioUringFlags) {
-        this(queueDepth, defaultWorkerCount(queueDepth), timeout, ioUringFlags);
+        this(queueDepth, defaultWorkerCount(queueDepth), ioUringFlags);
     }
 
     public JUringBlocking(int queueDepth, int numPollers, IoUringOptions... ioUringFlags) {
-        this(queueDepth, numPollers, Duration.ofMillis(-1), ioUringFlags);
-    }
-
-    public JUringBlocking(int queueDepth, int numPollers, Duration timeout, IoUringOptions... ioUringFlags) {
-        this.timeout = timeout;
         int workerCount = Math.max(1, Integer.highestOneBit(Math.max(1, numPollers)));
         this.workers = new Worker[workerCount];
         this.workerMask = workerCount - 1;
@@ -1115,7 +1105,7 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     public int open(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
-        byte[] pathBytes = filePath.getBytes();
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
         MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathAddr, JAVA_BYTE, 0, pathBytes.length);
         return (int) getWorker().submitAndAwaitSlot(
@@ -1125,7 +1115,7 @@ public class JUringBlocking implements AutoCloseable {
                 0L,
                 pathAddr.address(),
                 mode,
-                flags,
+                flags | 0x80000 /* O_CLOEXEC */,
                 (short) 0,
                 0,
                 pathAddr.address()
@@ -1156,9 +1146,10 @@ public class JUringBlocking implements AutoCloseable {
         if (fileIndex < 0) {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
         }
+        int directFlags = flags & ~0x80000 /* Strip O_CLOEXEC for direct fixed file open */;
         int res = 0;
         for (Worker w : workers) {
-            byte[] pathBytes = filePath.getBytes();
+            byte[] pathBytes = LibCDispatcher.encodePath(filePath);
             MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
             MemorySegment.copy(pathBytes, 0, pathAddr, JAVA_BYTE, 0, pathBytes.length);
             res = (int) w.submitAndAwaitSlot(
@@ -1168,7 +1159,7 @@ public class JUringBlocking implements AutoCloseable {
                     0L,
                     pathAddr.address(),
                     mode,
-                    flags,
+                    directFlags,
                     (short) 0,
                     fileIndex + 1,
                     pathAddr.address()

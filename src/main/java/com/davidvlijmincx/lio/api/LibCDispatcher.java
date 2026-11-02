@@ -7,6 +7,8 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandleProxies;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -37,7 +39,8 @@ record LibCDispatcher(FreeAddress freeLong,
                       IoUringEnter ioUringEnter,
                       IoUringRegister ioUringRegister,
                       Eventfd eventfd,
-                      WriteAddress write) {
+                      WriteAddress write,
+                      Fcntl fcntl) {
 
     // eventfd(2) flags
     static final int EFD_CLOEXEC = 0x80000;
@@ -88,13 +91,20 @@ record LibCDispatcher(FreeAddress freeLong,
                 linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
                 linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
                 link(Eventfd.class, "eventfd", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)),
-                link(WriteAddress.class, "write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG))
+                link(WriteAddress.class, "write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG)),
+                linkVariadic(Fcntl.class, "fcntl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), 2)
         );
     }
 
     private static <T> T link(Class<T> type, String name, FunctionDescriptor descriptor) {
         MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
         MethodHandle handle = linker.downcallHandle(symbol, descriptor);
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkVariadic(Class<T> type, String name, FunctionDescriptor descriptor, int firstVariadic) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.firstVariadicArg(firstVariadic));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
@@ -123,6 +133,33 @@ record LibCDispatcher(FreeAddress freeLong,
         return (int) ERRNO_HANDLE.get(callState, 0L);
     }
 
+    static void setErrno(MemorySegment callState, int err) {
+        ERRNO_HANDLE.set(callState, 0L, err);
+    }
+
+    static final Charset PATH_CHARSET;
+    static {
+        String enc = System.getProperty("sun.jnu.encoding");
+        Charset cs;
+        try {
+            cs = (enc != null) ? Charset.forName(enc) : StandardCharsets.UTF_8;
+        } catch (Exception e) {
+            cs = StandardCharsets.UTF_8;
+        }
+        PATH_CHARSET = cs;
+    }
+
+    static byte[] encodePath(String path) {
+        if (path.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("Path contains embedded NUL character: " + path);
+        }
+        return path.getBytes(PATH_CHARSET);
+    }
+
+    int fcntl(int fd, int cmd) {
+        return fcntl.fcntl(fd, cmd);
+    }
+
     static volatile java.util.function.LongConsumer FREE_HOOK = null;
     static final java.util.concurrent.atomic.AtomicLong FREE_COUNT = new java.util.concurrent.atomic.AtomicLong();
 
@@ -141,10 +178,13 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     int open(String path, int flags, int mode) {
+        byte[] pathBytes = encodePath(path);
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment callState = arena.allocate(CAPTURE_STATE_LAYOUT);
-            MemorySegment cPath = arena.allocateFrom(path);
-            int fd = open.open(callState, cPath, flags, mode);
+            MemorySegment cPath = arena.allocate(pathBytes.length + 1);
+            MemorySegment.copy(pathBytes, 0, cPath, JAVA_BYTE, 0, pathBytes.length);
+            cPath.set(JAVA_BYTE, pathBytes.length, (byte) 0);
+            int fd = open.open(callState, cPath, flags | 0x80000 /* O_CLOEXEC */, mode);
             if (fd < 0) {
                 return -errno(callState);
             }
