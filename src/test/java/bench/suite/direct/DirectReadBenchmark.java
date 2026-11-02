@@ -63,6 +63,8 @@ public class DirectReadBenchmark {
 
         public JUring ring;
         public FileDescriptor[] fileDescriptors;
+        public int[] taskFileIndices;
+        public long[] taskOffsets;
 
         public int reapedCount;
         public int inFlight;
@@ -71,11 +73,21 @@ public class DirectReadBenchmark {
 
         @Setup(Level.Trial)
         public void setup(BenchmarkState benchState, ThreadParams params) {
+            int threadIndex = params.getThreadIndex();
             int threadCount = params.getThreadCount();
             int safeBufferCount = Math.max(qd, IoHelper.getSafeBufferCount(DatasetManager.DEFAULT_BUFFER_SIZE, threadCount));
             int ringEntries = Math.max(256, qd * 2);
             this.inFlight = 0;
+
+            DatasetManager.TaskPool pool = benchState.dataset.generateThreadTasks(
+                    threadIndex, threadCount, 65536);
+            this.taskFileIndices = pool.fileIndices();
+            this.taskOffsets = pool.offsets();
             this.threadOffset = 0;
+
+            long workingSetBytes = (long) taskFileIndices.length * DatasetManager.DEFAULT_BUFFER_SIZE;
+            System.out.printf("[DirectReadBenchmark] JUring Thread #%d/%d working-set size: %,d offsets (%,.1f MB)%n",
+                    threadIndex, threadCount, taskFileIndices.length, workingSetBytes / (1024.0 * 1024.0));
 
             ring = new JUring(ringEntries,
                     IORING_SETUP_SINGLE_ISSUER,
@@ -143,11 +155,26 @@ public class DirectReadBenchmark {
     public static class FileChannelThreadState {
         public FileChannel[] channels;
         public ByteBuffer alignedBuffer;
+        public int[] taskFileIndices;
+        public long[] taskOffsets;
+        public int threadOffset;
 
         @Setup(Level.Trial)
-        public void setup(BenchmarkState benchState) {
+        public void setup(BenchmarkState benchState, ThreadParams params) {
+            int threadIndex = params.getThreadIndex();
+            int threadCount = params.getThreadCount();
+            DatasetManager.TaskPool pool = benchState.dataset.generateThreadTasks(
+                    threadIndex, threadCount, 65536);
+            this.taskFileIndices = pool.fileIndices();
+            this.taskOffsets = pool.offsets();
+            this.threadOffset = 0;
+
             channels = benchState.dataset.openFileChannels(true);
             alignedBuffer = IoHelper.allocateAligned(DatasetManager.DEFAULT_BUFFER_SIZE, IoHelper.DEFAULT_SECTOR_SIZE);
+
+            long workingSetBytes = (long) taskFileIndices.length * DatasetManager.DEFAULT_BUFFER_SIZE;
+            System.out.printf("[DirectReadBenchmark] FileChannel Thread #%d/%d working-set size: %,d offsets (%,.1f MB)%n",
+                    threadIndex, threadCount, taskFileIndices.length, workingSetBytes / (1024.0 * 1024.0));
         }
 
         @TearDown(Level.Trial)
@@ -159,10 +186,10 @@ public class DirectReadBenchmark {
     @Benchmark
     public void juringDirectRead(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.dataset.getTaskOffsets();
-        final int totalTasks = taskFileIndices.length;
-        final int taskMask = totalTasks - 1;
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
+        final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
+        final int taskMask = taskFileIndices.length - 1;
         final int qd = state.qd;
         final int waitBatch = 1;
 
@@ -174,7 +201,7 @@ public class DirectReadBenchmark {
             if (bufIdx < 0) break;
             int idx = (taskMask > 0 && (taskMask & (taskMask + 1)) == 0)
                     ? (threadOffset++ & taskMask)
-                    : (threadOffset++ % totalTasks);
+                    : (threadOffset++ % taskFileIndices.length);
             ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
             inFlight++;
         }
@@ -193,14 +220,16 @@ public class DirectReadBenchmark {
                 if (bufIdx < 0) break;
                 int idx = (taskMask > 0 && (taskMask & (taskMask + 1)) == 0)
                         ? (threadOffset++ & taskMask)
-                        : (threadOffset++ % totalTasks);
+                        : (threadOffset++ % taskFileIndices.length);
                 ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
                 inFlight++;
             }
         }
 
         state.inFlight = inFlight;
-        state.threadOffset = threadOffset;
+        state.threadOffset = (taskMask > 0 && (taskMask & (taskMask + 1)) == 0)
+                ? (threadOffset & taskMask)
+                : (threadOffset % taskFileIndices.length);
         state.reapedCount = reapedTotal;
 
         counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
@@ -210,15 +239,19 @@ public class DirectReadBenchmark {
     @Benchmark
     public void fileChannelDirectRead(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
         final FileChannel[] channels = state.channels;
-        final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();
-        final long[] taskOffsets = benchState.dataset.getTaskOffsets();
+        final int[] taskFileIndices = state.taskFileIndices;
+        final long[] taskOffsets = state.taskOffsets;
         final ByteBuffer buf = state.alignedBuffer;
-        final int totalTasks = taskFileIndices.length;
+        final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
+        final int taskMask = taskFileIndices.length - 1;
+        final int localOffset = state.threadOffset;
+        state.threadOffset = (localOffset + totalTasks) & taskMask;
 
         for (int i = 0; i < totalTasks; i++) {
-            FileChannel fc = channels[taskFileIndices[i]];
+            int idx = (localOffset + i) & taskMask;
+            FileChannel fc = channels[taskFileIndices[idx]];
             buf.clear();
-            int read = fc.read(buf, taskOffsets[i]);
+            int read = fc.read(buf, taskOffsets[idx]);
             if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
                 throw new IllegalStateException("FileChannel direct read failed: expected "
                         + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
