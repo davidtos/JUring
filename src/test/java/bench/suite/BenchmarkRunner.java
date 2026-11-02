@@ -90,20 +90,7 @@ public class BenchmarkRunner {
                 bench.suite.direct.DirectReadVisualVerificationTest.main(forwarded.toArray(new String[0]));
                 return;
             }
-            if ("--fio-live".equals(args[i].trim()) || "--compare-fio".equals(args[i].trim())) {
-                List<String> forwarded = new ArrayList<>();
-                for (int j = 0; j < args.length; j++) {
-                    if (j != i) {
-                        forwarded.add(args[j].trim());
-                    }
-                }
-                try {
-                    bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark.main(forwarded.toArray(new String[0]));
-                } catch (Exception e) {
-                    throw new RuntimeException("Fio live benchmark failed: " + e.getMessage(), e);
-                }
-                return;
-            }
+
         }
 
         for (int i = 0; i < args.length; i++) {
@@ -669,7 +656,6 @@ public class BenchmarkRunner {
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
         System.out.println("  --virtual           Run Project Loom Virtual Threads scaling benchmark (50..1000 VTs)");
         System.out.println("  --fio               Run fio workload parity comparison benchmark (O_DIRECT, 10GB file, 4KB blocks, full latency telemetry)");
-        System.out.println("  --fio-live          Run direct side-by-side comparison against native C fio (randread/randwrite)");
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");

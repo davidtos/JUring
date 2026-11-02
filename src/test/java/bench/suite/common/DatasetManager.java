@@ -356,7 +356,8 @@ public class DatasetManager {
             x ^= x << 25;
             x ^= x >>> 27;
             state = x;
-            return (x & 0x7FFFFFFFFFFFFFFFL) % maxBlocks;
+            long val = (x * 0x2545F4914F6CDD1DL) >>> 1;
+            return val % maxBlocks;
         }
 
         public long nextOffset(long maxBlocks, int blockSize) {

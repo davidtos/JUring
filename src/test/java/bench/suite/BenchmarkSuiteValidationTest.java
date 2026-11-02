@@ -511,9 +511,8 @@ class BenchmarkSuiteValidationTest {
             // Run direct read with telemetry ON
             bench.juringDirectRead(tState, bState, storage, null);
             assertTrue(tState.reapedCount > 0, "Read operations must be reaped");
-            assertTrue(tState.clatHistogram.getCount() > 0, "clat histogram must have recorded samples");
-            assertTrue(tState.slatHistogram.getCount() > 0, "slat histogram must have recorded samples");
-            assertTrue(tState.clatHistogram.getMeanMicros() > 0.0, "clat mean must be positive");
+            assertTrue(tState.latHistogram.getCount() > 0, "lat histogram must have recorded samples");
+            assertTrue(tState.latHistogram.getMeanMicros() > 0.0, "lat mean must be positive");
 
             // Run direct write with telemetry ON
             bench.juringDirectWrite(tState, bState, storage, null);
@@ -527,43 +526,6 @@ class BenchmarkSuiteValidationTest {
         } finally {
             tState.tearDown();
         }
-    }
-
-    @Test
-    @DisplayName("Verify FioComparisonBenchmark parseFioJson extracts exact metrics from JSON")
-    void testParseFioJsonAccuracy() {
-        String sampleJson = """
-        {
-          "jobs" : [
-            {
-              "jobname" : "fio_bench",
-              "read" : {
-                "io_bytes" : 419430400,
-                "bw_bytes" : 139810133,
-                "iops" : 34133.333333,
-                "slat_ns" : { "mean" : 2540.50 },
-                "clat_ns" : {
-                  "mean" : 185200.75,
-                  "percentile" : {
-                    "50.000000" : 182000,
-                    "99.000000" : 325000,
-                    "99.900000" : 410000
-                  }
-                }
-              }
-            }
-          ]
-        }
-        """;
-        var res = DirectLatencyBenchmark.FioComparisonBenchmark.parseFioJson(sampleJson, "read");
-        assertNotNull(res);
-        assertEquals(34133L, res.iops());
-        assertEquals(139810133.0 / (1024.0 * 1024.0), res.bwMBs(), 0.01);
-        assertEquals(2.5405, res.slatAvgUs(), 0.001);
-        assertEquals(185.20075, res.clatAvgUs(), 0.001);
-        assertEquals(182.0, res.clatP50Us(), 0.001);
-        assertEquals(325.0, res.clatP99Us(), 0.001);
-        assertEquals(410.0, res.clatP99_9Us(), 0.001);
     }
 }
 
