@@ -163,6 +163,42 @@ class Phase1BugProofTest {
     }
 
     @Test
+    void step1_1_throwingConsumerAdvancesHeadAndAvoidsDoubleFree() throws Exception {
+        java.util.List<Long> freedAddrs = new java.util.ArrayList<>();
+        LibCDispatcher.FREE_HOOK = freedAddrs::add;
+        try (JUring ring = new JUring(16, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", LinuxOpenOptions.WRITE, 0)) {
+
+            for (int i = 0; i < 8; i++) {
+                byte[] data = ("write-chunk-" + i + "\n").getBytes();
+                ring.prepareWrite(fd, data, i * 64L);
+            }
+            ring.submitAndWait(8);
+
+            java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(0);
+            assertThrows(RuntimeException.class, () -> {
+                ring.peekForBatchResult(8, result -> {
+                    if (count.incrementAndGet() == 3) {
+                        throw new RuntimeException("Simulated failure on 3rd CQE");
+                    }
+                });
+            });
+
+            // The consumer threw on the 3rd CQE.
+            // CQEs 0, 1, and 2 should have been retired from the ring.
+            // The next reap must return ONLY the remaining 5 CQEs.
+            java.util.List<Long> remainingTokens = new java.util.ArrayList<>();
+            int reaped = ring.peekForBatchResult(8, result -> remainingTokens.add(result.id()));
+
+            assertEquals(5, reaped, "Next reap should only return the remaining 5 CQEs");
+            assertEquals(5, remainingTokens.size());
+            assertEquals(8, freedAddrs.size(), "Each write buffer must be freed exactly once (no double-free)");
+        } finally {
+            LibCDispatcher.FREE_HOOK = null;
+        }
+    }
+
+    @Test
     void proof5_multishotAcceptPreservesCqeFlagsMore() throws Exception {
         final int port = 19299;
 

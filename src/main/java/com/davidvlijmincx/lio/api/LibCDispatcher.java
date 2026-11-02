@@ -107,7 +107,16 @@ record LibCDispatcher(FreeAddress freeLong,
         return (int) ERRNO_HANDLE.get(callState, 0L);
     }
 
+    static volatile java.util.function.LongConsumer FREE_HOOK = null;
+    static final java.util.concurrent.atomic.AtomicLong FREE_COUNT = new java.util.concurrent.atomic.AtomicLong();
+
     void free(long address) {
+        FREE_COUNT.incrementAndGet();
+        java.util.function.LongConsumer hook = FREE_HOOK;
+        if (hook != null) {
+            hook.accept(address);
+            return;
+        }
         freeLong.free(address);
     }
 

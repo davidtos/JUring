@@ -1156,6 +1156,10 @@ public final class IoUringDispatcher implements AutoCloseable {
 
     /**
      * Drains available completions directly from the shared memory-mapped CQ ring in-place.
+     * <p>
+     * Advances {@code cq.khead} in a {@code finally} block using the count of processed completions.
+     * A CQE counts as processed before invoking {@code consumer.accept}, ensuring that if the consumer
+     * throws, only the failing CQE is lost and already-freed buffers are never processed or freed again.
      *
      * @param head      the current CQ ring head index
      * @param available total number of completed entries currently in the CQ ring
@@ -1171,17 +1175,22 @@ public final class IoUringDispatcher implements AutoCloseable {
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
         int shift = cqeShift;
-        for (int i = 0; i < count; i++) {
-            int index = (head + i) & mask;
-            long address = cqes + ((long) index << shift);
-            long userData = ZeroGcCqe.getUserData(address);
-            int res = ZeroGcCqe.getRes(address);
-            int flags = ZeroGcCqe.getFlags(address);
+        int processed = 0;
+        try {
+            for (int i = 0; i < count; i++) {
+                int index = (head + i) & mask;
+                long address = cqes + ((long) index << shift);
+                long userData = ZeroGcCqe.getUserData(address);
+                int res = ZeroGcCqe.getRes(address);
+                int flags = ZeroGcCqe.getFlags(address);
 
-            populateResultFromCqe(reusableResult, userData, res, flags);
-            consumer.accept(reusableResult);
+                populateResultFromCqe(reusableResult, userData, res, flags);
+                processed = i + 1;
+                consumer.accept(reusableResult);
+            }
+        } finally {
+            VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
-        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
         return count;
     }
 
@@ -1219,15 +1228,20 @@ public final class IoUringDispatcher implements AutoCloseable {
         long cqes = cqCqesAddr;
         int mask = cqRingMask;
         int shift = cqeShift;
-        for (int i = 0; i < count; i++) {
-            int index = (head + i) & mask;
-            long address = cqes + ((long) index << shift);
-            long userData = ZeroGcCqe.getUserData(address);
-            int res = ZeroGcCqe.getRes(address);
-            int flags = ZeroGcCqe.getFlags(address);
-            consumer.accept(userData, res, flags);
+        int processed = 0;
+        try {
+            for (int i = 0; i < count; i++) {
+                int index = (head + i) & mask;
+                long address = cqes + ((long) index << shift);
+                long userData = ZeroGcCqe.getUserData(address);
+                int res = ZeroGcCqe.getRes(address);
+                int flags = ZeroGcCqe.getFlags(address);
+                processed = i + 1;
+                consumer.accept(userData, res, flags);
+            }
+        } finally {
+            VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
-        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
         return count;
     }
 
@@ -1243,19 +1257,24 @@ public final class IoUringDispatcher implements AutoCloseable {
         int mask = cqRingMask;
         int shift = cqeShift;
         List<Result> ret = new ArrayList<>(count);
-        for (int i = 0; i < count; i++) {
-            int index = (head + i) & mask;
-            long address = cqes + ((long) index << shift);
-            long userData = ZeroGcCqe.getUserData(address);
-            int res = ZeroGcCqe.getRes(address);
-            int flags = ZeroGcCqe.getFlags(address);
+        int processed = 0;
+        try {
+            for (int i = 0; i < count; i++) {
+                int index = (head + i) & mask;
+                long address = cqes + ((long) index << shift);
+                long userData = ZeroGcCqe.getUserData(address);
+                int res = ZeroGcCqe.getRes(address);
+                int flags = ZeroGcCqe.getFlags(address);
 
-            Result r = new Result();
-            r.setRegisteredBuffers(this.registeredBuffers);
-            populateResultFromCqe(r, userData, res, flags);
-            ret.add(r);
+                Result r = new Result();
+                r.setRegisteredBuffers(this.registeredBuffers);
+                populateResultFromCqe(r, userData, res, flags);
+                processed = i + 1;
+                ret.add(r);
+            }
+        } finally {
+            VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
-        VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
         return ret;
     }
 
