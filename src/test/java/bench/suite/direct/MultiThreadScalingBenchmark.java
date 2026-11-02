@@ -162,6 +162,7 @@ public class MultiThreadScalingBenchmark {
         public ByteBuffer writeBuffer;
         public MemorySegment writeSegment;
 
+        public int inFlight;
         public int reapedCount;
         public ResultConsumer consumer;
 
@@ -177,6 +178,7 @@ public class MultiThreadScalingBenchmark {
             this.taskFileIndices = pool.fileIndices();
             this.taskOffsets = pool.offsets();
             this.threadOffset = 0;
+            this.inFlight = 0;
             int ringEntries = Math.max(128, qd * 2);
 
             ring = new JUring(ringEntries,
@@ -218,6 +220,16 @@ public class MultiThreadScalingBenchmark {
 
         @TearDown(Level.Trial)
         public void tearDown() {
+            if (ring != null && inFlight > 0) {
+                try {
+                    while (inFlight > 0) {
+                        int reaped = ring.submitAndWaitForBatchResult(1, qd, result -> {
+                            this.ring.checkInBuffer(result.bufferIdx());
+                        });
+                        inFlight = Math.max(0, inFlight - reaped);
+                    }
+                } catch (Exception ignored) {}
+            }
             DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);
             if (ring != null) {
@@ -308,51 +320,40 @@ public class MultiThreadScalingBenchmark {
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int taskMask = taskFileIndices.length - 1;
-        final int localOffset = state.threadOffset;
-        state.threadOffset = (localOffset + totalTasks) & taskMask;
         final int qd = state.qd;
-        final int submitBatch = state.submitBatch;
         final int waitBatch = state.waitBatch;
 
-        state.reapedCount = 0;
-        int submitted = 0;
-        int taskIndex = 0;
-        int unsubmitted = 0;
+        int inFlight = state.inFlight;
+        int threadOffset = state.threadOffset;
+        int reapedTotal = 0;
 
-        while (state.reapedCount < totalTasks) {
-            while ((submitted - state.reapedCount) < qd && taskIndex < totalTasks) {
+        while (inFlight < qd) {
+            int bufIdx = ring.checkOutBuffer();
+            if (bufIdx < 0) break;
+            int idx = threadOffset++ & taskMask;
+            ring.prepareWriteFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+            inFlight++;
+        }
+
+        while (reapedTotal < totalTasks) {
+            int remaining = totalTasks - reapedTotal;
+            int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
+            int reaped = ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
+            inFlight -= reaped;
+            reapedTotal += reaped;
+
+            while (inFlight < qd) {
                 int bufIdx = ring.checkOutBuffer();
-                if (bufIdx < 0) {
-                    break;
-                }
-
-                int idx = (localOffset + taskIndex) & taskMask;
-                int fileIdx = taskFileIndices[idx];
-                long offset = taskOffsets[idx];
-
-                ring.prepareWriteFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
-                submitted++;
-                unsubmitted++;
-                taskIndex++;
-
-                if (unsubmitted >= submitBatch) {
-                    ring.submit();
-                    unsubmitted = 0;
-                    ring.peekForBatchResult(qd, state.consumer);
-                }
-            }
-
-            int reaped = ring.peekForBatchResult(qd, state.consumer);
-            if (reaped == 0 && state.reapedCount < totalTasks) {
-                int remaining = totalTasks - state.reapedCount;
-                int inFlight = submitted - state.reapedCount;
-                if (inFlight > 0) {
-                    int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
-                    ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-                    unsubmitted = 0;
-                }
+                if (bufIdx < 0) break;
+                int idx = threadOffset++ & taskMask;
+                ring.prepareWriteFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+                inFlight++;
             }
         }
+
+        state.inFlight = inFlight;
+        state.threadOffset = threadOffset;
+        state.reapedCount = reapedTotal;
 
         counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
