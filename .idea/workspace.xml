@@ -4,8 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation.">
-      <change afterPath="$PROJECT_DIR$/FIX_BEFORE_RELEASE.md" afterDir="false" />
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -14,7 +13,7 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="340" />
+    <option name="cachedIndexableFilesCount" value="341" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -305,10 +304,11 @@
     <MESSAGE value="Remove specific result types and consolidate into a single `Result` interface" />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe` and add tests." />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe`, add `ResultConsumer` functional interface, and include comprehensive unit tests." />
-    <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
     <MESSAGE value="test: add DirectIoTest for write, read, zero-copy, and round-trip operations at 4096-byte block size" />
     <MESSAGE value="test(direct-read): add DirectReadVisualVerificationTest for live benchmarks and disk match validation&#10;&#10;- Introduced DirectReadVisualVerificationTest to visually inspect and verify O_DIRECT NVMe reads.&#10;- Enhanced DirectReadBenchmark with debug visuals and detailed console output via `juring.visual`.&#10;- Updated test resource output and added single-file and multifile configurations for benchmarks." />
-    <option name="LAST_COMMIT_MESSAGE" value="test(direct-read): add DirectReadVisualVerificationTest for live benchmarks and disk match validation&#10;&#10;- Introduced DirectReadVisualVerificationTest to visually inspect and verify O_DIRECT NVMe reads.&#10;- Enhanced DirectReadBenchmark with debug visuals and detailed console output via `juring.visual`.&#10;- Updated test resource output and added single-file and multifile configurations for benchmarks." />
+    <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
+    <MESSAGE value="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks" />
+    <option name="LAST_COMMIT_MESSAGE" value="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
