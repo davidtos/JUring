@@ -453,48 +453,6 @@ class BenchmarkSuiteValidationTest {
     }
 
     @Test
-    @DisplayName("Verify FioLatencyHistogram percentile precision, stddev, and formatting")
-    void testFioLatencyHistogramAccuracyAndPercentiles() {
-        DatasetManager.FioLatencyHistogram hist = new DatasetManager.FioLatencyHistogram();
-        assertEquals(0, hist.getCount());
-        assertEquals(0, hist.getMinNs());
-        assertEquals(0, hist.getMaxNs());
-
-        // Feed uniform values from 100,000 ns (100 µs) to 500,000 ns (500 µs) in steps of 1,000 ns (401 samples)
-        for (long ns = 100_000L; ns <= 500_000L; ns += 1_000L) {
-            hist.record(ns);
-        }
-
-        assertEquals(401, hist.getCount());
-        assertEquals(100_000L, hist.getMinNs());
-        assertEquals(500_000L, hist.getMaxNs());
-        assertEquals(100.0, hist.getMinMicros(), 0.001);
-        assertEquals(500.0, hist.getMaxMicros(), 0.001);
-
-        // Expected mean = 300,000 ns (300.0 µs)
-        assertEquals(300.0, hist.getMeanMicros(), 0.01);
-
-        // Expected p50 ~= 300 µs (within 1.5% bin resolution)
-        double p50 = hist.getPercentileMicros(50.0);
-        assertTrue(Math.abs(p50 - 300.0) < 6.0, "p50 should be ~300 µs, got: " + p50);
-
-        // Expected p99 ~= 496 µs
-        double p99 = hist.getPercentileMicros(99.0);
-        assertTrue(p99 >= 480.0 && p99 <= 505.0, "p99 should be ~496 µs, got: " + p99);
-
-        // Verify summary and percentile string formatting
-        String summary = hist.formatFioSummary("clat");
-        assertNotNull(summary);
-        assertTrue(summary.contains("clat (usec):"));
-        assertTrue(summary.contains("avg=300.00"));
-
-        String pctReport = hist.formatFioPercentiles();
-        assertNotNull(pctReport);
-        assertTrue(pctReport.contains("50.00th="));
-        assertTrue(pctReport.contains("99.00th="));
-    }
-
-    @Test
     @DisplayName("Verify FioComparisonBenchmark pipeline execution with telemetry ON and OFF")
     void testFioComparisonBenchmarkPipelineExecution() throws Exception {
         Path benchFile = DatasetManager.resolveSingleBenchFile();
@@ -513,7 +471,7 @@ class BenchmarkSuiteValidationTest {
         tState.telemetry = true;
 
         try {
-            tState.setup(bState, null);
+            tState.setup(bState, null, null);
             StorageAuxCounters storage = new StorageAuxCounters();
             DirectLatencyBenchmark.FioComparisonBenchmark bench =
                     new DirectLatencyBenchmark.FioComparisonBenchmark();
@@ -521,8 +479,8 @@ class BenchmarkSuiteValidationTest {
             // Run direct read with telemetry ON
             bench.juringDirectRead(tState, bState, storage, null);
             assertTrue(tState.reapedCount > 0, "Read operations must be reaped");
-            assertTrue(tState.latHistogram.getCount() > 0, "lat histogram must have recorded samples");
-            assertTrue(tState.latHistogram.getMeanMicros() > 0.0, "lat mean must be positive");
+            assertTrue(tState.iterationHistogram.getTotalCount() > 0, "Iteration histogram must have recorded samples");
+            assertTrue(tState.iterationHistogram.getMean() > 0.0, "Latency mean must be positive");
 
             // Run direct write with telemetry ON
             bench.juringDirectWrite(tState, bState, storage, null);

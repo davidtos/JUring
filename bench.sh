@@ -87,7 +87,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ ! -f target/cp.txt ]]; then
+if [[ ! -f target/cp.txt || pom.xml -nt target/cp.txt ]]; then
     mvn -q test-compile dependency:build-classpath -Dmdep.outputFile=target/cp.txt
 else
     mvn -q test-compile
@@ -162,14 +162,14 @@ EOF
 
         run_jmh() {
             echo " [Repeat $rep/$REPEATS] Running JMH FioComparisonBenchmark ($BENCH_METHOD)..."
-            local jvm_args=(java --enable-native-access=ALL-UNNAMED)
-            local fork_jvm_args=""
+            local jvm_args=(java --enable-native-access=ALL-UNNAMED -Djuring.results.dir="$RESULTS_DIR")
+            local fork_jvm_args="-Djuring.results.dir=$RESULTS_DIR"
             if [[ -n "$PIN_CPUS" ]]; then
                 jvm_args+=(-XX:ActiveProcessorCount="$TOTAL_CPUS" -XX:+UseG1GC -Djuring.pin="$PIN_CPUS")
-                fork_jvm_args="-XX:ActiveProcessorCount=$TOTAL_CPUS -XX:+UseG1GC -Djuring.pin=$PIN_CPUS"
+                fork_jvm_args+=" -XX:ActiveProcessorCount=$TOTAL_CPUS -XX:+UseG1GC -Djuring.pin=$PIN_CPUS"
             else
                 jvm_args+=(-Djuring.pin="unpinned")
-                fork_jvm_args="-Djuring.pin=unpinned"
+                fork_jvm_args+=" -Djuring.pin=unpinned"
             fi
             local jmh_cmd=("${jvm_args[@]}"
                 -cp "target/test-classes:target/classes:$(cat target/cp.txt)"

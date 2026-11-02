@@ -9,10 +9,16 @@ import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.ResultConsumer;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.BenchmarkParams;
 import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.infra.IterationParams;
 import org.openjdk.jmh.infra.ThreadParams;
+import org.openjdk.jmh.runner.IterationType;
+import org.HdrHistogram.Histogram;
+import org.HdrHistogram.HistogramLogWriter;
 
 import java.io.IOException;
+import java.io.PrintStream;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -202,7 +208,8 @@ public class DirectLatencyBenchmark {
             public ByteBuffer alignedBuf;
 
             public DatasetManager.FioPrng prng;
-            public DatasetManager.FioLatencyHistogram latHistogram;
+            public Histogram iterationHistogram;
+            public Histogram trialHistogram;
 
             public long[] startTimes;
 
@@ -211,8 +218,11 @@ public class DirectLatencyBenchmark {
             public ResultConsumer readConsumer;
             public ResultConsumer writeConsumer;
 
+            private String benchmarkName;
+            private String resultsDir;
+
             @Setup(Level.Trial)
-            public void setup(FioBenchmarkState benchState, ThreadParams params) {
+            public void setup(FioBenchmarkState benchState, ThreadParams params, BenchmarkParams benchParams) {
                 int threadIndex = (params != null) ? params.getThreadIndex() : 0;
                 int threadCount = (params != null) ? params.getThreadCount() : 1;
                 int safeBufferCount = Math.max(qd, IoHelper.getSafeBufferCount(BLOCK_SIZE, threadCount));
@@ -221,7 +231,10 @@ public class DirectLatencyBenchmark {
                 long seed = System.nanoTime() ^ ((long) threadIndex * 31L);
                 this.prng = new DatasetManager.FioPrng(seed);
                 System.out.printf("[FioComparisonBenchmark] Initialized PRNG with seed: 0x%016x%n", seed);
-                this.latHistogram = new DatasetManager.FioLatencyHistogram();
+                this.iterationHistogram = new Histogram(1L, 60_000_000_000L, 3);
+                this.trialHistogram = new Histogram(1L, 60_000_000_000L, 3);
+                this.benchmarkName = (benchParams != null) ? benchParams.getBenchmark() : "FioComparisonBenchmark";
+                this.resultsDir = System.getProperty("juring.results.dir", null);
 
                 this.startTimes = new long[safeBufferCount];
                 this.inFlight = 0;
@@ -265,7 +278,10 @@ public class DirectLatencyBenchmark {
                     int bufIdx = result.bufferIdx();
                     if (this.telemetry) {
                         long compNow = System.nanoTime();
-                        this.latHistogram.record(compNow - this.startTimes[bufIdx]);
+                        long lat = compNow - this.startTimes[bufIdx];
+                        if (lat < 1L) lat = 1L;
+                        else if (lat > 60_000_000_000L) lat = 60_000_000_000L;
+                        this.iterationHistogram.recordValue(lat);
                     }
                     this.reapedCount++;
                     this.ring.checkInBuffer(bufIdx);
@@ -279,11 +295,30 @@ public class DirectLatencyBenchmark {
                     int bufIdx = result.bufferIdx();
                     if (this.telemetry) {
                         long compNow = System.nanoTime();
-                        this.latHistogram.record(compNow - this.startTimes[bufIdx]);
+                        long lat = compNow - this.startTimes[bufIdx];
+                        if (lat < 1L) lat = 1L;
+                        else if (lat > 60_000_000_000L) lat = 60_000_000_000L;
+                        this.iterationHistogram.recordValue(lat);
                     }
                     this.reapedCount++;
                     this.ring.checkInBuffer(bufIdx);
                 };
+            }
+
+            @Setup(Level.Iteration)
+            public void setupIteration() {
+                if (this.iterationHistogram != null) {
+                    this.iterationHistogram.reset();
+                }
+            }
+
+            @TearDown(Level.Iteration)
+            public void tearDownIteration(IterationParams iterationParams) {
+                if (iterationParams != null && iterationParams.getType() == IterationType.MEASUREMENT) {
+                    if (this.trialHistogram != null && this.iterationHistogram != null) {
+                        this.trialHistogram.add(this.iterationHistogram);
+                    }
+                }
             }
 
             @TearDown(Level.Trial)
@@ -303,6 +338,48 @@ public class DirectLatencyBenchmark {
                 if (readFd != null) { try { readFd.close(); } catch (Exception ignored) {} }
                 if (writeFd != null) { try { writeFd.close(); } catch (Exception ignored) {} }
                 if (ring != null) { ring.close(); }
+
+                if (this.telemetry && this.trialHistogram != null && this.trialHistogram.getTotalCount() > 0) {
+                    writeHistogramOutput();
+                }
+            }
+
+            private void writeHistogramOutput() {
+                try {
+                    Path outDir;
+                    if (resultsDir != null && !resultsDir.isBlank()) {
+                        outDir = Path.of(resultsDir);
+                    } else {
+                        String date = new java.text.SimpleDateFormat("yyyy-MM-dd_HHmmss").format(new java.util.Date());
+                        outDir = Path.of("results", date);
+                    }
+                    Files.createDirectories(outDir);
+
+                    String cleanName = benchmarkName != null
+                            ? benchmarkName.substring(benchmarkName.lastIndexOf('.') + 1)
+                            : "FioComparisonBenchmark";
+                    String fork = System.getProperty("jmh.forkId", String.valueOf(System.nanoTime() & 0xFFFF));
+                    String baseName = cleanName + "-qd" + qd + "-fork" + fork;
+
+                    Path percentilesFile = outDir.resolve(baseName + ".percentiles");
+                    Path hlogFile = outDir.resolve(baseName + ".hlog");
+
+                    try (PrintStream ps = new PrintStream(Files.newOutputStream(percentilesFile))) {
+                        trialHistogram.outputPercentileDistribution(ps, 1000.0);
+                    }
+
+                    try (PrintStream ps = new PrintStream(Files.newOutputStream(hlogFile))) {
+                        HistogramLogWriter logWriter = new HistogramLogWriter(ps);
+                        logWriter.outputLogFormatVersion();
+                        logWriter.outputLegend();
+                        logWriter.outputIntervalHistogram(trialHistogram);
+                    }
+
+                    System.out.printf("[FioComparisonBenchmark] Wrote latency percentiles to %s and .hlog to %s (%,d ops)%n",
+                            percentilesFile, hlogFile, trialHistogram.getTotalCount());
+                } catch (Exception e) {
+                    System.err.println("[FioComparisonBenchmark] Notice: Failed to write histogram output: " + e.getMessage());
+                }
             }
         }
 
@@ -415,7 +492,6 @@ public class DirectLatencyBenchmark {
             final long maxBlocks = benchState.maxBlocks;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
-            final DatasetManager.FioLatencyHistogram latHist = state.latHistogram;
             final int totalTasks = OPERATIONS_PER_INVOCATION;
 
             for (int i = 0; i < totalTasks; i++) {
@@ -429,7 +505,10 @@ public class DirectLatencyBenchmark {
                             + BLOCK_SIZE + " bytes, got " + n);
                 }
                 if (telemetry) {
-                    latHist.record(end - start);
+                    long lat = end - start;
+                    if (lat < 1L) lat = 1L;
+                    else if (lat > 60_000_000_000L) lat = 60_000_000_000L;
+                    state.iterationHistogram.recordValue(lat);
                 }
                 if (blackhole != null) blackhole.consume(n);
             }
@@ -444,7 +523,6 @@ public class DirectLatencyBenchmark {
             final long maxBlocks = benchState.maxBlocks;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
-            final DatasetManager.FioLatencyHistogram latHist = state.latHistogram;
             final int totalTasks = OPERATIONS_PER_INVOCATION;
 
             for (int i = 0; i < totalTasks; i++) {
@@ -458,7 +536,10 @@ public class DirectLatencyBenchmark {
                             + BLOCK_SIZE + " bytes, got " + n);
                 }
                 if (telemetry) {
-                    latHist.record(end - start);
+                    long lat = end - start;
+                    if (lat < 1L) lat = 1L;
+                    else if (lat > 60_000_000_000L) lat = 60_000_000_000L;
+                    state.iterationHistogram.recordValue(lat);
                 }
                 if (blackhole != null) blackhole.consume(n);
             }
