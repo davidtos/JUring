@@ -8,7 +8,10 @@ import com.davidvlijmincx.lio.api.JUring;
 import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 import com.davidvlijmincx.lio.api.ResultConsumer;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
@@ -41,6 +44,8 @@ import static org.junit.jupiter.api.Assertions.*;
  * visual preview, prints the live reads moving in real time to the console, and verifies every
  * block byte-for-byte against the physical file on disk.
  */
+@EnabledOnOs(OS.LINUX)
+@Tag("linux")
 public class DirectReadVisualVerificationTest {
 
     public static class VerificationConfig {
@@ -92,20 +97,9 @@ public class DirectReadVisualVerificationTest {
         public int ioErrors;
         public int poisonFailures;
         public long totalBytesRead;
-        public long elapsedNanos;
 
         public boolean isSuccess() {
             return completedTasks == totalTasks && mismatches == 0 && ioErrors == 0 && poisonFailures == 0;
-        }
-
-        public double getThroughputMbSec() {
-            double secs = elapsedNanos / 1_000_000_000.0;
-            return secs > 0 ? (totalBytesRead / (1024.0 * 1024.0)) / secs : 0;
-        }
-
-        public double getIops() {
-            double secs = elapsedNanos / 1_000_000_000.0;
-            return secs > 0 ? completedTasks / secs : 0;
         }
     }
 
@@ -317,7 +311,6 @@ public class DirectReadVisualVerificationTest {
                 }
             };
 
-            long startNano = System.nanoTime();
             int submitted = 0;
             int taskIndex = 0;
             int unsubmitted = 0;
@@ -357,8 +350,6 @@ public class DirectReadVisualVerificationTest {
                 }
             }
 
-            stats.elapsedNanos = System.nanoTime() - startNano;
-
         } finally {
             DatasetManager.closeChannels(verifyChannels);
             DatasetManager.closeFileDescriptors(fileDescriptors);
@@ -378,14 +369,11 @@ public class DirectReadVisualVerificationTest {
         System.out.println("----------------------------------------------------------------------------------");
         System.out.println("                        DIRECT READ VERIFICATION RESULTS                          ");
         System.out.println("----------------------------------------------------------------------------------");
-        System.out.printf(" Execution Wall Time:  %.3f s%n", stats.elapsedNanos / 1_000_000_000.0);
         System.out.printf(" Tasks Completed:      %d / %d (%.1f%%)%n",
                 stats.completedTasks, stats.totalTasks,
                 stats.totalTasks > 0 ? (100.0 * stats.completedTasks / stats.totalTasks) : 0);
         System.out.printf(" Total Data Read:      %,d bytes (%.2f MB)%n",
                 stats.totalBytesRead, stats.totalBytesRead / (1024.0 * 1024.0));
-        System.out.printf(" Average Throughput:   %,.2f MB/s (%,.0f IOPS)%n",
-                stats.getThroughputMbSec(), stats.getIops());
         System.out.printf(" Bit-Accurate Matches: %d / %d (100%% identical to disk)%n",
                 stats.verifiedMatches, stats.totalTasks);
         System.out.printf(" Mismatches Detected:  %d%n", stats.mismatches);

@@ -84,20 +84,6 @@ public class BenchmarkRunner {
         Integer customW = null;
 
         for (int i = 0; i < args.length; i++) {
-            if ("--visual-read".equals(args[i].trim())) {
-                List<String> forwarded = new ArrayList<>();
-                for (int j = 0; j < args.length; j++) {
-                    if (j != i) {
-                        forwarded.add(args[j].trim());
-                    }
-                }
-                bench.suite.direct.DirectReadVisualVerificationTest.main(forwarded.toArray(new String[0]));
-                return;
-            }
-
-        }
-
-        for (int i = 0; i < args.length; i++) {
             String arg = args[i].trim();
             switch (arg) {
                 case "--quick" -> quick = true;
@@ -701,7 +687,6 @@ public class BenchmarkRunner {
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");
         System.out.println("  --perfnorm          Attach LinuxPerfNormProfiler for hardware cycles and CPU task-clock");
         System.out.println("  --syscalls          Attach LinuxPerfNormProfiler to measure exact hardware/kernel syscall tracepoints");
-        System.out.println("  --visual-read       Run visual direct read verification with live console output");
         System.out.println("  --pin <cpus>        Pin benchmark JVM to specified CPUs (passes -XX:ActiveProcessorCount and -XX:+UseG1GC)");
         System.out.println("  --threads <N>       Set thread concurrency (1, 4, 8, 16)");
         System.out.println("  --help              Display this help message");
