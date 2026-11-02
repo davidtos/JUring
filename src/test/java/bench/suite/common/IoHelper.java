@@ -49,7 +49,7 @@ public final class IoHelper {
         ByteBuffer raw = ByteBuffer.allocateDirect(capacity + alignment);
         ByteBuffer aligned = raw.alignedSlice(alignment);
         aligned.limit(capacity);
-        return aligned;
+        return aligned.slice(0, capacity);
     }
 
     /**

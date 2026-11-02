@@ -129,6 +129,7 @@ public class JUringBlocking implements AutoCloseable {
         }
 
         static final long EVENTFD_SENTINEL = Long.MIN_VALUE;
+        static final long CANCEL_SENTINEL = Long.MIN_VALUE + 1;
         final JUringBlocking parent;
         final int workerId;
         final int eventFd;
@@ -261,8 +262,10 @@ public class JUringBlocking implements AutoCloseable {
             final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = unboundedInFlight
 
             final IoUringDispatcher.RawCqeConsumer cqeConsumer = (userData, res, flags) -> {
-                if (userData == EVENTFD_SENTINEL) {
-                    eventfdArmed = false;
+                if (userData == EVENTFD_SENTINEL || userData == CANCEL_SENTINEL) {
+                    if (userData == EVENTFD_SENTINEL) {
+                        eventfdArmed = false;
+                    }
                     return;
                 }
                 int slotId = (int) userData;
@@ -273,9 +276,17 @@ public class JUringBlocking implements AutoCloseable {
                 inFlightHolder[0]--;
                 slotResult[slotId] = res;
                 Thread vt = slotThread[slotId];
-                VH_INT_ARRAY.setRelease(slotState, slotId, STATE_DONE);
                 if (vt != null) {
+                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_DONE);
                     LockSupport.unpark(vt);
+                } else {
+                    long toFree = slotFreeAddr[slotId];
+                    if (toFree != 0L) {
+                        slotFreeAddr[slotId] = 0L;
+                        parent.libc.free(toFree);
+                    }
+                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
+                    releaseSlot(slotId);
                 }
             };
 
@@ -413,6 +424,23 @@ public class JUringBlocking implements AutoCloseable {
             }
 
             runPendingControlTask();
+
+            // Cancel and drain in-flight requests on poller thread
+            if (inFlightHolder[0] > 0) {
+                long cancelSqe = dispatcher.getSqe();
+                if (cancelSqe != 0L) {
+                    ZeroGcSqe.zero(cancelSqe);
+                    ZeroGcSqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                    ZeroGcSqe.setFd(cancelSqe, -1);
+                    ZeroGcSqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                    ZeroGcSqe.setUserData(cancelSqe, CANCEL_SENTINEL);
+                    dispatcher.submit();
+                }
+                while (inFlightHolder[0] > 0) {
+                    dispatcher.submitAndWait(1);
+                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                }
+            }
         }
 
         private static boolean isUnboundedOp(byte op) {
@@ -600,15 +628,19 @@ public class JUringBlocking implements AutoCloseable {
                 completed = true;
                 return slotResult[slotId];
             } finally {
-                long toFree = slotFreeAddr[slotId];
-                if (toFree != 0L) {
-                    slotFreeAddr[slotId] = 0L;
-                    parent.libc.free(toFree);
-                }
-                slotThread[slotId] = null;
-                VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
-                if (completed || !running) {
+                if (completed) {
+                    long toFree = slotFreeAddr[slotId];
+                    if (toFree != 0L) {
+                        slotFreeAddr[slotId] = 0L;
+                        parent.libc.free(toFree);
+                    }
+                    slotThread[slotId] = null;
+                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
                     releaseSlot(slotId);
+                } else {
+                    // Waiter threw an exception (interrupted or closed while in flight).
+                    // Ownership of buffer and slot release stays strictly with the poller thread.
+                    slotThread[slotId] = null;
                 }
             }
         }

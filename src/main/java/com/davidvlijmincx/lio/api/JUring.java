@@ -1065,10 +1065,10 @@ public class JUring implements AutoCloseable {
      */
     @Override
     public void close() {
+        ioUring.close();
         if (readBufferPool != null) {
             readBufferPool.close();
             readBufferPool = null;
         }
-        ioUring.close();
     }
 }

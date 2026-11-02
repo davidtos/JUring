@@ -143,6 +143,7 @@ final class IoUringDispatcher implements AutoCloseable {
     private int sqRingEntries;
     private int sqeHead;
     private int sqeTail;
+    private int inFlightCount;
 
     private long cqKheadAddr;
     private long cqKtailAddr;
@@ -355,6 +356,7 @@ final class IoUringDispatcher implements AutoCloseable {
         long sqe_addr = sqSqesAddr + ((long) index << sqeShift);
 
         sqeTail = tail + 1;
+        inFlightCount++;
 
         ZeroGcSqe.zero(sqe_addr);
         if (sqeShift > 6) {
@@ -732,6 +734,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     void cqAdvance(MemorySegment ring, int count) {
         if (count <= 0) return;
+        inFlightCount -= count;
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
     }
@@ -1181,6 +1184,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 consumer.accept(reusableResult);
             }
         } finally {
+            inFlightCount -= processed;
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -1232,6 +1236,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 consumer.accept(userData, res, flags);
             }
         } finally {
+            inFlightCount -= processed;
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -1265,6 +1270,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 ret.add(r);
             }
         } finally {
+            inFlightCount -= processed;
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return ret;
@@ -1525,11 +1531,49 @@ final class IoUringDispatcher implements AutoCloseable {
         NativeDispatcher.C.free(ring);
     }
 
+    private void drainAndCancel() {
+        try {
+            int unsubmitted = sqeTail - sqeHead;
+            if (unsubmitted > 0) {
+                submit();
+            }
+            if (inFlightCount > 0) {
+                long cancelSqe = getSqe();
+                if (cancelSqe != 0L) {
+                    ZeroGcSqe.zero(cancelSqe);
+                    ZeroGcSqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                    ZeroGcSqe.setFd(cancelSqe, -1);
+                    ZeroGcSqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                    ZeroGcSqe.setUserData(cancelSqe, Long.MIN_VALUE + 1);
+                    submit();
+                }
+                while (inFlightCount > 0) {
+                    long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+                    if (res < 0) {
+                        int err = LibCDispatcher.errno(this.callState);
+                        if (err != 11 /* EAGAIN */ && err != 16 /* EBUSY */ && err != 4 /* EINTR */) {
+                            break;
+                        }
+                    }
+                    int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+                    int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                    int available = tail - head;
+                    if (available > 0) {
+                        reapAvailable(head, available, available, Result::close);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // Disabled rings (IORING_SETUP_R_DISABLED) or invalid fds can fail submit; proceed to close
+        }
+    }
+
     @Override
     public void close() {
         if (closed) {
             return;
         }
+        drainAndCancel();
         closed = true;
         closeRing();
         iovecBlockPool.close();

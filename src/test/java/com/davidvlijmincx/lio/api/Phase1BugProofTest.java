@@ -507,6 +507,60 @@ class Phase1BugProofTest {
         }
     }
 
+    @Test
+    void step1_8_cancelAndDrainOnClose() throws Exception {
+        // Part 1: Close JUringBlocking while virtual thread writes are in flight
+        java.util.Set<Long> freedAddrs = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        LibCDispatcher.FREE_HOOK = freedAddrs::add;
+        try {
+            int vtCount = 100;
+            byte[] writeData = "cancel-drain-test-payload\n".getBytes();
+            JUringBlocking blocking = new JUringBlocking(32, IoUringOptions.IORING_SETUP_SINGLE_ISSUER);
+            FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", LinuxOpenOptions.WRITE, 0);
+            var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+            java.util.concurrent.CountDownLatch startLatch = new java.util.concurrent.CountDownLatch(1);
+            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+
+            for (int i = 0; i < vtCount; i++) {
+                final int idx = i;
+                futures.add(executor.submit(() -> {
+                    try {
+                        startLatch.await();
+                        blocking.write(fd, writeData, (long) idx * writeData.length);
+                    } catch (IllegalStateException expectedClosed) {
+                        // Expected if close() invalidated the worker while waiting
+                    } catch (Throwable t) {
+                        // In-flight cancellations can also produce exceptions
+                    }
+                }));
+            }
+
+            // Release virtual threads
+            startLatch.countDown();
+            // Call close while requests are actively being submitted / in-flight
+            Thread.sleep(2);
+            blocking.close();
+            fd.close();
+
+            for (var f : futures) {
+                f.get();
+            }
+
+            // Part 2: Close async JUring with in-flight SQEs
+            try (JUring ring = new JUring(64, IoUringOptions.IORING_SETUP_SINGLE_ISSUER);
+                 FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+                for (int i = 0; i < 32; i++) {
+                    ring.prepareRead(readFd, 13, 0);
+                }
+                ring.submit();
+                // Close immediately with 32 in-flight reads
+                ring.close();
+            }
+        } finally {
+            LibCDispatcher.FREE_HOOK = null;
+        }
+    }
+
     public static void main(String[] args) {
         if (args.length == 0) return;
         switch (args[0]) {
