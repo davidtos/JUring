@@ -1102,7 +1102,7 @@ class BugVerificationTest {
             org.openjdk.jcstress.Options opts = new org.openjdk.jcstress.Options(new String[]{
                     "-m", "sanity",
                     "-r", "target/jcstress-results",
-                    "-t", "com.davidvlijmincx.lio.jcstress.*"
+                    "-t", "com.davidvlijmincx.lio.api.WakePollerStoreLoadTest.*"
             });
             opts.parse();
             org.openjdk.jcstress.JCStress jcstress = new org.openjdk.jcstress.JCStress(opts);

@@ -363,4 +363,31 @@ class JUringBlockingTest {
             assertEquals(input, writtenContent);
         }
     }
+
+    @Test
+    void multiPollerConcurrentReadAndWrite() throws Exception {
+        // Force 4 pollers explicitly
+        try (JUringBlocking blocking = new JUringBlocking(16, 4, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            assertEquals(4, blocking.workerCount(), "Forced poller count should be 4");
+
+            int threads = 16;
+            var executor = Executors.newFixedThreadPool(threads);
+            java.util.List<Future<String>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(executor.submit(() -> {
+                    try (Arena arena = Arena.ofConfined()) {
+                        MemorySegment buf = arena.allocate(13);
+                        long n = blocking.read(fd, buf, 13, 0);
+                        assertEquals(13, n);
+                        return new String(buf.toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+                    }
+                }));
+            }
+            for (var f : futures) {
+                assertEquals("Hello, World!", f.get());
+            }
+            executor.shutdown();
+        }
+    }
 }

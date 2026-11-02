@@ -678,6 +678,16 @@ JUring includes [`bench.sh`](bench.sh) to execute the benchmark suite with autom
   ulimit -l unlimited
   ```
 
+### Building & Testing
+
+```bash
+# Build the project and run the complete test suite (including sanity JCStress tests)
+mvn clean test
+
+# Run the OpenJDK JCStress memory-ordering test suite directly via Maven profile
+mvn test -Pjcstress
+```
+
 ---
 
 ## Further Reading & Connect

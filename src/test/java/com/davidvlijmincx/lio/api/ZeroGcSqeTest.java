@@ -81,6 +81,92 @@ class ZeroGcSqeTest {
     }
 
     @Test
+    void testAbsoluteOffsetsSqe() {
+        assertEquals(64, ZeroGcSqe.SQE_SIZE, "io_uring_sqe must be exactly 64 bytes");
+        // Verify uapi offsets
+        sqeSegment.fill((byte) 0);
+        // opcode at 0
+        sqeSegment.set(ValueLayout.JAVA_BYTE, 0, (byte) 22);
+        assertEquals((byte) 22, ZeroGcSqe.getOpcode(sqeAddress));
+        ZeroGcSqe.setOpcode(sqeAddress, (byte) 23);
+        assertEquals((byte) 23, sqeSegment.get(ValueLayout.JAVA_BYTE, 0));
+
+        // flags at 1
+        sqeSegment.set(ValueLayout.JAVA_BYTE, 1, (byte) 0x05);
+        assertEquals((byte) 0x05, ZeroGcSqe.getFlags(sqeAddress));
+
+        // ioprio at 2
+        sqeSegment.set(ValueLayout.JAVA_SHORT, 2, (short) 100);
+        assertEquals((short) 100, ZeroGcSqe.getIoprio(sqeAddress));
+
+        // fd at 4
+        sqeSegment.set(ValueLayout.JAVA_INT, 4, 1234);
+        assertEquals(1234, ZeroGcSqe.getFd(sqeAddress));
+
+        // off at 8
+        sqeSegment.set(ValueLayout.JAVA_LONG, 8, 0x1122334455667788L);
+        assertEquals(0x1122334455667788L, ZeroGcSqe.getOff(sqeAddress));
+
+        // addr at 16
+        sqeSegment.set(ValueLayout.JAVA_LONG, 16, 0x8877665544332211L);
+        assertEquals(0x8877665544332211L, ZeroGcSqe.getAddr(sqeAddress));
+
+        // len at 24
+        sqeSegment.set(ValueLayout.JAVA_INT, 24, 4096);
+        assertEquals(4096, ZeroGcSqe.getLen(sqeAddress));
+
+        // rw_flags at 28
+        sqeSegment.set(ValueLayout.JAVA_INT, 28, 0x07);
+        assertEquals(0x07, ZeroGcSqe.getRwFlags(sqeAddress));
+
+        // user_data at 32
+        sqeSegment.set(ValueLayout.JAVA_LONG, 32, 0xCAFEBABE12345678L);
+        assertEquals(0xCAFEBABE12345678L, ZeroGcSqe.getUserData(sqeAddress));
+
+        // buf_index at 40
+        sqeSegment.set(ValueLayout.JAVA_SHORT, 40, (short) 42);
+        assertEquals((short) 42, ZeroGcSqe.getBufIndex(sqeAddress));
+
+        // file_index at 44
+        sqeSegment.set(ValueLayout.JAVA_INT, 44, 99);
+        assertEquals(99, ZeroGcSqe.getFileIndex(sqeAddress));
+    }
+
+    @Test
+    void testAbsoluteOffsetsCqe() {
+        assertEquals(16, ZeroGcCqe.CQE_LAYOUT.byteSize(), "io_uring_cqe must be exactly 16 bytes");
+        try (Arena a = Arena.ofConfined()) {
+            MemorySegment cqe = a.allocate(16);
+            long addr = cqe.address();
+            // user_data at 0
+            cqe.set(ValueLayout.JAVA_LONG, 0, 0x123456789ABCDEF0L);
+            assertEquals(0x123456789ABCDEF0L, ZeroGcCqe.getUserData(addr));
+
+            // res at 8
+            cqe.set(ValueLayout.JAVA_INT, 8, 4096);
+            assertEquals(4096, ZeroGcCqe.getRes(addr));
+
+            // flags at 12
+            cqe.set(ValueLayout.JAVA_INT, 12, 0x02);
+            assertEquals(0x02, ZeroGcCqe.getFlags(addr));
+        }
+    }
+
+    @Test
+    void testAbsoluteOffsetsParams() {
+        assertEquals(120, io_uring_params.layout().byteSize(), "io_uring_params must be exactly 120 bytes");
+        assertEquals(0, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_entries")));
+        assertEquals(4, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("cq_entries")));
+        assertEquals(8, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("flags")));
+        assertEquals(12, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_thread_cpu")));
+        assertEquals(16, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_thread_idle")));
+        assertEquals(20, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("features")));
+        assertEquals(24, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("wq_fd")));
+        assertEquals(40, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_off")));
+        assertEquals(80, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("cq_off")));
+    }
+
+    @Test
     void testZeroGcUserDataEncoding() {
         long ptr = 0x00007FFFF7DC1234L;
         long encoded = ZeroGcUserData.encode(OperationType.READ, ptr);

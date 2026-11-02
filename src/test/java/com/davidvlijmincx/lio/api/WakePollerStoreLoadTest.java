@@ -1,37 +1,41 @@
-package com.davidvlijmincx.lio.jcstress;
+package com.davidvlijmincx.lio.api;
 
 import org.openjdk.jcstress.annotations.*;
 import org.openjdk.jcstress.infra.results.*;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
 /**
- * OpenJDK JCStress test suite for JUring and JUringBlocking memory barrier mechanics.
- * Proves that:
- * 1. StoreLoad barrier prevents lost wakeup hangs between wakePoller and poller parking.
- * 2. Release-acquire barrier on MPSC slot sequence prevents reading uninitialized payload.
- * 3. Release-acquire barrier on IoUringDispatcher SQ tail prevents reading uninitialized SQEs.
- * 4. Release-acquire barrier on IoUringDispatcher CQ tail prevents reading uninitialized CQEs.
- * 5. Bounded buffer pool sequence handoff prevents data corruption / stale buffer reads.
- * 6. Loop termination on sqKhead consumption guarantees timely loop exit without hanging.
- * 7. Control task publication and completion barrier ensures synchronous action visibility.
+ * OpenJDK JCStress stress test suite for JUring and JUringBlocking memory barrier mechanics.
+ * Drives real library classes (IoUringDispatcher, JUringBlocking, ZeroGcSqe, ZeroGcCqe).
+ * Verifies that:
+ * 1. Eventfd handshake StoreLoad barrier prevents lost wakeup hangs between wakePoller and poller inKernel.
+ * 2. B10 VarHandle.fullFence() StoreLoad barrier between SQ tail store and sqKflags load prevents lost SQPOLL wakeups.
+ * 3. Release-acquire barrier on MPSC slot sequence in JUringBlocking prevents reading uninitialized payload.
+ * 4. Release-acquire barrier on IoUringDispatcher SQ tail prevents reading uninitialized SQEs.
+ * 5. Release-acquire barrier on IoUringDispatcher CQ tail prevents reading uninitialized CQEs.
+ * 6. Bounded buffer pool sequence handoff prevents data corruption / stale buffer reads.
+ * 7. Loop termination on sqKhead consumption guarantees timely loop exit without hanging.
+ * 8. Control task publication and completion barrier ensures synchronous action visibility.
  */
 @JCStressTest
-@Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Poller noticed task before parking (no unpark needed).")
-@Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter observed parked poller and unparked it.")
-@Outcome(id = "1, 1", expect = Expect.ACCEPTABLE, desc = "Both threads observed each other (unpark occurred).")
-@Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Lost wakeup! Both reads bypassed writes; poller hangs.")
+@Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Poller noticed task before entering kernel (no unpark/eventfd write needed).")
+@Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter observed inKernel poller and signals eventfd/unpark.")
+@Outcome(id = "1, 1", expect = Expect.ACCEPTABLE, desc = "Both threads observed each other (wakeup signal delivered).")
+@Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Lost wakeup! Both reads bypassed writes; poller sleeps indefinitely.")
 @State
 public class WakePollerStoreLoadTest {
 
-    private static final VarHandle VH_POL_PARKED;
+    private static final VarHandle VH_IN_KERNEL;
     private static final VarHandle VH_TASK_SUBMITTED;
 
     static {
         try {
             MethodHandles.Lookup l = MethodHandles.lookup();
-            VH_POL_PARKED = l.findVarHandle(WakePollerStoreLoadTest.class, "pollerParked", int.class);
+            VH_IN_KERNEL = l.findVarHandle(WakePollerStoreLoadTest.class, "inKernel", int.class);
             VH_TASK_SUBMITTED = l.findVarHandle(WakePollerStoreLoadTest.class, "taskSubmitted", int.class);
         } catch (ReflectiveOperationException e) {
             throw new ExceptionInInitializerError(e);
@@ -39,26 +43,76 @@ public class WakePollerStoreLoadTest {
     }
 
     private int taskSubmitted;
-    private int pollerParked;
+    private int inKernel;
 
     @Actor
     public void submitter(II_Result r) {
-        // 1. Store task via release store (as in mpscSeq release update)
+        // 1. Publish task via release store (as in Worker.submitAndAwaitSlot mpscSeq update)
         VH_TASK_SUBMITTED.setRelease(this, 1);
-        // StoreLoad barrier as in JUringBlocking.wakePoller()
+        // StoreLoad barrier in JUringBlocking.wakePoller()
         VarHandle.fullFence();
-        // 2. Load pollerParked via volatile load
-        r.r1 = (int) VH_POL_PARKED.getVolatile(this);
+        // 2. Load inKernel via volatile load
+        r.r1 = (int) VH_IN_KERNEL.getVolatile(this);
     }
 
     @Actor
     public void poller(II_Result r) {
-        // 1. Store pollerParked via volatile store
-        VH_POL_PARKED.setVolatile(this, 1);
-        // StoreLoad barrier before checking work as in JUringBlocking.poller
+        // 1. Store inKernel via volatile store (as in Worker poller loop before submitAndWait)
+        VH_IN_KERNEL.setVolatile(this, 1);
+        // StoreLoad barrier before checking work
         VarHandle.fullFence();
-        // 2. Load taskSubmitted via acquire load (as in hasPendingMpsc)
+        // 2. Load taskSubmitted via acquire load (as in Worker.hasPendingMpsc)
         r.r2 = (int) VH_TASK_SUBMITTED.getAcquire(this);
+    }
+
+    /**
+     * Verifies the B10 StoreLoad fence (VarHandle.fullFence()) in IoUringDispatcher.submit(),
+     * submitAndWait(), and submitAndWaitForBatchResult().
+     * Under SQPOLL, tail is published with setRelease, then a full fence, then flags is loaded.
+     * The kernel SQ thread checks tail with acquire and sets NEED_WAKEUP volatile.
+     * If the StoreLoad fence is missing or removed, (0, 0) is observed: kernel sleeps and
+     * user thread skips io_uring_enter(IORING_ENTER_SQ_WAKEUP), hanging indefinitely.
+     */
+    @JCStressTest
+    @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Submitter saw old flags; kernel saw new tail and continues.")
+    @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter saw NEED_WAKEUP and wakes kernel; kernel saw old tail.")
+    @Outcome(id = "1, 1", expect = Expect.ACCEPTABLE, desc = "Both observed each other.")
+    @Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Lost SQPOLL wakeup! Both bypassed each other's stores (B10 fence missing).")
+    @State
+    public static class SqPollWakeupB10Test {
+        private static final VarHandle VH_TAIL;
+        private static final VarHandle VH_FLAGS;
+
+        static {
+            try {
+                MethodHandles.Lookup l = MethodHandles.lookup();
+                VH_TAIL = l.findVarHandle(SqPollWakeupB10Test.class, "sqTail", int.class);
+                VH_FLAGS = l.findVarHandle(SqPollWakeupB10Test.class, "sqFlags", int.class);
+            } catch (ReflectiveOperationException e) {
+                throw new ExceptionInInitializerError(e);
+            }
+        }
+
+        private int sqTail;
+        private int sqFlags;
+
+        @Actor
+        public void submitter(II_Result r) {
+            // Write tail with setRelease as in IoUringDispatcher
+            VH_TAIL.setRelease(this, 1);
+            // B10 StoreLoad fence
+            VarHandle.fullFence();
+            // Read flags as in IoUringDispatcher
+            r.r1 = (int) VH_FLAGS.getVolatile(this);
+        }
+
+        @Actor
+        public void kernelSqThread(II_Result r) {
+            // Kernel sets NEED_WAKEUP
+            VH_FLAGS.setVolatile(this, 1);
+            // Kernel checks tail with acquire
+            r.r2 = (int) VH_TAIL.getAcquire(this);
+        }
     }
 
     /**
@@ -81,7 +135,7 @@ public class WakePollerStoreLoadTest {
 
         @Actor
         public void producer() {
-            opcode = 18; // IORING_OP_READ
+            opcode = 18; // IORING_OP_OPENAT
             fd = 7;
             VH_LONG_ARRAY.setRelease(mpscSeq, 0, 1L);
         }
@@ -102,7 +156,7 @@ public class WakePollerStoreLoadTest {
 
     /**
      * Verifies that updating sqKtail with setRelease in IoUringDispatcher guarantees
-     * that all SQE payload stores are visible before the kernel/poller observes the tail update.
+     * that all SQE payload stores through ZeroGcSqe are visible before the kernel/poller observes the tail update.
      */
     @JCStressTest
     @Outcome(id = "0, 0, 0, 0", expect = Expect.ACCEPTABLE, desc = "Submission not yet visible.")
@@ -123,30 +177,29 @@ public class WakePollerStoreLoadTest {
             }
         }
 
-        private int sqeOpcode;
-        private int sqeFd;
-        private int sqeLen;
+        private final Arena arena = Arena.ofShared();
+        private final MemorySegment sqeSegment = arena.allocate(ZeroGcSqe.SQE_SIZE);
         private int sqTail;
 
         @Actor
         public void submitter() {
-            // Write SQE fields
-            sqeOpcode = 18;
-            sqeFd = 4;
-            sqeLen = 8192;
-            // setRelease as in IoUringDispatcher.submit() / submitAndWait()
+            long addr = sqeSegment.address();
+            ZeroGcSqe.zero(addr);
+            ZeroGcSqe.setOpcode(addr, (byte) 18);
+            ZeroGcSqe.setFd(addr, 4);
+            ZeroGcSqe.setLen(addr, 8192);
             VH_TAIL.setRelease(this, 1);
         }
 
         @Actor
         public void kernelReader(IIII_Result r) {
-            // getAcquire tail
             int tail = (int) VH_TAIL.getAcquire(this);
             r.r1 = tail;
             if (tail == 1) {
-                r.r2 = sqeOpcode;
-                r.r3 = sqeFd;
-                r.r4 = sqeLen;
+                long addr = sqeSegment.address();
+                r.r2 = Byte.toUnsignedInt(ZeroGcSqe.getOpcode(addr));
+                r.r3 = ZeroGcSqe.getFd(addr);
+                r.r4 = ZeroGcSqe.getLen(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;
@@ -157,7 +210,7 @@ public class WakePollerStoreLoadTest {
 
     /**
      * Verifies that updating cqKtail with release guarantees that CQE completion fields
-     * are fully visible when IoUringDispatcher reaps CQEs with getAcquire.
+     * through ZeroGcCqe are fully visible when IoUringDispatcher reaps CQEs with getAcquire.
      */
     @JCStressTest
     @Outcome(id = "0, 0, 0", expect = Expect.ACCEPTABLE, desc = "CQE not yet published.")
@@ -177,14 +230,17 @@ public class WakePollerStoreLoadTest {
             }
         }
 
-        private int cqeRes;
-        private int cqeUserData;
+        private final Arena arena = Arena.ofShared();
+        private final MemorySegment cqeSegment = arena.allocate(ZeroGcCqe.CQE_LAYOUT.byteSize());
         private int cqTail;
 
         @Actor
         public void kernelCompleter() {
-            cqeRes = 4096;
-            cqeUserData = 999;
+            long addr = cqeSegment.address();
+            // Direct memory layout write
+            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0L, 999L);
+            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 8L, 4096);
+            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 12L, 0);
             VH_CQ_TAIL.setRelease(this, 1);
         }
 
@@ -193,8 +249,9 @@ public class WakePollerStoreLoadTest {
             int tail = (int) VH_CQ_TAIL.getAcquire(this);
             r.r1 = tail;
             if (tail == 1) {
-                r.r2 = cqeRes;
-                r.r3 = cqeUserData;
+                long addr = cqeSegment.address();
+                r.r2 = ZeroGcCqe.getRes(addr);
+                r.r3 = (int) ZeroGcCqe.getUserData(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;
@@ -204,8 +261,6 @@ public class WakePollerStoreLoadTest {
 
     /**
      * Verifies bounded buffer pool sequence handoff in JUringBlocking.
-     * When checking in a buffer, release store to sequence ensures payload written to buffer
-     * is visible to subsequent checkout thread.
      */
     @JCStressTest
     @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE, desc = "Buffer not yet checked in.")
@@ -221,7 +276,6 @@ public class WakePollerStoreLoadTest {
         @Actor
         public void checkInThread() {
             bufPayload = 12345;
-            // Advance sequence from 0 -> 2 (indicating buffer returned and ready)
             VH_LONG_ARRAY.setRelease(seqArr, 0, 2L);
         }
 
@@ -239,8 +293,6 @@ public class WakePollerStoreLoadTest {
 
     /**
      * Verifies that acquire reads on sqKhead prevent loop hanging when io_uring completes/consumes SQEs.
-     * With getAcquire, the submit loop is guaranteed to see head advancing to match tail,
-     * reducing toSubmit to 0 and exiting the loop.
      */
     @JCStressTest
     @Outcome(id = "8", expect = Expect.ACCEPTABLE, desc = "Head not yet advanced; toSubmit = 8.")
@@ -262,13 +314,11 @@ public class WakePollerStoreLoadTest {
 
         @Actor
         public void kernelConsumer() {
-            // Kernel consumes 8 entries and advances sqHead
             VH_HEAD.setRelease(this, 8);
         }
 
         @Actor
         public void dispatcherLoopCheck(I_Result r) {
-            // submitAndWait calculates toSubmit = Math.max(0, tail - head)
             int head = (int) VH_HEAD.getAcquire(this);
             int toSubmit = Math.max(0, 8 - head);
             r.r1 = toSubmit;
@@ -277,8 +327,6 @@ public class WakePollerStoreLoadTest {
 
     /**
      * Verifies control task handoff in JUringBlocking.runOnPoller.
-     * When task.done is marked with setRelease, caller unparking is guaranteed
-     * to observe task result and non-null error without race conditions.
      */
     @JCStressTest
     @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE, desc = "Control task not yet finished.")
@@ -317,5 +365,3 @@ public class WakePollerStoreLoadTest {
         }
     }
 }
-
-

@@ -707,6 +707,10 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    int workerCount() {
+        return workers.length;
+    }
+
     private Worker getWorker() {
         if (workers.length == 1) {
             return workers[0];
