@@ -53,7 +53,6 @@ public class BufferedWriteBenchmark {
         public FileDescriptor[] fileDescriptors;
         public FileChannel[] channels;
         public ByteBuffer writeBuffer;
-        public MemorySegment writeSegment;
 
         public int reapedCount;
         public ResultConsumer consumer;
@@ -86,7 +85,6 @@ public class BufferedWriteBenchmark {
                 writeBuffer.put((byte) 0x3C);
             }
             writeBuffer.flip();
-            writeSegment = MemorySegment.ofBuffer(writeBuffer);
 
             this.reapedCount = 0;
             this.consumer = result -> {
@@ -133,7 +131,7 @@ public class BufferedWriteBenchmark {
                 int fileIdx = taskFileIndices[taskIndex];
                 long offset = taskOffsets[taskIndex];
 
-                ring.prepareWriteFixed(fileIdx, state.writeSegment, offset, bufIdx);
+                ring.prepareWriteFixed(fileIdx, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
                 submitted++;
                 unsubmitted++;
                 taskIndex++;
