@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
+import java.lang.ref.Reference;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -17,6 +18,12 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
  * Zero-GC, Virtual-Thread-friendly blocking wrapper over {@code io_uring}.
+ *
+ * <h2>MemorySegment Lifetime Contract</h2>
+ * Any {@link MemorySegment} passed to blocking calls ({@code read}, {@code write}, etc.) must be native, alive,
+ * and accessible by the calling thread. For confined arenas, memory safety is inherently preserved because the owning
+ * thread blocks during the call. For shared arenas, callers must guarantee that another thread does not concurrently
+ * close the arena while an operation using one of its segments is in flight.
  *
  * <h2>Project Loom & Carrier Thread Mechanics</h2>
  * In standard OpenJDK (JDK 21+), file I/O operations on {@link java.nio.channels.FileChannel}
@@ -602,6 +609,21 @@ public class JUringBlocking implements AutoCloseable {
         return workers[(int) (tid & workerMask)];
     }
 
+    static void validateNativeSegment(MemorySegment segment, boolean forRead) {
+        if (!segment.isNative()) {
+            throw new IllegalArgumentException("Segment must be native memory");
+        }
+        if (forRead && segment.isReadOnly()) {
+            throw new IllegalArgumentException("Segment must not be read-only for read operations");
+        }
+        if (!segment.scope().isAlive()) {
+            throw new IllegalStateException("Segment scope is already closed");
+        }
+        if (!segment.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("Segment is confined to another thread");
+        }
+    }
+
     public long read(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return read(fd, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
     }
@@ -610,18 +632,23 @@ public class JUringBlocking implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid read length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_READ,
-                SqeOptions.combineOptions(sqeOptions),
-                fd.getFd(),
-                offset,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, true);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_READ,
+                    SqeOptions.combineOptions(sqeOptions),
+                    fd.getFd(),
+                    offset,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long read(int indexFD, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
@@ -632,18 +659,23 @@ public class JUringBlocking implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid read length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_READ,
-                (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
-                indexFD,
-                offset,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, true);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_READ,
+                    (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
+                    indexFD,
+                    offset,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long write(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
@@ -654,18 +686,23 @@ public class JUringBlocking implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid write length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_WRITE,
-                SqeOptions.combineOptions(sqeOptions),
-                fd.getFd(),
-                offset,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, false);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_WRITE,
+                    SqeOptions.combineOptions(sqeOptions),
+                    fd.getFd(),
+                    offset,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long write(FileDescriptor fd, byte[] bytes, long offset, SqeOptions... sqeOptions) {
@@ -693,18 +730,23 @@ public class JUringBlocking implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid write length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_WRITE,
-                (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
-                indexFD,
-                offset,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, false);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_WRITE,
+                    (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
+                    indexFD,
+                    offset,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long write(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
@@ -1116,36 +1158,46 @@ public class JUringBlocking implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid recv length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_RECV,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                0L,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, true);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_RECV,
+                    SqeOptions.combineOptions(sqeOptions),
+                    fd,
+                    0L,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long send(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid send length: " + length);
         }
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_SEND,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                0L,
-                buffer.address(),
-                length,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
+        validateNativeSegment(buffer, false);
+        try {
+            return getWorker().submitAndAwaitSlot(
+                    IORING_OP_SEND,
+                    SqeOptions.combineOptions(sqeOptions),
+                    fd,
+                    0L,
+                    buffer.address(),
+                    length,
+                    0,
+                    (short) 0,
+                    0,
+                    0L
+            );
+        } finally {
+            Reference.reachabilityFence(buffer);
+        }
     }
 
     public long send(int fd, byte[] bytes, SqeOptions... sqeOptions) {

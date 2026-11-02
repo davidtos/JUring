@@ -199,6 +199,56 @@ class Phase1BugProofTest {
     }
 
     @Test
+    void step1_2_rejectNonNativeAndReadOnlySegments() throws Exception {
+        try (JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER);
+             JUringBlocking blocking = new JUringBlocking(8, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", LinuxOpenOptions.READ, 0);
+             FileDescriptor writeFd = new FileDescriptor("src/test/resources/write_file", LinuxOpenOptions.WRITE, 0);
+             java.lang.foreign.Arena confinedArena = java.lang.foreign.Arena.ofConfined()) {
+
+            MemorySegment heapSegment = MemorySegment.ofArray(new byte[64]);
+            MemorySegment nativeSegment = confinedArena.allocate(64);
+            MemorySegment readOnlySegment = nativeSegment.asReadOnly();
+
+            // 1. Async JUring.prepareWrite rejects non-native heap segment
+            assertThrows(IllegalArgumentException.class, () ->
+                    ring.prepareWrite(writeFd, heapSegment, 0));
+
+            // 2. JUringBlocking.write rejects non-native heap segment
+            assertThrows(IllegalArgumentException.class, () ->
+                    blocking.write(writeFd, heapSegment, 0));
+
+            // 3. JUringBlocking.read rejects non-native heap segment
+            assertThrows(IllegalArgumentException.class, () ->
+                    blocking.read(readFd, heapSegment, 0));
+
+            // 4. JUringBlocking.read rejects read-only native segment
+            assertThrows(IllegalArgumentException.class, () ->
+                    blocking.read(readFd, readOnlySegment, 0));
+
+            // 5. Closed arena segment throws IllegalStateException
+            java.lang.foreign.Arena closedArena = java.lang.foreign.Arena.ofConfined();
+            MemorySegment closedSegment = closedArena.allocate(64);
+            closedArena.close();
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareWrite(writeFd, closedSegment, 0));
+            assertThrows(IllegalStateException.class, () ->
+                    blocking.read(readFd, closedSegment, 0));
+
+            // 6. Heap segment on prepareWriteFixed STILL WORKS (copied into registered buffer)
+            ring.registerBuffers(64, 1);
+            byte[] testData = "heap-data-copy-test".getBytes();
+            MemorySegment heapWriteBuf = MemorySegment.ofArray(testData);
+            long token = ring.prepareWriteFixed(writeFd, heapWriteBuf, 0, 0);
+            assertTrue(token != 0);
+            ring.submit();
+            try (Result r = ring.waitForResult()) {
+                assertEquals(testData.length, r.result());
+            }
+        }
+    }
+
+    @Test
     void proof5_multishotAcceptPreservesCqeFlagsMore() throws Exception {
         final int port = 19299;
 

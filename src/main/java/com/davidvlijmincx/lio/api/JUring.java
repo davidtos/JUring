@@ -10,6 +10,10 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
  * High-performance Java facade for Linux {@code io_uring}.
+ * <p>
+ * <b>MemorySegment Lifetime Contract:</b> Any {@link MemorySegment} passed to {@code prepareWrite}
+ * or other async operations accepting segments must be native, alive, and accessible by the calling thread.
+ * Callers must ensure the underlying memory stays alive and valid until the corresponding CQE is reaped.
  */
 public class JUring implements AutoCloseable {
 
@@ -440,11 +444,11 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareOpen(String filePath, int flags, int mode, byte sqeFlags) {
-        long sqe = getSqe(sqeFlags, false);
         byte[] pathBytes = filePath.getBytes();
         MemorySegment pathBuffer = NativeDispatcher.C.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
+        long sqe = getSqe(sqeFlags, false);
         long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
 
         ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags, mode);
@@ -545,7 +549,23 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    static void validateNativeSegment(MemorySegment segment, boolean forRead) {
+        if (!segment.isNative()) {
+            throw new IllegalArgumentException("Segment must be native memory");
+        }
+        if (forRead && segment.isReadOnly()) {
+            throw new IllegalArgumentException("Segment must not be read-only for read operations");
+        }
+        if (!segment.scope().isAlive()) {
+            throw new IllegalStateException("Segment scope is already closed");
+        }
+        if (!segment.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("Segment is confined to another thread");
+        }
+    }
+
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, byte flags, boolean fixedFile) {
+        validateNativeSegment(bytes, false);
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encodeWriteExt(opId);
@@ -557,10 +577,10 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, byte flags, boolean fixedFile) {
-        long sqe = getSqe(flags, fixedFile);
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
+        long sqe = getSqe(flags, fixedFile);
         long userData = ZeroGcUserData.encode(OperationType.WRITE, buff.address());
 
         ioUring.prepareWrite(sqe, fdOrIndex, buff.address(), bytes.length, offset);
@@ -597,8 +617,8 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long sqe = getSqe(flags, fixedFile);
         MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
+        long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
@@ -614,15 +634,22 @@ public class JUring implements AutoCloseable {
         }
 
         long byteSize = bytes.byteSize();
-        if (byteSize > registeredBufferSizes[bufferIndex]) {
+        if (byteSize < 0 || byteSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long sqe = getSqe(flags, fixedFile);
+        if (!bytes.scope().isAlive()) {
+            throw new IllegalStateException("Segment scope is already closed");
+        }
+        if (!bytes.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("Segment is confined to another thread");
+        }
+
         long targetAddr = registeredBufferAddresses[bufferIndex];
-        if (bytes.address() != targetAddr) {
+        if (!bytes.isNative() || bytes.address() != targetAddr) {
             MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
         }
+        long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
@@ -770,6 +797,7 @@ public class JUring implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid recv length: " + length);
         }
+        validateNativeSegment(buffer, true);
         long sqe = getSqe(flags, false);
         long userData = ZeroGcUserData.encode(OperationType.RECV_EXT, buffer.address());
 
@@ -815,6 +843,7 @@ public class JUring implements AutoCloseable {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid send length: " + length);
         }
+        validateNativeSegment(buffer, false);
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
         long userData = ZeroGcUserData.encode(OperationType.SEND_EXT, opId);
