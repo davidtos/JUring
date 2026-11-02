@@ -455,6 +455,58 @@ class Phase1BugProofTest {
         }
     }
 
+    @Test
+    void step1_3_eventfdPollerWakeupAndDeferTaskrun() throws Exception {
+        try (JUringBlocking blocking = new JUringBlocking(32,
+                IoUringOptions.IORING_SETUP_SINGLE_ISSUER,
+                IoUringOptions.IORING_SETUP_DEFER_TASKRUN);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofShared();
+             var executor = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+
+            // 1. Let the poller go idle and enter sleep in kernel
+            Thread.sleep(50);
+
+            // 2. Virtual thread submits a read while poller is idle
+            MemorySegment buf1 = arena.allocate(14);
+            long bytesRead = blocking.read(fd, buf1, 14, 0);
+            assertEquals(13L, bytesRead);
+            assertEquals("Hello, World!", new String(buf1.asSlice(0, bytesRead).toArray(JAVA_BYTE), java.nio.charset.StandardCharsets.UTF_8));
+
+            // 3. Flood test: One VT doing sequential reads while 20 other VTs flood concurrently
+            java.util.concurrent.atomic.AtomicInteger errors = new java.util.concurrent.atomic.AtomicInteger(0);
+            java.util.List<java.util.concurrent.Future<?>> futures = new java.util.ArrayList<>();
+
+            for (int i = 0; i < 20; i++) {
+                futures.add(executor.submit(() -> {
+                    try {
+                        MemorySegment floodBuf = arena.allocate(14);
+                        for (int j = 0; j < 10; j++) {
+                            long n = blocking.read(fd, floodBuf, 14, 0);
+                            if (n != 13L) {
+                                errors.incrementAndGet();
+                            }
+                        }
+                    } catch (Throwable t) {
+                        errors.incrementAndGet();
+                    }
+                }));
+            }
+
+            // Sequential reader in parallel
+            MemorySegment seqBuf = arena.allocate(14);
+            for (int i = 0; i < 20; i++) {
+                long n = blocking.read(fd, seqBuf, 14, 0);
+                assertEquals(13L, n);
+            }
+
+            for (var f : futures) {
+                f.get();
+            }
+            assertEquals(0, errors.get(), "No errors expected during concurrent VT flood");
+        }
+    }
+
     public static void main(String[] args) {
         if (args.length == 0) return;
         switch (args[0]) {

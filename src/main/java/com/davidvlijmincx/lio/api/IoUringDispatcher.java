@@ -524,6 +524,9 @@ final class IoUringDispatcher implements AutoCloseable {
 
         boolean sqpoll = this.isSqPoll;
         int enterFlags = this.enterFlagsBase;
+        if (this.isDeferTaskrun) {
+            enterFlags |= IORING_ENTER_GETEVENTS;
+        }
         boolean needEnter = true;
 
         if (sqpoll) {
@@ -610,11 +613,14 @@ final class IoUringDispatcher implements AutoCloseable {
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
-            if (available >= waitNr && toSubmit == 0) {
+            if (available >= waitNr && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
                 return available;
             }
 
             int enterFlags = (waitNr > 0 && available < waitNr) ? IORING_ENTER_GETEVENTS : 0;
+            if (this.isDeferTaskrun) {
+                enterFlags |= IORING_ENTER_GETEVENTS;
+            }
             boolean needEnter = (enterFlags != 0);
             if (toSubmit > 0) {
                 if (sqpoll) {
@@ -1321,11 +1327,14 @@ final class IoUringDispatcher implements AutoCloseable {
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
-            if (available >= minComplete && toSubmit == 0) {
+            if (available >= minComplete && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
             int enterFlags = (minComplete > 0 && available < minComplete) ? IORING_ENTER_GETEVENTS : 0;
+            if (this.isDeferTaskrun) {
+                enterFlags |= IORING_ENTER_GETEVENTS;
+            }
             boolean needEnter = (enterFlags != 0);
             if (toSubmit > 0) {
                 if (sqpoll) {

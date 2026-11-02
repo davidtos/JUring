@@ -35,7 +35,13 @@ record LibCDispatcher(FreeAddress freeLong,
                       Munmap munmap,
                       IoUringSetup ioUringSetup,
                       IoUringEnter ioUringEnter,
-                      IoUringRegister ioUringRegister) {
+                      IoUringRegister ioUringRegister,
+                      Eventfd eventfd,
+                      WriteAddress write) {
+
+    // eventfd(2) flags
+    static final int EFD_CLOEXEC = 0x80000;
+    static final int EFD_NONBLOCK = 0x800;
 
     // mmap(2) constants (Linux x86-64 / aarch64)
     static final int PROT_READ = 0x1;
@@ -80,7 +86,9 @@ record LibCDispatcher(FreeAddress freeLong,
                 link(Munmap.class, "munmap", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG)),
                 linkSyscallCaptureErrno(IoUringSetup.class, 425L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS)),
                 linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
-                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG))
+                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
+                link(Eventfd.class, "eventfd", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(WriteAddress.class, "write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG))
         );
     }
 
