@@ -114,7 +114,6 @@ public class BufferedReadBenchmark {
         state.reapedCount = 0;
         int submitted = 0;
         int taskIndex = 0;
-        int submitsIssued = 0;
         int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
@@ -134,7 +133,6 @@ public class BufferedReadBenchmark {
 
                 if (unsubmitted >= batchSize) {
                     ring.submit();
-                    submitsIssued++;
                     unsubmitted = 0;
                     ring.peekForBatchResult(batchSize, state.consumer);
                 }
@@ -142,7 +140,6 @@ public class BufferedReadBenchmark {
 
             if (unsubmitted > 0) {
                 ring.submit();
-                submitsIssued++;
                 unsubmitted = 0;
             }
 
@@ -153,7 +150,7 @@ public class BufferedReadBenchmark {
             }
         }
 
-        counters.record(submitsIssued, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
     }
 
@@ -176,6 +173,6 @@ public class BufferedReadBenchmark {
             blackhole.consume(read);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 }

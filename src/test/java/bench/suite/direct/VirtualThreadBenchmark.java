@@ -34,8 +34,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSU
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)
 @Fork(value = 1, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djuring.countEnters=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
 @Threads(1)
 public class VirtualThreadBenchmark {
@@ -126,7 +125,6 @@ public class VirtualThreadBenchmark {
     @Benchmark
     public void juringVirtualThreadRead(ThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws Exception {
         final JUringBlocking ring = state.ring;
-        ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
@@ -180,9 +178,7 @@ public class VirtualThreadBenchmark {
             throw new RuntimeException("JUringBlocking VT read failed", failure);
         }
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : 1;
-        counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 
     @Benchmark
@@ -242,6 +238,6 @@ public class VirtualThreadBenchmark {
             throw new RuntimeException("FileChannel VT read failed", failure);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 }

@@ -29,8 +29,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)
 @Fork(value = 1, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djuring.countEnters=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
 @Threads(1)
 public class DirectWriteBenchmark {
@@ -153,7 +152,6 @@ public class DirectWriteBenchmark {
     @Benchmark
     public void juringDirectWrite(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
@@ -167,8 +165,6 @@ public class DirectWriteBenchmark {
         state.reapedCount = 0;
         int submitted = 0;
         int taskIndex = 0;
-        int submitsIssued = 0;
-        int waitsIssued = 0;
         int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
@@ -189,7 +185,6 @@ public class DirectWriteBenchmark {
 
                 if (unsubmitted >= submitBatch) {
                     ring.submit();
-                    submitsIssued++;
                     unsubmitted = 0;
                     ring.peekForBatchResult(qd, state.consumer);
                 }
@@ -202,15 +197,12 @@ public class DirectWriteBenchmark {
                 if (inFlight > 0) {
                     int minComplete = Math.max(1, Math.min(inFlight, Math.min(remaining, waitBatch)));
                     ring.submitAndWaitForBatchResult(minComplete, qd, state.consumer);
-                    waitsIssued++;
                     unsubmitted = 0;
                 }
             }
         }
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
-        counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
     }
 
@@ -237,6 +229,6 @@ public class DirectWriteBenchmark {
             blackhole.consume(written);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 }

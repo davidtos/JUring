@@ -36,7 +36,7 @@ else
     mvn -q test-compile
 fi
 
-CMD=(java --enable-native-access=ALL-UNNAMED -Djuring.countEnters=true
+CMD=(java --enable-native-access=ALL-UNNAMED
      -cp "target/test-classes:target/classes:$(cat target/cp.txt)"
      bench.suite.BenchmarkRunner "${ARGS[@]}")
 

@@ -129,10 +129,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     private static final VarHandle VH_INT = JAVA_INT.varHandle();
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
-    static final boolean COUNT_ENTERS = Boolean.getBoolean("juring.countEnters");
-
     private final Arena arena;
-    private final java.util.concurrent.atomic.AtomicInteger enterCount = new java.util.concurrent.atomic.AtomicInteger();
     private final IovecBlockPool iovecBlockPool;
     private final MemorySegment ring;
     private final MemorySegment cqePtr;
@@ -640,9 +637,6 @@ final class IoUringDispatcher implements AutoCloseable {
 
         if (needEnter) {
             while (true) {
-                if (COUNT_ENTERS) {
-                    enterCount.incrementAndGet();
-                }
                 long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -683,9 +677,6 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void flushDeferredTaskrun() {
-        if (COUNT_ENTERS) {
-            enterCount.incrementAndGet();
-        }
         callIoUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
     }
 
@@ -741,9 +732,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return available;
             }
 
-            if (COUNT_ENTERS) {
-                enterCount.incrementAndGet();
-            }
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
             long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
@@ -791,9 +779,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            if (COUNT_ENTERS) {
-                enterCount.incrementAndGet();
-            }
             long res = callIoUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
@@ -853,9 +838,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            if (COUNT_ENTERS) {
-                enterCount.incrementAndGet();
-            }
             long res = callIoUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
@@ -865,10 +847,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return -err;
             }
         }
-    }
-
-    int takeEnterCount() {
-        return enterCount.getAndSet(0);
     }
 
     int queueInit(int queueDepth, int flags) {
@@ -1408,9 +1386,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            if (COUNT_ENTERS) {
-                enterCount.incrementAndGet();
-            }
             long res = callIoUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
@@ -1477,9 +1452,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            if (COUNT_ENTERS) {
-                enterCount.incrementAndGet();
-            }
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
             long res = callIoUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {

@@ -33,8 +33,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)
 @Fork(value = 1, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djuring.countEnters=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
 @Threads(1)
 public class MultiThreadScalingBenchmark {
@@ -230,7 +229,6 @@ public class MultiThreadScalingBenchmark {
     @Benchmark
     public void juringDirectRead(ReadThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
@@ -243,7 +241,6 @@ public class MultiThreadScalingBenchmark {
         int threadOffset = state.threadOffset;
         int unsubmitted = 0;
         int reapedTotal = 0;
-        int enters = 0;
 
         while (inFlight < qd) {
             int bufIdx = ring.checkOutBuffer();
@@ -258,7 +255,6 @@ public class MultiThreadScalingBenchmark {
             int remaining = totalTasks - reapedTotal;
             int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
             int reaped = ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-            enters++;
             inFlight -= reaped;
             reapedTotal += reaped;
 
@@ -275,9 +271,7 @@ public class MultiThreadScalingBenchmark {
         state.threadOffset = threadOffset;
         state.reapedCount = reapedTotal;
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : enters;
-        counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
     }
 
@@ -304,13 +298,12 @@ public class MultiThreadScalingBenchmark {
             blackhole.consume(read);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 
     @Benchmark
     public void juringDirectWrite(WriteThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        ring.takeEnterCount();
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
@@ -324,8 +317,6 @@ public class MultiThreadScalingBenchmark {
         state.reapedCount = 0;
         int submitted = 0;
         int taskIndex = 0;
-        int submitsIssued = 0;
-        int waitsIssued = 0;
         int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
@@ -346,7 +337,6 @@ public class MultiThreadScalingBenchmark {
 
                 if (unsubmitted >= submitBatch) {
                     ring.submit();
-                    submitsIssued++;
                     unsubmitted = 0;
                     ring.peekForBatchResult(qd, state.consumer);
                 }
@@ -359,15 +349,12 @@ public class MultiThreadScalingBenchmark {
                 if (inFlight > 0) {
                     int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
                     ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-                    waitsIssued++;
                     unsubmitted = 0;
                 }
             }
         }
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
-        counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
     }
 
@@ -394,6 +381,6 @@ public class MultiThreadScalingBenchmark {
             blackhole.consume(written);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 }

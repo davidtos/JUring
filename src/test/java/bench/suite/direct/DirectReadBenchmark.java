@@ -31,8 +31,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)
 @Fork(value = 1, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djuring.countEnters=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
 @Threads(1)
 public class DirectReadBenchmark {
@@ -160,7 +159,6 @@ public class DirectReadBenchmark {
     @Benchmark
     public void juringDirectRead(JuringThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        ring.takeEnterCount();
         final int[] taskFileIndices = benchState.dataset.getTaskFileIndices();
         final long[] taskOffsets = benchState.dataset.getTaskOffsets();
         final int totalTasks = taskFileIndices.length;
@@ -182,13 +180,11 @@ public class DirectReadBenchmark {
         }
 
         int reapedTotal = 0;
-        int enters = 0;
 
         while (reapedTotal < totalTasks) {
             int remaining = totalTasks - reapedTotal;
             int minWait = Math.max(1, Math.min(waitBatch, Math.min(remaining, inFlight)));
             int reaped = ring.submitAndWaitForBatchResult(minWait, qd, state.consumer);
-            enters++;
             inFlight -= reaped;
             reapedTotal += reaped;
 
@@ -207,9 +203,7 @@ public class DirectReadBenchmark {
         state.threadOffset = threadOffset;
         state.reapedCount = reapedTotal;
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : enters;
-        counters.record(totalEnters, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
         blackhole.consume(state.reapedCount);
     }
 
@@ -232,7 +226,7 @@ public class DirectReadBenchmark {
             blackhole.consume(read);
         }
 
-        counters.record(totalTasks, (long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+        counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
     }
 
     public static void main(String[] args) throws Exception {

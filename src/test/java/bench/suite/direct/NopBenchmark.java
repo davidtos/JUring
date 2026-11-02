@@ -22,8 +22,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)
 @Fork(value = 1, jvmArgs = {
-        "--enable-native-access=ALL-UNNAMED",
-        "-Djuring.countEnters=true"
+        "--enable-native-access=ALL-UNNAMED"
 })
 @Threads(1)
 public class NopBenchmark {
@@ -66,15 +65,12 @@ public class NopBenchmark {
     @Benchmark
     public void juringNop(ThreadState state, StorageAuxCounters counters, Blackhole blackhole) {
         final JUring ring = state.ring;
-        ring.takeEnterCount();
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
         final int qd = state.qd;
         final int submitBatch = (qd <= 1) ? 1 : Math.min(qd, 32);
 
         state.reapedCount = 0;
         int submitted = 0;
-        int submitsIssued = 0;
-        int waitsIssued = 0;
         int unsubmitted = 0;
 
         while (state.reapedCount < totalTasks) {
@@ -85,7 +81,6 @@ public class NopBenchmark {
 
                 if (unsubmitted >= submitBatch) {
                     ring.submit();
-                    submitsIssued++;
                     unsubmitted = 0;
                     ring.peekForBatchResult(qd, state.consumer);
                 }
@@ -94,14 +89,11 @@ public class NopBenchmark {
             int reaped = ring.peekForBatchResult(qd, state.consumer);
             if (reaped == 0 && state.reapedCount < totalTasks) {
                 ring.submitAndWaitForBatchResult(1, qd, state.consumer);
-                waitsIssued++;
                 unsubmitted = 0;
             }
         }
 
-        int countedEnters = ring.takeEnterCount();
-        int totalEnters = countedEnters > 0 ? countedEnters : (submitsIssued + waitsIssued);
-        counters.record(totalEnters, 0L);
+        counters.record(0L);
         blackhole.consume(state.reapedCount);
     }
 }

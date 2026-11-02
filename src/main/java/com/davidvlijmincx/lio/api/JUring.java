@@ -1069,15 +1069,6 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Returns and resets the number of {@code io_uring_enter} syscalls issued on this ring.
-     *
-     * @return count of enter syscalls
-     */
-    public int takeEnterCount() {
-        return ioUring.takeEnterCount();
-    }
-
-    /**
      * Closes the ring and releases all associated off-heap resources.
      * <p>
      * For rings initialized with {@link IoUringOptions#IORING_SETUP_SINGLE_ISSUER}, {@code close()}

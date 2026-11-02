@@ -162,8 +162,7 @@ public class DirectLatencyBenchmark {
     @OutputTimeUnit(TimeUnit.SECONDS)
     @OperationsPerInvocation(FioComparisonBenchmark.OPERATIONS_PER_INVOCATION)
     @Fork(value = 1, jvmArgs = {
-            "--enable-native-access=ALL-UNNAMED",
-            "-Djuring.countEnters=true"
+            "--enable-native-access=ALL-UNNAMED"
     })
     @Threads(1)
     public static class FioComparisonBenchmark {
@@ -326,7 +325,6 @@ public class DirectLatencyBenchmark {
         @Benchmark
         public void juringDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
-            ring.takeEnterCount();
             final long maxBlocks = benchState.maxBlocks;
             final int qd = state.qd;
             final boolean telemetry = state.telemetry;
@@ -391,16 +389,13 @@ public class DirectLatencyBenchmark {
             state.queuedCount = queuedCount;
             state.reapedCount = reapedTotal;
 
-            int countedEnters = ring.takeEnterCount();
-            int totalEnters = countedEnters > 0 ? countedEnters : enters;
-            counters.record(totalEnters, (long) totalTasks * BLOCK_SIZE);
+            counters.record((long) totalTasks * BLOCK_SIZE);
             if (blackhole != null) blackhole.consume(state.reapedCount);
         }
 
         @Benchmark
         public void juringDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
-            ring.takeEnterCount();
             final long maxBlocks = benchState.maxBlocks;
             final int qd = state.qd;
             final boolean telemetry = state.telemetry;
@@ -465,9 +460,7 @@ public class DirectLatencyBenchmark {
             state.queuedCount = queuedCount;
             state.reapedCount = reapedTotal;
 
-            int countedEnters = ring.takeEnterCount();
-            int totalEnters = countedEnters > 0 ? countedEnters : enters;
-            counters.record(totalEnters, (long) totalTasks * BLOCK_SIZE);
+            counters.record((long) totalTasks * BLOCK_SIZE);
             if (blackhole != null) blackhole.consume(state.reapedCount);
         }
 
@@ -500,7 +493,7 @@ public class DirectLatencyBenchmark {
                 if (blackhole != null) blackhole.consume(n);
             }
 
-            counters.record(totalTasks, (long) totalTasks * BLOCK_SIZE);
+            counters.record((long) totalTasks * BLOCK_SIZE);
         }
 
         @Benchmark
@@ -532,7 +525,7 @@ public class DirectLatencyBenchmark {
                 if (blackhole != null) blackhole.consume(n);
             }
 
-            counters.record(totalTasks, (long) totalTasks * BLOCK_SIZE);
+            counters.record((long) totalTasks * BLOCK_SIZE);
         }
 
         public record BenchResult(long iops, double bwMBs, DatasetManager.FioLatencyHistogram slatHist, DatasetManager.FioLatencyHistogram clatHist, DatasetManager.FioLatencyHistogram latHist) {}

@@ -68,6 +68,7 @@ public class BenchmarkRunner {
         }
 
         boolean attachPerfnorm = false;
+        boolean attachSyscalls = false;
         boolean decision = false;
         List<String> customIncludes = new ArrayList<>();
         Map<String, List<String>> customParams = new LinkedHashMap<>();
@@ -120,6 +121,7 @@ public class BenchmarkRunner {
                 case "--gc" -> attachGc = true;
                 case "--async" -> attachAsync = true;
                 case "--perfnorm" -> attachPerfnorm = true;
+                case "--syscalls" -> attachSyscalls = true;
                 case "--include" -> {
                     if (i + 1 < args.length) {
                         customIncludes.add(args[++i].trim());
@@ -173,7 +175,7 @@ public class BenchmarkRunner {
         }
 
         OptionsBuilder builder = new OptionsBuilder();
-        builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED", "-Djuring.countEnters=true");
+        builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
         if (!customJvmArgs.isEmpty()) {
             builder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
         }
@@ -262,7 +264,12 @@ public class BenchmarkRunner {
             builder.addProfiler(GCProfiler.class);
         }
 
-        if (attachPerfnorm) {
+        if (attachSyscalls) {
+            verifyTracepointAccess();
+            System.out.println("Attaching JMH LinuxPerfNormProfiler (--syscalls counting mode)...");
+            builder.addProfiler(org.openjdk.jmh.profile.LinuxPerfNormProfiler.class,
+                    "events=raw_syscalls:sys_enter,syscalls:sys_enter_io_uring_enter,syscalls:sys_enter_pread64,syscalls:sys_enter_pwrite64,syscalls:sys_enter_futex");
+        } else if (attachPerfnorm) {
             verifyRealPerfBinary();
             System.out.println("Attaching JMH LinuxPerfNormProfiler (-prof perfnorm)...");
             builder.addProfiler(org.openjdk.jmh.profile.LinuxPerfNormProfiler.class, "events=task-clock,cycles,instructions,cycles:u,cycles:k");
@@ -292,6 +299,9 @@ public class BenchmarkRunner {
             if (k.equals(name) || k.endsWith(":" + name) || k.endsWith("." + name) || k.endsWith("#" + name)) {
                 return entry.getValue().getScore();
             }
+            if ((name.contains(":") || name.contains("_")) && k.contains(name)) {
+                return entry.getValue().getScore();
+            }
         }
         return Double.NaN;
     }
@@ -300,12 +310,73 @@ public class BenchmarkRunner {
         if (results == null || results.isEmpty()) {
             return;
         }
+
+        boolean hasTracepoints = false;
+        for (RunResult rr : results) {
+            var sec = rr.getSecondaryResults();
+            if (!Double.isNaN(findSecondaryMetric(sec, "syscalls:sys_enter_io_uring_enter"))
+                    || !Double.isNaN(findSecondaryMetric(sec, "sys_enter_io_uring_enter"))
+                    || !Double.isNaN(findSecondaryMetric(sec, "syscalls:sys_enter_pread64"))
+                    || !Double.isNaN(findSecondaryMetric(sec, "sys_enter_pread64"))) {
+                hasTracepoints = true;
+                break;
+            }
+        }
+
+        if (hasTracepoints) {
+            System.out.println("\n==================================================================================================================================");
+            System.out.println("                                      HARDWARE / KERNEL SYSCALL TRACEPOINTS PER OP (--syscalls)                                   ");
+            System.out.println("==================================================================================================================================");
+            System.out.printf("%-42s | %18s | %14s | %16s | %12s | %12s | %10s%n",
+                    "Benchmark (params)", "Throughput (ops/s)", "all sys_enter", "io_uring_enter", "pread64/op", "pwrite64/op", "futex/op");
+            System.out.println("-".repeat(130));
+            for (RunResult rr : results) {
+                String fullName = rr.getParams().getBenchmark();
+                String shortName = fullName.substring(fullName.lastIndexOf('.', fullName.lastIndexOf('.') - 1) + 1);
+                StringBuilder paramStr = new StringBuilder();
+                for (String k : rr.getParams().getParamsKeys()) {
+                    if (!paramStr.isEmpty()) paramStr.append(",");
+                    paramStr.append(k).append("=").append(rr.getParams().getParam(k));
+                }
+                String label = paramStr.isEmpty() ? shortName : shortName + " (" + paramStr + ")";
+                double score = rr.getPrimaryResult().getScore();
+                double err = rr.getPrimaryResult().getScoreError();
+                var sec = rr.getSecondaryResults();
+
+                double allSys = findSecondaryMetric(sec, "raw_syscalls:sys_enter");
+                if (Double.isNaN(allSys)) allSys = findSecondaryMetric(sec, "sys_enter");
+                double ioUring = findSecondaryMetric(sec, "syscalls:sys_enter_io_uring_enter");
+                if (Double.isNaN(ioUring)) ioUring = findSecondaryMetric(sec, "sys_enter_io_uring_enter");
+                double pread = findSecondaryMetric(sec, "syscalls:sys_enter_pread64");
+                if (Double.isNaN(pread)) pread = findSecondaryMetric(sec, "sys_enter_pread64");
+                double pwrite = findSecondaryMetric(sec, "syscalls:sys_enter_pwrite64");
+                if (Double.isNaN(pwrite)) pwrite = findSecondaryMetric(sec, "sys_enter_pwrite64");
+                double futex = findSecondaryMetric(sec, "syscalls:sys_enter_futex");
+                if (Double.isNaN(futex)) futex = findSecondaryMetric(sec, "sys_enter_futex");
+
+                String scoreCell = Double.isNaN(err) || Double.isInfinite(err)
+                        ? String.format("%,18.0f", score)
+                        : String.format("%,10.0f ± %,6.0f", score, err);
+
+                String allSysCell = !Double.isNaN(allSys) ? String.format("%14.4f", allSys) : "             -";
+                String ioUringCell = !Double.isNaN(ioUring) ? String.format("%16.4f", ioUring) : "               -";
+                String preadCell = !Double.isNaN(pread) ? String.format("%12.4f", pread) : "           -";
+                String pwriteCell = !Double.isNaN(pwrite) ? String.format("%12.4f", pwrite) : "           -";
+                String futexCell = !Double.isNaN(futex) ? String.format("%10.4f", futex) : "         -";
+
+                System.out.printf("%-42s | %18s | %14s | %16s | %12s | %12s | %10s%n",
+                        label, scoreCell, allSysCell, ioUringCell, preadCell, pwriteCell, futexCell);
+            }
+            System.out.println("==================================================================================================================================\n");
+            return;
+        }
+
         System.out.println("\n==================================================================================================================");
-        System.out.println("                               DERIVED PER-OP METRICS (CPU + HARDWARE CYCLES + SYSCALLS)                          ");
+        System.out.println("                               DERIVED PER-OP METRICS (CPU + HARDWARE CYCLES)                                     ");
         System.out.println("==================================================================================================================");
-        System.out.printf("%-42s | %18s | %14s | %13s | %13s | %10s%n",
-                "Benchmark (params)", "Throughput (ops/s)", "task-clock/op", "cycles:u/op", "cycles:k/op", "enters/op");
-        System.out.println("-".repeat(122));
+        System.out.printf("%-42s | %18s | %14s | %13s | %13s%n",
+                "Benchmark (params)", "Throughput (ops/s)", "task-clock/op", "cycles:u/op", "cycles:k/op");
+        System.out.println("-".repeat(110));
         for (RunResult rr : results) {
             String fullName = rr.getParams().getBenchmark();
             String shortName = fullName.substring(fullName.lastIndexOf('.', fullName.lastIndexOf('.') - 1) + 1);
@@ -326,10 +397,6 @@ public class BenchmarkRunner {
             double cyclesU = findSecondaryMetric(sec, "cycles:u");
             double cyclesK = findSecondaryMetric(sec, "cycles:k");
 
-            // Storage / syscalls counters (only @AuxCounters are per-second rates divided by primary score)
-            double syscallsRate = sec.containsKey("syscalls") ? sec.get("syscalls").getScore() : Double.NaN;
-            double entersPerOp = (!Double.isNaN(syscallsRate) && score > 0) ? syscallsRate / score : Double.NaN;
-
             String scoreCell = Double.isNaN(err) || Double.isInfinite(err)
                     ? String.format("%,18.0f", score)
                     : String.format("%,10.0f ± %,6.0f", score, err);
@@ -337,10 +404,9 @@ public class BenchmarkRunner {
             String taskClockCell = !Double.isNaN(taskClockNsPerOp) ? String.format("%,10.1f ns", taskClockNsPerOp) : "             -";
             String cyclesUCell = !Double.isNaN(cyclesU) ? String.format("%,13.1f", cyclesU) : "            -";
             String cyclesKCell = !Double.isNaN(cyclesK) ? String.format("%,13.1f", cyclesK) : "            -";
-            String entersCell = !Double.isNaN(entersPerOp) ? String.format("%10.4f", entersPerOp) : "         -";
 
-            System.out.printf("%-42s | %18s | %14s | %13s | %13s | %10s%n",
-                    label, scoreCell, taskClockCell, cyclesUCell, cyclesKCell, entersCell);
+            System.out.printf("%-42s | %18s | %14s | %13s | %13s%n",
+                    label, scoreCell, taskClockCell, cyclesUCell, cyclesKCell);
         }
         System.out.println("==================================================================================================================\n");
     }
@@ -368,7 +434,7 @@ public class BenchmarkRunner {
             System.out.println("\n>>> Running MultiThreadScalingBenchmark at Concurrency: " + t + " Thread(s) <<<");
 
             OptionsBuilder builder = new OptionsBuilder();
-            builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED", "-Djuring.countEnters=true");
+            builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
             if (customIncludes != null && !customIncludes.isEmpty()) {
                 for (String inc : customIncludes) {
                     builder.include(inc);
@@ -566,6 +632,26 @@ public class BenchmarkRunner {
         System.out.println("perfnorm will use perf binary: " + safeRealPath(resolved));
     }
 
+    private static void verifyTracepointAccess() {
+        verifyRealPerfBinary();
+        try {
+            Process p = new ProcessBuilder("perf", "list", "syscalls:sys_enter_io_uring_enter").start();
+            String output = new String(p.getInputStream().readAllBytes());
+            int code = p.waitFor();
+            if (code != 0 || !output.contains("syscalls:sys_enter_io_uring_enter")) {
+                throw new IllegalStateException("Tracepoint profiling requested (--syscalls) but 'syscalls:sys_enter_io_uring_enter' "
+                        + "was not found by perf (exit code: " + code + ").\n"
+                        + "perf requires read access to tracefs (e.g. /sys/kernel/tracing) to resolve syscall tracepoints.\n"
+                        + "Fix with: sudo chmod a+rx /sys/kernel/tracing /sys/kernel/debug/tracing");
+            }
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to verify tracepoint access for --syscalls: " + e.getMessage(), e);
+        }
+        System.out.println("Tracepoint access verified for --syscalls.");
+    }
+
     private static String safeRealPath(java.nio.file.Path p) {
         try {
             return p.toRealPath().toString();
@@ -587,6 +673,8 @@ public class BenchmarkRunner {
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");
+        System.out.println("  --perfnorm          Attach LinuxPerfNormProfiler for hardware cycles and CPU task-clock");
+        System.out.println("  --syscalls          Attach LinuxPerfNormProfiler to measure exact hardware/kernel syscall tracepoints");
         System.out.println("  --visual-read       Run visual direct read verification with live console output");
         System.out.println("  --threads <N>       Set thread concurrency (1, 4, 8, 16)");
         System.out.println("  --help              Display this help message");

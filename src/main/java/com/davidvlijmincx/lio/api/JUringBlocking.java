@@ -644,10 +644,6 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
 
-        int takeEnterCount() {
-            return ioUringDispatcher != null ? ioUringDispatcher.takeEnterCount() : 0;
-        }
-
         void close() {
             running = false;
             wakePoller();
@@ -1326,14 +1322,6 @@ public class JUringBlocking implements AutoCloseable {
                 0,
                 sendBuf.address()
         );
-    }
-
-    public int takeEnterCount() {
-        int sum = 0;
-        for (Worker w : workers) {
-            sum += w.takeEnterCount();
-        }
-        return sum;
     }
 
     @Override
