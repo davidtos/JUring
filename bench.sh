@@ -68,6 +68,12 @@ while [[ $# -gt 0 ]]; do
             TARGET_FILE="$2"
             shift 2
             ;;
+        --data-dir)
+            DATA_DIR="$2"
+            export JURING_DATA_DIR="$DATA_DIR"
+            ARGS+=("-Djuring.data.dir=$DATA_DIR")
+            shift 2
+            ;;
         --quick)
             RUNTIME=2
             REPEATS=2
@@ -101,12 +107,17 @@ if [[ "$FIO_COMPARE" == "true" ]]; then
     fi
 
     if [[ -z "$TARGET_FILE" ]]; then
-        if [[ -f "/mnt/TestData/write_files/single_file_bench.bin" ]]; then
+        BASE_DATA="${JURING_DATA_DIR:-./bench-data}"
+        if [[ -f "$BASE_DATA/write_files/single_file_bench.bin" ]]; then
+            TARGET_FILE="$BASE_DATA/write_files/single_file_bench.bin"
+        elif [[ -f "$BASE_DATA/single_file_bench.bin" ]]; then
+            TARGET_FILE="$BASE_DATA/single_file_bench.bin"
+        elif [[ -f "/home/david/testData/write_files/single_file_bench.bin" ]]; then
+            TARGET_FILE="/home/david/testData/write_files/single_file_bench.bin"
+        elif [[ -f "/mnt/TestData/write_files/single_file_bench.bin" ]]; then
             TARGET_FILE="/mnt/TestData/write_files/single_file_bench.bin"
-        elif [[ -f "data/single_file_bench.bin" ]]; then
-            TARGET_FILE="data/single_file_bench.bin"
         else
-            TARGET_FILE="/mnt/TestData/write_files/single_file_bench.bin"
+            TARGET_FILE="$BASE_DATA/write_files/single_file_bench.bin"
         fi
     fi
 
@@ -244,6 +255,9 @@ EOF
 fi
 
 LAUNCHER_JVM_FLAGS=(--enable-native-access=ALL-UNNAMED)
+if [[ -n "${JURING_DATA_DIR:-}" ]]; then
+    LAUNCHER_JVM_FLAGS+=("-Djuring.data.dir=$JURING_DATA_DIR")
+fi
 if [[ -n "$PIN_CPUS" ]]; then
     LAUNCHER_JVM_FLAGS+=(-XX:ActiveProcessorCount="$TOTAL_CPUS" -XX:+UseG1GC -Djuring.pin="$PIN_CPUS")
     ARGS+=(--pin "$PIN_CPUS")

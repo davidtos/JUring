@@ -22,8 +22,56 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class DatasetManager {
 
-    public static final Path DEFAULT_READ_DIR = Path.of("/home/david/testData/text_files/");
-    public static final Path DEFAULT_WRITE_DIR = Path.of("/home/david/testData/write_files/");
+    public static Path resolveBaseDataDir() {
+        String sysProp = System.getProperty("juring.data.dir");
+        if (sysProp != null && !sysProp.isBlank()) {
+            return Path.of(sysProp);
+        }
+        String env = System.getenv("JURING_DATA_DIR");
+        if (env != null && !env.isBlank()) {
+            return Path.of(env);
+        }
+        Path benchData = Path.of("./bench-data");
+        if (Files.exists(benchData)) {
+            return benchData;
+        }
+        Path localTestData = Path.of("/home/david/testData");
+        if (Files.exists(localTestData)) {
+            return localTestData;
+        }
+        Path mntTestData = Path.of("/mnt/TestData");
+        if (Files.exists(mntTestData)) {
+            return mntTestData;
+        }
+        return benchData;
+    }
+
+    public static Path resolveReadDir(Path base) {
+        if (Files.isDirectory(base.resolve("text_files"))) {
+            return base.resolve("text_files");
+        }
+        if (Files.isDirectory(base.resolve("read"))) {
+            return base.resolve("read");
+        }
+        if (Files.isDirectory(base.resolve("multi_file"))) {
+            return base.resolve("multi_file");
+        }
+        return base;
+    }
+
+    public static Path resolveWriteDir(Path base) {
+        if (Files.isDirectory(base.resolve("write_files"))) {
+            return base.resolve("write_files");
+        }
+        if (Files.isDirectory(base.resolve("write"))) {
+            return base.resolve("write");
+        }
+        return base;
+    }
+
+    public static final Path DEFAULT_DATA_DIR = resolveBaseDataDir();
+    public static final Path DEFAULT_READ_DIR = resolveReadDir(DEFAULT_DATA_DIR);
+    public static final Path DEFAULT_WRITE_DIR = resolveWriteDir(DEFAULT_DATA_DIR);
     public static final String FILE_EXTENSION = ".bin";
     public static final int DEFAULT_BUFFER_SIZE = 4096;
     public static final int DEFAULT_TASK_COUNT = 2048;
@@ -56,7 +104,7 @@ public class DatasetManager {
 
     public DatasetManager(WorkloadType workloadType, FileDistribution distribution, int taskCount) {
         this(workloadType, distribution,
-                workloadType == WorkloadType.READ ? DEFAULT_READ_DIR : DEFAULT_WRITE_DIR,
+                workloadType == WorkloadType.READ ? resolveReadDir(resolveBaseDataDir()) : resolveWriteDir(resolveBaseDataDir()),
                 DEFAULT_BUFFER_SIZE, taskCount);
     }
 
@@ -74,12 +122,16 @@ public class DatasetManager {
 
         if (distribution == FileDistribution.SINGLE_FILE) {
             Path singleFile = null;
+            Path resolvedWriteDir = resolveWriteDir(resolveBaseDataDir());
+            Path resolvedReadDir = resolveReadDir(resolveBaseDataDir());
             if (workloadType == WorkloadType.WRITE) {
                 singleFile = ensureSingleBenchFile(baseDir, DEFAULT_SINGLE_FILE_SIZE);
             } else if (Files.exists(baseDir.resolve(SINGLE_BENCH_FILE))) {
                 singleFile = baseDir.resolve(SINGLE_BENCH_FILE);
-            } else if (baseDir.equals(DEFAULT_READ_DIR) && Files.exists(DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE))) {
-                singleFile = DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE);
+            } else if (Files.exists(resolvedWriteDir.resolve(SINGLE_BENCH_FILE))) {
+                singleFile = resolvedWriteDir.resolve(SINGLE_BENCH_FILE);
+            } else if (Files.exists(resolvedReadDir.resolve(SINGLE_BENCH_FILE))) {
+                singleFile = resolvedReadDir.resolve(SINGLE_BENCH_FILE);
             }
 
             if (singleFile != null && Files.exists(singleFile)) {
@@ -161,6 +213,13 @@ public class DatasetManager {
             return stream
                     .filter(p -> p.getFileName().toString().endsWith(FILE_EXTENSION)
                             && !p.getFileName().toString().equals(SINGLE_BENCH_FILE))
+                    .filter(p -> {
+                        try {
+                            return Files.size(p) >= DEFAULT_BUFFER_SIZE;
+                        } catch (IOException e) {
+                            return false;
+                        }
+                    })
                     .sorted(Comparator.comparing(Path::toString))
                     .limit(maxFiles)
                     .toArray(Path[]::new);
@@ -184,7 +243,7 @@ public class DatasetManager {
             }
             int intMaxBlocks = (int) Math.min(Integer.MAX_VALUE, maxBlocks);
             for (int i = 0; i < count; i++) {
-                long blockIndex = (long) random.nextInt(intMaxBlocks);
+                long blockIndex = intMaxBlocks > 0 ? (long) random.nextInt(intMaxBlocks) : 0L;
                 indices[i] = 0;
                 offsets[i] = blockIndex * bufferSize;
             }
@@ -199,7 +258,8 @@ public class DatasetManager {
                 int fileIdx = startFile + random.nextInt(localNumFiles);
                 long size = fileSizes[fileIdx];
                 long maxBlocks = size / bufferSize;
-                long blockIndex = (long) random.nextInt((int) Math.min(Integer.MAX_VALUE, maxBlocks));
+                int intMaxBlocks = (int) Math.min(Integer.MAX_VALUE, maxBlocks);
+                long blockIndex = intMaxBlocks > 0 ? (long) random.nextInt(intMaxBlocks) : 0L;
                 indices[i] = fileIdx;
                 offsets[i] = blockIndex * bufferSize;
             }
@@ -322,19 +382,32 @@ public class DatasetManager {
     }
 
     public static Path resolveSingleBenchFile() {
-        Path p = DEFAULT_WRITE_DIR.resolve(SINGLE_BENCH_FILE);
+        Path base = resolveBaseDataDir();
+        Path writeDir = resolveWriteDir(base);
+        Path readDir = resolveReadDir(base);
+
+        Path pWrite = writeDir.resolve(SINGLE_BENCH_FILE);
         try {
-            if (Files.exists(p) && Files.size(p) >= DEFAULT_SINGLE_FILE_SIZE) {
-                return p;
+            if (Files.exists(pWrite) && Files.size(pWrite) >= DEFAULT_SINGLE_FILE_SIZE) {
+                return pWrite;
             }
         } catch (IOException ignored) {}
-        Path alt = Path.of("/mnt/TestData/write_files/").resolve(SINGLE_BENCH_FILE);
+
+        Path pRead = readDir.resolve(SINGLE_BENCH_FILE);
         try {
-            if (Files.exists(alt) && Files.size(alt) >= DEFAULT_SINGLE_FILE_SIZE) {
-                return alt;
+            if (Files.exists(pRead) && Files.size(pRead) >= DEFAULT_SINGLE_FILE_SIZE) {
+                return pRead;
             }
         } catch (IOException ignored) {}
-        return ensureSingleBenchFile(DEFAULT_WRITE_DIR, DEFAULT_SINGLE_FILE_SIZE);
+
+        Path pBase = base.resolve(SINGLE_BENCH_FILE);
+        try {
+            if (Files.exists(pBase) && Files.size(pBase) >= DEFAULT_SINGLE_FILE_SIZE) {
+                return pBase;
+            }
+        } catch (IOException ignored) {}
+
+        return ensureSingleBenchFile(writeDir, DEFAULT_SINGLE_FILE_SIZE);
     }
 
     /**

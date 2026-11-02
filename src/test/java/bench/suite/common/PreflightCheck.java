@@ -111,8 +111,9 @@ public class PreflightCheck {
         }
 
         // 5. Test Data Availability & Alignment Check
-        Path readDir = DatasetManager.DEFAULT_READ_DIR;
-        Path writeDir = DatasetManager.DEFAULT_WRITE_DIR;
+        Path baseDataDir = DatasetManager.resolveBaseDataDir();
+        Path readDir = DatasetManager.resolveReadDir(baseDataDir);
+        Path writeDir = DatasetManager.resolveWriteDir(baseDataDir);
 
         checkDataDirectory(readDir, "Read test dataset", report);
         checkDataDirectory(writeDir, "Write test dataset", report);
@@ -138,12 +139,20 @@ public class PreflightCheck {
 
         try (var stream = Files.walk(dir, 1)) {
             Path[] files = stream
-                    .filter(p -> p.getFileName().toString().endsWith(DatasetManager.FILE_EXTENSION))
+                    .filter(p -> p.getFileName().toString().endsWith(DatasetManager.FILE_EXTENSION)
+                            && !p.getFileName().toString().equals(DatasetManager.SINGLE_BENCH_FILE))
+                    .filter(p -> {
+                        try {
+                            return Files.size(p) >= 4096;
+                        } catch (Exception e) {
+                            return false;
+                        }
+                    })
                     .limit(10)
                     .toArray(Path[]::new);
 
             if (files.length == 0) {
-                report.warnings.add(label + " (" + dir + ") contains no " + DatasetManager.FILE_EXTENSION + " files.");
+                report.warnings.add(label + " (" + dir + ") contains no valid " + DatasetManager.FILE_EXTENSION + " files (>= 4KB).");
             } else {
                 boolean allAligned = true;
                 for (Path f : files) {
@@ -165,7 +174,15 @@ public class PreflightCheck {
     private static void probeDirectIoRead(Path readDir, Report report) {
         try (var stream = Files.walk(readDir, 1)) {
             Path sampleFile = stream
-                    .filter(p -> p.getFileName().toString().endsWith(DatasetManager.FILE_EXTENSION))
+                    .filter(p -> p.getFileName().toString().endsWith(DatasetManager.FILE_EXTENSION)
+                            && !p.getFileName().toString().equals(DatasetManager.SINGLE_BENCH_FILE))
+                    .filter(p -> {
+                        try {
+                            return Files.size(p) >= 4096;
+                        } catch (Exception e) {
+                            return false;
+                        }
+                    })
                     .findFirst()
                     .orElse(null);
 
