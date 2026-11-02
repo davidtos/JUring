@@ -128,6 +128,7 @@ final class IoUringDispatcher implements AutoCloseable {
     private int ringFlags;
     private boolean isSqPoll;
     private boolean isDeferTaskrun;
+    private boolean isSingleIssuer;
     private int sqeShift = 6;
     private int cqeShift = 4;
     private Thread registeredThread;
@@ -516,9 +517,6 @@ final class IoUringDispatcher implements AutoCloseable {
         }
 
         boolean sqpoll = this.isSqPoll;
-        if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-            fallbackOrReRegisterRingFd();
-        }
         int enterFlags = this.enterFlagsBase;
         boolean needEnter = true;
 
@@ -546,11 +544,6 @@ final class IoUringDispatcher implements AutoCloseable {
                     continue;
                 }
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    enterFlags = (enterFlags & ~IORING_ENTER_REGISTERED_RING) | this.enterFlagsBase;
-                    continue;
-                }
                 if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -578,20 +571,10 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void flushDeferredTaskrun() {
-        if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-            fallbackOrReRegisterRingFd();
-        }
         if (COUNT_ENTERS) {
             enterCount.incrementAndGet();
         }
-        long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
-        if (res < 0) {
-            int err = LibCDispatcher.errno(this.callState);
-            if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                fallbackOrReRegisterRingFd();
-                ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
-            }
-        }
+        ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
     }
 
     /**
@@ -641,17 +624,10 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-                fallbackOrReRegisterRingFd();
-            }
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
             long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    continue;
-                }
                 if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -689,16 +665,9 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-                fallbackOrReRegisterRingFd();
-            }
             long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    continue;
-                }
                 if (err == 4 /* EINTR */) {
                     continue;
                 }
@@ -757,16 +726,9 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-                fallbackOrReRegisterRingFd();
-            }
             long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    continue;
-                }
                 if (err == 4 /* EINTR */) {
                     continue;
                 }
@@ -923,6 +885,7 @@ final class IoUringDispatcher implements AutoCloseable {
         this.ringFlags = flags;
         this.isSqPoll = (flags & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0;
         this.isDeferTaskrun = (flags & IoUringOptions.IORING_SETUP_DEFER_TASKRUN.value) != 0;
+        this.isSingleIssuer = (flags & IoUringOptions.IORING_SETUP_SINGLE_ISSUER.value) != 0;
         this.sqeShift = 6 + sqe_shift;
         this.cqeShift = 4 + cqe_shift;
         this.sqKheadAddr = sq_khead;
@@ -940,7 +903,9 @@ final class IoUringDispatcher implements AutoCloseable {
         this.cqRingMask = cq_mask;
         this.cqRingEntries = cq_ents;
 
-        registerRingFd();
+        if (this.isSingleIssuer) {
+            registerRingFd();
+        }
 
         return 0;
     }
@@ -1006,18 +971,12 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    private void fallbackOrReRegisterRingFd() {
-        if (registerRingFd() < 0) {
-            this.enterRingFd = this.ringFd;
-            this.enterFlagsBase = 0;
-            this.registeredThread = null;
-            enterRingFdHandle.set(this.ring, 0L, this.ringFd);
-            ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
-        }
-    }
-
     boolean isRingFdRegistered() {
         return this.enterFlagsBase != 0;
+    }
+
+    int ringFd() {
+        return this.ringFd;
     }
 
     void queueExit(MemorySegment ring) {
@@ -1308,16 +1267,9 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-                fallbackOrReRegisterRingFd();
-            }
             long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    continue;
-                }
                 if (err == 4 /* EINTR */) {
                     continue;
                 }
@@ -1367,17 +1319,10 @@ final class IoUringDispatcher implements AutoCloseable {
             if (COUNT_ENTERS) {
                 enterCount.incrementAndGet();
             }
-            if (this.enterFlagsBase != 0 && Thread.currentThread() != this.registeredThread) {
-                fallbackOrReRegisterRingFd();
-            }
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
             long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
-                if (err == 9 /* EBADF */ && this.enterFlagsBase != 0) {
-                    fallbackOrReRegisterRingFd();
-                    continue;
-                }
                 if (err == 11 /* EAGAIN */ || err == 16 /* EBUSY */) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);

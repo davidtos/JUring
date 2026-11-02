@@ -1019,6 +1019,14 @@ public class JUring implements AutoCloseable {
         freeBufferStack[freeBufferTop++] = bufferIndex;
     }
 
+    boolean isRingFdRegistered() {
+        return ioUring.isRingFdRegistered();
+    }
+
+    int ringFd() {
+        return ioUring.ringFd();
+    }
+
     public int registerFiles(FileDescriptor... fileDescriptors) {
         int[] fds = new int[fileDescriptors.length];
         for (int i = 0; i < fileDescriptors.length; i++) {
@@ -1040,6 +1048,13 @@ public class JUring implements AutoCloseable {
         return ioUring.takeEnterCount();
     }
 
+    /**
+     * Closes the ring and releases all associated off-heap resources.
+     * <p>
+     * For rings initialized with {@link IoUringOptions#IORING_SETUP_SINGLE_ISSUER}, {@code close()}
+     * must be invoked on the owner (submitting) thread so that kernel-registered ring file descriptors
+     * are properly unregistered from the calling task table.
+     */
     @Override
     public void close() {
         if (readBufferPool != null) {

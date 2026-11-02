@@ -304,6 +304,57 @@ class Phase1BugProofTest {
     }
 
     @Test
+    void step1_5_registerRingFdOnlyWithSingleIssuer() throws Exception {
+        // 1. Non-single-issuer ring should NOT register ring fd
+        try (JUring ring = new JUring(8)) {
+            assertFalse(ring.isRingFdRegistered(), "Non-single-issuer ring must not register ring fd");
+            int fd = ring.ringFd();
+            assertTrue(java.nio.file.Files.exists(java.nio.file.Path.of("/proc/self/fd/" + fd)));
+
+            // Use from two different platform threads
+            java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+            try {
+                pool.submit(() -> {
+                    ring.prepareNop();
+                    ring.submit();
+                    try (Result r = ring.waitForResult()) {
+                        assertTrue(r.isSuccess());
+                    }
+                }).get();
+                pool.submit(() -> {
+                    ring.prepareNop();
+                    ring.submit();
+                    try (Result r = ring.waitForResult()) {
+                        assertTrue(r.isSuccess());
+                    }
+                }).get();
+            } finally {
+                pool.shutdown();
+            }
+
+            assertFalse(ring.isRingFdRegistered(), "Non-single-issuer ring must still not register ring fd after multi-thread use");
+            ring.close();
+            assertFalse(java.nio.file.Files.exists(java.nio.file.Path.of("/proc/self/fd/" + fd)),
+                    "/proc/self/fd must not hold the ring after close");
+        }
+
+        // 2. Single-issuer ring registers once and unregisters on close
+        int singleIssuerFd;
+        try (JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER)) {
+            singleIssuerFd = ring.ringFd();
+            assertTrue(ring.isRingFdRegistered(), "Single-issuer ring must register ring fd");
+            assertTrue(java.nio.file.Files.exists(java.nio.file.Path.of("/proc/self/fd/" + singleIssuerFd)));
+            ring.prepareNop();
+            ring.submit();
+            try (Result r = ring.waitForResult()) {
+                assertTrue(r.isSuccess());
+            }
+        }
+        assertFalse(java.nio.file.Files.exists(java.nio.file.Path.of("/proc/self/fd/" + singleIssuerFd)),
+                "Single-issuer ring must unregister and close fd cleanly");
+    }
+
+    @Test
     void proof5_multishotAcceptPreservesCqeFlagsMore() throws Exception {
         final int port = 19299;
 
