@@ -355,6 +355,16 @@ class Phase1BugProofTest {
     }
 
     @Test
+    void step1_6_fileDescriptorMissingFileReportsEnoent() {
+        String missingPath = "non_existent_file_" + System.nanoTime() + ".tmp";
+        RuntimeException ex = assertThrows(RuntimeException.class, () ->
+                new FileDescriptor(missingPath, LinuxOpenOptions.READ, 0)
+        );
+        assertTrue(ex.getMessage().contains("ENOENT"),
+                "Exception message must report ENOENT but was: " + ex.getMessage());
+    }
+
+    @Test
     void proof5_multishotAcceptPreservesCqeFlagsMore() throws Exception {
         final int port = 19299;
 

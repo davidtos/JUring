@@ -64,29 +64,35 @@ record LibCDispatcher(FreeAddress freeLong,
 
     static LibCDispatcher create() {
         return new LibCDispatcher(
-                link(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), true),
-                link(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), true),
-                link(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT), true),
-                link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT), true),
-                link(Malloc.class, "malloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG), true),
-                link(MallocAddress.class, "malloc", FunctionDescriptor.of(JAVA_LONG, ValueLayout.JAVA_LONG), true),
-                link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_INT), false),
-                link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG), true),
-                link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), true),
-                link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
-                link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), true),
-                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
+                linkCritical(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), false),
+                linkCritical(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), false),
+                linkCaptureErrno(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT)),
+                link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT)),
+                linkCritical(Malloc.class, "malloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG), false),
+                linkCritical(MallocAddress.class, "malloc", FunctionDescriptor.of(JAVA_LONG, ValueLayout.JAVA_LONG), false),
+                link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_INT)),
+                linkCritical(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG), false),
+                link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)),
+                link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)),
                 linkCaptureErrno(Mmap.class, "mmap", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_LONG)),
-                link(Munmap.class, "munmap", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG), false),
-                linkSyscallCaptureErrno(IoUringSetup.class, 425L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, ADDRESS)),
-                linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG)),
-                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT))
+                link(Munmap.class, "munmap", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG)),
+                linkSyscallCaptureErrno(IoUringSetup.class, 425L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS)),
+                linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
+                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG))
         );
     }
 
-    private static <T> T link(Class<T> type, String name, FunctionDescriptor descriptor, boolean critical) {
+    private static <T> T link(Class<T> type, String name, FunctionDescriptor descriptor) {
         MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
-        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor);
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkCritical(Class<T> type, String name, FunctionDescriptor descriptor, boolean allowHeapAccess) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(allowHeapAccess));
         return MethodHandleProxies.asInterfaceInstance(type, handle);
     }
 
@@ -98,7 +104,9 @@ record LibCDispatcher(FreeAddress freeLong,
 
     private static <T> T linkSyscallCaptureErrno(Class<T> type, long sysno, FunctionDescriptor descriptor) {
         MemorySegment symbol = linker.defaultLookup().findOrThrow("syscall");
-        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.captureCallState("errno"));
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor,
+                Linker.Option.captureCallState("errno"),
+                Linker.Option.firstVariadicArg(1));
         MethodHandle bound = MethodHandles.insertArguments(handle, 1, sysno);
         return MethodHandleProxies.asInterfaceInstance(type, bound);
     }
@@ -125,7 +133,15 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     int open(String path, int flags, int mode) {
-        return open.open(MemorySegment.ofArray((path + "\0").getBytes()), flags, mode);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment callState = arena.allocate(CAPTURE_STATE_LAYOUT);
+            MemorySegment cPath = arena.allocateFrom(path);
+            int fd = open.open(callState, cPath, flags, mode);
+            if (fd < 0) {
+                return -errno(callState);
+            }
+            return fd;
+        }
     }
 
     void close(int fd) {

@@ -13,7 +13,9 @@ public class FileDescriptor implements AutoCloseable {
     public FileDescriptor(String path, LinuxOpenOptions flags, int mode) {
         int opened = NativeDispatcher.C.open(path, flags.getValue(), mode);
         if (opened < 0) {
-            throw new RuntimeException("Failed to open '" + path + "': fd=" + opened);
+            int err = -opened;
+            String errName = (err == 2) ? "ENOENT" : ("errno=" + err);
+            throw new RuntimeException("Failed to open '" + path + "': " + errName + " - " + NativeDispatcher.C.strerror(err));
         }
         this.fd = opened;
     }
@@ -29,7 +31,9 @@ public class FileDescriptor implements AutoCloseable {
     public FileDescriptor(String path, int mode, LinuxOpenOptions... flags) {
         int opened = NativeDispatcher.C.open(path, LinuxOpenOptions.combineOptions(flags), mode);
         if (opened < 0) {
-            throw new RuntimeException("Failed to open '" + path + "': fd=" + opened);
+            int err = -opened;
+            String errName = (err == 2) ? "ENOENT" : ("errno=" + err);
+            throw new RuntimeException("Failed to open '" + path + "': " + errName + " - " + NativeDispatcher.C.strerror(err));
         }
         this.fd = opened;
     }

@@ -22,7 +22,7 @@ class FileDescriptorTest {
         RuntimeException ex = assertThrows(RuntimeException.class, () ->
                 new FileDescriptor("/nonexistent/file/path/that/does/not/exist.bin", LinuxOpenOptions.READ, 0)
         );
-        assertThat(ex.getMessage()).contains("Failed to open").contains("fd=-");
+        assertThat(ex.getMessage()).contains("Failed to open").contains("ENOENT");
     }
 
     @Test

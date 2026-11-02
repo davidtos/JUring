@@ -7,5 +7,5 @@ import java.lang.foreign.MemorySegment;
  */
 public interface Open {
 
-    int open(MemorySegment path, int flags, int mode);
+    int open(MemorySegment callState, MemorySegment path, int flags, int mode);
 }
