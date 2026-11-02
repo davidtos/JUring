@@ -397,6 +397,64 @@ class Phase1BugProofTest {
         }
     }
 
+    @Test
+    void step1_7_sqpollWakeupAfterIdlePeriodDoesNotHang() throws Exception {
+        java.util.concurrent.atomic.AtomicInteger fenceCount = new java.util.concurrent.atomic.AtomicInteger(0);
+        IoUringDispatcher.FENCE_HOOK = fenceCount::incrementAndGet;
+
+        try {
+            // Initialize ring with SQPOLL and a short sq_thread_idle (20 ms)
+            try (JUring ring = new JUring(8, 20, IoUringOptions.IORING_SETUP_SQPOLL)) {
+                // Run 3 repeats with idle waits longer than sq_thread_idle
+                for (int rep = 0; rep < 3; rep++) {
+                    // Let kernel SQ thread idle and enter sleep
+                    Thread.sleep(50);
+
+                    // 1. Path: submit()
+                    fenceCount.set(0);
+                    ring.prepareNop();
+                    ring.submit();
+                    try (Result r = ring.waitForResult()) {
+                        assertTrue(r.isSuccess(), "submit() NOP failed under SQPOLL");
+                    }
+                    assertTrue(fenceCount.get() > 0,
+                            "VarHandle.fullFence() StoreLoad barrier must be invoked before reading sqKflags in submit()");
+
+                    // Let kernel SQ thread idle and enter sleep again
+                    Thread.sleep(50);
+
+                    // 2. Path: submitAndWait(1)
+                    fenceCount.set(0);
+                    ring.prepareNop();
+                    int available = ring.submitAndWait(1);
+                    assertTrue(available >= 1, "submitAndWait(1) should have >= 1 completion under SQPOLL");
+                    try (Result r = ring.waitForResult()) {
+                        assertTrue(r.isSuccess(), "submitAndWait(1) NOP failed under SQPOLL");
+                    }
+                    assertTrue(fenceCount.get() > 0,
+                            "VarHandle.fullFence() StoreLoad barrier must be invoked before reading sqKflags in submitAndWait()");
+
+                    // Let kernel SQ thread idle and enter sleep again
+                    Thread.sleep(50);
+
+                    // 3. Path: submitAndWaitForBatchResult(1, ...)
+                    fenceCount.set(0);
+                    ring.prepareNop();
+                    java.util.concurrent.atomic.AtomicBoolean reaped = new java.util.concurrent.atomic.AtomicBoolean(false);
+                    int reapedCount = ring.submitAndWaitForBatchResult(1, 1, r -> {
+                        reaped.set(r.isSuccess());
+                    });
+                    assertTrue(reapedCount >= 1 && reaped.get(),
+                            "submitAndWaitForBatchResult(1, ...) should reap completed NOP under SQPOLL");
+                    assertTrue(fenceCount.get() > 0,
+                            "VarHandle.fullFence() StoreLoad barrier must be invoked before reading sqKflags in submitAndWaitForBatchResult()");
+                }
+            }
+        } finally {
+            IoUringDispatcher.FENCE_HOOK = null;
+        }
+    }
+
     public static void main(String[] args) {
         if (args.length == 0) return;
         switch (args[0]) {

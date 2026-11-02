@@ -31,7 +31,11 @@ public class JUring implements AutoCloseable {
     private long opSeq = 1;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
-        ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
+        this(queueDepth, 0, ioUringFlags);
+    }
+
+    public JUring(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringFlags) {
+        ioUring = NativeDispatcher.getUringInstance(queueDepth, sqThreadIdleMs, ioUringFlags);
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];
         freeBufferTop = 0;
@@ -1021,6 +1025,10 @@ public class JUring implements AutoCloseable {
 
     boolean isRingFdRegistered() {
         return ioUring.isRingFdRegistered();
+    }
+
+    boolean isSqNeedWakeup() {
+        return ioUring.isSqNeedWakeup();
     }
 
     int ringFd() {

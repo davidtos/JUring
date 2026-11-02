@@ -47,6 +47,8 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final int IORING_UNREGISTER_RING_FDS = 21;
     private static final byte INT_FLAG_REG_RING = 1;
 
+    static volatile Runnable FENCE_HOOK = null;
+
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
 
@@ -275,10 +277,14 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     static IoUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
+        return create(queueDepth, 0, ioUringOptions);
+    }
+
+    static IoUringDispatcher create(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringOptions) {
         MemorySegment ring = NativeDispatcher.C.calloc(ring_layout.byteSize());
         IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
 
-        int ret = dispatcher.queueInit(queueDepth, IoUringOptions.combineOptions(ioUringOptions));
+        int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, IoUringOptions.combineOptions(ioUringOptions));
         if (ret < 0) {
             dispatcher.close();
             throw new RuntimeException("Failed to initialize queue " + libCDispatcher.strerror(-ret));
@@ -521,6 +527,11 @@ final class IoUringDispatcher implements AutoCloseable {
         boolean needEnter = true;
 
         if (sqpoll) {
+            VarHandle.fullFence();
+            Runnable hook = FENCE_HOOK;
+            if (hook != null) {
+                hook.run();
+            }
             int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
             if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                 enterFlags |= IORING_ENTER_SQ_WAKEUP;
@@ -607,6 +618,11 @@ final class IoUringDispatcher implements AutoCloseable {
             boolean needEnter = (enterFlags != 0);
             if (toSubmit > 0) {
                 if (sqpoll) {
+                    VarHandle.fullFence();
+                    Runnable hook = FENCE_HOOK;
+                    if (hook != null) {
+                        hook.run();
+                    }
                     int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
                     if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                         enterFlags |= IORING_ENTER_SQ_WAKEUP;
@@ -742,8 +758,15 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     int queueInit(int queueDepth, int flags) {
+        return queueInit(queueDepth, 0, flags);
+    }
+
+    int queueInit(int queueDepth, int sqThreadIdleMs, int flags) {
         MemorySegment params = libCDispatcher.calloc(io_uring_params.layout().byteSize());
         io_uring_params.flags(params, flags);
+        if (sqThreadIdleMs > 0) {
+            io_uring_params.sq_thread_idle(params, sqThreadIdleMs);
+        }
         int ret = queueInitParams(queueDepth, this.ring, params);
         libCDispatcher.free(params);
         return ret;
@@ -973,6 +996,10 @@ final class IoUringDispatcher implements AutoCloseable {
 
     boolean isRingFdRegistered() {
         return this.enterFlagsBase != 0;
+    }
+
+    boolean isSqNeedWakeup() {
+        return sqKflagsAddr != 0L && ((int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr) & IORING_SQ_NEED_WAKEUP) != 0;
     }
 
     int ringFd() {
@@ -1302,6 +1329,11 @@ final class IoUringDispatcher implements AutoCloseable {
             boolean needEnter = (enterFlags != 0);
             if (toSubmit > 0) {
                 if (sqpoll) {
+                    VarHandle.fullFence();
+                    Runnable hook = FENCE_HOOK;
+                    if (hook != null) {
+                        hook.run();
+                    }
                     int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
                     if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                         enterFlags |= IORING_ENTER_SQ_WAKEUP;
