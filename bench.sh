@@ -472,7 +472,7 @@ EOF
         java --enable-native-access=ALL-UNNAMED -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
             org.openjdk.jmh.Main ".*FioComparisonBenchmark\\.${BENCH_METHOD}$" \
             -f 1 -wi 1 -w 2s -i 1 -r 5s -p qd="$QD" -p telemetry=false \
-            -prof "bench.suite.profilers.SyscallProfiler:events=syscalls:sys_enter_io_uring_enter" \
+            -prof "org.openjdk.jmh.profile.LinuxPerfNormProfiler:events=syscalls:sys_enter_io_uring_enter" \
             -rf json -rff "$jmh_sys" &>/dev/null || true
         if [[ -f "$jmh_sys" ]]; then
             j_ent=$(jq -r '.[0].secondaryMetrics["syscalls:sys_enter_io_uring_enter"].score // empty' "$jmh_sys" 2>/dev/null || true)

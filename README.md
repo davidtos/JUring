@@ -104,9 +104,9 @@ Random 4KB read workload on a single thread at QD=64 on a dedicated 10 GB direct
 
 | Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |
 |---|---|---|---|---|---|
-| `fio` (default settings) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | 0.9850 | — | Default submission / reap |
-| `fio` (best batching: B=32) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | 0.9850 | baseline | `--iodepth_batch_submit=32` |
-| JUring (JMH) | 441,664.3 ± 2,815.3 | 1,725.3 ± 11.0 MB/s | 0.4395 | +24.7% | Batched `submitAndWait(1)` |
+| `fio` (default settings) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | — | — | Default submission / reap |
+| `fio` (best batching: B=—) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | — | baseline | `--iodepth_batch_submit=—` |
+| JUring (JMH) | 441,664.3 ± 2,815.3 | 1,725.3 ± 11.0 MB/s | — | +24.7% | Batched `submitAndWait(1)` |
 <!-- END GENERATED: fio-compare -->
 
 > [!NOTE]
@@ -528,6 +528,11 @@ public class VirtualThreadExample {
    The head-to-head comparison against native C `fio` (v3.40) was executed with 3 repeats per engine with randomized execution order. Both engines targeted the identical 10 GB contiguous pre-allocated file on ext4 with `O_DIRECT`, 4KB block size, fixed buffers, registered files, and QD=64. Raw JSON files for all runs are preserved in `results/2026-11-02/`.
 4. **Write Cache / SLC Folding Dynamics:**
    Sustained random write tests with multiple threads write tens of gigabytes within seconds, exceeding the SSD's high-speed SLC buffer. Throughput drops during TLC folding are physical hardware characteristics reflected equally in both Java and native C measurements.
+5. **Single-Thread 1T×QD=64 Direct Read Discrepancies across Sections:**
+   In earlier benchmark runs, three single-thread 4KB `O_DIRECT` read suites at QD=64 reported differing throughput numbers: Section 1 (`FioComparisonBenchmark`, ~441k IOPS), Section 2 (`DirectReadBenchmark`, ~345k IOPS), and Section 3 (`MultiThreadScalingBenchmark`, ~324k IOPS). Investigation identified three root causes:
+   - **Shared file state and drive SLC cache contamination:** Reads and writes previously shared `write_files/single_file_bench.bin`. Recent writes left LBAs cached in the drive's SLC buffer, altering subsequent read throughput. Separating read benchmarks onto dedicated, read-only files in `read_files/` and scheduling all read suites prior to write suites eliminates this cross-contamination.
+   - **Offset distribution differences:** `DirectReadBenchmark` and `MultiThreadScalingBenchmark` previously replayed a fixed pool of 65,536 pseudo-random offsets (256 MB working set) while `FioComparisonBenchmark` drew full-file random offsets via `FioPrng`. Standardizing all direct-read benchmarks on the same full-file PRNG stream aligns I/O working sets across suites.
+   - **Wait batching parameter (`waitBatch`):** `MultiThreadScalingBenchmark` used `waitBatch = min(8, qd >> 3)` (8 at QD=64), whereas `DirectReadBenchmark` and `FioComparisonBenchmark` used `waitBatch = 1` (`submitAndWait(1)`).
 
 ---
 

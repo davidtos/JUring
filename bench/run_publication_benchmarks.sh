@@ -184,19 +184,33 @@ fi
 
 # 12. MultiThreadScalingBenchmark writes (Single File: 1, 2, 4, 8, 16 Threads)
 if [ "$FROM_STEP" -le 12 ]; then
-    echo -e "\n>>> [12/15] Running MultiThreadScalingBenchmark writes (Single File) <<<"
+    echo -e "\n>>> [12/15] Running MultiThreadScalingBenchmark writes (Single File: Separate Invocations) <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-single-before.json"
-    precondition_write "$WRITE_FILE" 5
-    ./bench.sh --threads-scaling --include '.*DirectWrite$' --param distribution=SINGLE_FILE \
-        --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-single-write.json"
+
+    ORDER=( "fileChannelDirectWrite" "juringDirectWrite" )
+    if (( RANDOM % 2 == 0 )); then
+        ORDER=( "juringDirectWrite" "fileChannelDirectWrite" )
+    fi
+
+    for method in "${ORDER[@]}"; do
+        precondition_write "$WRITE_FILE" 5
+        ./bench.sh --threads-scaling --include "MultiThreadScalingBenchmark\\.${method}$" --param distribution=SINGLE_FILE \
+            --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-single-write-${method}.json"
+        cooldown 10
+    done
 
     # Merge read and write scaling files for each tier
     for t in 1 2 4 8 16; do
-        if [[ -f "$RESULTS_DIR/scaling-single-t${t}.json" && -f "$RESULTS_DIR/scaling-single-write-t${t}.json" ]]; then
-            jq -s 'add' "$RESULTS_DIR/scaling-single-t${t}.json" "$RESULTS_DIR/scaling-single-write-t${t}.json" \
-                > "$RESULTS_DIR/scaling-single-t${t}.merged.json" && mv -f "$RESULTS_DIR/scaling-single-t${t}.merged.json" "$RESULTS_DIR/scaling-single-t${t}.json"
-        elif [[ -f "$RESULTS_DIR/scaling-single-write-t${t}.json" ]]; then
-            cp -f "$RESULTS_DIR/scaling-single-write-t${t}.json" "$RESULTS_DIR/scaling-single-t${t}.json"
+        fc_json="$RESULTS_DIR/scaling-single-write-fileChannelDirectWrite-t${t}.json"
+        ju_json="$RESULTS_DIR/scaling-single-write-juringDirectWrite-t${t}.json"
+        rd_json="$RESULTS_DIR/scaling-single-t${t}.json"
+        if [[ -f "$fc_json" && -f "$ju_json" ]]; then
+            if [[ -f "$rd_json" ]]; then
+                jq -s '.[0] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-single-t${t}.merged.json" \
+                    && mv -f "$RESULTS_DIR/scaling-single-t${t}.merged.json" "$rd_json"
+            else
+                jq -s 'add' "$fc_json" "$ju_json" > "$rd_json"
+            fi
         fi
     done
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-single-after.json"
@@ -205,17 +219,32 @@ fi
 
 # 13. MultiThreadScalingBenchmark writes (Multi File: 2,211 discrete files)
 if [ "$FROM_STEP" -le 13 ]; then
-    echo -e "\n>>> [13/15] Running MultiThreadScalingBenchmark writes (Multi File) <<<"
+    echo -e "\n>>> [13/15] Running MultiThreadScalingBenchmark writes (Multi File: Separate Invocations) <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-multi-before.json"
-    ./bench.sh --threads-scaling --include '.*DirectWrite$' --param distribution=MULTI_FILE \
-        --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-multifile-write.json"
+
+    ORDER=( "fileChannelDirectWrite" "juringDirectWrite" )
+    if (( RANDOM % 2 == 0 )); then
+        ORDER=( "juringDirectWrite" "fileChannelDirectWrite" )
+    fi
+
+    for method in "${ORDER[@]}"; do
+        precondition_write "$WRITE_FILE" 5
+        ./bench.sh --threads-scaling --include "MultiThreadScalingBenchmark\\.${method}$" --param distribution=MULTI_FILE \
+            --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-multifile-write-${method}.json"
+        cooldown 10
+    done
 
     for t in 1 2 4 8 16; do
-        if [[ -f "$RESULTS_DIR/scaling-multifile-t${t}.json" && -f "$RESULTS_DIR/scaling-multifile-write-t${t}.json" ]]; then
-            jq -s 'add' "$RESULTS_DIR/scaling-multifile-t${t}.json" "$RESULTS_DIR/scaling-multifile-write-t${t}.json" \
-                > "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" && mv -f "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" "$RESULTS_DIR/scaling-multifile-t${t}.json"
-        elif [[ -f "$RESULTS_DIR/scaling-multifile-write-t${t}.json" ]]; then
-            cp -f "$RESULTS_DIR/scaling-multifile-write-t${t}.json" "$RESULTS_DIR/scaling-multifile-t${t}.json"
+        fc_json="$RESULTS_DIR/scaling-multifile-write-fileChannelDirectWrite-t${t}.json"
+        ju_json="$RESULTS_DIR/scaling-multifile-write-juringDirectWrite-t${t}.json"
+        rd_json="$RESULTS_DIR/scaling-multifile-t${t}.json"
+        if [[ -f "$fc_json" && -f "$ju_json" ]]; then
+            if [[ -f "$rd_json" ]]; then
+                jq -s '.[0] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" \
+                    && mv -f "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" "$rd_json"
+            else
+                jq -s 'add' "$fc_json" "$ju_json" > "$rd_json"
+            fi
         fi
     done
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-multi-after.json"

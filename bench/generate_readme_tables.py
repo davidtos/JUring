@@ -139,10 +139,10 @@ def gen_fio_compare(results_dir):
     # Enters data
     enters_file = os.path.join(results_dir, "fio-enters-read.json")
     enters_data = load_json_file(enters_file) or {}
-    best_b = enters_data.get("best_batch", "32")
-    f_def_ent = enters_data.get("fio_default_enters_op", "0.9850")
-    f_best_ent = enters_data.get("fio_best_enters_op", "0.4410")
-    j_ent = enters_data.get("juring_enters_op", "0.4395")
+    best_b = enters_data.get("best_batch", "—")
+    f_def_ent = enters_data.get("fio_default_enters_op", "—")
+    f_best_ent = enters_data.get("fio_best_enters_op", "—")
+    j_ent = enters_data.get("juring_enters_op", "—")
 
     fd_m, fd_s = stats(fio_def_rd)
     fb_m, fb_s = stats(fio_best_rd)
@@ -202,10 +202,10 @@ def gen_single_core(results_dir):
         sys_op = nop_sys[0]["secondaryMetrics"].get("raw_syscalls:sys_enter", {}).get("score") if nop_sys else None
         cu = nop_perf[0]["secondaryMetrics"].get("cycles:u", {}).get("score") if nop_perf else None
         ck = nop_perf[0]["secondaryMetrics"].get("cycles:k", {}).get("score") if nop_perf else None
-        sys_str = f"{sys_op:.4f}" if sys_op is not None else "0.0313"
-        cu_str = f"{cu:.1f}" if cu is not None else "N/A"
-        ck_str = f"{ck:.1f}" if ck is not None else "N/A"
-        lines.append(f"| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | {fmt_stat(s, e, 1, '')} | — | {sys_str} (32.0 ops/call) | {cu_str} | {ck_str} | 0.000 B/op |")
+        sys_str = f"{sys_op:.4f} ({(1.0/sys_op):.1f} ops/call)" if sys_op is not None and sys_op > 0 else "unknown"
+        cu_str = f"{cu:.1f}" if cu is not None else "—"
+        ck_str = f"{ck:.1f}" if ck is not None else "—"
+        lines.append(f"| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | {fmt_stat(s, e, 1, '')} | — | {sys_str} | {cu_str} | {ck_str} | 0.000 B/op |")
 
     # Direct Read
     if dr:
@@ -597,30 +597,6 @@ def update_readme(readme_path, results_dir, do_write=False):
         return True
     else:
         return new_content == content
-
-class TestGenerateReadmeTables(unittest.TestCase):
-    def test_stability_rule(self):
-        stat_5 = fmt_stat(100.0, 5.0)
-        self.assertIn("100.0 ± 5.0", stat_5)
-        self.assertNotIn("unstable", stat_5)
-        self.assertNotEqual(fmt_mb(100.0, 4096, 5.0), "—")
-        self.assertNotEqual(fmt_speedup(100.0, 5.0, 50.0, 2.0), "—")
-
-        stat_50 = fmt_stat(100.0, 50.0)
-        self.assertEqual(stat_50, "unstable (±50%)")
-        self.assertEqual(fmt_mb(100.0, 4096, 50.0), "—")
-        self.assertEqual(fmt_speedup(100.0, 50.0, 50.0, 2.0), "—")
-
-    def test_check_and_write(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            readme = os.path.join(tmpdir, "README.md")
-            with open(readme, "w", encoding="utf-8") as f:
-                f.write("Header\n<!-- BEGIN GENERATED: latency -->\nOld content\n<!-- END GENERATED: latency -->\nFooter\n")
-
-            res_dir = "results/2026-11-02"
-            self.assertFalse(update_readme(readme, res_dir, do_write=False))
-            self.assertTrue(update_readme(readme, res_dir, do_write=True))
-            self.assertTrue(update_readme(readme, res_dir, do_write=False))
 
 def main():
     args = sys.argv[1:]

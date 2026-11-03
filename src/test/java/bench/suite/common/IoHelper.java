@@ -202,14 +202,10 @@ public final class IoHelper {
     }
 
     public static int posixFadvise(Path path, long offset, long len, int advice) {
-        int fd = com.davidvlijmincx.lio.api.NativeDispatcher.C.open(path.toString(), 0, 0);
-        if (fd < 0) {
+        try (var fd = new com.davidvlijmincx.lio.api.FileDescriptor(path, com.davidvlijmincx.lio.api.LinuxOpenOptions.READ)) {
+            return posixFadvise(fd.getFd(), offset, len, advice);
+        } catch (Exception e) {
             return -1;
-        }
-        try {
-            return posixFadvise(fd, offset, len, advice);
-        } finally {
-            com.davidvlijmincx.lio.api.NativeDispatcher.C.close(fd);
         }
     }
 

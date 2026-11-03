@@ -39,3 +39,7 @@ build/
 
 ### JCStress ###
 jcstress-results*
+
+### Python ###
+__pycache__/
+*.py[cod]
