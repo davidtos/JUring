@@ -434,7 +434,7 @@ EOF
             --rw="rand${MODE}" --iodepth="$QD" --fixedbufs=1 --registerfiles=1 --time_based --runtime=5s --ramp_time=1s \
             --norandommap --randrepeat=0 --output-format=json --output="$json_def" &>/dev/null || true
         if [[ -f "$json_def" && -f "$perf_def" ]]; then
-            local ios=0
+            ios=0
             if [[ "$MODE" == "write" ]]; then
                 ios=$(jq -r '.jobs[0].write.total_ios // 0' "$json_def" 2>/dev/null || echo 0)
             else
@@ -455,7 +455,7 @@ EOF
             --iodepth_batch_submit="$BEST_B" --iodepth_batch_complete_min=1 --iodepth_batch_complete_max="$QD" \
             --norandommap --randrepeat=0 --output-format=json --output="$json_best" &>/dev/null || true
         if [[ -f "$json_best" && -f "$perf_best" ]]; then
-            local ios=0
+            ios=0
             if [[ "$MODE" == "write" ]]; then
                 ios=$(jq -r '.jobs[0].write.total_ios // 0' "$json_best" 2>/dev/null || echo 0)
             else
