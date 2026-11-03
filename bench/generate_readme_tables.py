@@ -17,8 +17,6 @@ import re
 import unittest
 import tempfile
 
-MAX_REL_ERROR = 0.10
-
 def load_json_file(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
@@ -28,16 +26,10 @@ def load_json_file(path):
     except Exception:
         return None
 
-def is_unstable(score, err):
-    return score is not None and err is not None and not math.isnan(err) and score > 0 and (err / score) > MAX_REL_ERROR
-
 def fmt_stat(score, err=None, digits=1, unit=""):
     if score is None:
         return "N/A"
     if err is not None and not math.isnan(err) and err > 0:
-        if score > 0 and (err / score) > MAX_REL_ERROR:
-            rel_pct = int(round((err / score) * 100))
-            return f"unstable (±{rel_pct}%)"
         unit_str = f" {unit}" if unit else ""
         return f"{score:,.{digits}f} ± {err:,.{digits}f}{unit_str}"
     unit_str = f" {unit}" if unit else ""
@@ -46,8 +38,6 @@ def fmt_stat(score, err=None, digits=1, unit=""):
 def fmt_mb(score_ops, block_bytes=4096, err=None):
     if score_ops is None:
         return "N/A"
-    if is_unstable(score_ops, err):
-        return "—"
     mb = (score_ops * block_bytes) / (1024 * 1024)
     if err is not None and not math.isnan(err) and err > 0:
         err_mb = (err * block_bytes) / (1024 * 1024)
@@ -57,8 +47,6 @@ def fmt_mb(score_ops, block_bytes=4096, err=None):
 def fmt_speedup(s1, e1, s2, e2, digits=1):
     if not s1 or not s2 or s2 <= 0:
         return "N/A"
-    if is_unstable(s1, e1) or is_unstable(s2, e2):
-        return "—"
     return f"{s1 / s2:.{digits}f}x"
 
 def get_fork_iter_str(json_data):
@@ -604,7 +592,7 @@ def main():
         idx = args.index("--write")
         readme = args[idx + 1] if idx + 1 < len(args) else "README.md"
         rem = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
-        results_dir = rem[0] if rem else "results/2026-11-02"
+        results_dir = rem[0] if rem else "results/2026-11-03"
         success = update_readme(readme, results_dir, do_write=True)
         if success:
             print(f"Successfully updated generated sections in {readme} from {results_dir}")
@@ -616,7 +604,7 @@ def main():
         idx = args.index("--check")
         readme = args[idx + 1] if idx + 1 < len(args) else "README.md"
         rem = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
-        results_dir = rem[0] if rem else "results/2026-11-02"
+        results_dir = rem[0] if rem else "results/2026-11-03"
         up_to_date = update_readme(readme, results_dir, do_write=False)
         if up_to_date:
             print(f"Check OK: Generated sections in {readme} match {results_dir}")
@@ -625,7 +613,7 @@ def main():
             print(f"Check FAILED: Generated sections in {readme} differ from {results_dir}", file=sys.stderr)
             sys.exit(1)
     else:
-        results_dir = args[0] if args else "results/2026-11-02"
+        results_dir = args[0] if args else "results/2026-11-03"
         print("=" * 80)
         print(f" JUring Publication Benchmark Report ({results_dir})")
         print("=" * 80)

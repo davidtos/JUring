@@ -163,11 +163,11 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Threads | JUring Concurrency | FileChannel Concurrency | JUring (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup |
 |---|---|---|---|---|---|---|---|
-| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | unstable (±53%) | — | unstable (±19%) | — | — |
-| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | unstable (±78%) | — | unstable (±36%) | — | — |
-| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | unstable (±95%) | — | unstable (±66%) | — | — |
-| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | unstable (±76%) | — | unstable (±52%) | — | — |
-| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | unstable (±60%) | — | unstable (±78%) | — | — |
+| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | 130,200.4 ± 69,339.8 | 508.6 ± 270.9 MB/s | 61,059.9 ± 11,597.0 | 238.5 ± 45.3 MB/s | 2.1x |
+| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | 108,935.5 ± 85,344.8 | 425.5 ± 333.4 MB/s | 104,538.7 ± 38,140.7 | 408.4 ± 149.0 MB/s | 1.0x |
+| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 109,707.7 ± 104,288.2 | 428.5 ± 407.4 MB/s | 123,384.5 ± 81,093.4 | 482.0 ± 316.8 MB/s | 0.9x |
+| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | 118,026.9 ± 89,903.4 | 461.0 ± 351.2 MB/s | 141,418.0 ± 73,467.3 | 552.4 ± 287.0 MB/s | 0.8x |
+| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | 127,436.0 ± 76,155.3 | 497.8 ± 297.5 MB/s | 118,876.3 ± 92,821.9 | 464.4 ± 362.6 MB/s | 1.1x |
 <!-- END GENERATED: scaling-write -->
 
 > [!NOTE]
@@ -183,11 +183,11 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Threads | JUring Read (ops/s) | FileChannel Read (ops/s) | Read Speedup | JUring Write (ops/s) | FileChannel Write (ops/s) | Write Speedup |
 |---|---|---|---|---|---|---|
-| 1 Thread | 330,786.1 ± 780.0 | unstable (±46%) | — | unstable (±98%) | unstable (±23%) | — |
-| 2 Threads | unstable (±19%) | 22,282.1 ± 86.8 | — | unstable (±64%) | unstable (±30%) | — |
-| 4 Threads | 468,020.6 ± 38,165.8 | 43,159.0 ± 77.0 | 10.8x | unstable (±82%) | unstable (±51%) | — |
-| 8 Threads | 477,037.5 ± 1,084.0 | 81,498.2 ± 201.3 | 5.9x | unstable (±73%) | unstable (±61%) | — |
-| 16 Threads | 477,476.8 ± 1,274.2 | 144,912.6 ± 4,295.8 | 3.3x | unstable (±59%) | unstable (±68%) | — |
+| 1 Thread | 330,786.1 ± 780.0 | 10,248.5 ± 4,754.1 | 32.3x | 78,723.1 ± 77,509.7 | 56,127.1 ± 13,159.4 | 1.4x |
+| 2 Threads | 409,954.3 ± 76,671.2 | 22,282.1 ± 86.8 | 18.4x | 114,080.8 ± 72,645.0 | 100,320.2 ± 29,594.5 | 1.1x |
+| 4 Threads | 468,020.6 ± 38,165.8 | 43,159.0 ± 77.0 | 10.8x | 133,770.4 ± 110,029.9 | 123,052.5 ± 62,359.8 | 1.1x |
+| 8 Threads | 477,037.5 ± 1,084.0 | 81,498.2 ± 201.3 | 5.9x | 100,603.5 ± 73,924.2 | 124,031.5 ± 75,892.5 | 0.8x |
+| 16 Threads | 477,476.8 ± 1,274.2 | 144,912.6 ± 4,295.8 | 3.3x | 126,771.6 ± 74,321.4 | 167,322.3 ± 113,504.5 | 0.8x |
 <!-- END GENERATED: multifile -->
 
 ---
@@ -199,7 +199,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Virtual Threads | JUringBlocking (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup | JUring Syscalls/op | FC Syscalls/op | JUring CPU/op | FC CPU/op |
 |---|---|---|---|---|---|---|---|---|---|
-| 50 VTs | 371,009.9 ± 2,433.3 | 1,449.3 ± 9.5 MB/s | unstable (±21%) | — | — | 4.6350 | 1.7031 | 29.3 µs | 24.4 µs |
+| 50 VTs | 371,009.9 ± 2,433.3 | 1,449.3 ± 9.5 MB/s | 373,307.8 ± 79,977.3 | 1,458.2 ± 312.4 MB/s | 0.99x | 4.6350 | 1.7031 | 29.3 µs | 24.4 µs |
 | 100 VTs | 552,956.2 ± 5,617.7 | 2,160.0 ± 21.9 MB/s | 589,949.2 ± 2,698.5 | 2,304.5 ± 10.5 MB/s | 0.94x | 3.2696 | 1.7331 | 27.6 µs | 28.6 µs |
 | 250 VTs | 644,876.0 ± 3,163.5 | 2,519.0 ± 12.4 MB/s | 644,655.6 ± 15,314.8 | 2,518.2 ± 59.8 MB/s | 1.00x | 2.5765 | 1.7109 | 27.4 µs | 34.4 µs |
 | 500 VTs | 654,002.1 ± 2,314.4 | 2,554.7 ± 9.0 MB/s | 649,593.1 ± 3,344.5 | 2,537.5 ± 13.1 MB/s | 1.01x | 2.3585 | 1.7721 | 26.6 µs | 33.8 µs |
@@ -209,7 +209,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Configuration | Virtual Threads | Engine | Throughput (ops/s) | Bandwidth | Notes |
 |---|---|---|---|---|---|
-| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | FileChannel | unstable (±12%) | — | Carrier pool expanded from default 256 to 1024 |
+| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | FileChannel | 481,494.2 ± 57,122.3 | 1,880.8 ± 223.1 MB/s | Carrier pool expanded from default 256 to 1024 |
 | `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | JUringBlocking | 656,997.5 ± 1,041.2 | 2,566.4 ± 4.1 MB/s | Fixed pool of 4 poller threads |
 
 #### Cold-Cache Buffered Virtual Thread Read (`BUFFERED_COLD`, Page Cache Dropped)
@@ -217,9 +217,9 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Virtual Threads | JUring (ops/s) | Device Read Rate | FileChannel (ops/s) | Device Read Rate | Speedup |
 |---|---|---|---|---|---|
-| 50 VTs | 1,026,586.4 ± 10,445.0 | 84.2 MB/s | unstable (±19%) | 84.2 MB/s | — |
+| 50 VTs | 1,026,586.4 ± 10,445.0 | 84.2 MB/s | 1,638,921.7 ± 310,093.8 | 84.2 MB/s | 0.63x |
 | 100 VTs | 1,088,723.9 ± 15,832.9 | 84.1 MB/s | 1,700,734.3 ± 67,157.5 | 84.2 MB/s | 0.64x |
-| 250 VTs | 1,187,601.5 ± 18,235.5 | 84.1 MB/s | unstable (±17%) | 84.2 MB/s | — |
+| 250 VTs | 1,187,601.5 ± 18,235.5 | 84.1 MB/s | 1,868,938.4 ± 324,242.6 | 84.2 MB/s | 0.64x |
 | 500 VTs | 1,313,172.2 ± 30,039.0 | 84.2 MB/s | 1,505,350.9 ± 100,475.0 | 84.2 MB/s | 0.87x |
 | 1000 VTs | 1,440,305.5 ± 38,722.7 | 84.2 MB/s | 793,549.6 ± 30,409.6 | 84.1 MB/s | 1.82x |
 <!-- END GENERATED: virtual-threads -->
@@ -366,8 +366,8 @@ public class DirectWriteExample {
                 IORING_SETUP_COOP_TASKRUN,
                 IORING_SETUP_DEFER_TASKRUN);
              FileDescriptor fd = new FileDescriptor(
-                     Path.of("/mnt/TestData/output.bin"),
-                     LinuxOpenOptions.WRITE_DIRECT | LinuxOpenOptions.O_CREAT)) {
+                     Path.of("/mnt/TestData/output.bin"), 
+                     LinuxOpenOptions.WRITE_DIRECT, LinuxOpenOptions.READ_DIRECT)) {
 
             ring.registerFiles(fd);
             MemorySegment[] buffers = ring.registerBuffers(bufferSize, queueDepth);
@@ -457,7 +457,7 @@ public class BufferedIoExample {
 
         // Asynchronous buffered write
         try (JUring ring = new JUring(128);
-             FileDescriptor fd = new FileDescriptor(Path.of("output.txt"), LinuxOpenOptions.WRITE | LinuxOpenOptions.O_CREAT);
+             FileDescriptor fd = new FileDescriptor(Path.of("output.txt"), LinuxOpenOptions.WRITE, LinuxOpenOptions.READ);
              Arena arena = Arena.ofConfined()) {
 
             byte[] bytes = "Hello from JUring io_uring!".getBytes(StandardCharsets.UTF_8);
@@ -536,7 +536,7 @@ public class VirtualThreadExample {
 2. **`perfnorm` Measurement Scope:**
    Hardware cycle and instruction metrics (`cycles:u`, `cycles:k`, `task-clock`) collected via JMH's `LinuxPerfNormProfiler` cover the threads of the forked JVM process over the active measurement window. They do not capture kernel interrupt-context completion handling executed on other CPU cores by the NVMe driver.
 3. **fio Benchmark Configuration:**
-   The head-to-head comparison against native C `fio` (v3.40) was executed with 3 repeats per engine with randomized execution order. Both engines targeted the identical 10 GB contiguous pre-allocated file on ext4 with `O_DIRECT`, 4KB block size, fixed buffers, registered files, and QD=64. Raw JSON files for all runs are preserved in `results/2026-11-02/`.
+   The head-to-head comparison against native C `fio` (v3.40) was executed with 3 repeats per engine with randomized execution order. Both engines targeted the identical 10 GB contiguous pre-allocated file on ext4 with `O_DIRECT`, 4KB block size, fixed buffers, registered files, and QD=64. Raw JSON files for all runs are preserved in `results/2026-11-03/`.
 4. **Write Cache / SLC Folding Dynamics:**
    Sustained random write tests with multiple threads write tens of gigabytes within seconds, exceeding the SSD's high-speed SLC buffer. Throughput drops during TLC folding are physical hardware characteristics reflected equally in both Java and native C measurements.
 5. **Single-Thread 1T×QD=64 Direct Read Discrepancies across Sections:**
