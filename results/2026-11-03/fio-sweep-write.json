@@ -1,0 +1,27 @@
+[
+  {
+    "batch": 1,
+    "iops": 200110.067918,
+    "enters_per_op": 1.3216
+  },
+  {
+    "batch": 4,
+    "iops": 296051.189762,
+    "enters_per_op": 0.4542
+  },
+  {
+    "batch": 8,
+    "iops": 194443.511298,
+    "enters_per_op": 1.0214
+  },
+  {
+    "batch": 16,
+    "iops": 194692.261548,
+    "enters_per_op": 0.9141
+  },
+  {
+    "batch": 32,
+    "iops": 195535.292941,
+    "enters_per_op": 0.5709
+  }
+]

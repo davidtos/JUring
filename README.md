@@ -68,8 +68,8 @@ By integrating Linux **`io_uring`** via **Project Panama (FFM API)**, JUring res
 
 Empirical measurements on physical PCIe Gen4 NVMe flash storage demonstrate:
 
-* **Competitive Parity vs. Native C `fio` (`ioengine=io_uring`):** Matches native C `fio` with low system-call overhead (~0.44 enters/op) under 4KB random direct reads. See [Head-to-Head Parity vs. Native C fio](#1-head-to-head-parity-vs-native-c-fio).
-* **Hardware Saturation on Direct Reads:** Reaches the NVMe controller's random read ceiling (~718,000 IOPS / ~2.80 GB/s) at 4 threads with zero heap allocations on the hot path (`0.000 B/op`). See [4 KB Direct Read Scaling](#3-4-kb-direct-read-scaling-single-10-gb-file).
+* **Competitive Parity vs. Native C `fio` (`ioengine=io_uring`):** Matches native C `fio` with low system-call overhead (~0.29 enters/op) under 4KB random direct reads. See [Head-to-Head Parity vs. Native C fio](#1-head-to-head-parity-vs-native-c-fio).
+* **Hardware Saturation on Direct Reads:** Reaches the NVMe controller's random read ceiling (~711,000 IOPS / ~2.78 GB/s) at 4 threads with zero heap allocations on the hot path (`0.000 B/op`). See [4 KB Direct Read Scaling](#3-4-kb-direct-read-scaling-single-10-gb-file).
 * **Multi-Descriptor Handling with Registered Files:** Pre-registering 2,211 file descriptors via `io_uring_register_files` (`IOSQE_FIXED_FILE`) avoids per-op POSIX file table lookups. See [Multi-File Scaling](#5-multi-file-scaling-2211-discrete-files).
 * **Fixed-Thread Polling for Virtual Threads:** `JUringBlocking` handles up to 1,000 concurrent Virtual Threads through a small, fixed pool of platform pollers, parking and unparking virtual threads without carrier thread exhaustion. See [Project Loom Virtual Threads Scaling](#6-project-loom-virtual-threads-scaling-50-to-1000-vts).
 
@@ -80,11 +80,11 @@ Empirical measurements on physical PCIe Gen4 NVMe flash storage demonstrate:
 <!-- BEGIN GENERATED: hardware -->
 All benchmarks were executed on bare-metal hardware with ext4 mounted directly on a dedicated PCIe Gen4 NVMe drive:
 
-* **CPU:** AMD Ryzen 9 3950X (32 cores, SMT enabled, governor `performance`).
-* **RAM:** unknown.
+* **CPU:** AMD Ryzen 9 3950X 16-Core Processor (32 cores, SMT enabled, governor `performance`).
+* **RAM:** 65738292 kB.
 * **Storage:** GIGABYTE GP-ASM2NE6100TTTD (firmware `EGFM11.2`).
-* **Filesystem & OS:** Linux Kernel `Linux 7.0.x`, ext4 mounted on `/mnt/TestData` (`/dev/nvme1n1p1`), mount options `rw,relatime`.
-* **Java Runtime:** OpenJDK 25 with Foreign Function & Memory API (JEP 454).
+* **Filesystem & OS:** Linux Kernel `7.0.12-201.fc44.x86_64`, ext4 mounted on `/mnt/TestData` (`/dev/nvme1n1p1`), mount options `rw,nosuid,nodev,relatime,seclabel`.
+* **Java Runtime:** openjdk version "25.0.3" 2026-04-21 with Foreign Function & Memory API (JEP 454).
 * **Harness & Profiling:** JMH with tracepoint profiling (`raw_syscalls:sys_enter`) and hardware perf counters (perf_event_paranoid `-1`).
 
 ### Workload Datasets:
@@ -104,14 +104,14 @@ Random 4KB read workload on a single thread at QD=64 on a dedicated 10 GB direct
 
 | Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |
 |---|---|---|---|---|---|
-| `fio` (default settings) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | — | — | Default submission / reap |
-| `fio` (best batching: B=—) | 354,183.4 ± 6,259.3 | 1,383.5 ± 24.5 MB/s | — | baseline | `--iodepth_batch_submit=—` |
-| JUring (JMH) | 441,664.3 ± 2,815.3 | 1,725.3 ± 11.0 MB/s | — | +24.7% | Batched `submitAndWait(1)` |
+| `fio` (default settings) | 372,417.2 ± 9,128.0 | 1,454.8 ± 35.7 MB/s | 1.1810 | — | Default submission / reap |
+| `fio` (best batching: B=8) | 440,522.3 ± 9,534.9 | 1,720.8 ± 37.2 MB/s | 0.2541 | baseline | `--iodepth_batch_submit=8` |
+| JUring (JMH) | 462,330.7 ± 1,877.8 | 1,806.0 ± 7.3 MB/s | 0.2928 | +5.0% | Batched `submitAndWait(1)` |
 <!-- END GENERATED: fio-compare -->
 
 > [!NOTE]
 > **Syscall Amortization and Batching:**
-> System calls per operation are measured via `perf stat -e syscalls:sys_enter_io_uring_enter` for fio and JMH `--syscalls`. JUring combines submission and completion waiting into single `io_uring_enter(min_complete=1, GETEVENTS)` syscalls (~0.44 enters/op), whereas default fio configuration commits submissions and reaps completions in separate syscalls (~0.98 enters/op). Sweeping fio batch settings narrows this difference.
+> System calls per operation are measured via `perf stat -e syscalls:sys_enter_io_uring_enter` for fio and JMH `--syscalls`. JUring combines submission and completion waiting into single `io_uring_enter(min_complete=1, GETEVENTS)` syscalls (~0.29 enters/op), whereas default fio configuration commits submissions and reaps completions in separate syscalls (~1.18 enters/op). Sweeping fio batch settings narrows this difference.
 
 ---
 
@@ -119,55 +119,55 @@ Random 4KB read workload on a single thread at QD=64 on a dedicated 10 GB direct
 
 <!-- BEGIN GENERATED: single-core -->
 Evaluation of pure framework overhead (`NopBenchmark`), followed by single-thread 4KB Direct Read and Direct Write (`O_DIRECT`) comparing QD=1 and QD=64 against `FileChannel`:
-*Harness: 3 forks × 3 iterations × 3 s per tier*
+*Harness: 5 forks × 3 iterations × 3 s per tier*
 
 | Target | Concurrency / QD | Throughput (ops/s) | Bandwidth | Syscalls / op (`raw_syscalls:sys_enter`) | User CPU (`cycles:u/op`) | Kernel CPU (`cycles:k/op`) | Heap Alloc |
 |---|---|---|---|---|---|---|---|
-| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | 11,196,476.1 ± 116,072.0 | — | 0.0313 (32.0 ops/call) | 52.5 | 353.2 | 0.000 B/op |
-| `FileChannel.read` | 1T (QD=1, synchronous `pread64`) | 12,051.8 ± 151.7 | 47.1 ± 0.6 MB/s | 1.0020 | 1447.6 | 25131.0 | 0.000 B/op |
-| `JUring.read` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 12,127.4 ± 51.3 | 47.4 ± 0.2 MB/s | 1.0032 | 3508.7 | 25436.7 | 0.000 B/op |
-| `JUring.read` (QD=64) | 1T (QD=64, batched pipeline) | 345,115.0 ± 619.6 | 1,348.1 ± 2.4 MB/s | 0.4395 | 274.9 | 10298.9 | 0.000 B/op |
-| `FileChannel.write` | 1T (QD=1, synchronous `pwrite64`) | 71,452.1 ± 504.1 | 279.1 ± 2.0 MB/s | 1.0008 | 889.6 | 25619.4 | 0.000 B/op |
-| `JUring.write` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 71,247.9 ± 732.5 | 278.3 ± 2.9 MB/s | 1.0009 | 693.9 | 26555.7 | 0.000 B/op |
-| `JUring.write` (QD=64) | 1T (QD=64, batched pipeline) | unstable (±70%) | — | 0.0383 | 109.3 | 8584.5 | 0.000 B/op |
+| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | 11,465,042.1 ± 80,341.0 | — | 0.0313 (32.0 ops/call) | 52.3 | 352.4 | 0.000 B/op |
+| `FileChannel.read` | 1T (QD=1, synchronous `pread64`) | 16,003.3 ± 61.6 | 62.5 ± 0.2 MB/s | 1.0020 | 1454.4 | 24506.6 | 0.000 B/op |
+| `JUring.read` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 16,055.0 ± 47.1 | 62.7 ± 0.2 MB/s | 1.0028 | 3141.4 | 25385.4 | 0.000 B/op |
+| `JUring.read` (QD=64) | 1T (QD=64, batched pipeline) | 461,926.4 ± 5,608.3 | 1,804.4 ± 21.9 MB/s | 0.2519 | 209.3 | 8703.9 | 0.000 B/op |
+| `FileChannel.write` | 1T (QD=1, synchronous `pwrite64`) | 65,838.1 ± 1,761.4 | 257.2 ± 6.9 MB/s | 1.0008 | 892.1 | 25101.2 | 0.000 B/op |
+| `JUring.write` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 67,431.8 ± 3,468.0 | 263.4 ± 13.5 MB/s | 1.0009 | 708.4 | 26093.3 | 0.000 B/op |
+| `JUring.write` (QD=64) | 1T (QD=64, batched pipeline) | 195,659.2 ± 2,369.2 | 764.3 ± 9.3 MB/s | 0.0382 | 115.9 | 8759.5 | 0.000 B/op |
 <!-- END GENERATED: single-core -->
 
 > [!TIP]
 > **Equal Concurrency Parity:**
-> At QD=1, `FileChannel` and `JUring` perform identically, directly matching the flash cell access latency (~83 µs). When queue depth increases to 64, JUring keeps the NVMe hardware command queue filled, amortizing syscalls down to ~0.44 enters/op.
+> At QD=1, `FileChannel` and `JUring` perform identically, directly matching the flash cell access latency (~83 µs). When queue depth increases to 64, JUring keeps the NVMe hardware command queue filled, amortizing syscalls down to ~0.25 enters/op.
 
 ---
 
 ### 3. 4 KB Direct Read Scaling (Single 10 GB File)
 
 <!-- BEGIN GENERATED: scaling-read -->
-*Harness: 1 forks × 3 iterations × 3 s per tier*
+*Harness: 5 forks × 3 iterations × 3 s per tier*
 
 | Threads | JUring Concurrency | FileChannel Concurrency | JUring (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup |
 |---|---|---|---|---|---|---|---|
-| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | 323,971.0 ± 10,378.8 | 1,265.5 ± 40.5 MB/s | 15,941.2 ± 1,513.6 | 62.3 ± 5.9 MB/s | 20.3x |
-| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | 678,682.2 ± 15,605.4 | 2,651.1 ± 61.0 MB/s | 27,395.4 ± 1,800.7 | 107.0 ± 7.0 MB/s | 24.8x |
-| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 717,986.5 ± 1,090.9 | 2,804.6 ± 4.3 MB/s | 52,676.5 ± 1,182.2 | 205.8 ± 4.6 MB/s | 13.6x |
-| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | 716,319.0 ± 5,207.2 | 2,798.1 ± 20.3 MB/s | 99,471.1 ± 2,669.1 | 388.6 ± 10.4 MB/s | 7.2x |
-| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | 712,629.3 ± 30,805.4 | 2,783.7 ± 120.3 MB/s | 166,806.9 ± 7,688.9 | 651.6 ± 30.0 MB/s | 4.3x |
+| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | 463,050.2 ± 5,082.3 | 1,808.8 ± 19.9 MB/s | 16,015.6 ± 34.2 | 62.6 ± 0.1 MB/s | 28.9x |
+| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | 689,876.8 ± 390.0 | 2,694.8 ± 1.5 MB/s | 31,313.2 ± 107.9 | 122.3 ± 0.4 MB/s | 22.0x |
+| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 709,969.0 ± 78.4 | 2,773.3 ± 0.3 MB/s | 59,962.2 ± 146.8 | 234.2 ± 0.6 MB/s | 11.8x |
+| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | 710,519.3 ± 401.2 | 2,775.5 ± 1.6 MB/s | 112,427.8 ± 168.4 | 439.2 ± 0.7 MB/s | 6.3x |
+| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | 711,008.6 ± 1,259.3 | 2,777.4 ± 4.9 MB/s | 199,891.8 ± 334.5 | 780.8 ± 1.3 MB/s | 3.6x |
 <!-- END GENERATED: scaling-read -->
 
-At 4 threads and above, JUring saturates the SSD controller's random read IOPS ceiling at ~718,000 ops/s (2.80 GB/s) with zero JVM heap allocations (`0.000 B/op`).
+At 4 threads and above, JUring saturates the SSD controller's random read IOPS ceiling at ~711,000 ops/s (2.78 GB/s) with zero JVM heap allocations (`0.000 B/op`).
 
 ---
 
 ### 4. 4 KB Direct Write Scaling & Physical SLC Dynamics
 
 <!-- BEGIN GENERATED: scaling-write -->
-*Harness: 1 forks × 3 iterations × 3 s per tier*
+*Harness: 5 forks × 3 iterations × 3 s per tier*
 
 | Threads | JUring Concurrency | FileChannel Concurrency | JUring (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup |
 |---|---|---|---|---|---|---|---|
-| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | unstable (±31%) | — | unstable (±10%) | — | — |
-| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | unstable (±21%) | — | 139,071.2 ± 4,753.5 | 543.2 ± 18.6 MB/s | — |
-| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 541,630.0 ± 21,049.8 | 2,115.7 ± 82.2 MB/s | unstable (±20%) | — | — |
-| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | unstable (±2412%) | — | 441,552.0 ± 36,979.0 | 1,724.8 ± 144.4 MB/s | — |
-| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | unstable (±1512%) | — | unstable (±789%) | — | — |
+| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | unstable (±53%) | — | unstable (±19%) | — | — |
+| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | unstable (±78%) | — | unstable (±36%) | — | — |
+| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | unstable (±95%) | — | unstable (±66%) | — | — |
+| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | unstable (±76%) | — | unstable (±52%) | — | — |
+| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | unstable (±60%) | — | unstable (±78%) | — | — |
 <!-- END GENERATED: scaling-write -->
 
 > [!NOTE]
@@ -179,15 +179,15 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 ### 5. Multi-File Scaling (2,211 Discrete Files)
 
 <!-- BEGIN GENERATED: multifile -->
-*Harness: 1 forks × 3 iterations × 3 s per tier*
+*Harness: 3 forks × 3 iterations × 3 s per tier*
 
 | Threads | JUring Read (ops/s) | FileChannel Read (ops/s) | Read Speedup | JUring Write (ops/s) | FileChannel Write (ops/s) | Write Speedup |
 |---|---|---|---|---|---|---|
-| 1 Thread | 330,708.3 ± 7,524.9 | 11,391.2 ± 418.4 | 29.0x | unstable (±739%) | unstable (±17%) | — |
-| 2 Threads | unstable (±444%) | 22,239.9 ± 820.6 | — | unstable (±2008%) | unstable (±92%) | — |
-| 4 Threads | unstable (±348%) | 43,076.5 ± 272.5 | — | unstable (±1949%) | unstable (±185%) | — |
-| 8 Threads | 475,027.7 ± 11,473.9 | 81,387.2 ± 1,157.6 | 5.8x | unstable (±47%) | unstable (±1161%) | — |
-| 16 Threads | 478,447.7 ± 15,797.1 | 145,925.0 ± 1,978.9 | 3.3x | unstable (±57%) | unstable (±238%) | — |
+| 1 Thread | 330,786.1 ± 780.0 | unstable (±46%) | — | unstable (±98%) | unstable (±23%) | — |
+| 2 Threads | unstable (±19%) | 22,282.1 ± 86.8 | — | unstable (±64%) | unstable (±30%) | — |
+| 4 Threads | 468,020.6 ± 38,165.8 | 43,159.0 ± 77.0 | 10.8x | unstable (±82%) | unstable (±51%) | — |
+| 8 Threads | 477,037.5 ± 1,084.0 | 81,498.2 ± 201.3 | 5.9x | unstable (±73%) | unstable (±61%) | — |
+| 16 Threads | 477,476.8 ± 1,274.2 | 144,912.6 ± 4,295.8 | 3.3x | unstable (±59%) | unstable (±68%) | — |
 <!-- END GENERATED: multifile -->
 
 ---
@@ -199,18 +199,29 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Virtual Threads | JUringBlocking (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup | JUring Syscalls/op | FC Syscalls/op | JUring CPU/op | FC CPU/op |
 |---|---|---|---|---|---|---|---|---|---|
-| 50 VTs | 331,351.9 ± 2,798.4 | 1,294.3 ± 10.9 MB/s | 348,087.0 ± 1,047.5 | 1,359.7 ± 4.1 MB/s | 0.95x | 4.8698 | 1.7100 | 30.5 µs | 24.3 µs |
-| 100 VTs | unstable (±48%) | — | unstable (±25%) | — | — | 3.6714 | 1.7187 | 28.3 µs | 28.2 µs |
-| 250 VTs | unstable (±23%) | — | unstable (±29%) | — | — | 3.2737 | 1.6688 | 27.3 µs | 35.2 µs |
-| 500 VTs | 559,061.2 ± 3,638.7 | 2,183.8 ± 14.2 MB/s | unstable (±12%) | — | — | 2.7729 | 1.5560 | 27.0 µs | 28.3 µs |
-| 1000 VTs | unstable (±26%) | — | unstable (±22%) | — | — | 2.4581 | 1.6794 | 26.7 µs | 28.3 µs |
+| 50 VTs | 371,009.9 ± 2,433.3 | 1,449.3 ± 9.5 MB/s | unstable (±21%) | — | — | 4.6350 | 1.7031 | 29.3 µs | 24.4 µs |
+| 100 VTs | 552,956.2 ± 5,617.7 | 2,160.0 ± 21.9 MB/s | 589,949.2 ± 2,698.5 | 2,304.5 ± 10.5 MB/s | 0.94x | 3.2696 | 1.7331 | 27.6 µs | 28.6 µs |
+| 250 VTs | 644,876.0 ± 3,163.5 | 2,519.0 ± 12.4 MB/s | 644,655.6 ± 15,314.8 | 2,518.2 ± 59.8 MB/s | 1.00x | 2.5765 | 1.7109 | 27.4 µs | 34.4 µs |
+| 500 VTs | 654,002.1 ± 2,314.4 | 2,554.7 ± 9.0 MB/s | 649,593.1 ± 3,344.5 | 2,537.5 ± 13.1 MB/s | 1.01x | 2.3585 | 1.7721 | 26.6 µs | 33.8 µs |
+| 1000 VTs | 657,283.0 ± 2,342.6 | 2,567.5 ± 9.2 MB/s | 592,315.0 ± 24,526.4 | 2,313.7 ± 95.8 MB/s | 1.11x | 2.0744 | 1.7187 | 25.7 µs | 32.9 µs |
 
 #### Impact of Loom Carrier Thread Cap (`maxPoolSize=1024` vs default 256 at 1,000 VTs)
 
 | Configuration | Virtual Threads | Engine | Throughput (ops/s) | Bandwidth | Notes |
 |---|---|---|---|---|---|
-| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | FileChannel | 393,871.7 ± 20,923.3 | 1,538.6 ± 81.7 MB/s | Carrier pool expanded from default 256 to 1024 |
-| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | JUringBlocking | unstable (±17%) | — | Fixed pool of 4 poller threads |
+| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | FileChannel | unstable (±12%) | — | Carrier pool expanded from default 256 to 1024 |
+| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | JUringBlocking | 656,997.5 ± 1,041.2 | 2,566.4 ± 4.1 MB/s | Fixed pool of 4 poller threads |
+
+#### Cold-Cache Buffered Virtual Thread Read (`BUFFERED_COLD`, Page Cache Dropped)
+*Working set sized so operations touch <25% of dataset. Device read rate measured via `/sys/block/<dev>/stat`.*
+
+| Virtual Threads | JUring (ops/s) | Device Read Rate | FileChannel (ops/s) | Device Read Rate | Speedup |
+|---|---|---|---|---|---|
+| 50 VTs | 1,026,586.4 ± 10,445.0 | 84.2 MB/s | unstable (±19%) | 84.2 MB/s | — |
+| 100 VTs | 1,088,723.9 ± 15,832.9 | 84.1 MB/s | 1,700,734.3 ± 67,157.5 | 84.2 MB/s | 0.64x |
+| 250 VTs | 1,187,601.5 ± 18,235.5 | 84.1 MB/s | unstable (±17%) | 84.2 MB/s | — |
+| 500 VTs | 1,313,172.2 ± 30,039.0 | 84.2 MB/s | 1,505,350.9 ± 100,475.0 | 84.2 MB/s | 0.87x |
+| 1000 VTs | 1,440,305.5 ± 38,722.7 | 84.2 MB/s | 793,549.6 ± 30,409.6 | 84.1 MB/s | 1.82x |
 <!-- END GENERATED: virtual-threads -->
 
 ---
@@ -222,10 +233,10 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Workload | Engine | Concurrency | Throughput (ops/s) | Bandwidth | Syscalls/op | CPU time/op (`task-clock`) | Kernel CPU (`cycles:k/op`) |
 |---|---|---|---|---|---|---|---|
-| Page Cache Read | JUring (`submitBatch=64`) | 1T (Batch=64) | 1,458,945.4 ± 28,133.6 | 5,699.0 ± 109.9 MB/s | 0.0168 | 0.72 µs | 3,075 |
-| Page Cache Read | FileChannel | 1T (Synchronous) | 1,280,284.0 ± 20,747.6 | 5,001.1 ± 81.0 MB/s | 1.0070 | 0.79 µs | 3,015 |
-| Page Cache Write | JUring (`submitBatch=64`) | 1 submitting thread + io-wq workers | 890,809.5 ± 61,836.9 | 3,479.7 ± 241.6 MB/s | 0.0446 | 5.52 µs | 22,010 |
-| Page Cache Write | FileChannel | 1T (Synchronous) | 475,238.3 ± 9,206.3 | 1,856.4 ± 36.0 MB/s | 1.0089 | 2.13 µs | 8,841 |
+| Page Cache Read | JUring (`submitBatch=64`) | 1T (Batch=64) | 1,524,305.1 ± 18,406.0 | 5,954.3 ± 71.9 MB/s | 0.0168 | 0.66 µs | 2,942 |
+| Page Cache Read | FileChannel | 1T (Synchronous) | 1,294,654.4 ± 42,589.2 | 5,057.2 ± 166.4 MB/s | 1.0061 | 0.80 µs | 3,072 |
+| Page Cache Write | JUring (`submitBatch=64`) | 1 submitting thread + io-wq workers | 893,554.4 ± 30,515.4 | 3,490.4 ± 119.2 MB/s | 0.0341 | 5.22 µs | 20,998 |
+| Page Cache Write | FileChannel | 1T (Synchronous) | 493,274.5 ± 25,402.3 | 1,926.9 ± 99.2 MB/s | 1.0093 | 2.04 µs | 8,655 |
 <!-- END GENERATED: buffered -->
 
 > [!NOTE]
@@ -242,14 +253,14 @@ Unbatched single-operation read sampling (`Mode.SampleTime`, `OperationsPerInvoc
 | Metric | JUring Fused (`submitAndWait(1)`) | JUring Unfused (`submit() + wait()`) | FileChannel (`DIRECT pread64`) |
 |---|---|---|---|
 | Syscalls / op | 1 enter/op (`to_submit=1, min_complete=1`) | 2 enters/op (`submit=1` + `wait=1`) | 1 `pread64` syscall |
-| Mean Latency | 87.40 µs | 87.25 µs | 87.76 µs |
+| Mean Latency | 87.01 µs | 87.10 µs | 87.65 µs |
 | p0 (Min) | 78.85 µs | 78.85 µs | 79.23 µs |
-| p50 (Median) | 82.94 µs | 82.94 µs | 83.33 µs |
-| p90 | 97.92 µs | 97.92 µs | 98.43 µs |
-| p95 | 98.43 µs | 98.43 µs | 99.07 µs |
-| p99 | 100.48 µs | 100.10 µs | 100.99 µs |
-| p99.9 | 109.82 µs | 108.29 µs | 109.70 µs |
-| p100 (Max) | 3555.33 µs | 3117.06 µs | 1675.26 µs |
+| p50 (Median) | 82.82 µs | 82.82 µs | 83.20 µs |
+| p90 | 97.79 µs | 97.92 µs | 98.43 µs |
+| p95 | 98.43 µs | 98.43 µs | 98.94 µs |
+| p99 | 99.71 µs | 99.71 µs | 101.25 µs |
+| p99.9 | 106.63 µs | 107.01 µs | 112.17 µs |
+| p100 (Max) | 3198.98 µs | 3747.84 µs | 2633.73 µs |
 <!-- END GENERATED: latency -->
 
 > [!NOTE]
@@ -264,15 +275,15 @@ Benchmarking Foreign Function & Memory downcall invocations across dispatch patt
 
 | Invocation Strategy | Call Mechanism | Average Time (ns/op) |
 |---|---|---|
-| `staticFinal_critical_invokeExact` | Linker.Option.critical(true) | 2.69 ± 0.02 ns/op |
-| `methodHandleProxies_critical` | Linker.Option.critical(true) | 4.81 ± 0.06 ns/op |
-| `record_staticFinal_proxy` | MethodHandleProxies / Record Interface | 6.06 ± 0.03 ns/op |
-| `staticFinal_invoke` | Direct MethodHandle | 6.06 ± 0.05 ns/op |
-| `staticFinal_invokeExact` | Direct MethodHandle | 6.09 ± 0.06 ns/op |
-| `instanceField_invokeExact` | Instance Field Handle | 8.18 ± 0.11 ns/op |
-| `instanceField_extractedFromRecord_proxy` | MethodHandleProxies / Record Interface | 8.40 ± 0.07 ns/op |
-| `methodHandleProxies_asInterfaceInstance` | MethodHandleProxies / Record Interface | 8.43 ± 0.08 ns/op |
-| `record_instance_proxy` | MethodHandleProxies / Record Interface | 8.84 ± 0.12 ns/op |
+| `staticFinal_critical_invokeExact` | Linker.Option.critical(true) | 2.64 ± 0.02 ns/op |
+| `methodHandleProxies_critical` | Linker.Option.critical(true) | 4.71 ± 0.04 ns/op |
+| `record_staticFinal_proxy` | MethodHandleProxies / Record Interface | 5.95 ± 0.03 ns/op |
+| `staticFinal_invokeExact` | Direct MethodHandle | 5.96 ± 0.06 ns/op |
+| `staticFinal_invoke` | Direct MethodHandle | 5.96 ± 0.08 ns/op |
+| `instanceField_invokeExact` | Instance Field Handle | 8.04 ± 0.05 ns/op |
+| `methodHandleProxies_asInterfaceInstance` | MethodHandleProxies / Record Interface | 8.28 ± 0.06 ns/op |
+| `instanceField_extractedFromRecord_proxy` | MethodHandleProxies / Record Interface | 8.33 ± 0.12 ns/op |
+| `record_instance_proxy` | MethodHandleProxies / Record Interface | 8.70 ± 0.05 ns/op |
 <!-- END GENERATED: ffm -->
 
 ---

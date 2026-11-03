@@ -723,14 +723,17 @@ class BenchmarkSuiteValidationTest {
         int testExit = pyTest.waitFor();
         assertEquals(0, testExit, "generate_readme_tables.py unit tests must pass: " + testOutput);
 
-        Process pyWrite = new ProcessBuilder("python3", "bench/generate_readme_tables.py", "--write", "README.md", "results/2026-11-02")
+        Path tempReadme = Path.of("target/test-README.md");
+        Files.copy(Path.of("README.md"), tempReadme, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+
+        Process pyWrite = new ProcessBuilder("python3", "bench/generate_readme_tables.py", "--write", tempReadme.toString(), "results/2026-11-03")
                 .redirectErrorStream(true)
                 .start();
         String writeOutput = new String(pyWrite.getInputStream().readAllBytes());
         int writeExit = pyWrite.waitFor();
         assertEquals(0, writeExit, "generate_readme_tables.py --write must succeed: " + writeOutput);
 
-        Process pyCheck = new ProcessBuilder("python3", "bench/generate_readme_tables.py", "--check", "README.md", "results/2026-11-02")
+        Process pyCheck = new ProcessBuilder("python3", "bench/generate_readme_tables.py", "--check", tempReadme.toString(), "results/2026-11-03")
                 .redirectErrorStream(true)
                 .start();
         String checkOutput = new String(pyCheck.getInputStream().readAllBytes());

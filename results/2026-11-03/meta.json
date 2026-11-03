@@ -1,0 +1,12 @@
+{
+  "pinning": "unpinned",
+  "pin_cpus": null,
+  "active_processor_count": 32,
+  "gc": "default",
+  "mode": "randwrite",
+  "qd": 64,
+  "runtime": 30,
+  "warmup": 5,
+  "fio_best_b": 4,
+  "target_file": "/home/david/testData/write_files/single_file_bench.bin"
+}

@@ -78,7 +78,7 @@
                                 <argument>bench/generate_readme_tables.py</argument>
                                 <argument>--check</argument>
                                 <argument>README.md</argument>
-                                <argument>results/2026-11-02</argument>
+                                <argument>results/2026-11-03</argument>
                             </arguments>
                         </configuration>
                     </execution>

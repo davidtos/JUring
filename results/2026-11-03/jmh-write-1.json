@@ -1,0 +1,84 @@
+[
+    {
+        "jmhVersion" : "1.37",
+        "benchmark" : "bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark.juringDirectWrite",
+        "mode" : "thrpt",
+        "threads" : 1,
+        "forks" : 1,
+        "jvm" : "/usr/lib/jvm/java-25-openjdk/bin/java",
+        "jvmArgs" : [
+            "--enable-native-access=ALL-UNNAMED",
+            "-Djuring.results.dir=results/2026-11-03",
+            "-Djuring.pin=unpinned"
+        ],
+        "jdkVersion" : "25.0.3",
+        "vmName" : "OpenJDK 64-Bit Server VM",
+        "vmVersion" : "25.0.3+9",
+        "warmupIterations" : 1,
+        "warmupTime" : "5 s",
+        "warmupBatchSize" : 1,
+        "measurementIterations" : 1,
+        "measurementTime" : "30 s",
+        "measurementBatchSize" : 1,
+        "params" : {
+            "qd" : "64",
+            "telemetry" : "true"
+        },
+        "primaryMetric" : {
+            "score" : 191550.83533850606,
+            "scoreError" : "NaN",
+            "scoreConfidence" : [
+                "NaN",
+                "NaN"
+            ],
+            "scorePercentiles" : {
+                "0.0" : 191550.83533850606,
+                "50.0" : 191550.83533850606,
+                "90.0" : 191550.83533850606,
+                "95.0" : 191550.83533850606,
+                "99.0" : 191550.83533850606,
+                "99.9" : 191550.83533850606,
+                "99.99" : 191550.83533850606,
+                "99.999" : 191550.83533850606,
+                "99.9999" : 191550.83533850606,
+                "100.0" : 191550.83533850606
+            },
+            "scoreUnit" : "ops/s",
+            "rawData" : [
+                [
+                    191550.83533850606
+                ]
+            ]
+        },
+        "secondaryMetrics" : {
+            "bytesProcessed" : {
+                "score" : 7.845922215465208E8,
+                "scoreError" : "NaN",
+                "scoreConfidence" : [
+                    "NaN",
+                    "NaN"
+                ],
+                "scorePercentiles" : {
+                    "0.0" : 7.845922215465208E8,
+                    "50.0" : 7.845922215465208E8,
+                    "90.0" : 7.845922215465208E8,
+                    "95.0" : 7.845922215465208E8,
+                    "99.0" : 7.845922215465208E8,
+                    "99.9" : 7.845922215465208E8,
+                    "99.99" : 7.845922215465208E8,
+                    "99.999" : 7.845922215465208E8,
+                    "99.9999" : 7.845922215465208E8,
+                    "100.0" : 7.845922215465208E8
+                },
+                "scoreUnit" : "ops/s",
+                "rawData" : [
+                    [
+                        7.845922215465208E8
+                    ]
+                ]
+            }
+        }
+    }
+]
+
+
