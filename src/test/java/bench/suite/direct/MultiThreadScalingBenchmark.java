@@ -83,6 +83,9 @@ public class MultiThreadScalingBenchmark {
         public int reapedCount;
         public int inFlight;
         public ResultConsumer consumer;
+        public boolean isSingleFile;
+        public long maxBlocks;
+        public DatasetManager.FioPrng prng;
 
         @Setup(Level.Trial)
         public void setup(BenchmarkState benchState, ThreadParams params) {
@@ -91,11 +94,25 @@ public class MultiThreadScalingBenchmark {
             this.qd = Math.max(16, Math.min(64, safeBufferCount));
             this.submitBatch = (qd <= 1) ? 1 : 8;
             this.waitBatch = 1;
-            DatasetManager.TaskPool pool = benchState.readDataset.generateThreadTasks(
-                    params.getThreadIndex(), threadCount, SCALING_TASK_POOL_SIZE);
-            this.taskFileIndices = pool.fileIndices();
-            this.taskOffsets = pool.offsets();
-            this.threadOffset = 0;
+
+            this.isSingleFile = "SINGLE_FILE".equals(benchState.distribution);
+            if (this.isSingleFile) {
+                long size = benchState.readDataset.getFileSizes()[0];
+                this.maxBlocks = size / DatasetManager.DEFAULT_BUFFER_SIZE;
+                long seed = System.nanoTime() ^ ((long) params.getThreadIndex() * 31L);
+                this.prng = new DatasetManager.FioPrng(seed);
+                this.taskFileIndices = new int[]{0};
+                this.taskOffsets = new long[]{0L};
+                this.threadOffset = 0;
+                System.out.printf("[MultiThreadScalingBenchmark] Read Thread #%d initialized PRNG with seed 0x%016x over %,d blocks (%,.1f MB)%n",
+                        params.getThreadIndex(), seed, maxBlocks, (size / (1024.0 * 1024.0)));
+            } else {
+                DatasetManager.TaskPool pool = benchState.readDataset.generateThreadTasks(
+                        params.getThreadIndex(), threadCount, SCALING_TASK_POOL_SIZE);
+                this.taskFileIndices = pool.fileIndices();
+                this.taskOffsets = pool.offsets();
+                this.threadOffset = 0;
+            }
             this.inFlight = 0;
             int ringEntries = Math.max(256, qd * 2);
 
@@ -248,6 +265,9 @@ public class MultiThreadScalingBenchmark {
         final int qd = state.qd;
         final int submitBatch = state.submitBatch;
         final int waitBatch = state.waitBatch;
+        final boolean isSingle = state.isSingleFile;
+        final long maxBlocks = state.maxBlocks;
+        final DatasetManager.FioPrng prng = state.prng;
 
         int inFlight = state.inFlight;
         int threadOffset = state.threadOffset;
@@ -257,8 +277,13 @@ public class MultiThreadScalingBenchmark {
         while (inFlight < qd) {
             int bufIdx = ring.checkOutBuffer();
             if (bufIdx < 0) break;
-            int idx = threadOffset++ & taskMask;
-            ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+            if (isSingle) {
+                long offset = prng.nextOffset(maxBlocks, DatasetManager.DEFAULT_BUFFER_SIZE);
+                ring.prepareReadFixed(0, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
+            } else {
+                int idx = threadOffset++ & taskMask;
+                ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+            }
             inFlight++;
             unsubmitted++;
         }
@@ -273,8 +298,13 @@ public class MultiThreadScalingBenchmark {
             while (inFlight < qd) {
                 int bufIdx = ring.checkOutBuffer();
                 if (bufIdx < 0) break;
-                int idx = threadOffset++ & taskMask;
-                ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+                if (isSingle) {
+                    long offset = prng.nextOffset(maxBlocks, DatasetManager.DEFAULT_BUFFER_SIZE);
+                    ring.prepareReadFixed(0, DatasetManager.DEFAULT_BUFFER_SIZE, offset, bufIdx);
+                } else {
+                    int idx = threadOffset++ & taskMask;
+                    ring.prepareReadFixed(taskFileIndices[idx], DatasetManager.DEFAULT_BUFFER_SIZE, taskOffsets[idx], bufIdx);
+                }
                 inFlight++;
             }
         }
@@ -290,24 +320,41 @@ public class MultiThreadScalingBenchmark {
     @Benchmark
     public void fileChannelDirectRead(ReadThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
         final FileChannel[] channels = state.channels;
-        final int[] taskFileIndices = state.taskFileIndices;
-        final long[] taskOffsets = state.taskOffsets;
-        final ByteBuffer buf = state.alignedBuffer;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;
-        final int taskMask = taskFileIndices.length - 1;
-        final int localOffset = state.threadOffset;
-        state.threadOffset = (localOffset + totalTasks) & taskMask;
+        final ByteBuffer buf = state.alignedBuffer;
 
-        for (int i = 0; i < totalTasks; i++) {
-            int idx = (localOffset + i) & taskMask;
-            FileChannel fc = channels[taskFileIndices[idx]];
-            buf.clear();
-            int read = fc.read(buf, taskOffsets[idx]);
-            if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
-                throw new IllegalStateException("FileChannel direct read failed: expected "
-                        + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+        if (state.isSingleFile) {
+            final FileChannel fc = channels[0];
+            final long maxBlocks = state.maxBlocks;
+            final DatasetManager.FioPrng prng = state.prng;
+            for (int i = 0; i < totalTasks; i++) {
+                long offset = prng.nextOffset(maxBlocks, DatasetManager.DEFAULT_BUFFER_SIZE);
+                buf.clear();
+                int read = fc.read(buf, offset);
+                if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                    throw new IllegalStateException("FileChannel direct read failed: expected "
+                            + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+                }
+                blackhole.consume(read);
             }
-            blackhole.consume(read);
+        } else {
+            final int[] taskFileIndices = state.taskFileIndices;
+            final long[] taskOffsets = state.taskOffsets;
+            final int taskMask = taskFileIndices.length - 1;
+            final int localOffset = state.threadOffset;
+            state.threadOffset = (localOffset + totalTasks) & taskMask;
+
+            for (int i = 0; i < totalTasks; i++) {
+                int idx = (localOffset + i) & taskMask;
+                FileChannel fc = channels[taskFileIndices[idx]];
+                buf.clear();
+                int read = fc.read(buf, taskOffsets[idx]);
+                if (read != DatasetManager.DEFAULT_BUFFER_SIZE) {
+                    throw new IllegalStateException("FileChannel direct read failed: expected "
+                            + DatasetManager.DEFAULT_BUFFER_SIZE + " bytes, got " + read);
+                }
+                blackhole.consume(read);
+            }
         }
 
         counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);

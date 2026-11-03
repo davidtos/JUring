@@ -158,4 +158,137 @@ public final class IoHelper {
         // Clamp between minimum viable queue depth (16) and recommended maximum (256)
         return Math.max(16, Math.min(256, maxBuffers));
     }
+
+    public static final int POSIX_FADV_DONTNEED = 4;
+    private static final java.lang.invoke.MethodHandle POSIX_FADVISE_MH;
+    private static final java.lang.invoke.MethodHandle MINCORE_MH;
+
+    static {
+        java.lang.invoke.MethodHandle fadvise = null;
+        java.lang.invoke.MethodHandle mincore = null;
+        try {
+            java.lang.foreign.Linker linker = java.lang.foreign.Linker.nativeLinker();
+            java.lang.foreign.SymbolLookup stdlib = linker.defaultLookup();
+            var fadviseOpt = stdlib.find("posix_fadvise");
+            if (fadviseOpt.isPresent()) {
+                var desc = java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
+                        java.lang.foreign.ValueLayout.JAVA_INT, java.lang.foreign.ValueLayout.JAVA_LONG,
+                        java.lang.foreign.ValueLayout.JAVA_LONG, java.lang.foreign.ValueLayout.JAVA_INT);
+                fadvise = linker.downcallHandle(fadviseOpt.get(), desc);
+            }
+            var mincoreOpt = stdlib.find("mincore");
+            if (mincoreOpt.isPresent()) {
+                var desc = java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
+                        java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.JAVA_LONG,
+                        java.lang.foreign.ValueLayout.ADDRESS);
+                mincore = linker.downcallHandle(mincoreOpt.get(), desc);
+            }
+        } catch (Throwable t) {
+            System.err.println("Notice: native FFM downcalls for fadvise/mincore not available: " + t.getMessage());
+        }
+        POSIX_FADVISE_MH = fadvise;
+        MINCORE_MH = mincore;
+    }
+
+    public static int posixFadvise(int fd, long offset, long len, int advice) {
+        if (POSIX_FADVISE_MH != null) {
+            try {
+                return (int) POSIX_FADVISE_MH.invokeExact(fd, offset, len, advice);
+            } catch (Throwable t) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    public static int posixFadvise(Path path, long offset, long len, int advice) {
+        int fd = com.davidvlijmincx.lio.api.NativeDispatcher.C.open(path.toString(), 0, 0);
+        if (fd < 0) {
+            return -1;
+        }
+        try {
+            return posixFadvise(fd, offset, len, advice);
+        } finally {
+            com.davidvlijmincx.lio.api.NativeDispatcher.C.close(fd);
+        }
+    }
+
+    public static void dropPageCache(Path... paths) {
+        if (paths == null) return;
+        for (Path p : paths) {
+            if (p != null && Files.exists(p)) {
+                posixFadvise(p, 0L, 0L, POSIX_FADV_DONTNEED);
+            }
+        }
+    }
+
+    public static int mincore(MemorySegment addr, long length, MemorySegment vec) {
+        if (MINCORE_MH != null) {
+            try {
+                return (int) MINCORE_MH.invokeExact(addr, length, vec);
+            } catch (Throwable t) {
+                return -1;
+            }
+        }
+        return -1;
+    }
+
+    public static boolean isPageResident(MemorySegment mappedSegment, long pageOffset) {
+        long pages = (mappedSegment.byteSize() + 4095) / 4096;
+        long targetPage = pageOffset / 4096;
+        if (targetPage < 0 || targetPage >= pages) {
+            return false;
+        }
+        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment vec = arena.allocate((int) pages);
+            int ret = mincore(mappedSegment, mappedSegment.byteSize(), vec);
+            if (ret != 0) {
+                return false;
+            }
+            byte b = vec.get(java.lang.foreign.ValueLayout.JAVA_BYTE, targetPage);
+            return (b & 1) != 0;
+        }
+    }
+
+    public static long parseSectorsRead(String statLine) {
+        if (statLine == null || statLine.isBlank()) {
+            return 0L;
+        }
+        String[] tokens = statLine.trim().split("\\s+");
+        if (tokens.length < 3) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(tokens[2]);
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
+    }
+
+    public static Path resolveBlockStatPath() {
+        Path p = Path.of("/sys/block/nvme1n1/stat");
+        if (Files.exists(p)) return p;
+        try (var s = Files.list(Path.of("/sys/block"))) {
+            for (Path dev : s.toList()) {
+                Path stat = dev.resolve("stat");
+                if (Files.exists(stat)) {
+                    return stat;
+                }
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    public static long readDeviceSectors() {
+        Path statPath = resolveBlockStatPath();
+        if (statPath == null || !Files.exists(statPath)) {
+            return 0L;
+        }
+        try {
+            String content = Files.readString(statPath);
+            return parseSectorsRead(content);
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
 }

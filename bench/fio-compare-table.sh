@@ -8,137 +8,123 @@ if [[ -z "$DIR" ]]; then
 fi
 
 if [[ -z "$DIR" || ! -d "$DIR" ]]; then
-    echo "Usage: $0 <results-directory>" >&2
+    echo "Usage: $0 <results-directory> [read|write]" >&2
     exit 1
 fi
 
-MODE_FILTER="${2:-}"
-if [[ -n "$MODE_FILTER" && -f "$DIR/jmh-$MODE_FILTER-1.json" ]]; then
-    JMH_FILES=("$DIR"/jmh-"$MODE_FILTER"-*.json)
-    FIO_FILES=("$DIR"/fio-"$MODE_FILTER"-*.json)
-else
-    JMH_FILES=("$DIR"/jmh-*.json)
-    FIO_FILES=("$DIR"/fio-*.json)
+MODE_FILTER="${2:-read}"
+
+# Find JMH files
+JMH_FILES=($(ls -v "$DIR"/jmh-"$MODE_FILTER"-*.json 2>/dev/null || true))
+if [[ ${#JMH_FILES[@]} -eq 0 ]]; then
+    JMH_FILES=($(ls -v "$DIR"/jmh-*.json 2>/dev/null || true))
 fi
 
-if [[ ! -f "${JMH_FILES[0]:-}" ]]; then
-    echo "Error: No JMH result files (jmh-*.json) found in $DIR" >&2
+# Find fio default files
+FIO_DEF_FILES=($(ls -v "$DIR"/fio-default-"$MODE_FILTER"-*.json 2>/dev/null || true))
+if [[ ${#FIO_DEF_FILES[@]} -eq 0 ]]; then
+    # Fallback to standard fio files
+    FIO_DEF_FILES=($(ls -v "$DIR"/fio-"$MODE_FILTER"-*.json 2>/dev/null || true))
+fi
+
+# Find fio best files
+FIO_BEST_FILES=($(ls -v "$DIR"/fio-best-"$MODE_FILTER"-*.json 2>/dev/null || true))
+
+if [[ ${#JMH_FILES[@]} -eq 0 ]]; then
+    echo "Error: No JMH result files found in $DIR" >&2
     exit 1
 fi
 
-if [[ ! -f "${FIO_FILES[0]:-}" ]]; then
-    echo "Error: No fio result files (fio-*.json) found in $DIR" >&2
+if [[ ${#FIO_DEF_FILES[@]} -eq 0 && ${#FIO_BEST_FILES[@]} -eq 0 ]]; then
+    echo "Error: No fio result files found in $DIR" >&2
     exit 1
 fi
 
-# Calculate statistics using jq
-STATS=$(jq -s '
-  def mean: if length == 0 then 0 else (add / length) end;
-  def stddev:
-    if length <= 1 then 0
-    else
-      mean as $m |
-      (map((. - $m) * (. - $m)) | add / (length - 1)) | sqrt
-    end;
+BEST_B="unknown"
+if [[ -f "$DIR/fio-best-$MODE_FILTER.txt" ]]; then
+    BEST_B=$(cat "$DIR/fio-best-$MODE_FILTER.txt" | tr -d '[:space:]')
+fi
 
-  # Split input files: JMH files have array type, fio files have object type with jobs
-  [ .[] | if type == "array" then .[0] else empty end ] as $jmh_runs |
-  [ .[] | if type == "object" and .jobs then . else empty end ] as $fio_runs |
+# Enters/op data
+FIO_DEF_ENTERS="—"
+FIO_BEST_ENTERS="—"
+JMH_ENTERS="—"
+if [[ -f "$DIR/fio-enters-$MODE_FILTER.json" ]]; then
+    FIO_DEF_ENTERS=$(jq -r '.fio_default_enters_op // "—"' "$DIR/fio-enters-$MODE_FILTER.json")
+    FIO_BEST_ENTERS=$(jq -r '.fio_best_enters_op // "—"' "$DIR/fio-enters-$MODE_FILTER.json")
+    JMH_ENTERS=$(jq -r '.juring_enters_op // "—"' "$DIR/fio-enters-$MODE_FILTER.json")
+fi
 
-  ($jmh_runs | map(.primaryMetric.score)) as $j_iops |
-  ($jmh_runs | map((.secondaryMetrics.bytesProcessed.score // (.primaryMetric.score * 4096.0)) / 1048576.0)) as $j_bw |
-
-  ($fio_runs | map(if ((.jobs[0].write.iops // 0) > 0) then .jobs[0].write.iops else .jobs[0].read.iops end)) as $f_iops |
-  ($fio_runs | map((if ((.jobs[0].write.bw_bytes // 0) > 0) then .jobs[0].write.bw_bytes else .jobs[0].read.bw_bytes end) / 1048576.0)) as $f_bw |
-  ($fio_runs | map((if ((.jobs[0].write.lat_ns.mean // 0) > 0) then .jobs[0].write.lat_ns.mean else .jobs[0].read.lat_ns.mean end) / 1000.0)) as $f_lat_mean |
-  ($fio_runs | map((((if ((.jobs[0].write.lat_ns.percentile["50.000000"] // 0) > 0) then .jobs[0].write.lat_ns.percentile["50.000000"] else .jobs[0].read.lat_ns.percentile["50.000000"] end) | tonumber) / 1000.0))) as $f_lat_p50 |
-  ($fio_runs | map((((if ((.jobs[0].write.lat_ns.percentile["99.000000"] // 0) > 0) then .jobs[0].write.lat_ns.percentile["99.000000"] else .jobs[0].read.lat_ns.percentile["99.000000"] end) | tonumber) / 1000.0))) as $f_lat_p99 |
-
-  {
-    jmh_count: ($j_iops | length),
-    fio_count: ($f_iops | length),
-    mode: ($fio_runs[0].jobs[0]["job options"].rw // "randread"),
-    qd: ($fio_runs[0].jobs[0]["job options"].iodepth // "64"),
-    file: ($fio_runs[0].jobs[0]["job options"].filename // "N/A"),
-    bs: ($fio_runs[0].jobs[0]["job options"].bs // "4k"),
-    runtime: ($fio_runs[0].jobs[0]["job options"].runtime // "N/A"),
-    jmh_iops_mean: ($j_iops | mean),
-    jmh_iops_stddev: ($j_iops | stddev),
-    jmh_bw_mean: ($j_bw | mean),
-    jmh_bw_stddev: ($j_bw | stddev),
-    fio_iops_mean: ($f_iops | mean),
-    fio_iops_stddev: ($f_iops | stddev),
-    fio_bw_mean: ($f_bw | mean),
-    fio_bw_stddev: ($f_bw | stddev),
-    fio_lat_mean: ($f_lat_mean | mean),
-    fio_lat_stddev: ($f_lat_mean | stddev),
-    fio_lat_p50_mean: ($f_lat_p50 | mean),
-    fio_lat_p50_stddev: ($f_lat_p50 | stddev),
-    fio_lat_p99_mean: ($f_lat_p99 | mean),
-    fio_lat_p99_stddev: ($f_lat_p99 | stddev)
-  }
-' "${JMH_FILES[@]}" "${FIO_FILES[@]}")
-
-# Extract fields
-J_COUNT=$(echo "$STATS" | jq -r '.jmh_count')
-F_COUNT=$(echo "$STATS" | jq -r '.fio_count')
-MODE=$(echo "$STATS" | jq -r '.mode')
-QD=$(echo "$STATS" | jq -r '.qd')
-FILE=$(echo "$STATS" | jq -r '.file')
-BS=$(echo "$STATS" | jq -r '.bs')
-RUNTIME=$(echo "$STATS" | jq -r '.runtime')
-
-J_IOPS_MEAN=$(echo "$STATS" | jq -r '.jmh_iops_mean')
-J_IOPS_STD=$(echo "$STATS" | jq -r '.jmh_iops_stddev')
-J_BW_MEAN=$(echo "$STATS" | jq -r '.jmh_bw_mean')
-J_BW_STD=$(echo "$STATS" | jq -r '.jmh_bw_stddev')
-
-F_IOPS_MEAN=$(echo "$STATS" | jq -r '.fio_iops_mean')
-F_IOPS_STD=$(echo "$STATS" | jq -r '.fio_iops_stddev')
-F_BW_MEAN=$(echo "$STATS" | jq -r '.fio_bw_mean')
-F_BW_STD=$(echo "$STATS" | jq -r '.fio_bw_stddev')
-
-F_LAT_MEAN=$(echo "$STATS" | jq -r '.fio_lat_mean')
-F_LAT_STD=$(echo "$STATS" | jq -r '.fio_lat_stddev')
-F_P50_MEAN=$(echo "$STATS" | jq -r '.fio_lat_p50_mean')
-F_P50_STD=$(echo "$STATS" | jq -r '.fio_lat_p50_stddev')
-F_P99_MEAN=$(echo "$STATS" | jq -r '.fio_lat_p99_mean')
-F_P99_STD=$(echo "$STATS" | jq -r '.fio_lat_p99_stddev')
-
-# Pinning status
-PIN_INFO="Unpinned"
-if [[ -f "$DIR/meta.json" ]]; then
-    PIN_TYPE=$(jq -r '.pinning // "unpinned"' "$DIR/meta.json")
-    if [[ "$PIN_TYPE" == "pinned" ]]; then
-        PIN_CPUS_VAL=$(jq -r '.pin_cpus // "N/A"' "$DIR/meta.json")
-        PIN_APC_VAL=$(jq -r '.active_processor_count // "N/A"' "$DIR/meta.json")
-        PIN_INFO="Pinned (CPUs: $PIN_CPUS_VAL, -XX:ActiveProcessorCount=$PIN_APC_VAL, -XX:+UseG1GC)"
+# Helper to compute mean and stddev using jq
+compute_stats() {
+    local files=("$@")
+    if [[ ${#files[@]} -eq 0 ]]; then
+        echo "0 0 0 0"
+        return
     fi
+    jq -s '
+      def mean: if length == 0 then 0 else (add / length) end;
+      def stddev:
+        if length <= 1 then 0
+        else
+          mean as $m |
+          (map((. - $m) * (. - $m)) | add / (length - 1)) | sqrt
+        end;
+
+      [ .[] | 
+        if type == "array" then 
+          .[0].primaryMetric.score
+        elif type == "object" and .jobs then
+          (if ((.jobs[0].write.iops // 0) > 0) then .jobs[0].write.iops else .jobs[0].read.iops end)
+        else empty end
+      ] as $iops |
+
+      [ .[] | 
+        if type == "array" then 
+          ((.[0].secondaryMetrics.bytesProcessed.score // (.[0].primaryMetric.score * 4096.0)) / 1048576.0)
+        elif type == "object" and .jobs then
+          ((if ((.jobs[0].write.bw_bytes // 0) > 0) then .jobs[0].write.bw_bytes else .jobs[0].read.bw_bytes end) / 1048576.0)
+        else empty end
+      ] as $bw |
+
+      "\($iops | mean) \($iops | stddev) \($bw | mean) \($bw | stddev)"
+    ' "${files[@]}" | tr -d '"'
+}
+
+read -r J_IOPS_MEAN J_IOPS_STD J_BW_MEAN J_BW_STD < <(compute_stats "${JMH_FILES[@]}")
+read -r F_DEF_IOPS_MEAN F_DEF_IOPS_STD F_DEF_BW_MEAN F_DEF_BW_STD < <(compute_stats "${FIO_DEF_FILES[@]}")
+
+if [[ ${#FIO_BEST_FILES[@]} -gt 0 ]]; then
+    read -r F_BEST_IOPS_MEAN F_BEST_IOPS_STD F_BEST_BW_MEAN F_BEST_BW_STD < <(compute_stats "${FIO_BEST_FILES[@]}")
+else
+    F_BEST_IOPS_MEAN=$F_DEF_IOPS_MEAN
+    F_BEST_IOPS_STD=$F_DEF_IOPS_STD
+    F_BEST_BW_MEAN=$F_DEF_BW_MEAN
+    F_BEST_BW_STD=$F_DEF_BW_STD
 fi
 
-# Calculate percentage delta
-DELTA=$(awk -v j="$J_IOPS_MEAN" -v f="$F_IOPS_MEAN" 'BEGIN {
-  if (f > 0) printf "%+.2f%%", ((j / f) - 1.0) * 100.0;
-  else printf "N/A";
-}')
+# Compare against fio best
+DELTA="N/A"
+if awk "BEGIN {exit !($F_BEST_IOPS_MEAN > 0)}"; then
+    DELTA=$(awk -v j="$J_IOPS_MEAN" -v f="$F_BEST_IOPS_MEAN" 'BEGIN {printf "%+.1f%%", ((j / f) - 1.0) * 100.0}')
+fi
 
 echo "========================================================================================================================"
 echo "                             JUring vs Native C fio Head-to-Head Workload Comparison                                    "
+echo "                                           (± = stddev over N repeats)                                                  "
 echo "========================================================================================================================"
-printf " Results Directory: %s (%d JMH runs, %d fio runs)\n" "$DIR" "$J_COUNT" "$F_COUNT"
-printf " Pinning Status:    %s\n" "$PIN_INFO"
-printf " Target File:       %s\n" "$FILE"
-printf " Block Size:        %s (O_DIRECT, fixed buffers, registered files)\n" "$BS"
-printf " Queue Depth (QD):  %s\n" "$QD"
-printf " Workload Mode:     %s (norandommap, randrepeat=0)\n" "$MODE"
-printf " Runtime / Window:  %s per repeat\n" "$RUNTIME"
+printf " Results Directory: %s (%d JMH runs, %d fio default runs, %d fio best runs)\n" \
+    "$DIR" "${#JMH_FILES[@]}" "${#FIO_DEF_FILES[@]}" "${#FIO_BEST_FILES[@]}"
+printf " Workload Mode:     rand%s (QD=64, 4KB, single file O_DIRECT)\n" "$MODE_FILTER"
 echo "------------------------------------------------------------------------------------------------------------------------"
-printf "%-24s | %-28s | %-24s | %-16s | %-16s\n" "Engine" "Throughput (ops/s)" "Bandwidth (MB/s)" "lat mean (µs)" "lat p99 (µs)"
+printf "%-32s | %-28s | %-22s | %-12s | %-12s\n" "Engine" "Throughput (ops/s)" "Bandwidth (MB/s)" "Enters / op" "Delta vs Best"
 echo "------------------------------------------------------------------------------------------------------------------------"
-printf "%-24s | %'12.0f ± %'9.0f  | %'10.1f ± %'6.1f    | %16s | %16s\n" \
-  "JUring (JMH)" "$J_IOPS_MEAN" "$J_IOPS_STD" "$J_BW_MEAN" "$J_BW_STD" "see .hlog" "see .hlog"
-printf "%-24s | %'12.0f ± %'9.0f  | %'10.1f ± %'6.1f    | %8.2f ± %-5.2f | %8.2f ± %-5.2f\n" \
-  "Native C fio" "$F_IOPS_MEAN" "$F_IOPS_STD" "$F_BW_MEAN" "$F_BW_STD" "$F_LAT_MEAN" "$F_LAT_STD" "$F_P99_MEAN" "$F_P99_STD"
+printf "%-32s | %'12.1f ± %'9.1f  | %'9.1f ± %'6.1f    | %-12s | %-12s\n" \
+  "fio (default settings)" "$F_DEF_IOPS_MEAN" "$F_DEF_IOPS_STD" "$F_DEF_BW_MEAN" "$F_DEF_BW_STD" "$FIO_DEF_ENTERS" "—"
+printf "%-32s | %'12.1f ± %'9.1f  | %'9.1f ± %'6.1f    | %-12s | %-12s\n" \
+  "fio (best batching: B=$BEST_B)" "$F_BEST_IOPS_MEAN" "$F_BEST_IOPS_STD" "$F_BEST_BW_MEAN" "$F_BEST_BW_STD" "$FIO_BEST_ENTERS" "baseline"
+printf "%-32s | %'12.1f ± %'9.1f  | %'9.1f ± %'6.1f    | %-12s | %-12s\n" \
+  "JUring (JMH)" "$J_IOPS_MEAN" "$J_IOPS_STD" "$J_BW_MEAN" "$J_BW_STD" "$JMH_ENTERS" "$DELTA"
 echo "------------------------------------------------------------------------------------------------------------------------"
-printf " Throughput Delta (JUring vs fio): %s\n" "$DELTA"
+printf " Headline Throughput Delta (JUring vs fio best): %s\n" "$DELTA"
 echo "========================================================================================================================"

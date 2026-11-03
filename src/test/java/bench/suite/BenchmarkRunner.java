@@ -184,7 +184,8 @@ public class BenchmarkRunner {
         }
 
         if (threadsScaling) {
-            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs, customRff, resultsDir);
+            runScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs, customRff, resultsDir,
+                    customForks, customWi, customI, customW, customR);
             return;
         }
 
@@ -213,47 +214,8 @@ public class BenchmarkRunner {
         }
 
         // Execution mode
-        if (customWi != null || customI != null || customForks != null || customR != null || customW != null) {
-            int forks = customForks != null ? customForks : 1;
-            int wi = customWi != null ? customWi : 3;
-            int it = customI != null ? customI : 3;
-            int rSec = customR != null ? customR : 3;
-            int wSec = customW != null ? customW : 3;
-            System.out.printf("Configuring CUSTOM benchmark (-f %d -wi %d -i %d -r %ds -w %ds)...%n", forks, wi, it, rSec, wSec);
-            builder.warmupIterations(wi)
-                    .warmupTime(TimeValue.seconds(wSec))
-                    .measurementIterations(it)
-                    .measurementTime(TimeValue.seconds(rSec))
-                    .forks(forks);
-        } else if (decision) {
-            System.out.println("Configuring DECISION benchmark (-f 3 -wi 3 -i 5 -w 3s -r 5s)...");
-            builder.warmupIterations(3)
-                    .warmupTime(TimeValue.seconds(3))
-                    .measurementIterations(5)
-                    .measurementTime(TimeValue.seconds(5))
-                    .forks(3);
-        } else if (quick) {
-            System.out.println("Configuring QUICK smoke test (1 warmup of 2s, 1 measurement of 3s)...");
-            builder.warmupIterations(1)
-                    .warmupTime(TimeValue.seconds(2))
-                    .measurementIterations(1)
-                    .measurementTime(TimeValue.seconds(3))
-                    .forks(1);
-        } else if (full) {
-            System.out.println("Configuring FULL publication benchmark (3 warmups of 5s, 5 measurements of 5s)...");
-            builder.warmupIterations(3)
-                    .warmupTime(TimeValue.seconds(5))
-                    .measurementIterations(5)
-                    .measurementTime(TimeValue.seconds(5))
-                    .forks(1);
-        } else {
-            // Default balanced mode
-            builder.warmupIterations(2)
-                    .warmupTime(TimeValue.seconds(3))
-                    .measurementIterations(3)
-                    .measurementTime(TimeValue.seconds(3))
-                    .forks(1);
-        }
+        applyExecutionMode(builder, quick, full, decision, customForks, customWi, customI, customW, customR);
+
 
         // Benchmark selection
         if (!customIncludes.isEmpty()) {
@@ -453,7 +415,8 @@ public class BenchmarkRunner {
 
     private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
                                         Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
-                                        List<String> customJvmArgs, String customRff, String resultsDir) throws RunnerException {
+                                        List<String> customJvmArgs, String customRff, String resultsDir,
+                                        Integer customForks, Integer customWi, Integer customI, Integer customW, Integer customR) throws RunnerException {
         System.out.println("================================================================================");
         System.out.println("          Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)         ");
         System.out.println("================================================================================");
@@ -493,31 +456,8 @@ public class BenchmarkRunner {
             }
             builder.threads(t);
 
-            if (decision) {
-                builder.warmupIterations(3)
-                        .warmupTime(TimeValue.seconds(3))
-                        .measurementIterations(5)
-                        .measurementTime(TimeValue.seconds(5))
-                        .forks(3);
-            } else if (quick) {
-                builder.warmupIterations(1)
-                        .warmupTime(TimeValue.seconds(2))
-                        .measurementIterations(1)
-                        .measurementTime(TimeValue.seconds(3))
-                        .forks(1);
-            } else if (full) {
-                builder.warmupIterations(3)
-                        .warmupTime(TimeValue.seconds(5))
-                        .measurementIterations(5)
-                        .measurementTime(TimeValue.seconds(5))
-                        .forks(1);
-            } else {
-                builder.warmupIterations(2)
-                        .warmupTime(TimeValue.seconds(3))
-                        .measurementIterations(3)
-                        .measurementTime(TimeValue.seconds(3))
-                        .forks(1);
-            }
+            applyExecutionMode(builder, quick, full, decision, customForks, customWi, customI, customW, customR);
+
 
             if (attachGc) {
                 builder.addProfiler(GCProfiler.class);
@@ -723,7 +663,7 @@ public class BenchmarkRunner {
     private static void printHelp() {
         System.out.println("JUring Benchmark Suite CLI Options:");
         System.out.println("  --quick             Run fast smoke test (1 warmup 2s, 1 measurement 3s, 1 fork)");
-        System.out.println("  --full              Run full publication benchmark (3 warmups 5s, 5 measurements 5s)");
+        System.out.println("  --full              Run full publication benchmark (3 warmups 5s, 5 measurements 5s, 3 forks)");
         System.out.println("  --direct            Run only NVMe Direct I/O (O_DIRECT) benchmarks");
         System.out.println("  --buffered          Run only Buffered / Page Cache benchmarks");
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
@@ -739,4 +679,186 @@ public class BenchmarkRunner {
         System.out.println("  --threads <N>       Set thread concurrency (1, 4, 8, 16)");
         System.out.println("  --help              Display this help message");
     }
+
+    public static void applyExecutionMode(OptionsBuilder builder, boolean quick, boolean full, boolean decision,
+                                          Integer customForks, Integer customWi, Integer customI, Integer customW, Integer customR) {
+        if (customWi != null || customI != null || customForks != null || customR != null || customW != null) {
+            int forks = customForks != null ? customForks : (full ? 3 : (decision ? 3 : 1));
+            int wi = customWi != null ? customWi : (quick ? 1 : (full ? 3 : 2));
+            int it = customI != null ? customI : (quick ? 1 : (full ? 5 : 3));
+            int rSec = customR != null ? customR : (quick ? 3 : (full || decision ? 5 : 3));
+            int wSec = customW != null ? customW : (quick ? 2 : (full ? 5 : 3));
+            System.out.printf("Configuring CUSTOM benchmark (-f %d -wi %d -i %d -r %ds -w %ds)...%n", forks, wi, it, rSec, wSec);
+            builder.warmupIterations(wi)
+                    .warmupTime(TimeValue.seconds(wSec))
+                    .measurementIterations(it)
+                    .measurementTime(TimeValue.seconds(rSec))
+                    .forks(forks);
+        } else if (decision) {
+            System.out.println("Configuring DECISION benchmark (-f 3 -wi 3 -i 5 -w 3s -r 5s)...");
+            builder.warmupIterations(3)
+                    .warmupTime(TimeValue.seconds(3))
+                    .measurementIterations(5)
+                    .measurementTime(TimeValue.seconds(5))
+                    .forks(3);
+        } else if (quick) {
+            System.out.println("Configuring QUICK smoke test (1 warmup of 2s, 1 measurement of 3s)...");
+            builder.warmupIterations(1)
+                    .warmupTime(TimeValue.seconds(2))
+                    .measurementIterations(1)
+                    .measurementTime(TimeValue.seconds(3))
+                    .forks(1);
+        } else if (full) {
+            System.out.println("Configuring FULL publication benchmark (3 warmups of 5s, 5 measurements of 5s, 3 forks)...");
+            builder.warmupIterations(3)
+                    .warmupTime(TimeValue.seconds(5))
+                    .measurementIterations(5)
+                    .measurementTime(TimeValue.seconds(5))
+                    .forks(3);
+        } else {
+            // Default balanced mode
+            builder.warmupIterations(2)
+                    .warmupTime(TimeValue.seconds(3))
+                    .measurementIterations(3)
+                    .measurementTime(TimeValue.seconds(3))
+                    .forks(1);
+        }
+    }
+
+    public static class RunnerConfig {
+        public boolean quick = false;
+        public boolean full = false;
+        public boolean decision = false;
+        public boolean directOnly = false;
+        public boolean bufferedOnly = false;
+        public boolean latencyOnly = false;
+        public boolean virtualOnly = false;
+        public boolean fioOnly = false;
+        public boolean threadsScaling = false;
+        public boolean attachGc = false;
+        public boolean attachAsync = false;
+        public boolean attachPerfnorm = false;
+        public boolean attachSyscalls = false;
+        public Integer customThreads = null;
+        public String pinCpus = null;
+        public String customRff = null;
+        public String resultsDir = null;
+        public List<String> customIncludes = new ArrayList<>();
+        public Map<String, List<String>> customParams = new LinkedHashMap<>();
+        public List<String> customJvmArgs = new ArrayList<>();
+        public Integer customForks = null;
+        public Integer customWi = null;
+        public Integer customI = null;
+        public Integer customR = null;
+        public Integer customW = null;
+    }
+
+    public static RunnerConfig parseArgs(String[] args) {
+        RunnerConfig cfg = new RunnerConfig();
+        cfg.pinCpus = System.getProperty("juring.pin", null);
+        if ("unpinned".equalsIgnoreCase(cfg.pinCpus) || "none".equalsIgnoreCase(cfg.pinCpus)) {
+            cfg.pinCpus = null;
+        }
+        cfg.resultsDir = System.getProperty("juring.results.dir", null);
+
+        for (int i = 0; i < args.length; i++) {
+            String arg = args[i].trim();
+            switch (arg) {
+                case "--quick" -> cfg.quick = true;
+                case "--full" -> cfg.full = true;
+                case "--decision" -> cfg.decision = true;
+                case "--direct" -> cfg.directOnly = true;
+                case "--buffered" -> cfg.bufferedOnly = true;
+                case "--latency" -> cfg.latencyOnly = true;
+                case "--virtual", "--virtual-threads" -> cfg.virtualOnly = true;
+                case "--max-pool-size", "--vt-1024" -> cfg.customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=1024");
+                case "--fio", "--fio-compare", "--fio-workload" -> cfg.fioOnly = true;
+                case "--threads-scaling" -> cfg.threadsScaling = true;
+                case "--gc" -> cfg.attachGc = true;
+                case "--async" -> cfg.attachAsync = true;
+                case "--perfnorm" -> cfg.attachPerfnorm = true;
+                case "--syscalls" -> cfg.attachSyscalls = true;
+                case "--rff", "--result" -> {
+                    if (i + 1 < args.length) cfg.customRff = args[++i].trim();
+                }
+                case "--results-dir" -> {
+                    if (i + 1 < args.length) {
+                        cfg.resultsDir = args[++i].trim();
+                        System.setProperty("juring.results.dir", cfg.resultsDir);
+                        cfg.customJvmArgs.add("-Djuring.results.dir=" + cfg.resultsDir);
+                    }
+                }
+                case "--include" -> {
+                    if (i + 1 < args.length) cfg.customIncludes.add(args[++i].trim());
+                }
+                case "--param" -> {
+                    if (i + 1 < args.length) {
+                        String[] parts = args[++i].trim().split("=", 2);
+                        if (parts.length == 2) {
+                            cfg.customParams.computeIfAbsent(parts[0].trim(), k -> new ArrayList<>()).add(parts[1].trim());
+                        }
+                    }
+                }
+                case "--f" -> {
+                    if (i + 1 < args.length) cfg.customForks = Integer.parseInt(args[++i].trim());
+                }
+                case "--wi" -> {
+                    if (i + 1 < args.length) cfg.customWi = Integer.parseInt(args[++i].trim());
+                }
+                case "--i" -> {
+                    if (i + 1 < args.length) cfg.customI = Integer.parseInt(args[++i].trim());
+                }
+                case "--r" -> {
+                    if (i + 1 < args.length) cfg.customR = Integer.parseInt(args[++i].trim());
+                }
+                case "--w" -> {
+                    if (i + 1 < args.length) cfg.customW = Integer.parseInt(args[++i].trim());
+                }
+                case "--threads" -> {
+                    if (i + 1 < args.length) cfg.customThreads = Integer.parseInt(args[++i].trim());
+                }
+                case "--pin" -> {
+                    if (i + 1 < args.length) cfg.pinCpus = args[++i].trim();
+                }
+                case "--help" -> {
+                    printHelp();
+                    return null;
+                }
+                default -> {
+                    if (arg.startsWith("-D")) {
+                        cfg.customJvmArgs.add(arg);
+                    } else {
+                        System.out.println("Unknown argument: " + arg + " (ignored)");
+                    }
+                }
+            }
+        }
+        return cfg;
+    }
+
+    public static Options buildScalingOptions(String[] args, int threads) {
+        RunnerConfig cfg = parseArgs(args);
+        OptionsBuilder builder = new OptionsBuilder();
+        builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
+        if (cfg.customJvmArgs != null && !cfg.customJvmArgs.isEmpty()) {
+            builder.jvmArgsAppend(cfg.customJvmArgs.toArray(new String[0]));
+        }
+        if (cfg.customIncludes != null && !cfg.customIncludes.isEmpty()) {
+            for (String inc : cfg.customIncludes) {
+                builder.include(inc);
+            }
+        } else {
+            builder.include(MultiThreadScalingBenchmark.class.getSimpleName());
+        }
+        if (cfg.customParams != null) {
+            for (Map.Entry<String, List<String>> entry : cfg.customParams.entrySet()) {
+                builder.param(entry.getKey(), entry.getValue().toArray(new String[0]));
+            }
+        }
+        builder.threads(threads);
+        applyExecutionMode(builder, cfg.quick, cfg.full, cfg.decision,
+                cfg.customForks, cfg.customWi, cfg.customI, cfg.customW, cfg.customR);
+        return builder.build();
+    }
 }
+

@@ -50,6 +50,9 @@ public class DatasetManager {
         if (Files.isDirectory(base.resolve("text_files"))) {
             return base.resolve("text_files");
         }
+        if (Files.isDirectory(base.resolve("read_files"))) {
+            return base.resolve("read_files");
+        }
         if (Files.isDirectory(base.resolve("read"))) {
             return base.resolve("read");
         }
@@ -121,26 +124,19 @@ public class DatasetManager {
         this.taskCount = taskCount;
 
         if (distribution == FileDistribution.SINGLE_FILE) {
-            Path singleFile = null;
-            Path resolvedWriteDir = resolveWriteDir(resolveBaseDataDir());
-            Path resolvedReadDir = resolveReadDir(resolveBaseDataDir());
-            if (workloadType == WorkloadType.WRITE) {
-                singleFile = ensureSingleBenchFile(baseDir, DEFAULT_SINGLE_FILE_SIZE);
-            } else if (Files.exists(baseDir.resolve(SINGLE_BENCH_FILE))) {
-                singleFile = baseDir.resolve(SINGLE_BENCH_FILE);
-            } else if (Files.exists(resolvedWriteDir.resolve(SINGLE_BENCH_FILE))) {
-                singleFile = resolvedWriteDir.resolve(SINGLE_BENCH_FILE);
-            } else if (Files.exists(resolvedReadDir.resolve(SINGLE_BENCH_FILE))) {
-                singleFile = resolvedReadDir.resolve(SINGLE_BENCH_FILE);
-            }
-
+            Path singleFile = resolveSingleBenchFile(workloadType);
             if (singleFile != null && Files.exists(singleFile)) {
                 this.uniquePaths = new Path[]{ singleFile };
             } else {
                 this.uniquePaths = discoverFiles(baseDir, 1);
             }
         } else {
-            this.uniquePaths = discoverFiles(baseDir, MAX_MULTI_FILES);
+            Path scanDir = (workloadType == WorkloadType.READ) ? resolveReadDir(baseDir) : resolveWriteDir(baseDir);
+            Path[] discovered = discoverFiles(scanDir, MAX_MULTI_FILES);
+            if (discovered.length == 0 && workloadType == WorkloadType.READ && !scanDir.equals(baseDir.resolve("text_files"))) {
+                discovered = discoverFiles(baseDir.resolve("text_files"), MAX_MULTI_FILES);
+            }
+            this.uniquePaths = discovered;
         }
 
         if (this.uniquePaths.length == 0) {
@@ -290,6 +286,10 @@ public class DatasetManager {
         return uniquePaths;
     }
 
+    public long[] getFileSizes() {
+        return fileSizes;
+    }
+
     public int[] getTaskFileIndices() {
         return taskFileIndices;
     }
@@ -382,32 +382,47 @@ public class DatasetManager {
     }
 
     public static Path resolveSingleBenchFile() {
+        return resolveSingleBenchFile(WorkloadType.READ);
+    }
+
+    public static Path resolveSingleBenchFile(WorkloadType type) {
         Path base = resolveBaseDataDir();
-        Path writeDir = resolveWriteDir(base);
-        Path readDir = resolveReadDir(base);
+        if (type == WorkloadType.READ) {
+            Path readFilesDir = base.resolve("read_files");
+            Path pReadFiles = readFilesDir.resolve(SINGLE_BENCH_FILE);
+            try {
+                if (Files.exists(pReadFiles) && Files.size(pReadFiles) >= DEFAULT_SINGLE_FILE_SIZE) {
+                    return pReadFiles;
+                }
+            } catch (IOException ignored) {}
 
-        Path pWrite = writeDir.resolve(SINGLE_BENCH_FILE);
-        try {
-            if (Files.exists(pWrite) && Files.size(pWrite) >= DEFAULT_SINGLE_FILE_SIZE) {
-                return pWrite;
-            }
-        } catch (IOException ignored) {}
+            Path readDir = resolveReadDir(base);
+            Path pRead = readDir.resolve(SINGLE_BENCH_FILE);
+            try {
+                if (Files.exists(pRead) && Files.size(pRead) >= DEFAULT_SINGLE_FILE_SIZE) {
+                    return pRead;
+                }
+            } catch (IOException ignored) {}
 
-        Path pRead = readDir.resolve(SINGLE_BENCH_FILE);
-        try {
-            if (Files.exists(pRead) && Files.size(pRead) >= DEFAULT_SINGLE_FILE_SIZE) {
-                return pRead;
-            }
-        } catch (IOException ignored) {}
+            Path pBase = base.resolve(SINGLE_BENCH_FILE);
+            try {
+                if (Files.exists(pBase) && Files.size(pBase) >= DEFAULT_SINGLE_FILE_SIZE) {
+                    return pBase;
+                }
+            } catch (IOException ignored) {}
 
-        Path pBase = base.resolve(SINGLE_BENCH_FILE);
-        try {
-            if (Files.exists(pBase) && Files.size(pBase) >= DEFAULT_SINGLE_FILE_SIZE) {
-                return pBase;
-            }
-        } catch (IOException ignored) {}
+            return ensureSingleBenchFile(readFilesDir, DEFAULT_SINGLE_FILE_SIZE);
+        } else {
+            Path writeDir = resolveWriteDir(base);
+            Path pWrite = writeDir.resolve(SINGLE_BENCH_FILE);
+            try {
+                if (Files.exists(pWrite) && Files.size(pWrite) >= DEFAULT_SINGLE_FILE_SIZE) {
+                    return pWrite;
+                }
+            } catch (IOException ignored) {}
 
-        return ensureSingleBenchFile(writeDir, DEFAULT_SINGLE_FILE_SIZE);
+            return ensureSingleBenchFile(writeDir, DEFAULT_SINGLE_FILE_SIZE);
+        }
     }
 
     /**

@@ -172,23 +172,28 @@ public class DirectLatencyBenchmark {
 
         @State(Scope.Benchmark)
         public static class FioBenchmarkState {
+            public Path readFilePath;
+            public Path writeFilePath;
             public Path filePath;
             public long fileSize;
             public long maxBlocks;
+            public long maxReadBlocks;
+            public long maxWriteBlocks;
 
             @Setup(Level.Trial)
             public void setup() {
-                this.filePath = DatasetManager.resolveSingleBenchFile();
+                this.readFilePath = DatasetManager.resolveSingleBenchFile(DatasetManager.WorkloadType.READ);
+                this.writeFilePath = DatasetManager.resolveSingleBenchFile(DatasetManager.WorkloadType.WRITE);
+                this.filePath = this.readFilePath;
                 try {
-                    this.fileSize = Files.size(this.filePath);
+                    this.fileSize = Files.size(this.readFilePath);
+                    long wSize = Files.size(this.writeFilePath);
+                    this.maxReadBlocks = this.fileSize / BLOCK_SIZE;
+                    this.maxWriteBlocks = wSize / BLOCK_SIZE;
+                    this.maxBlocks = this.maxReadBlocks;
                 } catch (IOException e) {
-                    throw new RuntimeException("Failed to read file size: " + this.filePath, e);
+                    throw new RuntimeException("Failed to read file size: " + this.readFilePath, e);
                 }
-                if (this.fileSize < DatasetManager.DEFAULT_SINGLE_FILE_SIZE) {
-                    throw new IllegalStateException("File size too small: expected >= "
-                            + DatasetManager.DEFAULT_SINGLE_FILE_SIZE + ", got " + this.fileSize);
-                }
-                this.maxBlocks = this.fileSize / BLOCK_SIZE;
             }
         }
 
@@ -245,8 +250,8 @@ public class DirectLatencyBenchmark {
                         IORING_SETUP_COOP_TASKRUN,
                         IORING_SETUP_DEFER_TASKRUN);
 
-                readFd = new FileDescriptor(benchState.filePath.toString(), LinuxOpenOptions.READ_DIRECT, 0);
-                writeFd = new FileDescriptor(benchState.filePath.toString(), LinuxOpenOptions.WRITE_DIRECT, 0);
+                readFd = new FileDescriptor(benchState.readFilePath.toString(), LinuxOpenOptions.READ_DIRECT, 0);
+                writeFd = new FileDescriptor(benchState.writeFilePath.toString(), LinuxOpenOptions.WRITE_DIRECT, 0);
                 int regRet = ring.registerFiles(readFd, writeFd);
                 if (regRet != 0) {
                     throw new RuntimeException("Failed to register files in JUring: " + regRet);
@@ -258,8 +263,8 @@ public class DirectLatencyBenchmark {
                 }
 
                 try {
-                    readChannel = FileChannel.open(benchState.filePath, StandardOpenOption.READ, IoHelper.getDirectOpenOption());
-                    writeChannel = FileChannel.open(benchState.filePath, StandardOpenOption.WRITE, IoHelper.getDirectOpenOption());
+                    readChannel = FileChannel.open(benchState.readFilePath, StandardOpenOption.READ, IoHelper.getDirectOpenOption());
+                    writeChannel = FileChannel.open(benchState.writeFilePath, StandardOpenOption.WRITE, IoHelper.getDirectOpenOption());
                 } catch (IOException e) {
                     throw new RuntimeException("Failed to open FileChannels with DIRECT option", e);
                 }
@@ -386,7 +391,7 @@ public class DirectLatencyBenchmark {
         @Benchmark
         public void juringDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
-            final long maxBlocks = benchState.maxBlocks;
+            final long maxBlocks = benchState.maxReadBlocks;
             final int qd = state.qd;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
@@ -437,7 +442,7 @@ public class DirectLatencyBenchmark {
         @Benchmark
         public void juringDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) {
             final JUring ring = state.ring;
-            final long maxBlocks = benchState.maxBlocks;
+            final long maxBlocks = benchState.maxWriteBlocks;
             final int qd = state.qd;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
@@ -489,7 +494,7 @@ public class DirectLatencyBenchmark {
         public void fileChannelDirectRead(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
             final FileChannel fc = state.readChannel;
             final ByteBuffer buf = state.alignedBuf;
-            final long maxBlocks = benchState.maxBlocks;
+            final long maxBlocks = benchState.maxReadBlocks;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
             final int totalTasks = OPERATIONS_PER_INVOCATION;
@@ -520,7 +525,7 @@ public class DirectLatencyBenchmark {
         public void fileChannelDirectWrite(FioThreadState state, FioBenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
             final FileChannel fc = state.writeChannel;
             final ByteBuffer buf = state.alignedBuf;
-            final long maxBlocks = benchState.maxBlocks;
+            final long maxBlocks = benchState.maxWriteBlocks;
             final boolean telemetry = state.telemetry;
             final DatasetManager.FioPrng prng = state.prng;
             final int totalTasks = OPERATIONS_PER_INVOCATION;

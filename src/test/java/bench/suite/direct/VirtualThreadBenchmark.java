@@ -50,6 +50,9 @@ public class VirtualThreadBenchmark {
         @Param({"MULTI_FILE", "SINGLE_FILE"})
         public String distribution = "MULTI_FILE";
 
+        @Param({"DIRECT", "BUFFERED_COLD"})
+        public String ioMode = "DIRECT";
+
         public DatasetManager readDataset;
 
         @Setup(Level.Trial)
@@ -63,6 +66,19 @@ public class VirtualThreadBenchmark {
                     SCALING_TASK_POOL_SIZE
             );
         }
+
+        @Setup(Level.Iteration)
+        public void setupIteration() {
+            if ("BUFFERED_COLD".equalsIgnoreCase(ioMode)) {
+                IoHelper.dropPageCache(readDataset.getUniquePaths());
+            }
+        }
+    }
+
+    @AuxCounters(AuxCounters.Type.OPERATIONS)
+    @State(Scope.Thread)
+    public static class DeviceCounters {
+        public long deviceReadBytes;
     }
 
     @State(Scope.Thread)
@@ -94,7 +110,9 @@ public class VirtualThreadBenchmark {
                     IORING_SETUP_COOP_TASKRUN,
                     IORING_SETUP_DEFER_TASKRUN);
 
-            this.fileDescriptors = benchState.readDataset.openFileDescriptors(LinuxOpenOptions.READ_DIRECT);
+            boolean direct = !"BUFFERED_COLD".equalsIgnoreCase(benchState.ioMode);
+            this.fileDescriptors = benchState.readDataset.openFileDescriptors(
+                    direct ? LinuxOpenOptions.READ_DIRECT : LinuxOpenOptions.READ);
             int regRet = ring.registerFiles(fileDescriptors);
             if (regRet != 0) {
                 throw new RuntimeException("Failed to register files in JUringBlocking: " + regRet);
@@ -143,7 +161,8 @@ public class VirtualThreadBenchmark {
             this.taskOffsets = pool.offsets();
             this.threadOffset = 0;
 
-            this.channels = benchState.readDataset.openFileChannels(true);
+            boolean direct = !"BUFFERED_COLD".equalsIgnoreCase(benchState.ioMode);
+            this.channels = benchState.readDataset.openFileChannels(direct);
             this.executor = Executors.newVirtualThreadPerTaskExecutor();
 
             this.alignedBuffers = new ByteBuffer[virtualThreads];
@@ -162,7 +181,8 @@ public class VirtualThreadBenchmark {
     }
 
     @Benchmark
-    public void juringVirtualThreadRead(JuringVirtualThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws Exception {
+    public void juringVirtualThreadRead(JuringVirtualThreadState state, BenchmarkState benchState, StorageAuxCounters counters, DeviceCounters deviceCounters, Blackhole blackhole) throws Exception {
+        final long sectorsStart = IoHelper.readDeviceSectors();
         final JUringBlocking ring = state.ring;
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
@@ -223,10 +243,15 @@ public class VirtualThreadBenchmark {
             blackhole.consume(totalBytes);
         }
         counters.record(totalBytes);
+        final long sectorsEnd = IoHelper.readDeviceSectors();
+        if (deviceCounters != null) {
+            deviceCounters.deviceReadBytes += Math.max(0, (sectorsEnd - sectorsStart) * 512);
+        }
     }
 
     @Benchmark
-    public void fileChannelVirtualThreadRead(FileChannelVirtualThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws Exception {
+    public void fileChannelVirtualThreadRead(FileChannelVirtualThreadState state, BenchmarkState benchState, StorageAuxCounters counters, DeviceCounters deviceCounters, Blackhole blackhole) throws Exception {
+        final long sectorsStart = IoHelper.readDeviceSectors();
         final FileChannel[] channels = state.channels;
         final int[] taskFileIndices = state.taskFileIndices;
         final long[] taskOffsets = state.taskOffsets;
@@ -288,5 +313,9 @@ public class VirtualThreadBenchmark {
             blackhole.consume(totalBytes);
         }
         counters.record(totalBytes);
+        final long sectorsEnd = IoHelper.readDeviceSectors();
+        if (deviceCounters != null) {
+            deviceCounters.deviceReadBytes += Math.max(0, (sectorsEnd - sectorsStart) * 512);
+        }
     }
 }
