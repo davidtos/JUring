@@ -71,6 +71,7 @@ if [ "$FROM_STEP" -le 2 ]; then
     ./bench.sh --include 'NopBenchmark' --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/nop.json"
     ./bench.sh --include 'NopBenchmark' --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/nop-syscalls.json"
     ./bench.sh --include 'NopBenchmark' --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/nop-perfnorm.json"
+    ./bench.sh --include 'NopBenchmark' --gc --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/nop-gc.json"
     cooldown 5
 fi
 
@@ -80,6 +81,7 @@ if [ "$FROM_STEP" -le 3 ]; then
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --f 5 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/direct-read-single.json"
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-read-single-syscalls.json"
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-read-single-perfnorm.json"
+    ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --gc --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-read-single-gc.json"
     cooldown 5
 fi
 
@@ -178,6 +180,7 @@ if [ "$FROM_STEP" -le 11 ]; then
     # Syscalls and perfnorm passes
     ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-single-syscalls.json"
     ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-single-perfnorm.json"
+    ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --gc --f 1 --wi 1 --i 2 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-single-gc.json"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-direct-write-after.json"
     cooldown 20
 fi

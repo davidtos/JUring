@@ -66,7 +66,7 @@ public class DirectLatencyBenchmark {
         public ByteBuffer alignedBuffer;
         public Result reusableResult;
 
-        @Setup(Level.Iteration)
+        @Setup(Level.Trial)
         public void setup(BenchmarkState benchState) {
             ring = new JUring(64,
                     IORING_SETUP_SINGLE_ISSUER,
@@ -86,7 +86,7 @@ public class DirectLatencyBenchmark {
             reusableResult = new Result();
         }
 
-        @TearDown(Level.Iteration)
+        @TearDown(Level.Trial)
         public void tearDown() {
             DatasetManager.closeChannels(channels);
             DatasetManager.closeFileDescriptors(fileDescriptors);

@@ -17,6 +17,11 @@ import re
 import unittest
 import tempfile
 
+MAX_REL_ERROR = 0.10
+
+def is_unstable(score, err):
+    return score is not None and err is not None and not math.isnan(err) and score > 0 and (err / score) > MAX_REL_ERROR
+
 def load_json_file(path):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return None
@@ -95,7 +100,7 @@ def gen_hardware(results_dir):
         f"* **Harness & Profiling:** JMH with tracepoint profiling (`raw_syscalls:sys_enter`) and hardware perf counters (perf_event_paranoid `{perf_paranoid}`).",
         "",
         "### Workload Datasets:",
-        "1. **`SINGLE_FILE` (10 GB):** A contiguous 10 GB pre-allocated binary file (`single_file_bench.bin`, 2.5 million 4KB sectors) on ext4. Eliminates directory mutex contention to measure raw I/O engine and drive controller throughput.",
+        "1. **`SINGLE_FILE` (10 GB):** A contiguous 10 GB pre-allocated binary file (`single_file_bench.bin`, 2,621,440 4KB blocks) on ext4. Eliminates directory mutex contention to measure raw I/O engine and drive controller throughput.",
         "2. **`MULTI_FILE` (2,211 Files):** 2,211 distinct pre-allocated binary files (~4.7 MB each, ~10.4 GB total) on ext4. Measures multi-descriptor handling via `io_uring_register_files`."
     ]
     return "\n".join(lines)
@@ -187,14 +192,17 @@ def gen_single_core(results_dir):
     nop = load_json_file(os.path.join(results_dir, "nop.json"))
     nop_sys = load_json_file(os.path.join(results_dir, "nop-syscalls.json"))
     nop_perf = load_json_file(os.path.join(results_dir, "nop-perfnorm.json"))
+    nop_gc = load_json_file(os.path.join(results_dir, "nop-gc.json"))
 
     dr = load_json_file(os.path.join(results_dir, "direct-read-single.json"))
     dr_sys = load_json_file(os.path.join(results_dir, "direct-read-single-syscalls.json"))
     dr_perf = load_json_file(os.path.join(results_dir, "direct-read-single-perfnorm.json"))
+    dr_gc = load_json_file(os.path.join(results_dir, "direct-read-single-gc.json"))
 
     dw = load_json_file(os.path.join(results_dir, "direct-write-single.json"))
     dw_sys = load_json_file(os.path.join(results_dir, "direct-write-single-syscalls.json"))
     dw_perf = load_json_file(os.path.join(results_dir, "direct-write-single-perfnorm.json"))
+    dw_gc = load_json_file(os.path.join(results_dir, "direct-write-single-gc.json"))
 
     harness_str = get_fork_iter_str(dr)
 
@@ -213,6 +221,21 @@ def gen_single_core(results_dir):
                 return x.get("secondaryMetrics", {}).get(metric, {}).get("score")
         return None
 
+    def get_alloc_metric(json_gc, json_main, bname, qd):
+        for json_obj in (json_gc, json_main):
+            if not json_obj:
+                continue
+            for metric in ("·gc.alloc.rate.norm", "gc.alloc.rate.norm"):
+                val = get_metric(json_obj, bname, qd, metric)
+                if val is not None:
+                    return val
+        return None
+
+    def fmt_alloc(val):
+        if val is None:
+            return " — "
+        return f"{val:,.3f} B/op"
+
     if nop:
         b = nop[0]
         s = b["primaryMetric"]["score"]
@@ -220,10 +243,11 @@ def gen_single_core(results_dir):
         sys_op = nop_sys[0]["secondaryMetrics"].get("raw_syscalls:sys_enter", {}).get("score") if nop_sys else None
         cu = nop_perf[0]["secondaryMetrics"].get("cycles:u", {}).get("score") if nop_perf else None
         ck = nop_perf[0]["secondaryMetrics"].get("cycles:k", {}).get("score") if nop_perf else None
+        alloc = get_alloc_metric(nop_gc, nop, "juringNop", "64")
         sys_str = f"{sys_op:.4f} ({(1.0/sys_op):.1f} ops/call)" if sys_op is not None and sys_op > 0 else "unknown"
         cu_str = f"{cu:.1f}" if cu is not None else "—"
         ck_str = f"{ck:.1f}" if ck is not None else "—"
-        lines.append(f"| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | {fmt_stat(s, e, 1, '')} | — | {sys_str} | {cu_str} | {ck_str} | 0.000 B/op |")
+        lines.append(f"| `NopBenchmark.juringNop` | 1T (QD=64, ring memory only) | {fmt_stat(s, e, 1, '')} | — | {sys_str} | {cu_str} | {ck_str} | {fmt_alloc(alloc)} |")
 
     # Direct Read
     if dr:
@@ -240,10 +264,11 @@ def gen_single_core(results_dir):
                 sys_op = get_metric(dr_sys, bname, qd, "raw_syscalls:sys_enter")
                 cu = get_metric(dr_perf, bname, qd, "cycles:u")
                 ck = get_metric(dr_perf, bname, qd, "cycles:k")
+                alloc = get_alloc_metric(dr_gc, dr, bname, qd)
                 sys_str = f"{sys_op:.4f}" if sys_op is not None else "1.0000"
                 cu_str = f"{cu:.1f}" if cu is not None else "N/A"
                 ck_str = f"{ck:.1f}" if ck is not None else "N/A"
-                lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | 0.000 B/op |")
+                lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | {fmt_alloc(alloc)} |")
 
     # Direct Write
     if dw:
@@ -260,10 +285,11 @@ def gen_single_core(results_dir):
                 sys_op = get_metric(dw_sys, bname, qd, "raw_syscalls:sys_enter")
                 cu = get_metric(dw_perf, bname, qd, "cycles:u")
                 ck = get_metric(dw_perf, bname, qd, "cycles:k")
+                alloc = get_alloc_metric(dw_gc, dw, bname, qd)
                 sys_str = f"{sys_op:.4f}" if sys_op is not None else "1.0000"
                 cu_str = f"{cu:.1f}" if cu is not None else "N/A"
                 ck_str = f"{ck:.1f}" if ck is not None else "N/A"
-                lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | 0.000 B/op |")
+                lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | {fmt_alloc(alloc)} |")
 
     return "\n".join([l for l in lines if l is not None])
 

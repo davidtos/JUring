@@ -42,23 +42,19 @@ class TestStabilityRule(unittest.TestCase):
         self.assertNotEqual(speedup_str, "—")
         self.assertEqual(speedup_str, "2.0x")
 
-    def test_fifty_percent_error_prints_unstable_and_no_speedup(self):
-        # 50% relative error (unstable)
+    def test_fifty_percent_error_prints_number_and_speedup_uncensored(self):
+        # 50% relative error is marked unstable by is_unstable, but printed uncensored with error bar (commit 45d039c)
         score = 1000.0
         err = 500.0 # 50%
         self.assertTrue(is_unstable(score, err))
         stat_str = fmt_stat(score, err)
-        self.assertEqual(stat_str, "unstable (±50%)")
+        self.assertEqual(stat_str, "1,000.0 ± 500.0")
 
         mb_str = fmt_mb(score, 4096, err)
-        self.assertEqual(mb_str, "—")
+        self.assertEqual(mb_str, "3.9 ± 2.0 MB/s")
 
         speedup_str = fmt_speedup(score, err, 500.0, 20.0)
-        self.assertEqual(speedup_str, "—")
-
-        # Baseline unstable also yields "—"
-        speedup_base_unstable = fmt_speedup(500.0, 20.0, score, err)
-        self.assertEqual(speedup_base_unstable, "—")
+        self.assertEqual(speedup_str, "2.0x")
 
 
 class TestReadmeCheckAndWrite(unittest.TestCase):
@@ -115,6 +111,69 @@ class TestReadmeCheckAndWrite(unittest.TestCase):
             )
             self.assertEqual(proc_check_pass.returncode, 0)
             self.assertIn("Check OK", proc_check_pass.stdout)
+
+
+class TestAllocationMetrics(unittest.TestCase):
+    def test_alloc_metric_formatting_from_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmpdir:
+            nop = [
+                {
+                    "benchmark": "bench.suite.direct.NopBenchmark.juringNop",
+                    "primaryMetric": {"score": 10000000.0, "scoreError": 1000.0},
+                    "params": {"qd": "64"}
+                }
+            ]
+            nop_gc = [
+                {
+                    "benchmark": "bench.suite.direct.NopBenchmark.juringNop",
+                    "params": {"qd": "64"},
+                    "secondaryMetrics": {
+                        "·gc.alloc.rate.norm": {"score": 0.0, "scoreUnit": "B/op"}
+                    }
+                }
+            ]
+            dr = [
+                {
+                    "benchmark": "bench.suite.direct.DirectReadBenchmark.juringDirectRead",
+                    "primaryMetric": {"score": 500000.0, "scoreError": 500.0},
+                    "params": {"qd": "64"}
+                }
+            ]
+            dr_gc = [
+                {
+                    "benchmark": "bench.suite.direct.DirectReadBenchmark.juringDirectRead",
+                    "params": {"qd": "64"},
+                    "secondaryMetrics": {
+                        "gc.alloc.rate.norm": {"score": 16.25, "scoreUnit": "B/op"}
+                    }
+                }
+            ]
+            with open(os.path.join(tmpdir, "nop.json"), "w") as f:
+                json.dump(nop, f)
+            with open(os.path.join(tmpdir, "nop-gc.json"), "w") as f:
+                json.dump(nop_gc, f)
+            with open(os.path.join(tmpdir, "direct-read-single.json"), "w") as f:
+                json.dump(dr, f)
+            with open(os.path.join(tmpdir, "direct-read-single-gc.json"), "w") as f:
+                json.dump(dr_gc, f)
+
+            dw = [
+                {
+                    "benchmark": "bench.suite.direct.DirectWriteBenchmark.juringDirectWrite",
+                    "primaryMetric": {"score": 300000.0, "scoreError": 300.0},
+                    "params": {"qd": "64"}
+                }
+            ]
+            with open(os.path.join(tmpdir, "direct-write-single.json"), "w") as f:
+                json.dump(dw, f)
+
+            from bench.generate_readme_tables import gen_single_core
+            table = gen_single_core(tmpdir)
+            self.assertIn("0.000 B/op", table)
+            self.assertIn("16.250 B/op", table)
+            self.assertIn(" — ", table)
+
 
 if __name__ == "__main__":
     unittest.main()
