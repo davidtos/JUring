@@ -430,9 +430,9 @@ public class BenchmarkRunner {
         for (int i = 0; i < threadLevels.length; i++) {
             int t = threadLevels[i];
             if (i > 0) {
-                System.out.println("\n[Cooldown] Pausing 10s between concurrency tiers for NVMe SLC cache recovery...");
+                System.out.println("\n[Cooldown] Pausing 20s between concurrency tiers for NVMe background GC recovery...");
                 try {
-                    Thread.sleep(10000);
+                    Thread.sleep(20000);
                 } catch (InterruptedException ignored) {}
             }
             System.out.println("\n>>> Running MultiThreadScalingBenchmark at Concurrency: " + t + " Thread(s) <<<");

@@ -99,14 +99,23 @@ All benchmarks were executed on bare-metal hardware with ext4 mounted directly o
 ### 1. Head-to-Head Parity vs. Native C fio
 
 <!-- BEGIN GENERATED: fio-compare -->
-Random 4KB read workload on a single thread at QD=64 on a dedicated 10 GB direct I/O read file (`O_DIRECT`, fixed buffers, registered files).
 *Note: ± indicates sample standard deviation over N independent repeats.*
+
+#### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
 
 | Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |
 |---|---|---|---|---|---|
 | `fio` (default settings) | 372,417.2 ± 9,128.0 | 1,454.8 ± 35.7 MB/s | 1.1810 | — | Default submission / reap |
 | `fio` (best batching: B=8) | 440,522.3 ± 9,534.9 | 1,720.8 ± 37.2 MB/s | 0.2541 | baseline | `--iodepth_batch_submit=8` |
 | JUring (JMH) | 462,330.7 ± 1,877.8 | 1,806.0 ± 7.3 MB/s | 0.2928 | +5.0% | Batched `submitAndWait(1)` |
+
+#### 4KB Random Direct Write (`randwrite`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
+
+| Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |
+|---|---|---|---|---|---|
+| `fio` (default settings) | 194,055.8 ± 3,064.6 | 758.0 ± 12.0 MB/s | 1.4869 | — | Default submission / reap |
+| `fio` (best batching: B=32) | 191,982.3 ± 4,350.2 | 749.9 ± 17.0 MB/s | 0.7858 | baseline | `--iodepth_batch_submit=32` |
+| JUring (JMH) | 190,413.8 ± 4,322.6 | 743.8 ± 16.9 MB/s | 0.2860 | -0.8% | Batched `submitAndWait(1)` |
 <!-- END GENERATED: fio-compare -->
 
 > [!NOTE]
@@ -127,9 +136,9 @@ Evaluation of pure framework overhead (`NopBenchmark`), followed by single-threa
 | `FileChannel.read` | 1T (QD=1, synchronous `pread64`) | 16,003.3 ± 61.6 | 62.5 ± 0.2 MB/s | 1.0020 | 1454.4 | 24506.6 | 0.000 B/op |
 | `JUring.read` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 16,055.0 ± 47.1 | 62.7 ± 0.2 MB/s | 1.0028 | 3141.4 | 25385.4 | 0.000 B/op |
 | `JUring.read` (QD=64) | 1T (QD=64, batched pipeline) | 461,926.4 ± 5,608.3 | 1,804.4 ± 21.9 MB/s | 0.2519 | 209.3 | 8703.9 | 0.000 B/op |
-| `FileChannel.write` | 1T (QD=1, synchronous `pwrite64`) | 65,838.1 ± 1,761.4 | 257.2 ± 6.9 MB/s | 1.0008 | 892.1 | 25101.2 | 0.000 B/op |
-| `JUring.write` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 67,431.8 ± 3,468.0 | 263.4 ± 13.5 MB/s | 1.0009 | 708.4 | 26093.3 | 0.000 B/op |
-| `JUring.write` (QD=64) | 1T (QD=64, batched pipeline) | 195,659.2 ± 2,369.2 | 764.3 ± 9.3 MB/s | 0.0382 | 115.9 | 8759.5 | 0.000 B/op |
+| `FileChannel.write` | 1T (QD=1, synchronous `pwrite64`) | 69,868.9 ± 5,779.7 | 272.9 ± 22.6 MB/s | 0.9995 | 866.3 | 25068.8 | 0.000 B/op |
+| `JUring.write` (QD=1) | 1T (QD=1, unbatched `O_DIRECT`) | 69,738.1 ± 5,435.5 | 272.4 ± 21.2 MB/s | 1.0009 | 738.0 | 26132.8 | 0.000 B/op |
+| `JUring.write` (QD=64) | 1T (QD=64, batched pipeline) | 190,961.5 ± 13,755.4 | 745.9 ± 53.7 MB/s | 0.1990 | 250.8 | 11477.1 | 0.000 B/op |
 <!-- END GENERATED: single-core -->
 
 > [!TIP]
@@ -163,16 +172,16 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Threads | JUring Concurrency | FileChannel Concurrency | JUring (ops/s) | Bandwidth | FileChannel (ops/s) | Bandwidth | Speedup |
 |---|---|---|---|---|---|---|---|
-| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | 130,200.4 ± 69,339.8 | 508.6 ± 270.9 MB/s | 61,059.9 ± 11,597.0 | 238.5 ± 45.3 MB/s | 2.1x |
-| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | 108,935.5 ± 85,344.8 | 425.5 ± 333.4 MB/s | 104,538.7 ± 38,140.7 | 408.4 ± 149.0 MB/s | 1.0x |
-| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 109,707.7 ± 104,288.2 | 428.5 ± 407.4 MB/s | 123,384.5 ± 81,093.4 | 482.0 ± 316.8 MB/s | 0.9x |
-| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | 118,026.9 ± 89,903.4 | 461.0 ± 351.2 MB/s | 141,418.0 ± 73,467.3 | 552.4 ± 287.0 MB/s | 0.8x |
-| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | 127,436.0 ± 76,155.3 | 497.8 ± 297.5 MB/s | 118,876.3 ± 92,821.9 | 464.4 ± 362.6 MB/s | 1.1x |
+| 1 Thread | 1T × QD=64 (QD=64) | 1T × QD=1 (QD=1) | 190,555.5 ± 21,848.7 | 744.4 ± 85.3 MB/s | 71,848.8 ± 2,265.2 | 280.7 ± 8.8 MB/s | 2.7x |
+| 2 Threads | 2T × QD=64 (QD=128) | 2T × QD=1 (QD=2) | 189,824.8 ± 18,864.3 | 741.5 ± 73.7 MB/s | 119,601.5 ± 2,813.4 | 467.2 ± 11.0 MB/s | 1.6x |
+| 4 Threads | 4T × QD=64 (QD=256) | 4T × QD=1 (QD=4) | 190,854.6 ± 12,295.2 | 745.5 ± 48.0 MB/s | 189,822.3 ± 23,741.2 | 741.5 ± 92.7 MB/s | 1.0x |
+| 8 Threads | 8T × QD=64 (QD=512) | 8T × QD=1 (QD=8) | 190,349.8 ± 18,913.6 | 743.6 ± 73.9 MB/s | 192,691.5 ± 4,571.7 | 752.7 ± 17.9 MB/s | 1.0x |
+| 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16) | 193,105.4 ± 26,574.6 | 754.3 ± 103.8 MB/s | 191,675.9 ± 19,227.1 | 748.7 ± 75.1 MB/s | 1.0x |
 <!-- END GENERATED: scaling-write -->
 
 > [!NOTE]
-> **Understanding High-Concurrency Write Variance:**
-> Sustained 4KB random direct writes across 8 to 16 threads push over 20 GB of data in seconds, completely exhausting the drive's dynamic SLC cache. The Phison PS5016-E16 controller falls back to direct-to-die TLC folding (~300–700 MB/s), producing high measurement variance in both JMH and fio until write activity subsides and the SLC buffer flushes.
+> **Understanding Direct Write Saturation & Steady-State TLC Dynamics:**
+> On a single thread (`1T × QD=64`), `JUring` saturates the drive's steady-state TLC random write ceiling (~190,556 ops/s / ~744 MB/s), delivering a **2.7x speedup** over single-threaded `FileChannel` (`71,849 ops/s`). Because NVMe write completions are acknowledged via the controller's non-volatile write cache (~14 µs per `pwrite64`), 4 synchronous `FileChannel` threads (`QD=4`) are already sufficient to reach the drive's ~191k IOPS steady-state TLC write ceiling, resulting in `1.0x` parity from 4 to 16 threads. Measuring inside the steady-state TLC regime—after draining the initial ~6 GB pSLC burst buffer, using full-dataset PRNG offsets (`FioPrng`) to avoid 256 MB LBA overwrite coalescing, and allowing idle GC recovery between tiers—eliminates bimodal pSLC/GC transitions.
 
 ---
 
@@ -183,11 +192,11 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 | Threads | JUring Read (ops/s) | FileChannel Read (ops/s) | Read Speedup | JUring Write (ops/s) | FileChannel Write (ops/s) | Write Speedup |
 |---|---|---|---|---|---|---|
-| 1 Thread | 330,786.1 ± 780.0 | 10,248.5 ± 4,754.1 | 32.3x | 78,723.1 ± 77,509.7 | 56,127.1 ± 13,159.4 | 1.4x |
-| 2 Threads | 409,954.3 ± 76,671.2 | 22,282.1 ± 86.8 | 18.4x | 114,080.8 ± 72,645.0 | 100,320.2 ± 29,594.5 | 1.1x |
-| 4 Threads | 468,020.6 ± 38,165.8 | 43,159.0 ± 77.0 | 10.8x | 133,770.4 ± 110,029.9 | 123,052.5 ± 62,359.8 | 1.1x |
-| 8 Threads | 477,037.5 ± 1,084.0 | 81,498.2 ± 201.3 | 5.9x | 100,603.5 ± 73,924.2 | 124,031.5 ± 75,892.5 | 0.8x |
-| 16 Threads | 477,476.8 ± 1,274.2 | 144,912.6 ± 4,295.8 | 3.3x | 126,771.6 ± 74,321.4 | 167,322.3 ± 113,504.5 | 0.8x |
+| 1 Thread | 330,786.1 ± 780.0 | 10,248.5 ± 4,754.1 | 32.3x | 171,411.8 ± 17,476.3 | 66,819.1 ± 777.3 | 2.6x |
+| 2 Threads | 409,954.3 ± 76,671.2 | 22,282.1 ± 86.8 | 18.4x | 172,302.9 ± 17,024.1 | 130,227.8 ± 1,668.8 | 1.3x |
+| 4 Threads | 468,020.6 ± 38,165.8 | 43,159.0 ± 77.0 | 10.8x | 170,032.1 ± 13,988.8 | 171,839.0 ± 5,008.8 | 1.0x |
+| 8 Threads | 477,037.5 ± 1,084.0 | 81,498.2 ± 201.3 | 5.9x | 173,193.1 ± 13,104.3 | 169,649.0 ± 14,776.6 | 1.0x |
+| 16 Threads | 477,476.8 ± 1,274.2 | 144,912.6 ± 4,295.8 | 3.3x | 170,913.6 ± 19,535.4 | 166,644.1 ± 21,540.5 | 1.0x |
 <!-- END GENERATED: multifile -->
 
 ---
@@ -537,8 +546,8 @@ public class VirtualThreadExample {
    Hardware cycle and instruction metrics (`cycles:u`, `cycles:k`, `task-clock`) collected via JMH's `LinuxPerfNormProfiler` cover the threads of the forked JVM process over the active measurement window. They do not capture kernel interrupt-context completion handling executed on other CPU cores by the NVMe driver.
 3. **fio Benchmark Configuration:**
    The head-to-head comparison against native C `fio` (v3.40) was executed with 3 repeats per engine with randomized execution order. Both engines targeted the identical 10 GB contiguous pre-allocated file on ext4 with `O_DIRECT`, 4KB block size, fixed buffers, registered files, and QD=64. Raw JSON files for all runs are preserved in `results/2026-11-03/`.
-4. **Write Cache / SLC Folding Dynamics:**
-   Sustained random write tests with multiple threads write tens of gigabytes within seconds, exceeding the SSD's high-speed SLC buffer. Throughput drops during TLC folding are physical hardware characteristics reflected equally in both Java and native C measurements.
+4. **Write Cache / Steady-State TLC Dynamics:**
+   Consumer NVMe drives exhibit three distinct write regimes: (1) a short dynamic pSLC cache burst (~450k IOPS for the first ~6 GB), (2) a flat steady-state direct-to-TLC plateau (~190k–194k IOPS on a 10 GB single file; ~170k–173k IOPS across 2,211 files), and (3) a garbage-collection / inline block-erase cliff (~20k IOPS) if >120 GB is written continuously without idle GC recovery. All write benchmarks (`FioComparisonBenchmark`, `DirectWriteBenchmark`, and `MultiThreadScalingBenchmark`) use full-dataset `FioPrng` offsets (`waitBatch = 1`), drain the pSLC burst during warmup, and include inter-tier idle pauses for background GC recovery so that every measurement captures steady-state TLC throughput.
 5. **Single-Thread 1T×QD=64 Direct Read Discrepancies across Sections:**
    In earlier benchmark runs, three single-thread 4KB `O_DIRECT` read suites at QD=64 reported differing throughput numbers: Section 1 (`FioComparisonBenchmark`, ~441k IOPS), Section 2 (`DirectReadBenchmark`, ~345k IOPS), and Section 3 (`MultiThreadScalingBenchmark`, ~324k IOPS). Investigation identified three root causes:
    - **Shared file state and drive SLC cache contamination:** Reads and writes previously shared `write_files/single_file_bench.bin`. Recent writes left LBAs cached in the drive's SLC buffer, altering subsequent read throughput. Separating read benchmarks onto dedicated, read-only files in `read_files/` and scheduling all read suites prior to write suites eliminates this cross-contamination.

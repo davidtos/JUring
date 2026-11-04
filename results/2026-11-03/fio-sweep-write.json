@@ -1,27 +1,27 @@
 [
   {
     "batch": 1,
-    "iops": 200110.067918,
-    "enters_per_op": 1.3216
+    "iops": 192774.075308,
+    "enters_per_op": 1.4869
   },
   {
     "batch": 4,
-    "iops": 296051.189762,
-    "enters_per_op": 0.4542
+    "iops": 194821.571238,
+    "enters_per_op": 0.8770
   },
   {
     "batch": 8,
-    "iops": 194443.511298,
-    "enters_per_op": 1.0214
+    "iops": 195281.572809,
+    "enters_per_op": 0.7654
   },
   {
     "batch": 16,
-    "iops": 194692.261548,
-    "enters_per_op": 0.9141
+    "iops": 187593.802066,
+    "enters_per_op": 1.2466
   },
   {
     "batch": 32,
-    "iops": 195535.292941,
-    "enters_per_op": 0.5709
+    "iops": 195392.535821,
+    "enters_per_op": 0.7858
   }
 ]

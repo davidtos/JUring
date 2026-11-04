@@ -146,11 +146,12 @@ precondition_write() {
 if [ "$FROM_STEP" -le 10 ]; then
     echo -e "\n>>> [10/15] Running Head-to-Head fio comparison: randwrite <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-fio-write-before.json"
-    precondition_write "$WRITE_FILE" 5
-    ./bench.sh --fio-sweep --mode write --qd 64 --runtime 5 --file "$WRITE_FILE" --results-dir "$RESULTS_DIR"
-    ./bench.sh --fio-compare 5 --mode write --qd 64 --runtime 30 --warmup 5 --file "$WRITE_FILE" --results-dir "$RESULTS_DIR"
+    rm -f "$RESULTS_DIR"/fio-default-write-*.json "$RESULTS_DIR"/fio-best-write-*.json "$RESULTS_DIR"/fio-write-*.json "$RESULTS_DIR"/jmh-write-*.json
+    ./bench.sh --fio-sweep --mode write --qd 64 --runtime 3 --warmup 1 --file "$WRITE_FILE" --results-dir "$RESULTS_DIR"
+    cooldown 20
+    ./bench.sh --fio-compare 3 --mode write --qd 64 --runtime 3 --warmup 2 --file "$WRITE_FILE" --results-dir "$RESULTS_DIR"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-fio-write-after.json"
-    cooldown 10
+    cooldown 20
 fi
 
 # 11. DirectWriteBenchmark (SINGLE_FILE: separate invocations, randomised order)
@@ -165,10 +166,9 @@ if [ "$FROM_STEP" -le 11 ]; then
     fi
 
     for method in "${ORDER[@]}"; do
-        precondition_write "$WRITE_FILE" 3
         ./bench.sh --include "DirectWriteBenchmark\\.${method}$" --param distribution=SINGLE_FILE \
-            --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/direct-write-${method}.json"
-        cooldown 10
+            --f 1 --wi 3 --i 5 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-${method}.json"
+        cooldown 20
     done
 
     # Merge results into direct-write-single.json
@@ -176,10 +176,10 @@ if [ "$FROM_STEP" -le 11 ]; then
         > "$RESULTS_DIR/direct-write-single.json"
 
     # Syscalls and perfnorm passes
-    ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-write-single-syscalls.json"
-    ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-write-single-perfnorm.json"
+    ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-single-syscalls.json"
+    ./bench.sh --include 'DirectWriteBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 2 --rff "$RESULTS_DIR/direct-write-single-perfnorm.json"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-direct-write-after.json"
-    cooldown 10
+    cooldown 20
 fi
 
 # 12. MultiThreadScalingBenchmark writes (Single File: 1, 2, 4, 8, 16 Threads)
@@ -193,10 +193,9 @@ if [ "$FROM_STEP" -le 12 ]; then
     fi
 
     for method in "${ORDER[@]}"; do
-        precondition_write "$WRITE_FILE" 5
         ./bench.sh --threads-scaling --include "MultiThreadScalingBenchmark\\.${method}$" --param distribution=SINGLE_FILE \
-            --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-single-write-${method}.json"
-        cooldown 10
+            --f 1 --wi 3 --i 5 --w 2 --r 2 --rff "$RESULTS_DIR/scaling-single-write-${method}.json"
+        cooldown 20
     done
 
     # Merge read and write scaling files for each tier
@@ -206,7 +205,7 @@ if [ "$FROM_STEP" -le 12 ]; then
         rd_json="$RESULTS_DIR/scaling-single-t${t}.json"
         if [[ -f "$fc_json" && -f "$ju_json" ]]; then
             if [[ -f "$rd_json" ]]; then
-                jq -s '.[0] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-single-t${t}.merged.json" \
+                jq -s '[.[0][] | select(.benchmark | test("Read$"))] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-single-t${t}.merged.json" \
                     && mv -f "$RESULTS_DIR/scaling-single-t${t}.merged.json" "$rd_json"
             else
                 jq -s 'add' "$fc_json" "$ju_json" > "$rd_json"
@@ -214,7 +213,7 @@ if [ "$FROM_STEP" -le 12 ]; then
         fi
     done
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-single-after.json"
-    cooldown 10
+    cooldown 20
 fi
 
 # 13. MultiThreadScalingBenchmark writes (Multi File: 2,211 discrete files)
@@ -228,10 +227,9 @@ if [ "$FROM_STEP" -le 13 ]; then
     fi
 
     for method in "${ORDER[@]}"; do
-        precondition_write "$WRITE_FILE" 5
         ./bench.sh --threads-scaling --include "MultiThreadScalingBenchmark\\.${method}$" --param distribution=MULTI_FILE \
-            --f 3 --wi 2 --i 5 --w 5 --r 10 --rff "$RESULTS_DIR/scaling-multifile-write-${method}.json"
-        cooldown 10
+            --f 1 --wi 3 --i 5 --w 2 --r 2 --rff "$RESULTS_DIR/scaling-multifile-write-${method}.json"
+        cooldown 20
     done
 
     for t in 1 2 4 8 16; do
@@ -240,7 +238,7 @@ if [ "$FROM_STEP" -le 13 ]; then
         rd_json="$RESULTS_DIR/scaling-multifile-t${t}.json"
         if [[ -f "$fc_json" && -f "$ju_json" ]]; then
             if [[ -f "$rd_json" ]]; then
-                jq -s '.[0] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" \
+                jq -s '[.[0][] | select(.benchmark | test("Read$"))] + .[1] + .[2]' "$rd_json" "$fc_json" "$ju_json" > "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" \
                     && mv -f "$RESULTS_DIR/scaling-multifile-t${t}.merged.json" "$rd_json"
             else
                 jq -s 'add' "$fc_json" "$ju_json" > "$rd_json"
@@ -248,7 +246,7 @@ if [ "$FROM_STEP" -le 13 ]; then
         fi
     done
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-multi-after.json"
-    cooldown 10
+    cooldown 5
 fi
 
 # 14. BufferedWriteBenchmark with iou-wrk sampling

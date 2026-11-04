@@ -108,49 +108,79 @@ def gen_fio_compare(results_dir):
         variance = sum((x - mean) ** 2 for x in arr) / (len(arr) - 1) if len(arr) > 1 else 0.0
         return mean, math.sqrt(variance)
 
-    # Read
-    fio_def_rd, fio_best_rd, jmh_rd = [], [], []
-    for f in sorted(glob.glob(os.path.join(results_dir, "fio-default-read-*.json"))):
-        d = load_json_file(f)
-        if d: fio_def_rd.append(d["jobs"][0]["read"]["iops"])
-    if not fio_def_rd:
-        for f in sorted(glob.glob(os.path.join(results_dir, "fio-read-*.json"))):
+    def mode_block(mode, desc):
+        fio_def, fio_best, jmh = [], [], []
+        for f in sorted(glob.glob(os.path.join(results_dir, f"fio-default-{mode}-*.json"))):
             d = load_json_file(f)
-            if d: fio_def_rd.append(d["jobs"][0]["read"]["iops"])
-    for f in sorted(glob.glob(os.path.join(results_dir, "fio-best-read-*.json"))):
-        d = load_json_file(f)
-        if d: fio_best_rd.append(d["jobs"][0]["read"]["iops"])
-    for f in sorted(glob.glob(os.path.join(results_dir, "jmh-read-*.json"))):
-        d = load_json_file(f)
-        if d: jmh_rd.append(d[0]["primaryMetric"]["score"])
+            if d: fio_def.append(d["jobs"][0][mode]["iops"])
+        if not fio_def:
+            for f in sorted(glob.glob(os.path.join(results_dir, f"fio-{mode}-*.json"))):
+                d = load_json_file(f)
+                if d: fio_def.append(d["jobs"][0][mode]["iops"])
+        for f in sorted(glob.glob(os.path.join(results_dir, f"fio-best-{mode}-*.json"))):
+            d = load_json_file(f)
+            if d: fio_best.append(d["jobs"][0][mode]["iops"])
+        for f in sorted(glob.glob(os.path.join(results_dir, f"jmh-{mode}-*.json"))):
+            d = load_json_file(f)
+            if d: jmh.append(d[0]["primaryMetric"]["score"])
 
-    # Enters data
-    enters_file = os.path.join(results_dir, "fio-enters-read.json")
-    enters_data = load_json_file(enters_file) or {}
-    best_b = enters_data.get("best_batch", "—")
-    f_def_ent = enters_data.get("fio_default_enters_op", "—")
-    f_best_ent = enters_data.get("fio_best_enters_op", "—")
-    j_ent = enters_data.get("juring_enters_op", "—")
+        if not fio_def and not fio_best and not jmh:
+            return []
 
-    fd_m, fd_s = stats(fio_def_rd)
-    fb_m, fb_s = stats(fio_best_rd)
-    if fb_m == 0.0:
-        fb_m, fb_s = fd_m, fd_s
-        f_best_ent = f_def_ent
-    j_m, j_s = stats(jmh_rd)
+        enters_file = os.path.join(results_dir, f"fio-enters-{mode}.json")
+        enters_data = load_json_file(enters_file) or {}
+        best_b = enters_data.get("best_batch", "—")
+        if best_b == "—":
+            best_b_txt = os.path.join(results_dir, f"fio-best-{mode}.txt")
+            if os.path.exists(best_b_txt):
+                try:
+                    with open(best_b_txt, "r") as bf:
+                        best_b = bf.read().strip() or "—"
+                except Exception:
+                    pass
+        f_def_ent = enters_data.get("fio_default_enters_op", "—")
+        f_best_ent = enters_data.get("fio_best_enters_op", "—")
+        j_ent = enters_data.get("juring_enters_op", "—")
 
-    delta = ((j_m - fb_m) / fb_m * 100) if fb_m > 0 else 0.0
+        fd_m, fd_s = stats(fio_def)
+        fb_m, fb_s = stats(fio_best)
+        if fb_m == 0.0:
+            fb_m, fb_s = fd_m, fd_s
+            f_best_ent = f_def_ent
+        j_m, j_s = stats(jmh)
+
+        delta = ((j_m - fb_m) / fb_m * 100) if fb_m > 0 else 0.0
+
+        return [
+            desc,
+            "",
+            "| Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |",
+            "|---|---|---|---|---|---|",
+            f"| `fio` (default settings) | {fmt_stat(fd_m, fd_s, 1, '')} | {fmt_mb(fd_m, 4096, fd_s)} | {f_def_ent} | — | Default submission / reap |",
+            f"| `fio` (best batching: B={best_b}) | {fmt_stat(fb_m, fb_s, 1, '')} | {fmt_mb(fb_m, 4096, fb_s)} | {f_best_ent} | baseline | `--iodepth_batch_submit={best_b}` |",
+            f"| JUring (JMH) | {fmt_stat(j_m, j_s, 1, '')} | {fmt_mb(j_m, 4096, j_s)} | {j_ent} | {delta:+.1f}% | Batched `submitAndWait(1)` |"
+        ]
 
     lines = [
-        "Random 4KB read workload on a single thread at QD=64 on a dedicated 10 GB direct I/O read file (`O_DIRECT`, fixed buffers, registered files).",
         "*Note: ± indicates sample standard deviation over N independent repeats.*",
-        "",
-        "| Engine | Throughput (ops/s) | Bandwidth (MB/s) | Enters / op (`io_uring_enter`) | Delta vs Best fio | Configuration |",
-        "|---|---|---|---|---|---|",
-        f"| `fio` (default settings) | {fmt_stat(fd_m, fd_s, 1, '')} | {fmt_mb(fd_m, 4096, fd_s)} | {f_def_ent} | — | Default submission / reap |",
-        f"| `fio` (best batching: B={best_b}) | {fmt_stat(fb_m, fb_s, 1, '')} | {fmt_mb(fb_m, 4096, fb_s)} | {f_best_ent} | baseline | `--iodepth_batch_submit={best_b}` |",
-        f"| JUring (JMH) | {fmt_stat(j_m, j_s, 1, '')} | {fmt_mb(j_m, 4096, j_s)} | {j_ent} | {delta:+.1f}% | Batched `submitAndWait(1)` |"
+        ""
     ]
+    read_lines = mode_block(
+        "read",
+        "#### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)"
+    )
+    write_lines = mode_block(
+        "write",
+        "#### 4KB Random Direct Write (`randwrite`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)"
+    )
+
+    if read_lines:
+        lines.extend(read_lines)
+    if write_lines:
+        if read_lines:
+            lines.append("")
+        lines.extend(write_lines)
+
     return "\n".join(lines)
 
 def gen_single_core(results_dir):

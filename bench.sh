@@ -184,6 +184,7 @@ if [[ "${FIO_SWEEP:-false}" == "true" || "$FIO_COMPARE" == "true" ]]; then
             --name=fio_run
             --ioengine=io_uring
             --direct=1
+            --invalidate=0
             --bs=4k
             --size=10G
             --filename="$TARGET_FILE"
@@ -241,6 +242,14 @@ if [[ "${FIO_SWEEP:-false}" == "true" || "$FIO_COMPARE" == "true" ]]; then
         echo "=================================================================================="
         echo "                Running fio Batching Sweep (Mode: rand$MODE, QD: $QD)             "
         echo "=================================================================================="
+        if [[ "$MODE" == "write" && "$FIO_BIN" == "fio" ]]; then
+            echo " [Pre-warm] Draining initial pSLC write buffer (10s) to reach steady-state TLC regime..."
+            "$FIO_BIN" --name=fio_prewarm --ioengine=io_uring --direct=1 --bs=4k --size=10G \
+                --filename="$TARGET_FILE" --rw="randwrite" --iodepth="$QD" --fixedbufs=1 \
+                --registerfiles=1 --time_based --runtime=10s --norandommap --randrepeat=0 \
+                --output-format=json --output="$RESULTS_DIR/fio-prewarm.json" &>/dev/null || true
+            rm -f "$RESULTS_DIR/fio-prewarm.json"
+        fi
         local best_iops=0
         local best_b=1
         local sweep_records=()
@@ -356,6 +365,15 @@ EOF
     echo " Execution Order:   Randomized per repeat"
     echo "----------------------------------------------------------------------------------"
 
+    if [[ "$MODE" == "write" && "$FIO_BIN" == "fio" ]]; then
+        echo " [Pre-warm] Draining initial pSLC write buffer (8s) to reach steady-state TLC regime..."
+        "$FIO_BIN" --name=fio_prewarm --ioengine=io_uring --direct=1 --bs=4k --size=10G \
+            --filename="$TARGET_FILE" --rw="randwrite" --iodepth="$QD" --fixedbufs=1 \
+            --registerfiles=1 --time_based --runtime=8s --norandommap --randrepeat=0 \
+            --output-format=json --output="$RESULTS_DIR/fio-prewarm.json" &>/dev/null || true
+        rm -f "$RESULTS_DIR/fio-prewarm.json"
+    fi
+
     for ((rep = 1; rep <= REPEATS; rep++)); do
         JMH_OUT="$RESULTS_DIR/jmh-${MODE}-$rep.json"
         FIO_DEF_OUT="$RESULTS_DIR/fio-default-${MODE}-$rep.json"
@@ -431,7 +449,7 @@ EOF
         json_def="$RESULTS_DIR/fio-enters-def.json"
         perf stat -e syscalls:sys_enter_io_uring_enter -x, -o "$perf_def" -- "$FIO_BIN" \
             --name=fio_perf_def --ioengine=io_uring --direct=1 --bs=4k --size=10G --filename="$TARGET_FILE" \
-            --rw="rand${MODE}" --iodepth="$QD" --fixedbufs=1 --registerfiles=1 --time_based --runtime=5s --ramp_time=1s \
+            --rw="rand${MODE}" --iodepth="$QD" --fixedbufs=1 --registerfiles=1 --time_based --runtime=2s --ramp_time=1s \
             --norandommap --randrepeat=0 --output-format=json --output="$json_def" &>/dev/null || true
         if [[ -f "$json_def" && -f "$perf_def" ]]; then
             ios=0
@@ -451,7 +469,7 @@ EOF
         json_best="$RESULTS_DIR/fio-enters-best.json"
         perf stat -e syscalls:sys_enter_io_uring_enter -x, -o "$perf_best" -- "$FIO_BIN" \
             --name=fio_perf_best --ioengine=io_uring --direct=1 --bs=4k --size=10G --filename="$TARGET_FILE" \
-            --rw="rand${MODE}" --iodepth="$QD" --fixedbufs=1 --registerfiles=1 --time_based --runtime=5s --ramp_time=1s \
+            --rw="rand${MODE}" --iodepth="$QD" --fixedbufs=1 --registerfiles=1 --time_based --runtime=2s --ramp_time=1s \
             --iodepth_batch_submit="$BEST_B" --iodepth_batch_complete_min=1 --iodepth_batch_complete_max="$QD" \
             --norandommap --randrepeat=0 --output-format=json --output="$json_best" &>/dev/null || true
         if [[ -f "$json_best" && -f "$perf_best" ]]; then
@@ -471,7 +489,7 @@ EOF
         jmh_sys="$RESULTS_DIR/jmh-enters-${MODE}.json"
         java --enable-native-access=ALL-UNNAMED -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
             org.openjdk.jmh.Main ".*FioComparisonBenchmark\\.${BENCH_METHOD}$" \
-            -f 1 -wi 1 -w 2s -i 1 -r 5s -p qd="$QD" -p telemetry=false \
+            -f 1 -wi 1 -w 1s -i 1 -r 2s -p qd="$QD" -p telemetry=false \
             -prof "org.openjdk.jmh.profile.LinuxPerfNormProfiler:events=syscalls:sys_enter_io_uring_enter" \
             -rf json -rff "$jmh_sys" &>/dev/null || true
         if [[ -f "$jmh_sys" ]]; then
