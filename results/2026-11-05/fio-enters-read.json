@@ -1,0 +1,7 @@
+{
+  "mode": "read",
+  "best_batch": "8",
+  "fio_default_enters_op": "1.5224",
+  "fio_best_enters_op": "0.7251",
+  "juring_enters_op": "0.3465"
+}

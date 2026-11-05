@@ -72,22 +72,22 @@ def gen_hardware(results_dir):
     env_file = os.path.join(results_dir, "env.json")
     env = load_json_file(env_file) or {}
 
-    cpu_model = env.get("cpu_model", "AMD Ryzen 9 3950X")
-    cores = env.get("cpu_cores", 32)
-    gov = env.get("cpu_governor", "performance")
-    smt = env.get("smt", "enabled")
+    cpu_model = env.get("cpu_model", "unknown")
+    cores = env.get("cpu_cores", "unknown")
+    gov = env.get("cpu_governor", "unknown")
+    smt = env.get("smt", "unknown")
     ram = env.get("ram", "unknown")
 
-    nvme_model = env.get("nvme_model", "GIGABYTE GP-ASM2NE6100TTTD")
-    nvme_fw = env.get("nvme_firmware", "EGFM11.2")
-    kernel = env.get("kernel", "Linux 7.0.x")
-    fs = env.get("filesystem", "ext4")
-    mnt = env.get("mount_point", "/mnt/TestData")
-    dev = env.get("mount_device", "/dev/nvme1n1p1")
-    opts = env.get("mount_options", "rw,relatime")
+    nvme_model = env.get("nvme_model", "unknown")
+    nvme_fw = env.get("nvme_firmware", "unknown")
+    kernel = env.get("kernel", "unknown")
+    fs = env.get("filesystem", "unknown")
+    mnt = env.get("mount_point", "unknown")
+    dev = env.get("mount_device", "unknown")
+    opts = env.get("mount_options", "unknown")
 
-    java_v = env.get("java_version", "OpenJDK 25")
-    perf_paranoid = env.get("perf_event_paranoid", "-1")
+    java_v = env.get("java_version", "unknown")
+    perf_paranoid = env.get("perf_event_paranoid", "unknown")
 
     lines = [
         "All benchmarks were executed on bare-metal hardware with ext4 mounted directly on a dedicated PCIe Gen4 NVMe drive:",
@@ -265,7 +265,7 @@ def gen_single_core(results_dir):
                 cu = get_metric(dr_perf, bname, qd, "cycles:u")
                 ck = get_metric(dr_perf, bname, qd, "cycles:k")
                 alloc = get_alloc_metric(dr_gc, dr, bname, qd)
-                sys_str = f"{sys_op:.4f}" if sys_op is not None else "1.0000"
+                sys_str = f"{sys_op:.4f}" if sys_op is not None else "N/A"
                 cu_str = f"{cu:.1f}" if cu is not None else "N/A"
                 ck_str = f"{ck:.1f}" if ck is not None else "N/A"
                 lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | {fmt_alloc(alloc)} |")
@@ -286,7 +286,7 @@ def gen_single_core(results_dir):
                 cu = get_metric(dw_perf, bname, qd, "cycles:u")
                 ck = get_metric(dw_perf, bname, qd, "cycles:k")
                 alloc = get_alloc_metric(dw_gc, dw, bname, qd)
-                sys_str = f"{sys_op:.4f}" if sys_op is not None else "1.0000"
+                sys_str = f"{sys_op:.4f}" if sys_op is not None else "N/A"
                 cu_str = f"{cu:.1f}" if cu is not None else "N/A"
                 ck_str = f"{ck:.1f}" if ck is not None else "N/A"
                 lines.append(f"| {label} | {conc} | {fmt_stat(s, e, 1, '')} | {fmt_mb(s, 4096, e)} | {sys_str} | {cu_str} | {ck_str} | {fmt_alloc(alloc)} |")
@@ -403,7 +403,7 @@ def gen_virtual_threads(results_dir):
         j_sys = get_val(vt_sys, "juringVirtualThreadRead", vts, "raw_syscalls:sys_enter")
         fc_sys = get_val(vt_sys, "fileChannelVirtualThreadRead", vts, "raw_syscalls:sys_enter")
         j_sys_str = f"{j_sys:.4f}" if j_sys is not None else "N/A"
-        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "1.0000"
+        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "N/A"
 
         # task-clock in ms converted to µs/op
         j_tc = get_val(vt_perf, "juringVirtualThreadRead", vts, "task-clock")
@@ -496,7 +496,7 @@ def gen_buffered(results_dir):
         j_sys = get_val(buf_sys, "juringBufferedRead", "raw_syscalls:sys_enter")
         fc_sys = get_val(buf_sys, "fileChannelBufferedRead", "raw_syscalls:sys_enter")
         j_sys_str = f"{j_sys:.4f}" if j_sys is not None else "N/A"
-        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "1.0000"
+        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "N/A"
 
         j_tc = get_val(buf_perf, "juringBufferedRead", "task-clock")
         fc_tc = get_val(buf_perf, "fileChannelBufferedRead", "task-clock")
@@ -520,7 +520,7 @@ def gen_buffered(results_dir):
         j_sys = get_val(buf_sys, "juringBufferedWrite", "raw_syscalls:sys_enter")
         fc_sys = get_val(buf_sys, "fileChannelBufferedWrite", "raw_syscalls:sys_enter")
         j_sys_str = f"{j_sys:.4f}" if j_sys is not None else "N/A"
-        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "1.0000"
+        fc_sys_str = f"{fc_sys:.4f}" if fc_sys is not None else "N/A"
 
         j_tc = get_val(buf_perf, "juringBufferedWrite", "task-clock")
         fc_tc = get_val(buf_perf, "fileChannelBufferedWrite", "task-clock")
@@ -642,13 +642,18 @@ def update_readme(readme_path, results_dir, do_write=False):
     else:
         return new_content == content
 
+def get_default_results_dir():
+    candidates = sorted([d for d in glob.glob("results/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]") if os.path.isdir(d)])
+    return candidates[-1] if candidates else "results/2026-11-05"
+
 def main():
     args = sys.argv[1:]
+    default_dir = get_default_results_dir()
     if "--write" in args:
         idx = args.index("--write")
         readme = args[idx + 1] if idx + 1 < len(args) else "README.md"
         rem = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
-        results_dir = rem[0] if rem else "results/2026-11-03"
+        results_dir = rem[0] if rem else default_dir
         success = update_readme(readme, results_dir, do_write=True)
         if success:
             print(f"Successfully updated generated sections in {readme} from {results_dir}")
@@ -660,7 +665,7 @@ def main():
         idx = args.index("--check")
         readme = args[idx + 1] if idx + 1 < len(args) else "README.md"
         rem = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
-        results_dir = rem[0] if rem else "results/2026-11-03"
+        results_dir = rem[0] if rem else default_dir
         up_to_date = update_readme(readme, results_dir, do_write=False)
         if up_to_date:
             print(f"Check OK: Generated sections in {readme} match {results_dir}")
@@ -669,7 +674,7 @@ def main():
             print(f"Check FAILED: Generated sections in {readme} differ from {results_dir}", file=sys.stderr)
             sys.exit(1)
     else:
-        results_dir = args[0] if args else "results/2026-11-03"
+        results_dir = args[0] if args else default_dir
         print("=" * 80)
         print(f" JUring Publication Benchmark Report ({results_dir})")
         print("=" * 80)
