@@ -21,8 +21,7 @@ import org.openjdk.jmh.runner.options.TimeValue;
 import java.util.*;
 
 /**
- * Universal CLI Benchmark Runner wrapping JMH OptionsBuilder with preflight verification,
- * quick/full execution presets, category filters, multi-thread scaling sweeps, and profiler attachments.
+ * Benchmark Runner wrapping JMH.
  */
 public class BenchmarkRunner {
 

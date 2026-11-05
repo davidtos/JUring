@@ -20,10 +20,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
  * Buffered / Page-Cache Read Benchmark.
- *
- * Compares fair, un-crippled FileChannel against batched JUring (batch 64)
- * when file content is fully resident in Linux page cache (DRAM).
- * Quantifies pure system call context switch amortization.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

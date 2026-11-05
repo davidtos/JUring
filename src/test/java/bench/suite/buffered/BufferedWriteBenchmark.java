@@ -21,9 +21,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
  * Buffered / Page-Cache Write Benchmark.
- *
- * Compares FileChannel vs JUring when dirtying pages in Linux page cache (RAM).
- * Measures pure in-memory syscall batching efficiency.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

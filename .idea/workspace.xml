@@ -4,10 +4,29 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="bench: remove publication benchmark helper scripts">
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="docs: simplify API javadocs">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkSuiteValidationTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/FfmInvocationBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/FfmInvocationBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedReadBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedWriteBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/DatasetManager.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/DatasetManager.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/IoHelper.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/IoHelper.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectLatencyBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectLatencyBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/EqualQueueDepthBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/EqualQueueDepthBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/MultiThreadScalingBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/MultiThreadScalingBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/NopBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/NopBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/VirtualThreadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/VirtualThreadBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/BugVerificationTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Main.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Phase1BugProofTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Phase2VirtualThreadProofTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -48,19 +67,19 @@
       <entry key="MS500" value="1.0" />
       <entry key="S2" value="1.0" />
       <entry key="S5" value="1.0" />
-      <entry key="S10" value="1.0000000000046871" />
-      <entry key="S30" value="1.0009080222691307" />
-      <entry key="S60" value="1.1279768737340847" />
-      <entry key="M2" value="2.821045319691187" />
-      <entry key="M5" value="14.27809410296511" />
-      <entry key="M10" value="34.49586003209876" />
-      <entry key="M15" value="52.414591186588474" />
-      <entry key="M30" value="92.33702479239844" />
-      <entry key="H1" value="149.8330173629715" />
-      <entry key="H2" value="295.5273719123788" />
-      <entry key="H4" value="546.9321118956418" />
-      <entry key="D1" value="1048.9359487396757" />
-      <entry key="W1" value="1184.479607522273" />
+      <entry key="S10" value="1.0" />
+      <entry key="S30" value="1.0" />
+      <entry key="S60" value="1.0" />
+      <entry key="M2" value="1.0000000006270995" />
+      <entry key="M5" value="1.0019653539100393" />
+      <entry key="M10" value="1.4047177393857577" />
+      <entry key="M15" value="3.706298593729028" />
+      <entry key="M30" value="21.9815530526936" />
+      <entry key="H1" value="72.42305176050463" />
+      <entry key="H2" value="205.03898305619163" />
+      <entry key="H4" value="455.45526798069676" />
+      <entry key="D1" value="1018.0491071048906" />
+      <entry key="W1" value="1180.2674075772386" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -82,23 +101,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.8179020585577811" />
-      <entry key="MS500" value="0.9605948639534766" />
-      <entry key="S2" value="0.9899997047180724" />
-      <entry key="S5" value="0.9959878167538044" />
-      <entry key="S10" value="0.9979918921329526" />
-      <entry key="S30" value="1.000236712239761" />
-      <entry key="S60" value="1.1275394482177532" />
-      <entry key="M2" value="2.820179743941802" />
-      <entry key="M5" value="14.276269551296036" />
-      <entry key="M10" value="34.49387666367501" />
-      <entry key="M15" value="52.41271878730575" />
-      <entry key="M30" value="92.33552305818168" />
-      <entry key="H1" value="149.83166199027937" />
-      <entry key="H2" value="295.52552379137546" />
-      <entry key="H4" value="546.9301067097192" />
-      <entry key="D1" value="1048.9352521338026" />
-      <entry key="W1" value="1184.479494051912" />
+      <entry key="MS100" value="0.05111887865986132" />
+      <entry key="MS500" value="0.5517168700209797" />
+      <entry key="S2" value="0.8618448006053145" />
+      <entry key="S5" value="0.9422618900854682" />
+      <entry key="S10" value="0.9707017513559292" />
+      <entry key="S30" value="0.990136957332295" />
+      <entry key="S60" value="0.9950562583755227" />
+      <entry key="M2" value="0.9975250671668525" />
+      <entry key="M5" value="1.00097439337251" />
+      <entry key="M10" value="1.4041989923550757" />
+      <entry key="M15" value="3.7058715714140162" />
+      <entry key="M30" value="21.98104663026957" />
+      <entry key="H1" value="72.42232307895084" />
+      <entry key="H2" value="205.0376657712249" />
+      <entry key="H4" value="455.45358118754166" />
+      <entry key="D1" value="1018.0484282336349" />
+      <entry key="W1" value="1180.2672941145272" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -123,6 +142,7 @@
     "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
     "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
     "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
+    "JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails.executor": "Run",
     "JUnit.DirectIoTest.executor": "Run",
     "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
     "JUnit.JUringTest (1).executor": "Run",
@@ -173,22 +193,9 @@
       <command value="mvn verify" />
     </option>
   </component>
-  <component name="RunManager" selected="Application.FioComparisonBenchmark">
+  <component name="RunManager" selected="JUnit.DirectIoTest">
     <configuration name="DirectReadBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadBenchmark" />
-      <module name="JUring" />
-      <extension name="coverage">
-        <pattern>
-          <option name="PATTERN" value="bench.suite.direct.*" />
-          <option name="ENABLED" value="true" />
-        </pattern>
-      </extension>
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="DirectReadVisualVerificationTest" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
-      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadVisualVerificationTest" />
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
@@ -213,7 +220,40 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
-    <configuration name="DirectIoTest.testDirectIoRead" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+    <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="bench.suite.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="bench.suite" />
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="BenchmarkSuiteValidationTest.testFioStubExitCodeFails" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="bench.suite.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="bench.suite" />
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
+      <option name="METHOD_NAME" value="testFioStubExitCodeFails" />
+      <option name="TEST_OBJECT" value="method" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="DirectIoTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
@@ -223,23 +263,6 @@
       </extension>
       <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
       <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.DirectIoTest" />
-      <option name="METHOD_NAME" value="testDirectIoRead(java.nio.file.Path)" />
-      <option name="TEST_OBJECT" value="method" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="ZeroAllocationHotPathTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
-      <module name="JUring" />
-      <extension name="coverage">
-        <pattern>
-          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
-          <option name="ENABLED" value="true" />
-        </pattern>
-      </extension>
-      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
-      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.ZeroAllocationHotPathTest" />
       <option name="TEST_OBJECT" value="class" />
       <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
@@ -255,11 +278,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="JUnit.DirectIoTest" />
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails" />
+        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
         <item itemvalue="Application.FioComparisonBenchmark" />
         <item itemvalue="Application.DirectReadBenchmark" />
-        <item itemvalue="JUnit.ZeroAllocationHotPathTest" />
-        <item itemvalue="Application.DirectReadVisualVerificationTest" />
-        <item itemvalue="JUnit.DirectIoTest.testDirectIoRead" />
       </list>
     </recent_temporary>
   </component>
@@ -320,23 +343,9 @@
     <MESSAGE value="chore: clean up IDE workspace changelist" />
     <MESSAGE value="bench: remove publication benchmark helper scripts and tests" />
     <MESSAGE value="bench: remove publication benchmark helper scripts" />
-    <option name="LAST_COMMIT_MESSAGE" value="bench: remove publication benchmark helper scripts" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" type="java-line">
-          <url>file://$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkSuiteValidationTest.java</url>
-          <line>59</line>
-          <option name="timeStamp" value="1" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" type="java-line">
-          <url>file://$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java</url>
-          <line>107</line>
-          <option name="timeStamp" value="3" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
+    <MESSAGE value="docs: clean up API javadocs" />
+    <MESSAGE value="docs: simplify API javadocs" />
+    <option name="LAST_COMMIT_MESSAGE" value="docs: simplify API javadocs" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

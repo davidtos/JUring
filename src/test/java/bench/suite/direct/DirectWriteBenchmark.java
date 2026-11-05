@@ -22,8 +22,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 /**
  * NVMe Direct I/O (O_DIRECT) Write Benchmark.
  *
- * Compares FileChannel vs JUring random writes across both multi-file
- * (preventing VFS inode lock serialization) and single-file contention modes.
+ * Compares FileChannel vs JUring random writes across both multi-file and single-file contention modes.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

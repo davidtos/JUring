@@ -36,28 +36,24 @@ class DirectIoTest {
     }
 
     /**
-     * Generates exactly 4096 bytes of human-readable text.
-     * Composed of 64 lines of 64 bytes each (including trailing newline).
+     * Generates 4096 bytes of text (64 lines of 64 bytes each).
      */
-    private static String generateHumanReadable4096Bytes() {
+    private static String generateBlockData() {
         StringBuilder sb = new StringBuilder(BLOCK_SIZE);
         for (int i = 1; i <= 64; i++) {
-            // Exactly 64 bytes per line (ASCII / UTF-8):
-            // "Line 01: Direct I/O human readable block payload in JUring [01]\n" = 64 bytes
-            sb.append(String.format(Locale.ROOT,
-                    "Line %02d: Direct I/O human readable block payload in JUring [%02d]\n", i, i));
+            sb.append(String.format(Locale.ROOT, "Line %02d: %s\n", i, "x".repeat(54)));
         }
         return sb.toString();
     }
 
     @Test
-    @DisplayName("Direct I/O Write of 4096 human-readable bytes")
+    @DisplayName("Direct I/O Write of 4096 bytes")
     void testDirectIoWrite(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_write_test.txt");
 
-        String expectedText = generateHumanReadable4096Bytes();
+        String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
-        assertEquals(BLOCK_SIZE, expectedBytes.length, "Generated text payload must be exactly 4096 bytes");
+        assertEquals(BLOCK_SIZE, expectedBytes.length);
 
         // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
@@ -72,24 +68,24 @@ class DirectIoTest {
             assertEquals(BLOCK_SIZE, result.result(), "Direct I/O write must write exactly 4096 bytes");
         }
 
-        // Verify the file content on disk byte-for-byte and as human-readable string
+        // Verify the file content on disk
         String writtenText = Files.readString(testFile, StandardCharsets.UTF_8);
-        assertEquals(expectedText, writtenText, "File content written via Direct I/O must match expected human-readable text");
-        assertEquals(BLOCK_SIZE, Files.size(testFile), "File size on disk must be exactly 4096 bytes");
+        assertEquals(expectedText, writtenText);
+        assertEquals(BLOCK_SIZE, Files.size(testFile));
     }
 
     @Test
-    @DisplayName("Direct I/O Read of 4096 human-readable bytes")
+    @DisplayName("Direct I/O Read of 4096 bytes")
     void testDirectIoRead(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_read_test.txt");
 
-        String expectedText = generateHumanReadable4096Bytes();
+        String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
-        assertEquals(BLOCK_SIZE, expectedBytes.length, "Generated text payload must be exactly 4096 bytes");
+        assertEquals(BLOCK_SIZE, expectedBytes.length);
 
-        // Prepare the test file containing 4096 bytes of human-readable data
+        // Prepare test file
         Files.write(testFile, expectedBytes);
-        assertEquals(BLOCK_SIZE, Files.size(testFile), "File size must be exactly 4096 bytes");
+        assertEquals(BLOCK_SIZE, Files.size(testFile));
 
         // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
@@ -103,26 +99,26 @@ class DirectIoTest {
             assertEquals(readId, result.id(), "Completed operation ID must match submitted ID");
             assertEquals(BLOCK_SIZE, result.result(), "Direct I/O read must read exactly 4096 bytes");
 
-            // Verify read content is human-readable and matches expected content
+            // Verify read content matches expected content
             String actualText = result.getString(StandardCharsets.UTF_8);
-            assertEquals(expectedText, actualText, "Data read via Direct I/O must match expected human-readable text");
-            assertTrue(actualText.startsWith("Line 01: Direct I/O human readable block payload in JUring [01]\n"));
-            assertTrue(actualText.endsWith("Line 64: Direct I/O human readable block payload in JUring [64]\n"));
+            assertEquals(expectedText, actualText);
+            assertTrue(actualText.startsWith("Line 01: " + "x".repeat(54) + "\n"));
+            assertTrue(actualText.endsWith("Line 64: " + "x".repeat(54) + "\n"));
         }
     }
 
     @Test
-    @DisplayName("Direct I/O Zero-Copy Write of 4096 human-readable bytes")
+    @DisplayName("Direct I/O Zero-Copy Write of 4096 bytes")
     void testDirectIoZeroCopyWrite(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_zero_copy_write_test.txt");
 
-        String expectedText = generateHumanReadable4096Bytes();
+        String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
 
         // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
-        // Check out buffer 0 and copy human-readable text directly into registered memory segment
+        // Check out buffer 0 and copy data directly into registered memory segment
         int bufIdx = jUring.checkOutBuffer();
         assertTrue(bufIdx >= 0, "A registered buffer should be successfully checked out");
         MemorySegment registeredBuffer = jUring.getRegisteredBuffer(bufIdx);
@@ -146,11 +142,11 @@ class DirectIoTest {
     }
 
     @Test
-    @DisplayName("Direct I/O Write and Read round-trip of 4096 human-readable bytes")
+    @DisplayName("Direct I/O Write and Read round-trip of 4096 bytes")
     void testDirectIoWriteAndReadRoundTrip(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_roundtrip_test.txt");
 
-        String expectedText = generateHumanReadable4096Bytes();
+        String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
 
         // Register 4096-byte aligned buffer in JUring

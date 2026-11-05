@@ -16,16 +16,6 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Benchmark comparing the different ways to invoke a native function via Java FFM (JEP 454).
- * <p>
- * Evaluates:
- * <ol>
- *   <li><b>Static Final MethodHandle (invokeExact):</b> The gold-standard constant-folded JIT path.</li>
- *   <li><b>Static Final MethodHandle with critical(true):</b> Skipping safepoints for leaf calls.</li>
- *   <li><b>Instance MethodHandle (invokeExact):</b> MethodHandle stored in an instance field (no constant folding).</li>
- *   <li><b>Static Final MethodHandle (invoke):</b> Generic invoke with type checking.</li>
- *   <li><b>MethodHandleProxies (Interface Proxy):</b> The pattern used in LibCDispatcher (MethodHandleProxies.asInterfaceInstance).</li>
- *   <li><b>MethodHandleProxies with critical(true):</b> Interface proxy over a critical downcall handle.</li>
- * </ol>
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)

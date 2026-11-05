@@ -15,10 +15,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Manages test datasets for both Direct I/O and Buffered I/O benchmarks.
- *
- * Precomputes 4KB-aligned tasks into primitive arrays (taskFileIndices[] and taskOffsets[])
- * to eliminate HashMap lookups, string allocations, and path conversions on the benchmark hot path
- * for BOTH FileChannel and JUring.
  */
 public class DatasetManager {
 
@@ -426,9 +422,8 @@ public class DatasetManager {
     }
 
     /**
-     * Ultra-fast, zero-allocation 64-bit XorShift PRNG generating uniform random
-     * 4KB-aligned block offsets across the entire 10 GB file (2,621,440 blocks),
-     * exactly mirroring fio's per-thread PRNG offset generator (e.g. tausworthe / lfsr).
+     * 64-bit XorShift PRNG generating uniform random 4KB-aligned block offsets across
+     * the entire 10 GB file mirroring fio's per-thread PRNG offset generator.
      */
     public static final class FioPrng {
         private long state;

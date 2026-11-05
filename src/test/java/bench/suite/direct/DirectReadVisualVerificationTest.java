@@ -31,18 +31,6 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Visual Verification Runner and Integrity Test for the JUring Direct Read Benchmark.
- *
- * <p>Executes the exact same pipelined O_DIRECT reading architecture as {@link DirectReadBenchmark}:
- * <ul>
- *   <li>Registered files ({@code ring.registerFiles})</li>
- *   <li>Registered fixed buffers ({@code ring.registerBuffers})</li>
- *   <li>Zero-copy NVMe direct reads ({@code ring.prepareReadFixed}) bypassing Linux page cache</li>
- *   <li>Queue depth batch submission and batch completion reaping</li>
- * </ul>
- *
- * <p>While running, it extracts the actual contents transferred into off-heap memory, formats a
- * visual preview, prints the live reads moving in real time to the console, and verifies every
- * block byte-for-byte against the physical file on disk.
  */
 @EnabledOnOs(OS.LINUX)
 @Tag("linux")

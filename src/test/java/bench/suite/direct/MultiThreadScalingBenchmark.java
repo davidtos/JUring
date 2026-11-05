@@ -20,14 +20,7 @@ import java.util.concurrent.TimeUnit;
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
- * Multi-Thread NVMe Flash Bus Saturation & Concurrency Scaling Suite.
- *
- * Compares Java standard FileChannel against JUring across 1, 4, 8, and 16 concurrent threads
- * for both direct reads and direct writes.
- * Demonstrates:
- *   1. Single-threaded JUring outperforming 16-threaded FileChannel.
- *   2. Multi-threaded JUring saturating the physical PCIe NVMe flash controller bus.
- *   3. Adaptive buffer pool sizing conforming to system RLIMIT_MEMLOCK restrictions.
+ * Multi-Thread NVMe Flash Bus Saturation & Concurrency Scaling.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

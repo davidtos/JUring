@@ -13,10 +13,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
  * Pure {@code IORING_OP_NOP} throughput and overhead ceiling benchmark.
- * <p>
- * Exercises the exact same SQE preparation, batch submission, and CQE reaping pipeline
- * as {@link DirectReadBenchmark} without touching any filesystem or block device.
- * Isolates pure JUring + kernel {@code io_uring} framework cost per operation.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

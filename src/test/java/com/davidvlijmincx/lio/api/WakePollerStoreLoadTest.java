@@ -10,16 +10,6 @@ import java.lang.invoke.VarHandle;
 
 /**
  * OpenJDK JCStress stress test suite for JUring and JUringBlocking memory barrier mechanics.
- * Drives real library classes (IoUringDispatcher, JUringBlocking, ZeroGcSqe, ZeroGcCqe).
- * Verifies that:
- * 1. Eventfd handshake StoreLoad barrier prevents lost wakeup hangs between wakePoller and poller inKernel.
- * 2. B10 VarHandle.fullFence() StoreLoad barrier between SQ tail store and sqKflags load prevents lost SQPOLL wakeups.
- * 3. Release-acquire barrier on MPSC slot sequence in JUringBlocking prevents reading uninitialized payload.
- * 4. Release-acquire barrier on IoUringDispatcher SQ tail prevents reading uninitialized SQEs.
- * 5. Release-acquire barrier on IoUringDispatcher CQ tail prevents reading uninitialized CQEs.
- * 6. Bounded buffer pool sequence handoff prevents data corruption / stale buffer reads.
- * 7. Loop termination on sqKhead consumption guarantees timely loop exit without hanging.
- * 8. Control task publication and completion barrier ensures synchronous action visibility.
  */
 @JCStressTest
 @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Poller noticed task before entering kernel (no unpark/eventfd write needed).")
@@ -42,9 +32,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    private int taskSubmitted;
-    private int inKernel;
-
     @Actor
     public void submitter(II_Result r) {
         // 1. Publish task via release store (as in Worker.submitAndAwaitSlot mpscSeq update)
@@ -65,14 +52,6 @@ public class WakePollerStoreLoadTest {
         r.r2 = (int) VH_TASK_SUBMITTED.getAcquire(this);
     }
 
-    /**
-     * Verifies the B10 StoreLoad fence (VarHandle.fullFence()) in IoUringDispatcher.submit(),
-     * submitAndWait(), and submitAndWaitForBatchResult().
-     * Under SQPOLL, tail is published with setRelease, then a full fence, then flags is loaded.
-     * The kernel SQ thread checks tail with acquire and sets NEED_WAKEUP volatile.
-     * If the StoreLoad fence is missing or removed, (0, 0) is observed: kernel sleeps and
-     * user thread skips io_uring_enter(IORING_ENTER_SQ_WAKEUP), hanging indefinitely.
-     */
     @JCStressTest
     @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Submitter saw old flags; kernel saw new tail and continues.")
     @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter saw NEED_WAKEUP and wakes kernel; kernel saw old tail.")
@@ -115,10 +94,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies that the release-acquire barrier on the MPSC sequence array
-     * in JUringBlocking guarantees full payload visibility when a work slot is published.
-     */
     @JCStressTest
     @Outcome(id = "0, 0, 0", expect = Expect.ACCEPTABLE, desc = "Slot not yet published.")
     @Outcome(id = "1, 18, 7", expect = Expect.ACCEPTABLE, desc = "Slot published; payload fully visible.")
@@ -154,10 +129,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies that updating sqKtail with setRelease in IoUringDispatcher guarantees
-     * that all SQE payload stores through ZeroGcSqe are visible before the kernel/poller observes the tail update.
-     */
     @JCStressTest
     @Outcome(id = "0, 0, 0, 0", expect = Expect.ACCEPTABLE, desc = "Submission not yet visible.")
     @Outcome(id = "1, 18, 4, 8192", expect = Expect.ACCEPTABLE, desc = "Submission visible; all SQE fields intact.")
@@ -208,10 +179,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies that updating cqKtail with release guarantees that CQE completion fields
-     * through ZeroGcCqe are fully visible when IoUringDispatcher reaps CQEs with getAcquire.
-     */
     @JCStressTest
     @Outcome(id = "0, 0, 0", expect = Expect.ACCEPTABLE, desc = "CQE not yet published.")
     @Outcome(id = "1, 4096, 999", expect = Expect.ACCEPTABLE, desc = "CQE published; result and user_data visible.")
@@ -259,9 +226,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies bounded buffer pool sequence handoff in JUringBlocking.
-     */
     @JCStressTest
     @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE, desc = "Buffer not yet checked in.")
     @Outcome(id = "2, 12345", expect = Expect.ACCEPTABLE, desc = "Buffer checked in; contents visible to checkout thread.")
@@ -291,9 +255,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies that acquire reads on sqKhead prevent loop hanging when io_uring completes/consumes SQEs.
-     */
     @JCStressTest
     @Outcome(id = "8", expect = Expect.ACCEPTABLE, desc = "Head not yet advanced; toSubmit = 8.")
     @Outcome(id = "0", expect = Expect.ACCEPTABLE, desc = "Head advance observed; toSubmit = 0, loop terminates.")
@@ -325,9 +286,6 @@ public class WakePollerStoreLoadTest {
         }
     }
 
-    /**
-     * Verifies control task handoff in JUringBlocking.runOnPoller.
-     */
     @JCStressTest
     @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE, desc = "Control task not yet finished.")
     @Outcome(id = "1, 999", expect = Expect.ACCEPTABLE, desc = "Control task done; result fully visible.")

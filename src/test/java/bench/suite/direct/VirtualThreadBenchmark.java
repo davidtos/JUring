@@ -25,12 +25,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSU
 
 /**
  * Project Loom Virtual Threads NVMe Direct Read Benchmark.
- *
- * Compares Java standard FileChannel (which executes synchronous blocking pread64 system calls
- * that monopolize and exhaust OS carrier threads in ForkJoinPool)
- * against JUringBlocking (which unmounts virtual threads cleanly via LockSupport.park()
- * during asynchronous I/O and stripes virtual threads across non-blocking single-issuer poller rings)
- * across virtual thread concurrency levels (50, 100, 250, 500, 1,000 VTs).
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

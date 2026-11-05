@@ -16,10 +16,6 @@ import java.nio.file.Path;
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 import static org.junit.jupiter.api.Assertions.*;
 
-/**
- * Strict deterministic unit test asserting exactly 0 JVM heap bytes allocated on the calling thread
- * during hot path operations (NOP, Direct Read, Direct Write) using com.sun.management.ThreadMXBean.
- */
 class ZeroAllocationHotPathTest {
 
     private static final int BLOCK_SIZE = 4096;
@@ -109,7 +105,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path NOP batched pipeline allocates 0 heap bytes over 100,000+ operations")
     void testHotPathNopBatchedZeroAllocations() {
         final int qd = 64;
         final int submitBatch = 32;
@@ -145,7 +140,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path NOP submitAndWaitForBatchResult allocates 0 heap bytes over 100,000+ operations")
     void testHotPathNopSubmitAndWaitZeroAllocations() {
         final int qd = 32;
         final ReapingConsumer consumer = new ReapingConsumer(ring);
@@ -179,7 +173,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path Direct Read (O_DIRECT) allocates 0 heap bytes over 100,000+ operations")
     void testHotPathDirectReadZeroAllocations(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_read_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
@@ -221,7 +214,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path Direct Write (O_DIRECT) allocates 0 heap bytes over 100,000+ operations")
     void testHotPathDirectWriteZeroAllocations(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_write_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
@@ -263,7 +255,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path unbatched NOP with waitForResult(reusableResult) allocates 0 heap bytes over 100,000+ operations")
     void testHotPathNopSingleWaitForResultZeroAllocations() {
         final Result reusableResult = new Result();
         long threadId = Thread.currentThread().threadId();
@@ -292,7 +283,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path unbatched Direct Read (QD=1) with waitForResult(reusableResult) allocates 0 heap bytes over 100,000+ operations")
     void testHotPathDirectReadSingleZeroAllocations(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_read_single_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
@@ -329,7 +319,6 @@ class ZeroAllocationHotPathTest {
     }
 
     @Test
-    @DisplayName("Hot-path unbatched Direct Write (QD=1) with waitForResult(reusableResult) allocates 0 heap bytes over 100,000+ operations")
     void testHotPathDirectWriteSingleZeroAllocations(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_write_single_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);

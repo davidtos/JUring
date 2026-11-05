@@ -82,7 +82,6 @@ public final class IoHelper {
 
     /**
      * Retrieves com.sun.nio.file.ExtendedOpenOption.DIRECT via reflection,
-     * avoiding module system export errors while enabling true NVMe O_DIRECT access.
      *
      * @return the OpenOption for ExtendedOpenOption.DIRECT, or null if unavailable
      */
@@ -134,7 +133,7 @@ public final class IoHelper {
 
     /**
      * Calculates a safe number of registered buffers per thread so that multi-thread ring setups
-     * do not exceed RLIMIT_MEMLOCK and trigger ENOMEM (errno 12).
+     * do not exceed RLIMIT_MEMLOCK.
      *
      * @param bufferSize size of each buffer in bytes (e.g. 4096)
      * @param threads    number of concurrent benchmark threads
@@ -147,16 +146,13 @@ public final class IoHelper {
         }
 
         int activeThreads = Math.max(1, threads);
-        // Reserve memory for ring structures (~64KB per thread; a 256-entry ring is ~24KB)
         long ringOverhead = 64 * 1024L * activeThreads;
         long usableLimit = Math.max(0, limit - ringOverhead);
         // Reserve 75% of usable limit across all threads, leave 25% safety margin
         long safeTotalBudget = (usableLimit * 3) / 4;
         long budgetPerThread = safeTotalBudget / activeThreads;
         int maxBuffers = (int) (budgetPerThread / bufferSize);
-
-        // Clamp between minimum viable queue depth (16) and recommended maximum (256)
-        return Math.max(16, Math.min(256, maxBuffers));
+        return Math.clamp(maxBuffers, 16, 256);
     }
 
     public static final int POSIX_FADV_DONTNEED = 4;

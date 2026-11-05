@@ -19,16 +19,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
  * Equal Queue Depth Direct I/O Read Benchmark on a Single Thread.
- *
- * Compares Java standard FileChannel against JUring at identical thread count (1 thread)
- * across queue depths (QD = 1, 16, 32, 64) for 4KB NVMe direct random reads (O_DIRECT).
- *
- * Both engines run on the exact same single OS thread:
- *   - FileChannel operations (pread64) are synchronous and blocking on the calling OS thread.
- *     Because a single thread cannot issue concurrent pread64 calls, FileChannel cannot increase
- *     hardware queue depth regardless of the requested QD, remaining clamped at ~83 µs cell latency.
- *   - JUring achieves any desired hardware queue depth (QD = 1, 16, 32, 64) asynchronously
- *     on a SINGLE thread through io_uring submission queues with zero thread-switching overhead.
  */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)

@@ -31,10 +31,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
 /**
  * NVMe Direct I/O (O_DIRECT) Unbatched Tail Latency Benchmark.
- *
- * Runs in JMH Mode.SampleTime with OperationsPerInvocation(1) to isolate
- * per-request completion percentiles (P50, P90, P99, P99.9, Max) and eliminate
- * batch-smoothing distortion.
  */
 @BenchmarkMode(Mode.SampleTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
@@ -147,16 +143,7 @@ public class DirectLatencyBenchmark {
     }
 
     /**
-     * Head-to-head empirical benchmark matching fio's exact ioengine=io_uring workload:
-     * <ul>
-     *   <li>Target: 10 GB pre-allocated file (single_file_bench.bin)</li>
-     *   <li>4KB block size, O_DIRECT (direct=1)</li>
-     *   <li>Queue depth = 64 (configurable via -p qd=...)</li>
-     *   <li>Random offsets generated uniformly across the full 10 GB file (2,621,440 blocks)</li>
-     *   <li>Fixed files (registerfiles=1) and fixed buffers (fixedbufs=1)</li>
-     *   <li>Full latency telemetry (clat / slat / lat histograms) matching fio's default behavior,
-     *       with toggleable telemetry parameter (true vs false) to measure latency tracking overhead vs raw I/O</li>
-     * </ul>
+     *  Benchmark matching fio's exact ioengine=io_uring workload
      */
     @BenchmarkMode(Mode.Throughput)
     @OutputTimeUnit(TimeUnit.SECONDS)
