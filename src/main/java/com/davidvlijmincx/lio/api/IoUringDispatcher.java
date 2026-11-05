@@ -1055,7 +1055,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     /**
-     * Unregisters the ring file descriptor from the kernel registered table.
+     * Unregisters the ring file descriptor from the kernel-registered table.
      *
      * @return 0 on success, or negative errno
      */

@@ -4,23 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="chore: clean up IDE workspace changelist">
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="bench: remove publication benchmark helper scripts">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/count_iou_wrk.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/fio-compare-table.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/generate_datasets.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/generate_readme_tables.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/log_drive_state.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/precondition.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/record_env.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/run_publication_benchmarks.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bench/test_generate_readme_tables.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/c4_architecture.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/direct_read_flow.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/direct_write_flow.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -127,7 +114,9 @@
   "keyToString": {
     "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "Application.BenchmarkRunner.executor": "Run",
+    "Application.DirectReadBenchmark.executor": "Run",
     "Application.DirectReadVisualVerificationTest.executor": "Run",
+    "Application.FioComparisonBenchmark.executor": "Run",
     "Application.Phase1BugProofTest.executor": "Run",
     "Application.RandomReadBenchMark.executor": "Run",
     "CidrDebugProfileConversion": "true",
@@ -184,7 +173,20 @@
       <command value="mvn verify" />
     </option>
   </component>
-  <component name="RunManager" selected="JUnit.ZeroAllocationHotPathTest">
+  <component name="RunManager" selected="Application.FioComparisonBenchmark">
+    <configuration name="DirectReadBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadBenchmark" />
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="bench.suite.direct.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
     <configuration name="DirectReadVisualVerificationTest" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadVisualVerificationTest" />
       <module name="JUring" />
@@ -198,35 +200,15 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
-    <configuration name="BenchmarkSuiteValidationTest.testBitAccurateDirectRead" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+    <configuration name="FioComparisonBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark" />
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
-          <option name="PATTERN" value="bench.suite.*" />
+          <option name="PATTERN" value="bench.suite.direct.*" />
           <option name="ENABLED" value="true" />
         </pattern>
       </extension>
-      <option name="PACKAGE_NAME" value="bench.suite" />
-      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
-      <option name="METHOD_NAME" value="testBitAccurateDirectRead" />
-      <option name="TEST_OBJECT" value="method" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="DirectIoTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
-      <module name="JUring" />
-      <extension name="coverage">
-        <pattern>
-          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
-          <option name="ENABLED" value="true" />
-        </pattern>
-      </extension>
-      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
-      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.DirectIoTest" />
-      <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
@@ -273,11 +255,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Application.FioComparisonBenchmark" />
+        <item itemvalue="Application.DirectReadBenchmark" />
         <item itemvalue="JUnit.ZeroAllocationHotPathTest" />
         <item itemvalue="Application.DirectReadVisualVerificationTest" />
         <item itemvalue="JUnit.DirectIoTest.testDirectIoRead" />
-        <item itemvalue="JUnit.DirectIoTest" />
-        <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead" />
       </list>
     </recent_temporary>
   </component>
@@ -336,7 +318,9 @@
     <MESSAGE value="bench: remove generated benchmark result artifacts" />
     <MESSAGE value="bench: remove README table check from Maven verify" />
     <MESSAGE value="chore: clean up IDE workspace changelist" />
-    <option name="LAST_COMMIT_MESSAGE" value="chore: clean up IDE workspace changelist" />
+    <MESSAGE value="bench: remove publication benchmark helper scripts and tests" />
+    <MESSAGE value="bench: remove publication benchmark helper scripts" />
+    <option name="LAST_COMMIT_MESSAGE" value="bench: remove publication benchmark helper scripts" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

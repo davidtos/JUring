@@ -80,7 +80,7 @@ public class Result implements AutoCloseable {
     }
 
     /**
-     * Returns true if more completion queue entries will be produced by this operation.
+     * Returns true if this operation produces more completion queue entries.
      *
      * @return true if more completions are expected
      */
