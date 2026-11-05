@@ -4,14 +4,423 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks" />
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="bench: add equal QD and virtual thread budget comparisons">
+      <change afterPath="$PROJECT_DIR$/BENCHMARK.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.devcontainer/Dockerfile" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.devcontainer/devcontainer.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.vscode/settings.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/BENCHMARK_FINDINGS.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/BENCHMARK_PLAN.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/BENCHMARK_VERIFICATION_AND_SCALING_PLAN.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/CONTRIBUTING.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/FFM_TALK_PATTERNS.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/FIX_BEFORE_RELEASE.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/hypothesis.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/buffered-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/buffered-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/buffered.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-read-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-read-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-read-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-write-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-write-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/direct-write-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/env.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/ffm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/fio-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/jmh-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork30096.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork30096.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork30630.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork30630.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork52299.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectRead-qd64-fork52299.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork17500.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork17500.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork60806.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork60806.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork61455.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/juringDirectWrite-qd64-fork61455.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/latency.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/meta.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/nop-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/nop-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/nop.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/remaining.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-multifile-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-multifile-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-multifile-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-multifile-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-multifile-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-single-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-single-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-single-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-single-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/scaling-single-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/tables.md" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/virtual-threads-maxpool1024.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/virtual-threads-multi.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/virtual-threads-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/virtual-threads-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-02/virtual-threads-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/buffered-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/buffered-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/buffered-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/buffered-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/buffered.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-read-single-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-read-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-read-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-read-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-fileChannelDirectWrite.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-juringDirectWrite.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-single-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/direct-write-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-buffered-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-buffered-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-direct-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-direct-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-fio-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-fio-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-scaling-write-multi-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-scaling-write-multi-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-scaling-write-single-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/drive-state-scaling-write-single-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/env.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/ffm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-read.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-best-write.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-default-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-best.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-best.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-def.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-def.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-enters-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B1.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B16.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B32.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B32.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B4.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read-B8.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B1.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B16.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B32.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B32.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B4.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write-B8.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-sweep-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/fio-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/iou-wrk-buffered-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-enters-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-enters-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/jmh-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork10829.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork10829.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork1308.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork1308.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork16175.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork16175.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork17941.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork17941.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork31525.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork31525.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork47314.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork47314.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork481.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork481.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork51585.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork51585.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork62409.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork62409.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork8336.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectRead-qd64-fork8336.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork13488.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork13488.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork14073.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork14073.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork14893.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork14893.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork19284.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork19284.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork20183.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork20183.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork2132.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork2132.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork23628.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork23628.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork28289.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork28289.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork28637.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork28637.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork31122.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork31122.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork32607.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork32607.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork35686.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork35686.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork3628.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork3628.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork39136.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork39136.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork40405.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork40405.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork41132.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork41132.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork43986.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork43986.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork47379.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork47379.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork49292.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork49292.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork55828.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork55828.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork5863.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork5863.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork61741.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork61741.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork62201.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork62201.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork64311.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork64311.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork8619.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/juringDirectWrite-qd64-fork8619.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/latency.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/meta.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/nop-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/nop-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/nop-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/nop.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/precondition-single_file_bench.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/publication.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-multifile-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-multifile-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-multifile-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-multifile-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-multifile-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-single-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-single-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-single-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-single-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/scaling-single-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-buffered-cold.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-maxpool1024.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-multi.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-03/virtual-threads-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/buffered-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/buffered-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/buffered-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/buffered-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/buffered.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-read-single-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-read-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-read-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-read-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-fileChannelDirectWrite.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-juringDirectWrite.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-single-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-single-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-single-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/direct-write-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-buffered-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-buffered-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-direct-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-direct-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-fio-write-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-fio-write-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-scaling-write-multi-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-scaling-write-multi-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-scaling-write-single-after.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/drive-state-scaling-write-single-before.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/env.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/ffm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-read.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-best-write.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-default-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-best.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-best.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-def.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-def.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-enters-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B1.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B16.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B32.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B32.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B4.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read-B8.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B1.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B16.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B32.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B32.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B4.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write-B8.perf" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-sweep-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/fio-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/iou-wrk-buffered-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-enters-read.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-enters-write.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-read-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-read-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-read-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-read-4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-read-5.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-write-1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-write-2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/jmh-write-3.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork18624.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork18624.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork20754.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork20754.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork21768.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork21768.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork24296.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork24296.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork49465.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectRead-qd64-fork49465.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork24920.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork24920.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork32671.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork32671.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork832.hlog" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/juringDirectWrite-qd64-fork832.percentiles" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/latency.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/meta.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/nop-gc.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/nop-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/nop-syscalls.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/nop.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/publication.log" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-fileChannelDirectWrite-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-fileChannelDirectWrite-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-fileChannelDirectWrite-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-fileChannelDirectWrite-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-fileChannelDirectWrite-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-juringDirectWrite-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-juringDirectWrite-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-juringDirectWrite-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-juringDirectWrite-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-multifile-write-juringDirectWrite-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-fileChannelDirectWrite-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-fileChannelDirectWrite-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-fileChannelDirectWrite-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-fileChannelDirectWrite-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-fileChannelDirectWrite-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-juringDirectWrite-t1.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-juringDirectWrite-t16.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-juringDirectWrite-t2.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-juringDirectWrite-t4.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/scaling-single-write-juringDirectWrite-t8.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-buffered-cold.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-maxpool1024.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-multi.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-perfnorm.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-single.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/results/2026-11-05/virtual-threads-syscalls.json" beforeDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="676" />
+    <option name="cachedIndexableFilesCount" value="290" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -40,23 +449,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0" />
-      <entry key="MS500" value="1.0" />
-      <entry key="S2" value="1.0" />
-      <entry key="S5" value="1.0" />
-      <entry key="S10" value="1.0" />
-      <entry key="S30" value="1.0" />
-      <entry key="S60" value="1.0" />
-      <entry key="M2" value="1.000000000067862" />
-      <entry key="M5" value="1.0001297955662307" />
-      <entry key="M10" value="1.0161117797911887" />
-      <entry key="M15" value="1.0803721088545226" />
-      <entry key="M30" value="1.4009290483562524" />
-      <entry key="H1" value="1.895465215506261" />
-      <entry key="H2" value="2.33825645909556" />
-      <entry key="H4" value="2.6360051613730855" />
-      <entry key="D1" value="2.9341453484523017" />
-      <entry key="W1" value="2.99045666090122" />
+      <entry key="MS100" value="1.1339716828170365" />
+      <entry key="MS500" value="1.6691592562416542" />
+      <entry key="S2" value="2.1092804555091336" />
+      <entry key="S5" value="3.113563249600785" />
+      <entry key="S10" value="4.665891481046236" />
+      <entry key="S30" value="9.064941687503252" />
+      <entry key="S60" value="13.034092636421219" />
+      <entry key="M2" value="17.281584146681343" />
+      <entry key="M5" value="26.271899340596093" />
+      <entry key="M10" value="43.62913702363441" />
+      <entry key="M15" value="57.81321484624826" />
+      <entry key="M30" value="83.24067752869284" />
+      <entry key="H1" value="128.0973124527198" />
+      <entry key="H2" value="276.087250635845" />
+      <entry key="H4" value="524.5739292433202" />
+      <entry key="D1" value="992.0952192980322" />
+      <entry key="W1" value="1114.0809349240349" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -78,23 +487,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.3737123121587346" />
-      <entry key="MS500" value="0.8213107007520658" />
-      <entry key="S2" value="0.9519779084975315" />
-      <entry key="S5" value="0.980507112001979" />
-      <entry key="S10" value="0.9902055907749557" />
-      <entry key="S30" value="0.9967244796055204" />
-      <entry key="S60" value="0.9983608964725733" />
-      <entry key="M2" value="0.9991801121960547" />
-      <entry key="M5" value="0.9998017346144858" />
-      <entry key="M10" value="1.0159461876806661" />
-      <entry key="M15" value="1.0802575581697713" />
-      <entry key="M30" value="1.4008614070851566" />
-      <entry key="H1" value="1.8954233965950371" />
-      <entry key="H2" value="2.3382319682795814" />
-      <entry key="H4" value="2.635991711727" />
-      <entry key="D1" value="2.9341429058615387" />
-      <entry key="W1" value="2.9904563065365375" />
+      <entry key="MS100" value="0.9259833033074961" />
+      <entry key="MS500" value="1.5220999055137021" />
+      <entry key="S2" value="2.0572007772125174" />
+      <entry key="S5" value="3.088645782965806" />
+      <entry key="S10" value="4.651038375688343" />
+      <entry key="S30" value="9.057778916696389" />
+      <entry key="S60" value="13.02929957361917" />
+      <entry key="M2" value="17.278401065002797" />
+      <entry key="M5" value="26.26991707265757" />
+      <entry key="M10" value="43.62750418069955" />
+      <entry key="M15" value="57.8117865935656" />
+      <entry key="M30" value="83.23963949172831" />
+      <entry key="H1" value="128.09618175145442" />
+      <entry key="H2" value="276.08539210006126" />
+      <entry key="H4" value="524.5719012626403" />
+      <entry key="D1" value="992.0945397703637" />
+      <entry key="W1" value="1114.0808251983829" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -106,53 +515,55 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;Application.BenchmarkRunner.executor&quot;: &quot;Run&quot;,
-    &quot;Application.DirectReadVisualVerificationTest.executor&quot;: &quot;Run&quot;,
-    &quot;Application.Phase1BugProofTest.executor&quot;: &quot;Run&quot;,
-    &quot;Application.RandomReadBenchMark.executor&quot;: &quot;Run&quot;,
-    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.DirectIoTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.DirectIoTest.testDirectIoRead.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.JUringTest (1).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest (2).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.readFromFile.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.sharedWorkerRingCreation.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.Phase2VirtualThreadProofTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.SocketTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring (1).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring.test.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.com.davidvlijmincx.lio.api in JUring.executor&quot;: &quot;Run&quot;,
-    &quot;KEY_CHAT_IN_TOOLWINDOW&quot;: &quot;false&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/home/david/projects/JUring&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "Application.BenchmarkRunner.executor": "Run",
+    "Application.DirectReadVisualVerificationTest.executor": "Run",
+    "Application.Phase1BugProofTest.executor": "Run",
+    "Application.RandomReadBenchMark.executor": "Run",
+    "CidrDebugProfileConversion": "true",
+    "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
+    "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
+    "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
+    "JUnit.DirectIoTest.executor": "Run",
+    "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
+    "JUnit.JUringTest (1).executor": "Run",
+    "JUnit.JUringTest (2).executor": "Run",
+    "JUnit.JUringTest.executor": "Run",
+    "JUnit.JUringTest.readFromFile.executor": "Run",
+    "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
+    "JUnit.Phase2VirtualThreadProofTest.executor": "Run",
+    "JUnit.SocketTest.executor": "Run",
+    "JUnit.api in JUring (1).executor": "Run",
+    "JUnit.api in JUring.executor": "Run",
+    "JUnit.api in JUring.test.executor": "Run",
+    "JUnit.com.davidvlijmincx.lio.api in JUring.executor": "Run",
+    "KEY_CHAT_IN_TOOLWINDOW": "false",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "/home/david/projects/JUring",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.jshint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.jshint": "",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
   },
-  &quot;keyToStringList&quot;: {
-    &quot;com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File&quot;: [
-      &quot;TEXT&quot;
+  "keyToStringList": {
+    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
+      "TEXT"
     ]
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$" />
@@ -306,7 +717,8 @@
     <MESSAGE value="test(direct-read): add DirectReadVisualVerificationTest for live benchmarks and disk match validation&#10;&#10;- Introduced DirectReadVisualVerificationTest to visually inspect and verify O_DIRECT NVMe reads.&#10;- Enhanced DirectReadBenchmark with debug visuals and detailed console output via `juring.visual`.&#10;- Updated test resource output and added single-file and multifile configurations for benchmarks." />
     <MESSAGE value="Add benchmarking suite for direct, buffered, and latency-based I/O performance, alongside preflight checks and data preparation." />
     <MESSAGE value="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks" />
-    <option name="LAST_COMMIT_MESSAGE" value="docs: add detailed fix-before-release instructions and roadmap for JUring benchmarks" />
+    <MESSAGE value="bench: add equal QD and virtual thread budget comparisons" />
+    <option name="LAST_COMMIT_MESSAGE" value="bench: add equal QD and virtual thread budget comparisons" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>
