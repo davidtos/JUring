@@ -25,7 +25,7 @@ public enum IoUringOptions {
     IORING_SETUP_HYBRID_IOPOLL(1 << 17),
     UNSUPPORTED_TEST_FLAG(1 << 30);
 
-    int value;
+    final int value;
 
     IoUringOptions(int value) {
         this.value = value;

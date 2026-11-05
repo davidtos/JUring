@@ -25,35 +25,6 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * and accessible by the calling thread. For confined arenas, memory safety is inherently preserved because the owning
  * thread blocks during the call. For shared arenas, callers must guarantee that another thread does not concurrently
  * close the arena while an operation using one of its segments is in flight.
- *
- * <h2>Project Loom & Carrier Thread Mechanics</h2>
- * In standard OpenJDK (JDK 21+), file I/O operations on {@link java.nio.channels.FileChannel}
- * perform synchronous kernel system calls (e.g., {@code pread64(2)}) that block the calling thread.
- * Because standard POSIX file systems lack non-blocking readiness notification (such as {@code epoll(7)}),
- * the JVM cannot unmount virtual threads during file I/O. Instead, Loom's {@link java.util.concurrent.ForkJoinPool}
- * attempts to preserve parallelism by spawning compensation carrier threads (up to {@code jdk.virtualThreadScheduler.maxPoolSize}).
- * Under high virtual thread concurrency (500–1,000+ VTs), this causes carrier pool exhaustion, thread thrashing,
- * massive kernel runqueue bloat, and severe throughput collapse.
- *
- * <p>{@code JUringBlocking} solves this by decoupling virtual thread lifecycle from kernel I/O execution:
- * <ol>
- *   <li><b>Clean Unmounting:</b> When a virtual thread initiates I/O, it claims an off-heap slot,
- *       publishes the request to a lock-free Vyukov Multi-Producer Single-Consumer (MPSC) queue,
- *       and unmounts immediately via {@link java.util.concurrent.locks.LockSupport#park(Object)}.
- *       The underlying OS carrier thread is instantly released back to the ForkJoinPool to run other virtual threads.</li>
- *   <li><b>Single-Issuer Kernel Affinity:</b> Ring operations are confined to dedicated platform poller thread(s),
- *       satisfying Linux {@code IORING_SETUP_SINGLE_ISSUER}, {@code IORING_SETUP_COOP_TASKRUN}, and
- *       {@code IORING_SETUP_DEFER_TASKRUN} without violating single-issuer thread affinity as virtual threads
- *       migrate across different carriers.</li>
- *   <li><b>Single-Syscall Fusion:</b> The poller loop drains all available MPSC slots and uses a single
- *       fused {@code io_uring_enter(2)} system call with {@code IORING_ENTER_GETEVENTS} to submit pending SQEs
- *       and reap completions in one kernel transition.</li>
- *   <li><b>Multi-Core Striping:</b> Virtual threads are hash-striped across independent single-issuer
- *       poller rings based on {@link Thread#threadId()}, saturating multiple CPU cores and hardware NVMe submission
- *       queues with zero cross-poller lock contention.</li>
- *   <li><b>Zero Heap Allocations:</b> All submission slots, completion results, and buffer pool indices are managed
- *       via primitive arrays and {@link java.lang.invoke.VarHandle} operations, producing {@code 0.000 B/op} of heap allocation.</li>
- * </ol>
  */
 public class JUringBlocking implements AutoCloseable {
 
@@ -722,18 +693,7 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     static void validateNativeSegment(MemorySegment segment, boolean forRead) {
-        if (!segment.isNative()) {
-            throw new IllegalArgumentException("Segment must be native memory");
-        }
-        if (forRead && segment.isReadOnly()) {
-            throw new IllegalArgumentException("Segment must not be read-only for read operations");
-        }
-        if (!segment.scope().isAlive()) {
-            throw new IllegalStateException("Segment scope is already closed");
-        }
-        if (!segment.isAccessibleBy(Thread.currentThread())) {
-            throw new WrongThreadException("Segment is confined to another thread");
-        }
+        JUring.validateNativeSegment(segment, forRead);
     }
 
     public long read(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {

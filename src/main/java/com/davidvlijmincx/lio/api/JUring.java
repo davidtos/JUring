@@ -9,7 +9,7 @@ import java.util.List;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * High-performance Java facade for Linux {@code io_uring}.
+ *  facade for Linux {@code io_uring}.
  * <p>
  * <b>Thread Safety:</b> {@code JUring} is <b>NOT</b> thread-safe. A single instance must only be
  * accessed by one thread at a time (e.g. pinned to a dedicated event loop or worker thread).
