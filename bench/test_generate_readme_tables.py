@@ -18,7 +18,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from bench.generate_readme_tables import (
-    fmt_stat, fmt_mb, fmt_speedup, is_unstable, update_readme, MAX_REL_ERROR
+    fmt_stat, fmt_mb, fmt_speedup, is_unstable, update_readme, gen_equal_qd, MAX_REL_ERROR
 )
 
 class TestStabilityRule(unittest.TestCase):
@@ -173,6 +173,50 @@ class TestAllocationMetrics(unittest.TestCase):
             self.assertIn("0.000 B/op", table)
             self.assertIn("16.250 B/op", table)
             self.assertIn(" — ", table)
+
+
+class TestEqualQdGenerator(unittest.TestCase):
+    def test_gen_equal_qd_renders_table(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # When file doesn't exist
+            not_ready = gen_equal_qd(tmpdir)
+            self.assertIn("equal-qd.json not ready yet", not_ready)
+
+            # When file exists with mock data
+            data = [
+                {
+                    "benchmark": "bench.suite.direct.EqualQueueDepthBenchmark.juringDirectRead",
+                    "primaryMetric": {"score": 11463.0, "scoreError": 120.0},
+                    "params": {"qd": "1"}
+                },
+                {
+                    "benchmark": "bench.suite.direct.EqualQueueDepthBenchmark.fileChannelDirectRead",
+                    "primaryMetric": {"score": 11378.0, "scoreError": 115.0},
+                    "params": {"qd": "1"}
+                },
+                {
+                    "benchmark": "bench.suite.direct.EqualQueueDepthBenchmark.juringDirectRead",
+                    "primaryMetric": {"score": 329794.0, "scoreError": 3500.0},
+                    "params": {"qd": "64"}
+                },
+                {
+                    "benchmark": "bench.suite.direct.EqualQueueDepthBenchmark.fileChannelDirectRead",
+                    "primaryMetric": {"score": 293176.0, "scoreError": 3200.0},
+                    "params": {"qd": "64"}
+                }
+            ]
+            with open(os.path.join(tmpdir, "equal-qd.json"), "w") as f:
+                json.dump(data, f)
+
+            table = gen_equal_qd(tmpdir)
+            self.assertIn("| QD = 1 |", table)
+            self.assertIn("11,463.0 ± 120.0", table)
+            self.assertIn("11,378.0 ± 115.0", table)
+            self.assertIn("| QD = 64 |", table)
+            self.assertIn("329,794.0 ± 3,500.0", table)
+            self.assertIn("293,176.0 ± 3,200.0", table)
+            self.assertIn("FileChannel clamped at QD=1 (synchronous); JUring drives QD=64", table)
 
 
 if __name__ == "__main__":

@@ -77,7 +77,7 @@ fi
 
 # 3. DirectReadBenchmark (SINGLE_FILE: QD=1, 16, 64, 128 vs FileChannel QD=1)
 if [ "$FROM_STEP" -le 3 ]; then
-    echo -e "\n>>> [3/15] Running DirectReadBenchmark (Throughput, Syscalls, PerfNorm) <<<"
+    echo -e "\n>>> [3/16] Running DirectReadBenchmark (Throughput, Syscalls, PerfNorm) <<<"
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --f 5 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/direct-read-single.json"
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-read-single-syscalls.json"
     ./bench.sh --include 'DirectReadBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/direct-read-single-perfnorm.json"
@@ -85,49 +85,60 @@ if [ "$FROM_STEP" -le 3 ]; then
     cooldown 5
 fi
 
-# 4. MultiThreadScalingBenchmark reads (Single File: 1, 2, 4, 8, 16 Threads)
+# 4. EqualQueueDepthBenchmark (SINGLE_FILE: QD=1, 16, 32, 64 FileChannel vs JUring)
 if [ "$FROM_STEP" -le 4 ]; then
-    echo -e "\n>>> [4/15] Running MultiThreadScalingBenchmark reads (Single File) <<<"
+    echo -e "\n>>> [4/16] Running EqualQueueDepthBenchmark (Throughput, Syscalls, PerfNorm) <<<"
+    ./bench.sh --include 'EqualQueueDepthBenchmark' --param distribution=SINGLE_FILE --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/equal-qd.json"
+    ./bench.sh --include 'EqualQueueDepthBenchmark' --param distribution=SINGLE_FILE --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/equal-qd-syscalls.json"
+    ./bench.sh --include 'EqualQueueDepthBenchmark' --param distribution=SINGLE_FILE --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/equal-qd-perfnorm.json"
+    cooldown 5
+fi
+
+# 5. MultiThreadScalingBenchmark reads (Single File: 1, 2, 4, 8, 16 Threads)
+if [ "$FROM_STEP" -le 5 ]; then
+    echo -e "\n>>> [5/16] Running MultiThreadScalingBenchmark reads (Single File) <<<"
     ./bench.sh --threads-scaling --include '.*DirectRead$' --param distribution=SINGLE_FILE --f 5 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/scaling-single.json"
     cooldown 10
 fi
 
-# 5. MultiThreadScalingBenchmark reads (Multi File: 2,211 discrete files)
-if [ "$FROM_STEP" -le 5 ]; then
-    echo -e "\n>>> [5/15] Running MultiThreadScalingBenchmark reads (Multi File) <<<"
+# 6. MultiThreadScalingBenchmark reads (Multi File: 2,211 discrete files)
+if [ "$FROM_STEP" -le 6 ]; then
+    echo -e "\n>>> [6/16] Running MultiThreadScalingBenchmark reads (Multi File) <<<"
     ./bench.sh --threads-scaling --include '.*DirectRead$' --param distribution=MULTI_FILE --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/scaling-multifile.json"
     cooldown 10
 fi
 
-# 6. VirtualThreadBenchmark (Single File & Multi File DIRECT sweeps + BUFFERED_COLD + maxPoolSize=1024)
-if [ "$FROM_STEP" -le 6 ]; then
-    echo -e "\n>>> [6/15] Running VirtualThreadBenchmark (DIRECT & BUFFERED_COLD) <<<"
+# 7. VirtualThreadBenchmark (Single File & Multi File DIRECT sweeps + BUFFERED_COLD + maxPoolSize=1024 + carrier-equal)
+if [ "$FROM_STEP" -le 7 ]; then
+    echo -e "\n>>> [7/16] Running VirtualThreadBenchmark (DIRECT & BUFFERED_COLD) <<<"
     ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=DIRECT --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-single.json"
     ./bench.sh --virtual --param distribution=MULTI_FILE --param ioMode=DIRECT --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-multi.json"
     ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=BUFFERED_COLD --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-buffered-cold.json"
     ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=DIRECT --param virtualThreads=1000 --max-pool-size --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-maxpool1024.json"
+    ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=DIRECT --param virtualThreads=1000 --carrier-equal --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-carrier-equal.json"
+    ./bench.sh --vt-scaling --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/virtual-threads-budget-scaling.json"
     ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=DIRECT --syscalls --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/virtual-threads-syscalls.json"
     ./bench.sh --virtual --param distribution=SINGLE_FILE --param ioMode=DIRECT --perfnorm --f 1 --wi 1 --i 2 --w 2 --r 3 --rff "$RESULTS_DIR/virtual-threads-perfnorm.json"
     cooldown 5
 fi
 
-# 7. BufferedReadBenchmark (Page-Cache Resident Reads)
-if [ "$FROM_STEP" -le 7 ]; then
-    echo -e "\n>>> [7/15] Running BufferedReadBenchmark <<<"
+# 8. BufferedReadBenchmark (Page-Cache Resident Reads)
+if [ "$FROM_STEP" -le 8 ]; then
+    echo -e "\n>>> [8/16] Running BufferedReadBenchmark <<<"
     ./bench.sh --include 'BufferedReadBenchmark' --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/buffered-read.json"
     cooldown 5
 fi
 
-# 8. DirectLatencyBenchmark (QD=1 Unbatched Flash Cell Latency Percentiles)
-if [ "$FROM_STEP" -le 8 ]; then
-    echo -e "\n>>> [8/15] Running DirectLatencyBenchmark (QD=1 SampleTime) <<<"
+# 9. DirectLatencyBenchmark (QD=1 Unbatched Flash Cell Latency Percentiles)
+if [ "$FROM_STEP" -le 9 ]; then
+    echo -e "\n>>> [9/16] Running DirectLatencyBenchmark (QD=1 SampleTime) <<<"
     ./bench.sh --latency --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/latency.json"
     cooldown 5
 fi
 
-# 9. FfmInvocationBenchmark (Panama Foreign Downcall Invocations)
-if [ "$FROM_STEP" -le 9 ]; then
-    echo -e "\n>>> [9/15] Running FfmInvocationBenchmark (FFM vs Critical vs Proxies) <<<"
+# 10. FfmInvocationBenchmark (Panama Foreign Downcall Invocations)
+if [ "$FROM_STEP" -le 10 ]; then
+    echo -e "\n>>> [10/16] Running FfmInvocationBenchmark (FFM vs Critical vs Proxies) <<<"
     ./bench.sh --include 'FfmInvocationBenchmark' --f 3 --wi 2 --i 3 --w 3 --r 3 --rff "$RESULTS_DIR/ffm.json"
     cooldown 5
 fi
@@ -144,9 +155,9 @@ precondition_write() {
     ./bench/precondition.sh "$target" "$min" "$RESULTS_DIR"
 }
 
-# 10. Head-to-Head fio comparison: randwrite (QD=64, 4KB, preconditioned)
-if [ "$FROM_STEP" -le 10 ]; then
-    echo -e "\n>>> [10/15] Running Head-to-Head fio comparison: randwrite <<<"
+# 11. Head-to-Head fio comparison: randwrite (QD=64, 4KB, preconditioned)
+if [ "$FROM_STEP" -le 11 ]; then
+    echo -e "\n>>> [11/16] Running Head-to-Head fio comparison: randwrite <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-fio-write-before.json"
     rm -f "$RESULTS_DIR"/fio-default-write-*.json "$RESULTS_DIR"/fio-best-write-*.json "$RESULTS_DIR"/fio-write-*.json "$RESULTS_DIR"/jmh-write-*.json
     ./bench.sh --fio-sweep --mode write --qd 64 --runtime 3 --warmup 1 --file "$WRITE_FILE" --results-dir "$RESULTS_DIR"
@@ -156,9 +167,9 @@ if [ "$FROM_STEP" -le 10 ]; then
     cooldown 20
 fi
 
-# 11. DirectWriteBenchmark (SINGLE_FILE: separate invocations, randomised order)
-if [ "$FROM_STEP" -le 11 ]; then
-    echo -e "\n>>> [11/15] Running DirectWriteBenchmark (Separate Invocations) <<<"
+# 12. DirectWriteBenchmark (SINGLE_FILE: separate invocations, randomised order)
+if [ "$FROM_STEP" -le 12 ]; then
+    echo -e "\n>>> [12/16] Running DirectWriteBenchmark (Separate Invocations) <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-direct-write-before.json"
 
     # Randomise execution order between FileChannel and JUring
@@ -185,9 +196,9 @@ if [ "$FROM_STEP" -le 11 ]; then
     cooldown 20
 fi
 
-# 12. MultiThreadScalingBenchmark writes (Single File: 1, 2, 4, 8, 16 Threads)
-if [ "$FROM_STEP" -le 12 ]; then
-    echo -e "\n>>> [12/15] Running MultiThreadScalingBenchmark writes (Single File: Separate Invocations) <<<"
+# 13. MultiThreadScalingBenchmark writes (Single File: 1, 2, 4, 8, 16 Threads)
+if [ "$FROM_STEP" -le 13 ]; then
+    echo -e "\n>>> [13/16] Running MultiThreadScalingBenchmark writes (Single File: Separate Invocations) <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-single-before.json"
 
     ORDER=( "fileChannelDirectWrite" "juringDirectWrite" )
@@ -219,9 +230,9 @@ if [ "$FROM_STEP" -le 12 ]; then
     cooldown 20
 fi
 
-# 13. MultiThreadScalingBenchmark writes (Multi File: 2,211 discrete files)
-if [ "$FROM_STEP" -le 13 ]; then
-    echo -e "\n>>> [13/15] Running MultiThreadScalingBenchmark writes (Multi File: Separate Invocations) <<<"
+# 14. MultiThreadScalingBenchmark writes (Multi File: 2,211 discrete files)
+if [ "$FROM_STEP" -le 14 ]; then
+    echo -e "\n>>> [14/16] Running MultiThreadScalingBenchmark writes (Multi File: Separate Invocations) <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-scaling-write-multi-before.json"
 
     ORDER=( "fileChannelDirectWrite" "juringDirectWrite" )
@@ -252,9 +263,9 @@ if [ "$FROM_STEP" -le 13 ]; then
     cooldown 5
 fi
 
-# 14. BufferedWriteBenchmark with iou-wrk sampling
-if [ "$FROM_STEP" -le 14 ]; then
-    echo -e "\n>>> [14/15] Running BufferedWriteBenchmark with iou-wrk worker sampling <<<"
+# 15. BufferedWriteBenchmark with iou-wrk sampling
+if [ "$FROM_STEP" -le 15 ]; then
+    echo -e "\n>>> [15/16] Running BufferedWriteBenchmark with iou-wrk worker sampling <<<"
     ./bench.sh --log-drive-state "$RESULTS_DIR/drive-state-buffered-write-before.json"
 
     # Start buffered write in background and sample iou-wrk threads
@@ -276,9 +287,9 @@ if [ "$FROM_STEP" -le 14 ]; then
     cooldown 5
 fi
 
-# 15. Regenerate README.md tables and verify
-if [ "$FROM_STEP" -le 15 ]; then
-    echo -e "\n>>> [15/15] Regenerating README tables from $RESULTS_DIR <<<"
+# 16. Regenerate README.md tables and verify
+if [ "$FROM_STEP" -le 16 ]; then
+    echo -e "\n>>> [16/16] Regenerating README tables from $RESULTS_DIR <<<"
     python3 bench/generate_readme_tables.py --write README.md "$RESULTS_DIR"
     python3 bench/generate_readme_tables.py --check README.md "$RESULTS_DIR"
 fi

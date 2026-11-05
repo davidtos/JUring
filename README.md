@@ -24,13 +24,14 @@ JUring is a pure-Java library that provides direct native bindings to Linux's hi
 - [Empirical Benchmark Results](#empirical-benchmark-results)
   - [1. Head-to-Head Parity vs. Native C fio](#1-head-to-head-parity-vs-native-c-fio)
   - [2. Single-Core Framework Overhead & Direct I/O Efficiency](#2-single-core-framework-overhead--direct-io-efficiency)
-  - [3. 4 KB Direct Read Scaling (Single 10 GB File)](#3-4-kb-direct-read-scaling-single-10-gb-file)
-  - [4. 4 KB Direct Write Scaling & Physical SLC Dynamics](#4-4-kb-direct-write-scaling--physical-slc-dynamics)
-  - [5. Multi-File Scaling (2,211 Discrete Files)](#5-multi-file-scaling-2211-discrete-files)
-  - [6. Project Loom Virtual Threads Scaling (50 to 1,000 VTs)](#6-project-loom-virtual-threads-scaling-50-to-1000-vts)
-  - [7. Buffered Page-Cache I/O (DRAM Resident)](#7-buffered-page-cache-io-dram-resident)
-  - [8. Physical NAND Flash Cell Latency (QD=1)](#8-physical-nand-flash-cell-latency-qd1)
-  - [9. Project Panama (FFM API) Downcall Overhead](#9-project-panama-ffm-api-downcall-overhead)
+  - [3. Equal Hardware Queue Depth Comparison (QD = 1, 16, 32, 64)](#3-equal-hardware-queue-depth-comparison-qd--1-16-32-64)
+  - [4. 4 KB Direct Read Scaling (Single 10 GB File)](#4-4-kb-direct-read-scaling-single-10-gb-file)
+  - [5. 4 KB Direct Write Scaling & Physical SLC Dynamics](#5-4-kb-direct-write-scaling--physical-slc-dynamics)
+  - [6. Multi-File Scaling (2,211 Discrete Files)](#6-multi-file-scaling-2211-discrete-files)
+  - [7. Project Loom Virtual Threads Scaling (50 to 1,000 VTs)](#7-project-loom-virtual-threads-scaling-50-to-1000-vts)
+  - [8. Buffered Page-Cache I/O (DRAM Resident)](#8-buffered-page-cache-io-dram-resident)
+  - [9. Physical NAND Flash Cell Latency (QD=1)](#9-physical-nand-flash-cell-latency-qd1)
+  - [10. Project Panama (FFM API) Downcall Overhead](#10-project-panama-ffm-api-downcall-overhead)
 - [Code Examples: Using JUring in Your Application](#code-examples-using-juring-in-your-application)
   - [1. High-Throughput Direct Read (Registered Files & Fixed Buffers)](#1-high-throughput-direct-read-registered-files--fixed-buffers)
   - [2. High-Throughput Direct Write](#2-high-throughput-direct-write)
@@ -152,7 +153,25 @@ Evaluation of pure framework overhead (`NopBenchmark`), followed by single-threa
 
 ---
 
-### 3. 4 KB Direct Read Scaling (Single 10 GB File)
+### 3. Equal Hardware Queue Depth Comparison (QD = 1, 16, 32, 64)
+
+<!-- BEGIN GENERATED: equal-qd -->
+Head-to-head comparison of standard Java `FileChannel` against `JUring` with **identical thread counts (1 thread)** across increasing hardware Queue Depths (QD = 1, 16, 32, 64) for 4KB random direct reads (`O_DIRECT`) on a contiguous 10 GB pre-allocated file.
+
+*Both benchmarks run on a single calling thread. Because standard Java FileChannel operations (`pread64`) are synchronous and blocking, FileChannel cannot submit concurrent requests to the storage controller without spawning threads; its effective queue depth remains clamped at QD = 1 (~83 µs flash latency). In contrast, JUring drives any requested hardware queue depth asynchronously on the **exact same single thread** via non-blocking io_uring submission queues.*
+*Harness: 3 forks × 3 iterations × 3 s per tier*
+
+| Queue Depth (QD) | JUring (1 Thread) Throughput | JUring Bandwidth | FileChannel (1 Thread) Throughput | FileChannel Bandwidth | Speedup (JUring vs FileChannel) | Notes |
+|---|---|---|---|---|---|---|
+| QD = 1 | 11,492.2 ± 49.6 | 44.9 ± 0.2 MB/s | 11,431.7 ± 48.2 | 44.7 ± 0.2 MB/s | 1.0x | Flash cell access latency bound (~83 µs) |
+| QD = 16 | 148,011.3 ± 190.3 | 578.2 ± 0.7 MB/s | 11,447.1 ± 34.3 | 44.7 ± 0.1 MB/s | 12.9x | FileChannel clamped at QD=1 (synchronous); JUring drives QD=16 |
+| QD = 32 | 236,162.3 ± 423.9 | 922.5 ± 1.7 MB/s | 11,174.3 ± 1,316.8 | 43.6 ± 5.1 MB/s | 21.1x | FileChannel clamped at QD=1 (synchronous); JUring drives QD=32 |
+| QD = 64 | 330,089.1 ± 748.0 | 1,289.4 ± 2.9 MB/s | 11,437.3 ± 21.9 | 44.7 ± 0.1 MB/s | 28.9x | FileChannel clamped at QD=1 (synchronous); JUring drives QD=64 |
+<!-- END GENERATED: equal-qd -->
+
+---
+
+### 4. 4 KB Direct Read Scaling (Single 10 GB File)
 
 <!-- BEGIN GENERATED: scaling-read -->
 *Harness: 5 forks × 3 iterations × 3 s per tier*
@@ -170,7 +189,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 ---
 
-### 4. 4 KB Direct Write Scaling & Physical SLC Dynamics
+### 5. 4 KB Direct Write Scaling & Physical SLC Dynamics
 
 <!-- BEGIN GENERATED: scaling-write -->
 *Harness: 5 forks × 3 iterations × 3 s per tier*
@@ -190,7 +209,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 ---
 
-### 5. Multi-File Scaling (2,211 Discrete Files)
+### 6. Multi-File Scaling (2,211 Discrete Files)
 
 <!-- BEGIN GENERATED: multifile -->
 *Harness: 3 forks × 3 iterations × 3 s per tier*
@@ -206,7 +225,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 ---
 
-### 6. Project Loom Virtual Threads Scaling (50 to 1,000 VTs)
+### 7. Project Loom Virtual Threads Scaling (50 to 1,000 VTs)
 
 <!-- BEGIN GENERATED: virtual-threads -->
 *Harness: 3 forks × 3 iterations × 3 s per tier*
@@ -226,6 +245,28 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 | `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | FileChannel | 379,776.6 ± 21,294.0 | 1,483.5 ± 83.2 MB/s | Carrier pool expanded from default 256 to 1024 |
 | `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | JUringBlocking | 425,417.5 ± 86,203.3 | 1,661.8 ± 336.7 MB/s | Fixed pool of 4 poller threads |
 
+#### Equal Thread Budget (Carrier Threads Limited to JUring Poller Count)
+*When carrier threads are constrained to match the exact number of JUring pollers (4), FileChannel carrier pinning collapses throughput, whereas JUring unmounts virtual threads cleanly.*
+
+| Configuration | Virtual Threads | Engine | Throughput (ops/s) | Bandwidth | Notes |
+|---|---|---|---|---|---|
+| Equal Carriers (4 threads) | 1,000 | FileChannel | 39,917.4 ± 10,251.7 | 155.9 ± 40.0 MB/s | Pinned carriers bottlenecked at QD=4 |
+| Equal Carriers (4 threads) | 1,000 | JUringBlocking | 449,448.2 ± 12,379.6 | 1,755.7 ± 48.4 MB/s | Clean unmount via park(), full NVMe QD |
+
+#### Equal Total Platform Thread Budget (1, 4, 8, 16 Threads at 1,000 VTs)
+*Comparing FileChannel and JUringBlocking under strictly equal total OS platform thread budgets. FileChannel dedicates all platform threads to Loom carriers (which get pinned by synchronous pread64), while JUringBlocking divides its budget between carriers and background pollers.*
+
+| Total Platform Threads | Engine | Thread Breakdown | Throughput (ops/s) | Bandwidth | Speedup | Notes |
+|---|---|---|---|---|---|---|
+| 1 Thread(s) | FileChannel | 1 carriers | 11,433.8 ± 31.5 | 44.7 ± 0.1 MB/s | baseline | Pinned in pread64, capped at QD=1 |
+| 1 Thread(s) | JUringBlocking | 1 carrier + 1 poller (2T) | 399,108.7 ± 89,551.6 | 1,559.0 ± 349.8 MB/s | 34.91x | Minimum decoupled M:N poller |
+| 4 Thread(s) | FileChannel | 4 carriers | 43,080.4 ± 220.6 | 168.3 ± 0.9 MB/s | baseline | Pinned in pread64, capped at QD=4 |
+| 4 Thread(s) | JUringBlocking | 2 carriers + 2 pollers | 452,192.8 ± 1,262.9 | 1,766.4 ± 4.9 MB/s | 10.50x | Clean unmount via park(), full NVMe QD |
+| 8 Thread(s) | FileChannel | 8 carriers | 73,003.5 ± 23,547.5 | 285.2 ± 92.0 MB/s | baseline | Pinned in pread64, capped at QD=8 |
+| 8 Thread(s) | JUringBlocking | 4 carriers + 4 pollers | 389,340.6 ± 158,626.3 | 1,520.9 ± 619.6 MB/s | 5.33x | Clean unmount via park(), full NVMe QD |
+| 16 Thread(s) | FileChannel | 16 carriers | 137,326.1 ± 32,534.5 | 536.4 ± 127.1 MB/s | baseline | Pinned in pread64, capped at QD=16 |
+| 16 Thread(s) | JUringBlocking | 8 carriers + 8 pollers | 443,592.3 ± 40,401.8 | 1,732.8 ± 157.8 MB/s | 3.23x | Clean unmount via park(), full NVMe QD |
+
 #### Cold-Cache Buffered Virtual Thread Read (`BUFFERED_COLD`, Page Cache Dropped)
 *Working set sized so operations touch <25% of dataset. Device read rate measured via `/sys/block/<dev>/stat`.*
 
@@ -240,7 +281,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 ---
 
-### 7. Buffered Page-Cache I/O (DRAM Resident)
+### 8. Buffered Page-Cache I/O (DRAM Resident)
 
 <!-- BEGIN GENERATED: buffered -->
 *Harness: 3 forks × 3 iterations × 3 s per tier*
@@ -259,7 +300,7 @@ At 4 threads and above, JUring saturates the SSD controller's random read IOPS c
 
 ---
 
-### 8. Physical NAND Flash Cell Latency (QD=1)
+### 9. Physical NAND Flash Cell Latency (QD=1)
 
 <!-- BEGIN GENERATED: latency -->
 Unbatched single-operation read sampling (`Mode.SampleTime`, `OperationsPerInvocation(1)`) confirming direct hardware NVMe DMA latency:
@@ -282,7 +323,7 @@ Unbatched single-operation read sampling (`Mode.SampleTime`, `OperationsPerInvoc
 
 ---
 
-### 9. Project Panama (FFM API) Downcall Overhead
+### 10. Project Panama (FFM API) Downcall Overhead
 
 <!-- BEGIN GENERATED: ffm -->
 Benchmarking Foreign Function & Memory downcall invocations across dispatch patterns using [`FfmInvocationBenchmark`](src/test/java/bench/suite/FfmInvocationBenchmark.java):

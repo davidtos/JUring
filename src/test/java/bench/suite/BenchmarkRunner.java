@@ -6,6 +6,7 @@ import bench.suite.common.PreflightCheck;
 import bench.suite.direct.DirectLatencyBenchmark;
 import bench.suite.direct.DirectReadBenchmark;
 import bench.suite.direct.DirectWriteBenchmark;
+import bench.suite.direct.EqualQueueDepthBenchmark;
 import bench.suite.direct.MultiThreadScalingBenchmark;
 import bench.suite.direct.VirtualThreadBenchmark;
 import org.openjdk.jmh.profile.AsyncProfiler;
@@ -43,8 +44,10 @@ public class BenchmarkRunner {
         boolean bufferedOnly = false;
         boolean latencyOnly = false;
         boolean virtualOnly = false;
+        boolean equalQdOnly = false;
         boolean fioOnly = false;
         boolean threadsScaling = false;
+        boolean vtScaling = false;
         boolean attachGc = false;
         boolean attachAsync = false;
         Integer customThreads = null;
@@ -95,9 +98,30 @@ public class BenchmarkRunner {
                 case "--buffered" -> bufferedOnly = true;
                 case "--latency" -> latencyOnly = true;
                 case "--virtual", "--virtual-threads" -> virtualOnly = true;
+                case "--equal-qd", "--equal-queue-depth", "--qd-equal" -> equalQdOnly = true;
                 case "--max-pool-size", "--vt-1024" -> customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=1024");
+                case "--carrier-equal", "--limit-carriers", "--carrier-threads" -> {
+                    int n;
+                    if (i + 1 < args.length && args[i + 1].trim().matches("\\d+")) {
+                        n = Integer.parseInt(args[++i].trim());
+                    } else {
+                        String pollerProp = System.getProperty("juring.blocking.pollers");
+                        if (pollerProp != null && !pollerProp.isBlank() && pollerProp.trim().matches("\\d+")) {
+                            n = Integer.parseInt(pollerProp.trim());
+                        } else {
+                            int procs = Runtime.getRuntime().availableProcessors();
+                            n = Math.max(1, Math.min(4, Integer.highestOneBit(procs / 4)));
+                        }
+                    }
+                    customJvmArgs.add("-Djdk.virtualThreadScheduler.parallelism=" + n);
+                    customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=" + n);
+                    customJvmArgs.add("-Djdk.virtualThreadScheduler.minRunnable=1");
+                    customJvmArgs.add("-Djuring.blocking.pollers=" + n);
+                    System.out.printf("Equalized Carrier Threads: Loom ForkJoinPool limited to %d carriers (parallelism=%d, maxPoolSize=%d), JUring configured with %d pollers%n", n, n, n, n);
+                }
                 case "--fio", "--fio-compare", "--fio-workload" -> fioOnly = true;
                 case "--threads-scaling" -> threadsScaling = true;
+                case "--vt-scaling", "--vt-budget", "--vt-threads-scaling" -> vtScaling = true;
                 case "--gc" -> attachGc = true;
                 case "--async" -> attachAsync = true;
                 case "--perfnorm" -> attachPerfnorm = true;
@@ -189,6 +213,12 @@ public class BenchmarkRunner {
             return;
         }
 
+        if (vtScaling) {
+            runVirtualThreadScalingSuite(quick, full, decision, attachGc, attachAsync, customThreads, customIncludes, customParams, customJvmArgs, customRff, resultsDir,
+                    customForks, customWi, customI, customW, customR);
+            return;
+        }
+
         OptionsBuilder builder = new OptionsBuilder();
         builder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
         if (!customJvmArgs.isEmpty()) {
@@ -226,6 +256,8 @@ public class BenchmarkRunner {
             List<String> includes = new ArrayList<>();
             if (fioOnly) {
                 includes.add(".*FioComparisonBenchmark.*");
+            } else if (equalQdOnly) {
+                includes.add(EqualQueueDepthBenchmark.class.getSimpleName());
             } else if (directOnly) {
                 includes.add(DirectReadBenchmark.class.getSimpleName());
                 includes.add(DirectWriteBenchmark.class.getSimpleName());
@@ -572,6 +604,174 @@ public class BenchmarkRunner {
         return null;
     }
 
+    private static void runVirtualThreadScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
+                                                     Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
+                                                     List<String> customJvmArgs, String customRff, String resultsDir,
+                                                     Integer customForks, Integer customWi, Integer customI, Integer customW, Integer customR) throws RunnerException {
+        System.out.println("================================================================================");
+        System.out.println("   Virtual Threads Equal Platform Thread Budget Suite (1, 4, 8, 16 Threads)     ");
+        System.out.println("================================================================================");
+
+        int[] budgetLevels = (customThreads != null && customThreads > 0)
+                ? new int[]{customThreads}
+                : new int[]{1, 4, 8, 16};
+
+        Map<Integer, Double> fcScores = new LinkedHashMap<>();
+        Map<Integer, Double> juringScores = new LinkedHashMap<>();
+        List<String> createdJsonFiles = new ArrayList<>();
+
+        String effectiveRff = customRff;
+        if (effectiveRff == null && resultsDir != null) {
+            effectiveRff = java.nio.file.Path.of(resultsDir, "virtual-threads-budget-scaling.json").toString();
+        } else if (effectiveRff == null) {
+            effectiveRff = java.nio.file.Path.of("results", java.time.LocalDate.now().toString(), "virtual-threads-budget-scaling.json").toString();
+        }
+
+        for (int i = 0; i < budgetLevels.length; i++) {
+            int t = budgetLevels[i];
+            if (i > 0) {
+                System.out.println("\n[Cooldown] Pausing 10s between budget tiers for NVMe recovery...");
+                try {
+                    Thread.sleep(10000);
+                } catch (InterruptedException ignored) {}
+            }
+            System.out.printf("%n>>> Running Equal Thread Budget Tier: %d Total Platform Thread(s) <<<%n", t);
+
+            // 1. FileChannel: t carrier threads (0 pollers, total t threads)
+            OptionsBuilder fcBuilder = new OptionsBuilder();
+            fcBuilder.include("VirtualThreadBenchmark.fileChannelVirtualThreadRead");
+            fcBuilder.param("virtualThreads", "1000");
+            fcBuilder.param("distribution", "SINGLE_FILE");
+            fcBuilder.param("ioMode", "DIRECT");
+            fcBuilder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
+            if (customJvmArgs != null && !customJvmArgs.isEmpty()) {
+                fcBuilder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
+            }
+            fcBuilder.jvmArgsAppend(
+                    "-Djdk.virtualThreadScheduler.parallelism=" + t,
+                    "-Djdk.virtualThreadScheduler.maxPoolSize=" + t,
+                    "-Djdk.virtualThreadScheduler.minRunnable=1"
+            );
+            applyExecutionMode(fcBuilder, quick, full, decision, customForks, customWi, customI, customW, customR);
+            if (attachGc) fcBuilder.addProfiler(GCProfiler.class);
+            if (attachAsync) fcBuilder.addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results-vt-budget-" + t + "-fc");
+
+            if (effectiveRff != null) {
+                String fcRff = effectiveRff.endsWith(".json")
+                        ? effectiveRff.substring(0, effectiveRff.length() - 5) + "-fc-t" + t + ".json"
+                        : effectiveRff + "-fc-t" + t + ".json";
+                try {
+                    java.nio.file.Path p = java.nio.file.Path.of(fcRff);
+                    if (p.getParent() != null) java.nio.file.Files.createDirectories(p.getParent());
+                    fcBuilder.result(fcRff);
+                    fcBuilder.resultFormat(org.openjdk.jmh.results.format.ResultFormatType.JSON);
+                    createdJsonFiles.add(fcRff);
+                } catch (Exception ignored) {}
+            }
+
+            System.out.printf("  [FileChannel] Running with %d carrier threads (0 pollers, total %d threads)...%n", t, t);
+            Collection<RunResult> fcRes = new Runner(fcBuilder.build()).run();
+            for (RunResult rr : fcRes) {
+                fcScores.put(t, rr.getPrimaryResult().getScore());
+            }
+
+            // 2. JUring: carriers + pollers = t (or 1 carrier + 1 poller min for t=1)
+            int carriers = (t == 1) ? 1 : Math.max(1, t / 2);
+            int pollers = (t == 1) ? 1 : Math.max(1, Integer.highestOneBit(t - carriers));
+            int actualJuringTotal = carriers + pollers;
+
+            OptionsBuilder juBuilder = new OptionsBuilder();
+            juBuilder.include("VirtualThreadBenchmark.juringVirtualThreadRead");
+            juBuilder.param("virtualThreads", "1000");
+            juBuilder.param("distribution", "SINGLE_FILE");
+            juBuilder.param("ioMode", "DIRECT");
+            juBuilder.jvmArgsPrepend("--enable-native-access=ALL-UNNAMED");
+            if (customJvmArgs != null && !customJvmArgs.isEmpty()) {
+                juBuilder.jvmArgsAppend(customJvmArgs.toArray(new String[0]));
+            }
+            juBuilder.jvmArgsAppend(
+                    "-Djdk.virtualThreadScheduler.parallelism=" + carriers,
+                    "-Djdk.virtualThreadScheduler.maxPoolSize=" + carriers,
+                    "-Djdk.virtualThreadScheduler.minRunnable=1",
+                    "-Djuring.blocking.pollers=" + pollers
+            );
+            applyExecutionMode(juBuilder, quick, full, decision, customForks, customWi, customI, customW, customR);
+            if (attachGc) juBuilder.addProfiler(GCProfiler.class);
+            if (attachAsync) juBuilder.addProfiler(AsyncProfiler.class, "event=cpu;simple=true;output=flamegraph;dir=./profiler-results-vt-budget-" + t + "-ju");
+
+            if (effectiveRff != null) {
+                String juRff = effectiveRff.endsWith(".json")
+                        ? effectiveRff.substring(0, effectiveRff.length() - 5) + "-ju-t" + t + ".json"
+                        : effectiveRff + "-ju-t" + t + ".json";
+                try {
+                    java.nio.file.Path p = java.nio.file.Path.of(juRff);
+                    if (p.getParent() != null) java.nio.file.Files.createDirectories(p.getParent());
+                    juBuilder.result(juRff);
+                    juBuilder.resultFormat(org.openjdk.jmh.results.format.ResultFormatType.JSON);
+                    createdJsonFiles.add(juRff);
+                } catch (Exception ignored) {}
+            }
+
+            System.out.printf("  [JUringBlocking] Running with %d carrier threads + %d poller threads (total %d threads)...%n", carriers, pollers, actualJuringTotal);
+            Collection<RunResult> juRes = new Runner(juBuilder.build()).run();
+            for (RunResult rr : juRes) {
+                juringScores.put(t, rr.getPrimaryResult().getScore());
+            }
+        }
+
+        // Print final summary table
+        System.out.println("\n==================================================================================================================");
+        System.out.println("                 VIRTUAL THREADS EQUAL PLATFORM THREAD BUDGET SCALING SUMMARY                    ");
+        System.out.println("==================================================================================================================");
+        System.out.printf("%-10s | %-15s | %-24s | %18s | %14s | %10s%n", "Budget", "Engine", "Breakdown", "Throughput (ops/s)", "Bandwidth", "Speedup");
+        System.out.println("------------------------------------------------------------------------------------------------------------------");
+        for (int t : budgetLevels) {
+            Double fc = fcScores.get(t);
+            Double ju = juringScores.get(t);
+            int carriers = (t == 1) ? 1 : Math.max(1, t / 2);
+            int pollers = (t == 1) ? 1 : Math.max(1, Integer.highestOneBit(t - carriers));
+
+            String fcStr = (fc != null) ? String.format("%,18.1f", fc) : "N/A";
+            String fcMb = (fc != null) ? String.format("%11.1f MB/s", (fc * 4096.0) / 1_000_000.0) : "N/A";
+            System.out.printf("%-10s | %-15s | %-24s | %18s | %14s | %10s%n",
+                    t + " Thread(s)", "FileChannel", t + " carriers", fcStr, fcMb, "baseline");
+
+            String juStr = (ju != null) ? String.format("%,18.1f", ju) : "N/A";
+            String juMb = (ju != null) ? String.format("%11.1f MB/s", (ju * 4096.0) / 1_000_000.0) : "N/A";
+            String spStr = (fc != null && ju != null && fc > 0) ? String.format("%9.2fx", ju / fc) : "N/A";
+            String juBreakdown = (t == 1) ? "1 carrier + 1 poller (2T)" : (carriers + " carriers + " + pollers + " pollers");
+            System.out.printf("%-10s | %-15s | %-24s | %18s | %14s | %10s%n",
+                    t + " Thread(s)", "JUringBlocking", juBreakdown, juStr, juMb, spStr);
+            System.out.println("------------------------------------------------------------------------------------------------------------------");
+        }
+        System.out.println("==================================================================================================================");
+
+        // Merge JSON files into combined effectiveRff
+        if (effectiveRff != null && !createdJsonFiles.isEmpty()) {
+            try {
+                List<String> entries = new ArrayList<>();
+                for (String file : createdJsonFiles) {
+                    java.nio.file.Path p = java.nio.file.Path.of(file);
+                    if (java.nio.file.Files.exists(p)) {
+                        String content = java.nio.file.Files.readString(p).trim();
+                        if (content.startsWith("[") && content.endsWith("]")) {
+                            content = content.substring(1, content.length() - 1).trim();
+                            if (!content.isEmpty()) entries.add(content);
+                        }
+                    }
+                }
+                if (!entries.isEmpty()) {
+                    java.nio.file.Path target = java.nio.file.Path.of(effectiveRff);
+                    if (target.getParent() != null) java.nio.file.Files.createDirectories(target.getParent());
+                    java.nio.file.Files.writeString(target, "[\n" + String.join(",\n", entries) + "\n]\n");
+                    System.out.println("Combined budget scaling benchmark results saved to: " + effectiveRff);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to merge budget scaling JSON files: " + e.getMessage());
+            }
+        }
+    }
+
     /**
      * Guards against a non-genuine {@code perf} executable being picked up by JMH's perfnorm profiler.
      * <p>
@@ -668,9 +868,12 @@ public class BenchmarkRunner {
         System.out.println("  --buffered          Run only Buffered / Page Cache benchmarks");
         System.out.println("  --latency           Run unbatched tail latency distribution benchmark (Mode.SampleTime)");
         System.out.println("  --virtual           Run Project Loom Virtual Threads scaling benchmark (50..1000 VTs)");
+        System.out.println("  --equal-qd          Run equal queue depth benchmark comparing FileChannel to JUring at QD 1, 16, 32, 64");
         System.out.println("  --max-pool-size     Run with -Djdk.virtualThreadScheduler.maxPoolSize=1024");
+        System.out.println("  --carrier-equal [N] Limit Loom carrier threads to match JUring poller threads (default: procs/4, max 4)");
         System.out.println("  --fio               Run fio workload parity comparison benchmark (O_DIRECT, 10GB file, 4KB blocks, full latency telemetry)");
         System.out.println("  --threads-scaling   Run multi-thread saturation suite (1, 4, 8, 16 threads)");
+        System.out.println("  --vt-scaling        Run virtual threads equal platform thread budget suite (1, 4, 8, 16 threads)");
         System.out.println("  --gc                Attach GCProfiler to measure bytes allocated / op");
         System.out.println("  --async             Attach AsyncProfiler for CPU profiling flame graphs");
         System.out.println("  --perfnorm          Attach LinuxPerfNormProfiler for hardware cycles and CPU task-clock");
@@ -733,8 +936,10 @@ public class BenchmarkRunner {
         public boolean bufferedOnly = false;
         public boolean latencyOnly = false;
         public boolean virtualOnly = false;
+        public boolean equalQdOnly = false;
         public boolean fioOnly = false;
         public boolean threadsScaling = false;
+        public boolean vtScaling = false;
         public boolean attachGc = false;
         public boolean attachAsync = false;
         public boolean attachPerfnorm = false;
@@ -771,9 +976,29 @@ public class BenchmarkRunner {
                 case "--buffered" -> cfg.bufferedOnly = true;
                 case "--latency" -> cfg.latencyOnly = true;
                 case "--virtual", "--virtual-threads" -> cfg.virtualOnly = true;
+                case "--equal-qd", "--equal-queue-depth", "--qd-equal" -> cfg.equalQdOnly = true;
                 case "--max-pool-size", "--vt-1024" -> cfg.customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=1024");
+                case "--carrier-equal", "--limit-carriers", "--carrier-threads" -> {
+                    int n;
+                    if (i + 1 < args.length && args[i + 1].trim().matches("\\d+")) {
+                        n = Integer.parseInt(args[++i].trim());
+                    } else {
+                        String pollerProp = System.getProperty("juring.blocking.pollers");
+                        if (pollerProp != null && !pollerProp.isBlank() && pollerProp.trim().matches("\\d+")) {
+                            n = Integer.parseInt(pollerProp.trim());
+                        } else {
+                            int procs = Runtime.getRuntime().availableProcessors();
+                            n = Math.max(1, Math.min(4, Integer.highestOneBit(procs / 4)));
+                        }
+                    }
+                    cfg.customJvmArgs.add("-Djdk.virtualThreadScheduler.parallelism=" + n);
+                    cfg.customJvmArgs.add("-Djdk.virtualThreadScheduler.maxPoolSize=" + n);
+                    cfg.customJvmArgs.add("-Djdk.virtualThreadScheduler.minRunnable=1");
+                    cfg.customJvmArgs.add("-Djuring.blocking.pollers=" + n);
+                }
                 case "--fio", "--fio-compare", "--fio-workload" -> cfg.fioOnly = true;
                 case "--threads-scaling" -> cfg.threadsScaling = true;
+                case "--vt-scaling", "--vt-budget", "--vt-threads-scaling" -> cfg.vtScaling = true;
                 case "--gc" -> cfg.attachGc = true;
                 case "--async" -> cfg.attachAsync = true;
                 case "--perfnorm" -> cfg.attachPerfnorm = true;

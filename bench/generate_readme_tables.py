@@ -293,6 +293,44 @@ def gen_single_core(results_dir):
 
     return "\n".join([l for l in lines if l is not None])
 
+def gen_equal_qd(results_dir):
+    eq = load_json_file(os.path.join(results_dir, "equal-qd.json"))
+    if not eq:
+        return "<!-- equal-qd.json not ready yet -->"
+
+    eq_sys = load_json_file(os.path.join(results_dir, "equal-qd-syscalls.json"))
+    harness_str = get_fork_iter_str(eq)
+    qds = ["1", "16", "32", "64"]
+
+    lines = [
+        "Head-to-head comparison of standard Java `FileChannel` against `JUring` with **identical thread counts (1 thread)** across increasing hardware Queue Depths (QD = 1, 16, 32, 64) for 4KB random direct reads (`O_DIRECT`) on a contiguous 10 GB pre-allocated file.",
+        "",
+        "*Both benchmarks run on a single calling thread. Because standard Java FileChannel operations (`pread64`) are synchronous and blocking, FileChannel cannot submit concurrent requests to the storage controller without spawning threads; its effective queue depth remains clamped at QD = 1 (~83 µs flash latency). In contrast, JUring drives any requested hardware queue depth asynchronously on the **exact same single thread** via non-blocking io_uring submission queues.*",
+        harness_str if harness_str else "",
+        "",
+        "| Queue Depth (QD) | JUring (1 Thread) Throughput | JUring Bandwidth | FileChannel (1 Thread) Throughput | FileChannel Bandwidth | Speedup (JUring vs FileChannel) | Notes |",
+        "|---|---|---|---|---|---|---|"
+    ]
+
+    by_bench_qd = {}
+    for b in eq:
+        bname = b["benchmark"].split(".")[-1]
+        qd = str(b.get("params", {}).get("qd", "1"))
+        by_bench_qd[(bname, qd)] = b
+
+    for qd in qds:
+        jb = by_bench_qd.get(("juringDirectRead", qd))
+        fcb = by_bench_qd.get(("fileChannelDirectRead", qd))
+
+        js, je = (jb["primaryMetric"]["score"], jb["primaryMetric"]["scoreError"]) if jb else (None, None)
+        fcs, fce = (fcb["primaryMetric"]["score"], fcb["primaryMetric"]["scoreError"]) if fcb else (None, None)
+        sp = fmt_speedup(js, je, fcs, fce, 1)
+
+        note = "Flash cell access latency bound (~83 µs)" if qd == "1" else f"FileChannel clamped at QD=1 (synchronous); JUring drives QD={qd}"
+        lines.append(f"| QD = {qd} | {fmt_stat(js, je, 1, '')} | {fmt_mb(js, 4096, je)} | {fmt_stat(fcs, fce, 1, '')} | {fmt_mb(fcs, 4096, fce)} | {sp} | {note} |")
+
+    return "\n".join([l for l in lines if l is not None])
+
 def gen_scaling(results_dir, mode="read"):
     j_target = "juringDirectRead" if mode == "read" else "juringDirectWrite"
     fc_target = "fileChannelDirectRead" if mode == "read" else "fileChannelDirectWrite"
@@ -428,6 +466,73 @@ def gen_virtual_threads(results_dir):
             engine = "JUringBlocking" if "juring" in name.lower() else "FileChannel"
             note = "Carrier pool expanded from default 256 to 1024" if engine == "FileChannel" else "Fixed pool of 4 poller threads"
             lines.append(f"| `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000 | {engine} | {fmt_stat(score, err, 1, '')} | {fmt_mb(score, 4096, err)} | {note} |")
+
+    vt_equal = load_json_file(os.path.join(results_dir, "virtual-threads-carrier-equal.json"))
+    if vt_equal:
+        lines.extend([
+            "",
+            "#### Equal Thread Budget (Carrier Threads Limited to JUring Poller Count)",
+            "*When carrier threads are constrained to match the exact number of JUring pollers (4), FileChannel carrier pinning collapses throughput, whereas JUring unmounts virtual threads cleanly.*",
+            "",
+            "| Configuration | Virtual Threads | Engine | Throughput (ops/s) | Bandwidth | Notes |",
+            "|---|---|---|---|---|---|"
+        ])
+        for b in vt_equal:
+            name = b["benchmark"].split(".")[-1]
+            score = b["primaryMetric"]["score"]
+            err = b["primaryMetric"]["scoreError"]
+            engine = "JUringBlocking" if "juring" in name.lower() else "FileChannel"
+            note = "Pinned carriers bottlenecked at QD=4" if engine == "FileChannel" else "Clean unmount via park(), full NVMe QD"
+            lines.append(f"| Equal Carriers (4 threads) | 1,000 | {engine} | {fmt_stat(score, err, 1, '')} | {fmt_mb(score, 4096, err)} | {note} |")
+
+    vt_budget = load_json_file(os.path.join(results_dir, "virtual-threads-budget-scaling.json"))
+    if vt_budget:
+        lines.extend([
+            "",
+            "#### Equal Total Platform Thread Budget (1, 4, 8, 16 Threads at 1,000 VTs)",
+            "*Comparing FileChannel and JUringBlocking under strictly equal total OS platform thread budgets. FileChannel dedicates all platform threads to Loom carriers (which get pinned by synchronous pread64), while JUringBlocking divides its budget between carriers and background pollers.*",
+            "",
+            "| Total Platform Threads | Engine | Thread Breakdown | Throughput (ops/s) | Bandwidth | Speedup | Notes |",
+            "|---|---|---|---|---|---|---|"
+        ])
+        # Group by budget
+        budget_map = {}
+        for b in vt_budget:
+            name = b["benchmark"].split(".")[-1]
+            is_ju = "juring" in name.lower()
+            jvm_args = b.get("jvmArgs", [])
+            par = 1
+            pol = 1
+            for arg in jvm_args:
+                if arg.startswith("-Djdk.virtualThreadScheduler.parallelism="):
+                    par = int(arg.split("=")[1])
+                elif arg.startswith("-Djuring.blocking.pollers="):
+                    pol = int(arg.split("=")[1])
+            if is_ju:
+                budget = 1 if (par == 1 and pol == 1) else (par + pol)
+                breakdown = "1 carrier + 1 poller (2T)" if (par == 1 and pol == 1) else f"{par} carriers + {pol} pollers"
+            else:
+                budget = par
+                breakdown = f"{par} carriers"
+            engine = "JUringBlocking" if is_ju else "FileChannel"
+            budget_map.setdefault(budget, {})[engine] = (b, breakdown)
+
+        for budget in sorted(budget_map.keys()):
+            pair = budget_map[budget]
+            fc_entry = pair.get("FileChannel")
+            ju_entry = pair.get("JUringBlocking")
+            fc_score = fc_entry[0]["primaryMetric"]["score"] if fc_entry else None
+            fc_err = fc_entry[0]["primaryMetric"]["scoreError"] if fc_entry else None
+            ju_score = ju_entry[0]["primaryMetric"]["score"] if ju_entry else None
+            ju_err = ju_entry[0]["primaryMetric"]["scoreError"] if ju_entry else None
+            sp = fmt_speedup(ju_score, ju_err, fc_score, fc_err, 2)
+
+            if fc_entry:
+                note = f"Pinned in pread64, capped at QD={budget}"
+                lines.append(f"| {budget} Thread(s) | FileChannel | {fc_entry[1]} | {fmt_stat(fc_score, fc_err, 1, '')} | {fmt_mb(fc_score, 4096, fc_err)} | baseline | {note} |")
+            if ju_entry:
+                note = "Clean unmount via park(), full NVMe QD" if budget > 1 else "Minimum decoupled M:N poller"
+                lines.append(f"| {budget} Thread(s) | JUringBlocking | {ju_entry[1]} | {fmt_stat(ju_score, ju_err, 1, '')} | {fmt_mb(ju_score, 4096, ju_err)} | {sp} | {note} |")
 
     # Check for BUFFERED_COLD table if data exists
     vt_cold = load_json_file(os.path.join(results_dir, "virtual-threads-buffered-cold.json"))
@@ -609,6 +714,7 @@ GENERATORS = {
     "hardware": gen_hardware,
     "fio-compare": gen_fio_compare,
     "single-core": gen_single_core,
+    "equal-qd": gen_equal_qd,
     "scaling-read": lambda r: gen_scaling(r, "read"),
     "scaling-write": lambda r: gen_scaling(r, "write"),
     "multifile": gen_multifile,

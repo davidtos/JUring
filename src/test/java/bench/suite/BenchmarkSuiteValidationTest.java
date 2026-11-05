@@ -5,6 +5,7 @@ import bench.suite.common.IoHelper;
 import bench.suite.common.PreflightCheck;
 import bench.suite.common.StorageAuxCounters;
 import bench.suite.direct.DirectLatencyBenchmark;
+import bench.suite.direct.EqualQueueDepthBenchmark;
 import bench.suite.direct.VirtualThreadBenchmark;
 import org.openjdk.jmh.infra.Blackhole;
 import com.davidvlijmincx.lio.api.*;
@@ -505,6 +506,88 @@ class BenchmarkSuiteValidationTest {
                 BenchmarkRunner.buildScalingOptions(new String[]{"--threads-scaling", "--f", "3", "--i", "4"}, 1);
         assertEquals(3, options.getForkCount().orElse(-1), "Forks must be 3");
         assertEquals(4, options.getMeasurementIterations().orElse(-1), "Measurement iterations must be 4");
+    }
+
+    @Test
+    @DisplayName("Verify --carrier-equal and --carrier-threads CLI options configure JVM args correctly")
+    void testCarrierEqualCliOptions() {
+        BenchmarkRunner.RunnerConfig cfg1 = BenchmarkRunner.parseArgs(new String[]{"--virtual", "--carrier-equal"});
+        assertNotNull(cfg1);
+        assertTrue(cfg1.virtualOnly);
+        assertTrue(cfg1.customJvmArgs.stream().anyMatch(a -> a.startsWith("-Djdk.virtualThreadScheduler.parallelism=")));
+        assertTrue(cfg1.customJvmArgs.stream().anyMatch(a -> a.startsWith("-Djdk.virtualThreadScheduler.maxPoolSize=")));
+        assertTrue(cfg1.customJvmArgs.contains("-Djdk.virtualThreadScheduler.minRunnable=1"));
+        assertTrue(cfg1.customJvmArgs.stream().anyMatch(a -> a.startsWith("-Djuring.blocking.pollers=")));
+
+        BenchmarkRunner.RunnerConfig cfg2 = BenchmarkRunner.parseArgs(new String[]{"--virtual", "--carrier-threads", "2"});
+        assertNotNull(cfg2);
+        assertTrue(cfg2.customJvmArgs.contains("-Djdk.virtualThreadScheduler.parallelism=2"));
+        assertTrue(cfg2.customJvmArgs.contains("-Djdk.virtualThreadScheduler.maxPoolSize=2"));
+        assertTrue(cfg2.customJvmArgs.contains("-Djdk.virtualThreadScheduler.minRunnable=1"));
+        assertTrue(cfg2.customJvmArgs.contains("-Djuring.blocking.pollers=2"));
+    }
+
+    @Test
+    @DisplayName("Verify --vt-scaling CLI options parse correctly")
+    void testVtScalingCliOptions() {
+        BenchmarkRunner.RunnerConfig cfg = BenchmarkRunner.parseArgs(new String[]{"--vt-scaling", "--quick"});
+        assertNotNull(cfg);
+        assertTrue(cfg.vtScaling, "vtScaling must be true");
+        assertTrue(cfg.quick, "quick must be true");
+    }
+
+    @Test
+    @DisplayName("Verify --equal-qd CLI options parse correctly")
+    void testEqualQdCliOptions() {
+        BenchmarkRunner.RunnerConfig cfg1 = BenchmarkRunner.parseArgs(new String[]{"--equal-qd"});
+        assertNotNull(cfg1);
+        assertTrue(cfg1.equalQdOnly, "equalQdOnly must be true");
+
+        BenchmarkRunner.RunnerConfig cfg2 = BenchmarkRunner.parseArgs(new String[]{"--equal-queue-depth"});
+        assertNotNull(cfg2);
+        assertTrue(cfg2.equalQdOnly, "equalQdOnly must be true");
+
+        BenchmarkRunner.RunnerConfig cfg3 = BenchmarkRunner.parseArgs(new String[]{"--qd-equal"});
+        assertNotNull(cfg3);
+        assertTrue(cfg3.equalQdOnly, "equalQdOnly must be true");
+    }
+
+    @Test
+    @DisplayName("Verify EqualQueueDepthBenchmark lifecycle and direct reads across QD=1 and QD=16")
+    void testEqualQueueDepthBenchmarkExecution() throws Exception {
+        EqualQueueDepthBenchmark bench = new EqualQueueDepthBenchmark();
+        EqualQueueDepthBenchmark.BenchmarkState bState = new EqualQueueDepthBenchmark.BenchmarkState();
+        bState.distribution = "SINGLE_FILE";
+        bState.setup();
+
+        for (int qd : new int[]{1, 16}) {
+            // Test JUring
+            EqualQueueDepthBenchmark.JuringThreadState jState = new EqualQueueDepthBenchmark.JuringThreadState();
+            jState.qd = qd;
+            jState.setup(bState);
+            StorageAuxCounters jCounters = new StorageAuxCounters();
+
+            try {
+                bench.juringDirectRead(jState, bState, jCounters, null);
+                assertTrue(jState.reapedCount >= DatasetManager.DEFAULT_TASK_COUNT, "All tasks must be reaped for JUring at QD=" + qd);
+                assertTrue(jCounters.bytesProcessed > 0, "JUring counters must be recorded at QD=" + qd);
+            } finally {
+                jState.tearDown();
+            }
+
+            // Test FileChannel
+            EqualQueueDepthBenchmark.FileChannelThreadState fcState = new EqualQueueDepthBenchmark.FileChannelThreadState();
+            fcState.qd = qd;
+            fcState.setup(bState);
+            StorageAuxCounters fcCounters = new StorageAuxCounters();
+
+            try {
+                bench.fileChannelDirectRead(fcState, bState, fcCounters, null);
+                assertTrue(fcCounters.bytesProcessed > 0, "FileChannel counters must be recorded at QD=" + qd);
+            } finally {
+                fcState.tearDown();
+            }
+        }
     }
 
     @Test
