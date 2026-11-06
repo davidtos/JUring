@@ -12,7 +12,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
-import static com.davidvlijmincx.lio.api.DirectoryFileDescriptorFlags.AT_FDCWD;
 import static com.davidvlijmincx.lio.api.IoUringDispatcher.*;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
@@ -62,6 +61,8 @@ public class JUringBlocking implements AutoCloseable {
     private volatile long freeBufHead;
     @SuppressWarnings("unused")
     private volatile long freeBufTail;
+
+    public static final int AT_FDCWD = -100;
 
     private static final class ControlTask<T> {
         final Callable<T> action;
@@ -1067,7 +1068,7 @@ public class JUringBlocking implements AutoCloseable {
         return (int) getWorker().submitAndAwaitSlot(
                 IORING_OP_OPENAT,
                 SqeOptions.combineOptions(sqeOptions),
-                AT_FDCWD.value,
+                AT_FDCWD,
                 0L,
                 pathAddr.address(),
                 mode,
@@ -1111,7 +1112,7 @@ public class JUringBlocking implements AutoCloseable {
             res = (int) w.submitAndAwaitSlot(
                     IORING_OP_OPENAT,
                     SqeOptions.combineOptions(sqeOptions),
-                    AT_FDCWD.value,
+                    AT_FDCWD,
                     0L,
                     pathAddr.address(),
                     mode,

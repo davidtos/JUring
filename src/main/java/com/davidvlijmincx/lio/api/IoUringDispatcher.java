@@ -8,7 +8,6 @@ import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.davidvlijmincx.lio.api.DirectoryFileDescriptorFlags.AT_FDCWD;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_ATTACH_WQ;
 import static java.lang.foreign.ValueLayout.*;
 
@@ -147,6 +146,8 @@ final class IoUringDispatcher implements AutoCloseable {
     private int cqRingMask;
     private int cqRingEntries;
 
+    public static final int AT_FDCWD = -100;
+
     static {
         io_uring_sq_layout = MemoryLayout.structLayout(
                 JAVA_LONG.withName("khead"),
@@ -240,18 +241,6 @@ final class IoUringDispatcher implements AutoCloseable {
         this.cqePtrPtr = cqePtrPtr;
         this.callState = callState;
     }
-
-    public IoUringDispatcher(Arena arena,
-                            IovecBlockPool iovecBlockPool,
-                            MemorySegment ring,
-                            MemorySegment cqePtr,
-                            MemorySegment cqePtrPtr,
-                            MemorySegment callState,
-                            IoUringEnter ioUringEnter,
-                            IoUringRegister ioUringRegister) {
-        this(arena, iovecBlockPool, ring, cqePtr, cqePtrPtr, callState);
-    }
-
     public Arena arena() {
         return arena;
     }
@@ -444,7 +433,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     void prepareOpenAt(long sqe, long filePathAddress, int flags, int mode) {
         ZeroGcSqe.setOpcode(sqe, IORING_OP_OPENAT);
-        ZeroGcSqe.setFd(sqe, AT_FDCWD.value);
+        ZeroGcSqe.setFd(sqe, AT_FDCWD);
         ZeroGcSqe.setOff(sqe, 0L);
         ZeroGcSqe.setAddr(sqe, filePathAddress);
         ZeroGcSqe.setLen(sqe, mode);
@@ -726,7 +715,7 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    int waitCqe(MemorySegment ring, MemorySegment cqePtr) {
+    int waitCqe(MemorySegment cqePtr) {
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -776,18 +765,18 @@ final class IoUringDispatcher implements AutoCloseable {
         return count;
     }
 
-    void cqeSeen(MemorySegment ring, MemorySegment cqe) {
-        cqAdvance(ring, 1);
+    void cqeSeen() {
+        cqAdvance(1);
     }
 
-    void cqAdvance(MemorySegment ring, int count) {
+    void cqAdvance(int count) {
         if (count <= 0) return;
         inFlightCount -= count;
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
     }
 
-    int waitCqeNr(MemorySegment ring, MemorySegment cqePtrPtr, int waitNr) {
+    int waitCqeNr(int waitNr) {
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1305,11 +1294,11 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     List<Result> waitForBatchResult(int batchSize) {
-        int status = waitCqeNr(ring, cqePtrPtr, batchSize);
+        int status = waitCqeNr( batchSize);
         if (status < 0) {
-            status = waitCqeNr(ring, cqePtrPtr, batchSize);
+            status = waitCqeNr(batchSize);
             if (status < 0) {
-                status = waitCqeNr(ring, cqePtrPtr, batchSize);
+                status = waitCqeNr(batchSize);
                 if (status < 0) {
                     throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-status));
                 }
@@ -1439,7 +1428,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     Result waitForResult(Result target) {
-        int ret = waitCqe(ring, cqePtr);
+        int ret = waitCqe(cqePtr);
         if (ret < 0) {
             throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-ret));
         }
@@ -1452,7 +1441,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         target.setRegisteredBuffers(this.registeredBuffers);
         populateResultFromCqe(target, userData, res, flags);
-        cqAdvance(ring, 1);
+        cqAdvance(1);
         return target;
     }
 

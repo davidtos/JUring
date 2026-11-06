@@ -129,10 +129,6 @@ public class Result implements AutoCloseable {
         return getString(StandardCharsets.UTF_8);
     }
 
-    public String asString() {
-        return getString(StandardCharsets.UTF_8);
-    }
-
     public String getString(Charset charset) {
         return new String(toByteArray(), charset);
     }
