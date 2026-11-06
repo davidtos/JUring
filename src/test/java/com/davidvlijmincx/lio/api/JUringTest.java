@@ -290,17 +290,14 @@ class JUringTest {
         try(FileDescriptor readFd = new FileDescriptor("src/test/resources/read_file", READ, 0);
             FileDescriptor secondReadFd = new FileDescriptor("src/test/resources/second_read_file", READ, 0);
             FileDescriptor thirdReadFd = new FileDescriptor("src/test/resources/third_read_file", READ, 0)) {
-            
-            // Register initial files: read_file and second_read_file
+
             int result = jUring.registerFiles(readFd, secondReadFd);
             assertEquals(0, result);
 
-            // Update index 1 to point to third_read_file
             int[] updateFiles = {thirdReadFd.getFd()};
             int updateResult = jUring.registerFilesUpdate(0, updateFiles);
             assertEquals(1, updateResult);
 
-            // Test reading from index 1 (now third_read_file) after update
             long id2 = jUring.prepareRead(0, 20, 0);
             jUring.submit();
             Result readResult2 = jUring.waitForResult();
@@ -311,7 +308,6 @@ class JUringTest {
             readResult2.freeBuffer();
             assertEquals("third file content", content);
 
-            // Test reading from index 1 (second_read_file) before update
             long id1 = jUring.prepareRead(1, 20, 0);
             jUring.submit();
             Result readResult1 = jUring.waitForResult();
@@ -422,29 +418,25 @@ class JUringTest {
     @Test
     void prepareCloseFileDescriptor() {
         FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-        
-        // First, verify we can read from the file
+
         long readId1 = jUring.prepareRead(fd, 14, 0);
         jUring.submit();
         Result readResult1 = jUring.waitForResult();
         
         assertEquals(13, readResult1.result());
         readResult1.freeBuffer();
-        
-        // Now close the file descriptor
+
         long closeId = jUring.prepareClose(fd);
         jUring.submit();
         Result closeResult = jUring.waitForResult();
 
         assertEquals(closeId, closeResult.id());
         assertEquals(0, closeResult.result());
-        
-        // Verify the file descriptor is actually closed by trying to read from it
-        // This should fail with a bad file descriptor error
+
         long readId2 = jUring.prepareRead(fd, 14, 0);
         jUring.submit();
         Result readResult2 = jUring.waitForResult();
-        
+
         // Should get EBADF (Bad file descriptor) error, which is -9
         assertEquals(-9, readResult2.result());
         readResult2.freeBuffer();
@@ -454,25 +446,21 @@ class JUringTest {
     void prepareCloseDirectFileDescriptor() {
         try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             jUring.registerFiles(fd);
-            
-            // First, verify we can read from the registered file
+
             jUring.prepareRead(0, 14, 0);
             jUring.submit();
             Result readResult1 = jUring.waitForResult();
             
             assertEquals(13, readResult1.result());
             readResult1.freeBuffer();
-            
-            // Now close the registered file using direct close
+
             long closeId = jUring.prepareCloseDirect(0);
             jUring.submit();
             Result closeResult = jUring.waitForResult();
 
             assertEquals(closeId, closeResult.id());
             assertEquals(0, closeResult.result());
-            
-            // Verify the registered file descriptor is actually closed by trying to read from it
-            // This should fail with a bad file descriptor error
+
             jUring.prepareRead(0, 14, 0);
             jUring.submit();
             Result readResult2 = jUring.waitForResult();
@@ -587,10 +575,8 @@ class JUringTest {
         assertNotEquals(-1, first);
         assertNotEquals(-1, second);
 
-        // Pool is now exhausted
         assertEquals(-1, jUring.checkOutBuffer());
 
-        // Return one buffer and verify it is reusable
         jUring.checkInBuffer(first);
         int reused = jUring.checkOutBuffer();
         assertNotEquals(-1, reused);
@@ -718,7 +704,6 @@ class JUringTest {
             jUring.registerFiles(fd);
             jUring.registerBuffers(64, 2);
 
-            // 1. Zero-copy write via FileDescriptor
             int bufIdx0 = jUring.checkOutBuffer();
             MemorySegment buf0 = jUring.getRegisteredBuffer(bufIdx0);
             MemorySegment.copy(MemorySegment.ofArray(firstBytes), 0, buf0, 0, firstBytes.length);
@@ -734,7 +719,6 @@ class JUringTest {
             assertEquals(firstInput, Files.readString(path));
             jUring.checkInBuffer(bufIdx0);
 
-            // 2. Zero-copy write via registered file index
             String secondInput = "Registered";
             byte[] secondBytes = secondInput.getBytes();
             int bufIdx1 = jUring.checkOutBuffer();

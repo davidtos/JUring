@@ -31,15 +31,13 @@ class ReadvWritevTest {
 
     @Test
     void readvSplitsFileIntoMultipleBuffers() {
-        // read_file contains "Hello, World!" (13 bytes)
-        // Split: first 7 bytes "Hello, " and next 6 bytes "World!"
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             long id = jUring.prepareReadv(fd, new int[]{7, 6}, 0);
             jUring.submit();
             Result result = jUring.waitForResult();
 
             assertEquals(id, result.id());
-            // total bytes read should be 13
+
             assertEquals(13, result.result());
 
             MemorySegment[] buffers = result.buffers();

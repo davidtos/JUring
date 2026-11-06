@@ -36,21 +36,15 @@ public class WakePollerStoreLoadTest {
 
     @Actor
     public void submitter(II_Result r) {
-        // 1. Publish task via release store (as in Worker.submitAndAwaitSlot mpscSeq update)
         VH_TASK_SUBMITTED.setRelease(this, 1);
-        // StoreLoad barrier in JUringBlocking.wakePoller()
         VarHandle.fullFence();
-        // 2. Load inKernel via volatile load
         r.r1 = (int) VH_IN_KERNEL.getVolatile(this);
     }
 
     @Actor
     public void poller(II_Result r) {
-        // 1. Store inKernel via volatile store (as in Worker poller loop before submitAndWait)
         VH_IN_KERNEL.setVolatile(this, 1);
-        // StoreLoad barrier before checking work
         VarHandle.fullFence();
-        // 2. Load taskSubmitted via acquire load (as in Worker.hasPendingMpsc)
         r.r2 = (int) VH_TASK_SUBMITTED.getAcquire(this);
     }
 
@@ -79,19 +73,14 @@ public class WakePollerStoreLoadTest {
 
         @Actor
         public void submitter(II_Result r) {
-            // Write tail with setRelease as in IoUringDispatcher
             VH_TAIL.setRelease(this, 1);
-            // StoreLoad barrier before checking flags
             VarHandle.fullFence();
-            // Read flags as in IoUringDispatcher
             r.r1 = (int) VH_FLAGS.getVolatile(this);
         }
 
         @Actor
         public void kernelSqThread(II_Result r) {
-            // Kernel sets NEED_WAKEUP
             VH_FLAGS.setVolatile(this, 1);
-            // Kernel checks tail with acquire
             r.r2 = (int) VH_TAIL.getAcquire(this);
         }
     }
@@ -206,7 +195,6 @@ public class WakePollerStoreLoadTest {
         @Actor
         public void kernelCompleter() {
             long addr = cqeSegment.address();
-            // Direct memory layout write
             cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0L, 999L);
             cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 8L, 4096);
             cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 12L, 0);

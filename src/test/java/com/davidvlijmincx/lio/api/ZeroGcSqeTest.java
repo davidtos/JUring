@@ -30,16 +30,13 @@ class ZeroGcSqeTest {
 
     @Test
     void testZeroClearsAll64Bytes() {
-        // Fill memory with non-zero bytes
         sqeSegment.fill((byte) 0xFF);
         for (long i = 0; i < ZeroGcSqe.SQE_SIZE; i++) {
             assertEquals((byte) 0xFF, sqeSegment.get(ValueLayout.JAVA_BYTE, i));
         }
 
-        // Call zero
         ZeroGcSqe.zero(sqeAddress);
 
-        // Verify all 64 bytes are 0
         for (long i = 0; i < ZeroGcSqe.SQE_SIZE; i++) {
             assertEquals((byte) 0, sqeSegment.get(ValueLayout.JAVA_BYTE, i), "Byte at offset " + i + " was not zeroed");
         }
@@ -83,51 +80,41 @@ class ZeroGcSqeTest {
     @Test
     void testAbsoluteOffsetsSqe() {
         assertEquals(64, ZeroGcSqe.SQE_SIZE, "io_uring_sqe must be exactly 64 bytes");
-        // Verify uapi offsets
+
         sqeSegment.fill((byte) 0);
-        // opcode at 0
+
         sqeSegment.set(ValueLayout.JAVA_BYTE, 0, (byte) 22);
         assertEquals((byte) 22, ZeroGcSqe.getOpcode(sqeAddress));
         ZeroGcSqe.setOpcode(sqeAddress, (byte) 23);
         assertEquals((byte) 23, sqeSegment.get(ValueLayout.JAVA_BYTE, 0));
 
-        // flags at 1
         sqeSegment.set(ValueLayout.JAVA_BYTE, 1, (byte) 0x05);
         assertEquals((byte) 0x05, ZeroGcSqe.getFlags(sqeAddress));
 
-        // ioprio at 2
         sqeSegment.set(ValueLayout.JAVA_SHORT, 2, (short) 100);
         assertEquals((short) 100, ZeroGcSqe.getIoprio(sqeAddress));
 
-        // fd at 4
         sqeSegment.set(ValueLayout.JAVA_INT, 4, 1234);
         assertEquals(1234, ZeroGcSqe.getFd(sqeAddress));
 
-        // off at 8
         sqeSegment.set(ValueLayout.JAVA_LONG, 8, 0x1122334455667788L);
         assertEquals(0x1122334455667788L, ZeroGcSqe.getOff(sqeAddress));
 
-        // addr at 16
         sqeSegment.set(ValueLayout.JAVA_LONG, 16, 0x8877665544332211L);
         assertEquals(0x8877665544332211L, ZeroGcSqe.getAddr(sqeAddress));
 
-        // len at 24
         sqeSegment.set(ValueLayout.JAVA_INT, 24, 4096);
         assertEquals(4096, ZeroGcSqe.getLen(sqeAddress));
 
-        // rw_flags at 28
         sqeSegment.set(ValueLayout.JAVA_INT, 28, 0x07);
         assertEquals(0x07, ZeroGcSqe.getRwFlags(sqeAddress));
 
-        // user_data at 32
         sqeSegment.set(ValueLayout.JAVA_LONG, 32, 0xCAFEBABE12345678L);
         assertEquals(0xCAFEBABE12345678L, ZeroGcSqe.getUserData(sqeAddress));
 
-        // buf_index at 40
         sqeSegment.set(ValueLayout.JAVA_SHORT, 40, (short) 42);
         assertEquals((short) 42, ZeroGcSqe.getBufIndex(sqeAddress));
 
-        // file_index at 44
         sqeSegment.set(ValueLayout.JAVA_INT, 44, 99);
         assertEquals(99, ZeroGcSqe.getFileIndex(sqeAddress));
     }
@@ -138,15 +125,13 @@ class ZeroGcSqeTest {
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cqe = a.allocate(16);
             long addr = cqe.address();
-            // user_data at 0
+
             cqe.set(ValueLayout.JAVA_LONG, 0, 0x123456789ABCDEF0L);
             assertEquals(0x123456789ABCDEF0L, ZeroGcCqe.getUserData(addr));
 
-            // res at 8
             cqe.set(ValueLayout.JAVA_INT, 8, 4096);
             assertEquals(4096, ZeroGcCqe.getRes(addr));
 
-            // flags at 12
             cqe.set(ValueLayout.JAVA_INT, 12, 0x02);
             assertEquals(0x02, ZeroGcCqe.getFlags(addr));
         }
@@ -174,7 +159,6 @@ class ZeroGcSqeTest {
         assertEquals(OperationType.READ, ZeroGcUserData.getType(encoded));
         assertEquals(ptr, ZeroGcUserData.getPayload(encoded));
 
-        // Test fixed buffer encoding
         int bufIdx = 42;
         long opId = 987654321L;
         long encodedFixed = ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufIdx, opId);
@@ -186,13 +170,11 @@ class ZeroGcSqeTest {
 
     @Test
     void testZeroGcUserDataEdgeCases() {
-        // High payload (56 bits max: 0x00FFFFFFFFFFFFFF)
         long maxPayload = 0x00FFFFFFFFFFFFFFL;
         long encodedMax = ZeroGcUserData.encode(OperationType.MULTISHOT_ACCEPT, maxPayload);
         assertEquals(OperationType.MULTISHOT_ACCEPT, ZeroGcUserData.getType(encodedMax));
         assertEquals(maxPayload, ZeroGcUserData.getPayload(encodedMax));
 
-        // Max bufferIndex (16 bits: 65535) and max fixed opId (40 bits: 0xFFFFFFFFFF)
         int maxBufIdx = 0xFFFF;
         long maxFixedOpId = 0xFFFFFFFFFFL;
         long encodedFixedMax = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, maxBufIdx, maxFixedOpId);
@@ -230,7 +212,6 @@ class ZeroGcSqeTest {
             long id = ring.prepareRead(fd, 14, 0);
             ring.submit();
 
-            // Use a single pre-allocated reusable Result instance
             Result reusable = new Result();
             Result returned = ring.waitForResult(reusable);
 
@@ -240,14 +221,12 @@ class ZeroGcSqeTest {
             assertEquals(OperationType.READ, reusable.type());
             reusable.freeBuffer();
 
-            // Submit another read and consume via peekForBatchResult(consumer)
             long id2 = ring.prepareRead(fd, 14, 0);
             ring.submit();
 
             int[] consumedCount = new int[1];
             long[] consumedId = new long[1];
 
-            // Wait until cqe is available
             while (consumedCount[0] == 0) {
                 ring.peekForBatchResult(1, r -> {
                     consumedCount[0]++;

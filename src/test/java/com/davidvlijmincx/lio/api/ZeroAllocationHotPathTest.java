@@ -86,7 +86,6 @@ class ZeroAllocationHotPathTest {
         final ReapingConsumer consumer = new ReapingConsumer(ring);
         long threadId = Thread.currentThread().threadId();
 
-        // Warmup until steady-state C2 compilation (0 allocations over batch)
         int zeroCount = 0;
         for (int w = 0; w < 30; w++) {
             consumer.count = 0;
@@ -102,7 +101,6 @@ class ZeroAllocationHotPathTest {
         assertTrue(zeroCount >= 3, "Warmup must achieve steady-state 0 allocations before benchmarking");
         consumer.count = 0;
 
-        // Measurement phase
         long bytesBefore = getThreadAllocatedBytes(threadId);
         runNopPipeline(BENCHMARK_OPS, qd, submitBatch, consumer);
         long bytesAfter = getThreadAllocatedBytes(threadId);
@@ -120,7 +118,6 @@ class ZeroAllocationHotPathTest {
         final ReapingConsumer consumer = new ReapingConsumer(ring);
         long threadId = Thread.currentThread().threadId();
 
-        // Warmup until steady-state C2 compilation
         int zeroCount = 0;
         for (int w = 0; w < 30; w++) {
             consumer.count = 0;
@@ -160,7 +157,6 @@ class ZeroAllocationHotPathTest {
             final ReapingConsumer consumer = new ReapingConsumer(ring);
             long threadId = Thread.currentThread().threadId();
 
-            // Warm up until steady-state
             int zeroCount = 0;
             for (int w = 0; w < 30; w++) {
                 consumer.count = 0;
@@ -201,7 +197,6 @@ class ZeroAllocationHotPathTest {
             final ReapingConsumer consumer = new ReapingConsumer(ring);
             long threadId = Thread.currentThread().threadId();
 
-            // Warm up until steady-state
             int zeroCount = 0;
             for (int w = 0; w < 30; w++) {
                 consumer.count = 0;

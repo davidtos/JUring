@@ -72,10 +72,8 @@ public class BufferedReadBenchmark {
 
             ring.registerBuffers(DatasetManager.DEFAULT_BUFFER_SIZE, safeBufferCount);
 
-            // Open buffered FileChannels (without ExtendedOpenOption.DIRECT)
             channels = benchState.dataset.openFileChannels(false);
 
-            // Fair pre-allocated direct ByteBuffer (eliminates heap allocation & GC stalls)
             directBuffer = ByteBuffer.allocateDirect(DatasetManager.DEFAULT_BUFFER_SIZE);
 
             this.reapedCount = 0;

@@ -366,7 +366,6 @@ class JUringBlockingTest {
 
     @Test
     void multiPollerConcurrentReadAndWrite() throws Exception {
-        // Force 4 pollers explicitly
         try (JUringBlocking blocking = new JUringBlocking(16, 4, IORING_SETUP_SINGLE_ISSUER);
              FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             assertEquals(4, blocking.workerCount(), "Forced poller count should be 4");

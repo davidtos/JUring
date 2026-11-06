@@ -324,7 +324,6 @@ public class DatasetManager {
             try {
                 channels[i] = FileChannel.open(uniquePaths[i], opts);
             } catch (IOException e) {
-                // Clean up already opened channels
                 for (int j = 0; j < i; j++) {
                     try { channels[j].close(); } catch (Exception ignored) {}
                 }

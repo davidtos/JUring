@@ -53,10 +53,8 @@ class DirectIoTest {
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
         assertEquals(BLOCK_SIZE, expectedBytes.length);
 
-        // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
-        // Open with O_DIRECT | O_WRONLY | O_CREAT
         try (FileDescriptor fd = new FileDescriptor(testFile, 0644, WRITE_DIRECT, CREATE, TRUNCATE)) {
             long writeId = jUring.prepareWriteFixed(fd, expectedBytes, 0, 0);
             jUring.submit();
@@ -66,7 +64,6 @@ class DirectIoTest {
             assertEquals(BLOCK_SIZE, result.result(), "Direct I/O write must write exactly 4096 bytes");
         }
 
-        // Verify the file content on disk
         String writtenText = Files.readString(testFile, StandardCharsets.UTF_8);
         assertEquals(expectedText, writtenText);
         assertEquals(BLOCK_SIZE, Files.size(testFile));
@@ -80,14 +77,11 @@ class DirectIoTest {
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
         assertEquals(BLOCK_SIZE, expectedBytes.length);
 
-        // Prepare test file
         Files.write(testFile, expectedBytes);
         assertEquals(BLOCK_SIZE, Files.size(testFile));
 
-        // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
-        // Open with O_DIRECT | O_RDONLY
         try (FileDescriptor fd = new FileDescriptor(testFile.toString(), READ_DIRECT, 0)) {
             long readId = jUring.prepareReadFixed(fd, BLOCK_SIZE, 0, 0);
             jUring.submit();
@@ -96,7 +90,6 @@ class DirectIoTest {
             assertEquals(readId, result.id(), "Completed operation ID must match submitted ID");
             assertEquals(BLOCK_SIZE, result.result(), "Direct I/O read must read exactly 4096 bytes");
 
-            // Verify read content matches expected content
             String actualText = result.getString(StandardCharsets.UTF_8);
             assertEquals(expectedText, actualText);
             assertTrue(actualText.startsWith("Line 01: " + "x".repeat(54) + "\n"));
@@ -111,17 +104,14 @@ class DirectIoTest {
         String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
 
-        // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
-        // Check out buffer 0 and copy data directly into registered memory segment
         int bufIdx = jUring.checkOutBuffer();
         assertTrue(bufIdx >= 0, "A registered buffer should be successfully checked out");
         MemorySegment registeredBuffer = jUring.getRegisteredBuffer(bufIdx);
         MemorySegment.copy(MemorySegment.ofArray(expectedBytes), 0, registeredBuffer, 0, BLOCK_SIZE);
 
         try (FileDescriptor fd = new FileDescriptor(testFile, 0644, WRITE_DIRECT, CREATE, TRUNCATE)) {
-            // Zero-copy overload: does not re-copy into the buffer
             long writeId = jUring.prepareWriteFixed(fd, BLOCK_SIZE, 0, bufIdx);
             jUring.submit();
 
@@ -144,10 +134,8 @@ class DirectIoTest {
         String expectedText = generateBlockData();
         byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
 
-        // Register 4096-byte aligned buffer in JUring
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
-        // 1. Direct I/O Write
         try (FileDescriptor writeFd = new FileDescriptor(testFile, 0644, WRITE_DIRECT, CREATE, TRUNCATE)) {
             long writeId = jUring.prepareWriteFixed(writeFd, expectedBytes, 0, 0);
             jUring.submit();
@@ -157,7 +145,6 @@ class DirectIoTest {
             assertEquals(BLOCK_SIZE, writeResult.result());
         }
 
-        // 2. Direct I/O Read back
         try (FileDescriptor readFd = new FileDescriptor(testFile.toString(), READ_DIRECT, 0)) {
             long readId = jUring.prepareReadFixed(readFd, BLOCK_SIZE, 0, 1);
             jUring.submit();
