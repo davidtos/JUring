@@ -17,9 +17,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * Equal Queue Depth Direct I/O Read Benchmark on a Single Thread.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)

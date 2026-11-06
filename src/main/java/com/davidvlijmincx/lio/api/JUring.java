@@ -9,16 +9,7 @@ import java.util.List;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * Pure Java API for Linux {@code io_uring}.
- * <p>
- * <b>Thread Safety:</b> {@code JUring} is <b>NOT</b> thread-safe. A single instance must only be
- * accessed by one thread at a time (e.g. pinned to a dedicated event loop or worker thread).
- * Internal submission state ({@code sqeTail}, {@code opSeq}, {@code freeBufferStack}) is not synchronized.
- * For concurrent access across multiple threads or virtual threads, use {@link JUringBlocking}.
- * <p>
- * <b>MemorySegment Lifetime Contract:</b> Any {@link MemorySegment} passed to {@code prepareWrite}
- * or other async operations accepting segments must be native, alive, and accessible by the calling thread.
- * Callers must ensure the underlying memory stays alive and valid until the corresponding CQE is reaped.
+ * Java API for Linux {@code io_uring}.
  */
 public class JUring implements AutoCloseable {
 

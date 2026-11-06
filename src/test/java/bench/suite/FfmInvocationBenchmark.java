@@ -14,9 +14,6 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandleProxies;
 import java.util.concurrent.TimeUnit;
 
-/**
- * Benchmark comparing the different ways to invoke a native function via Java FFM (JEP 454).
- */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 3, time = 1, timeUnit = TimeUnit.SECONDS)

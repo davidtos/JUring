@@ -17,13 +17,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Zero-GC, Virtual-Thread-friendly blocking wrapper over {@code io_uring}.
- *
- * <h2>MemorySegment Lifetime Contract</h2>
- * Any {@link MemorySegment} passed to blocking calls ({@code read}, {@code write}, etc.) must be native, alive,
- * and accessible by the calling thread. For confined arenas, memory safety is inherently preserved because the owning
- * thread blocks during the call. For shared arenas, callers must guarantee that another thread does not concurrently
- * close the arena while an operation using one of its segments is in flight.
+ * Zero-GC, Virtual Thread friendly blocking wrapper over {@code io_uring}.
  */
 public class JUringBlocking implements AutoCloseable {
 

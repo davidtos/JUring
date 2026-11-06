@@ -20,12 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * NVMe Direct I/O (O_DIRECT) Read Benchmark.
- *
- * Compares standard FileChannel against JUring with registered files and fixed buffers
- * across queue depths (QD = 1, 16, 64, 128) and thread concurrencies (1, 4, 8, 16).
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)

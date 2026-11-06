@@ -11,9 +11,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * Pure {@code IORING_OP_NOP} throughput and overhead ceiling benchmark.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)

@@ -29,9 +29,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * NVMe Direct I/O (O_DIRECT) Unbatched Tail Latency Benchmark.
- */
 @BenchmarkMode(Mode.SampleTime)
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 @OperationsPerInvocation(1)

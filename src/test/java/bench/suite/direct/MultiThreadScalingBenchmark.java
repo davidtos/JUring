@@ -19,9 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * Multi-Thread NVMe Flash Bus Saturation & Concurrency Scaling.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)

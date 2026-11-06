@@ -19,11 +19,6 @@ import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
 
-/**
- * NVMe Direct I/O (O_DIRECT) Write Benchmark.
- *
- * Compares FileChannel vs JUring random writes across both multi-file and single-file contention modes.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(DatasetManager.DEFAULT_TASK_COUNT)

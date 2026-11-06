@@ -23,9 +23,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_COOP_TASKRU
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_DEFER_TASKRUN;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 
-/**
- * Project Loom Virtual Threads NVMe Direct Read Benchmark.
- */
 @BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
 @OperationsPerInvocation(VirtualThreadBenchmark.OPERATIONS_PER_INVOCATION)

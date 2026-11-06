@@ -8,9 +8,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
-/**
- * OpenJDK JCStress stress test suite for JUring and JUringBlocking memory barrier mechanics.
- */
 @JCStressTest
 @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Poller noticed task before entering kernel (no unpark/eventfd write needed).")
 @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter observed inKernel poller and signals eventfd/unpark.")
