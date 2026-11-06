@@ -1,202 +1,377 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.*;
+import java.lang.foreign.MemorySegment;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.ThreadLocalRandom;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
+/**
+ * Java API for Linux {@code io_uring}.
+ */
 public class JUring implements AutoCloseable {
 
-    private final LibUringDispatcher ioUring;
+    private final IoUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
+
+    private MemorySegment[] registeredBuffersArray = new MemorySegment[0];
+    private long[] registeredBufferAddresses = new long[0];
+    private long[] registeredBufferSizes = new long[0];
+    private boolean[] bufferInUse;
+
     private int[] freeBufferStack;
     private int freeBufferTop;
     private ReadBufferPool readBufferPool;
 
+    private long opSeq = 1;
+
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
-        ioUring = NativeDispatcher.getUringInstance(queueDepth, ioUringFlags);
+        this(queueDepth, 0, ioUringFlags);
+    }
+
+    public JUring(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringFlags) {
+        ioUring = NativeDispatcher.getUringInstance(queueDepth, sqThreadIdleMs, ioUringFlags);
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];
         freeBufferTop = 0;
     }
 
-    private JUring(LibUringDispatcher ioUring){
+    private JUring(IoUringDispatcher ioUring) {
         this.ioUring = ioUring;
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];
         freeBufferTop = 0;
     }
 
-    public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions){
-        var ring = this.ioUring.getSharedWorkerRing(queueDepth);
+    public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
+        var ring = this.ioUring.getSharedWorkerRing(queueDepth, ioUringOptions);
         return new JUring(ring);
     }
 
+    public long prepareRead(FileDescriptor fd, int readSize, long offset) {
+        return prepareReadInternal(fd.getFd(), readSize, offset, (byte) 0, false);
+    }
+
     public long prepareRead(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadInternal(fd.getFd(), readSize, offset, sqeOptions, false);
+        return prepareReadInternal(fd.getFd(), readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareRead(int indexFD, int readSize, long offset) {
+        return prepareReadInternal(indexFD, readSize, offset, (byte) 0, true);
     }
 
     public long prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadInternal(indexFD, readSize, offset, sqeOptions, true);
+        return prepareReadInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
     public void setupReadBufferPool(int bufferSize, int capacity) {
+        if (bufferSize <= 0 || capacity < 0) {
+            throw new IllegalArgumentException("Invalid read buffer pool configuration: bufferSize=" + bufferSize + ", capacity=" + capacity);
+        }
+        if (readBufferPool != null) {
+            readBufferPool.close();
+        }
         readBufferPool = new ReadBufferPool(capacity, bufferSize);
     }
 
+    public long prepareReadPooled(FileDescriptor fd, int readSize, long offset) {
+        return prepareReadPooledInternal(fd.getFd(), readSize, offset, (byte) 0, false);
+    }
+
     public long prepareReadPooled(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadPooledInternal(fd.getFd(), readSize, offset, sqeOptions, false);
+        return prepareReadPooledInternal(fd.getFd(), readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareReadPooled(int indexFD, int readSize, long offset) {
+        return prepareReadPooledInternal(indexFD, readSize, offset, (byte) 0, true);
     }
 
     public long prepareReadPooled(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
-        return prepareReadPooledInternal(indexFD, readSize, offset, sqeOptions, true);
+        return prepareReadPooledInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
-    public void checkInReadBuffer(long address) {
-        readBufferPool.checkIn(address);
+    public void checkInReadBuffer(Result result) {
+        if (result == null) {
+            throw new IllegalArgumentException("Result cannot be null");
+        }
+        if (result.type() != OperationType.READ_POOLED) {
+            throw new IllegalArgumentException("Result must be of type READ_POOLED");
+        }
+        long address = result.bufferAddress();
+        if (address != 0L) {
+            checkInReadBuffer(address);
+        }
+    }
+
+    void checkInReadBuffer(long address) {
+        if (readBufferPool != null) {
+            readBufferPool.checkIn(address);
+        }
+    }
+
+    public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex) {
+        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, (byte) 0, false);
     }
 
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, sqeOptions, false);
+        return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex) {
+        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, (byte) 0, true);
     }
 
     public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, sqeOptions, true);
+        return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareNop() {
+        return prepareNopInternal((byte) 0);
+    }
+
+    public long prepareNop(SqeOptions... sqeOptions) {
+        return prepareNopInternal(SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareNopInternal(byte flags) {
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.NOP, opId);
+        ioUring.prepareNop(sqe);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
+        return prepareWriteInternal(fd.getFd(), bytes, offset, (byte) 0, false);
     }
 
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions, false);
+        return prepareWriteInternal(fd.getFd(), bytes, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset) {
+        return prepareWriteInternal(fd.getFd(), bytes, offset, (byte) 0, false);
     }
 
     public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(fd.getFd(), bytes, offset, sqeOptions, false);
+        return prepareWriteInternal(fd.getFd(), bytes, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWrite(int indexFD, byte[] bytes, long offset) {
+        return prepareWriteInternal(indexFD, bytes, offset, (byte) 0, true);
     }
 
     public long prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(indexFD, bytes, offset, sqeOptions, true);
+        return prepareWriteInternal(indexFD, bytes, offset, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareWrite(int indexFD, MemorySegment bytes, long offset) {
+        return prepareWriteInternal(indexFD, bytes, offset, (byte) 0, true);
     }
 
     public long prepareWrite(int indexFD, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
-        return prepareWriteInternal(indexFD, bytes, offset, sqeOptions, true);
+        return prepareWriteInternal(indexFD, bytes, offset, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, (byte) 0, false);
     }
 
     public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions, false);
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, (byte) 0, true);
     }
 
     public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, sqeOptions, true);
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, (byte) 0, false);
     }
 
     public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, sqeOptions, false);
+        return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex) {
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, (byte) 0, true);
     }
 
     public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, sqeOptions, true);
+        return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex) {
+        return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, (byte) 0, false);
+    }
+
+    public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
+        return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, (byte) 0, true);
+    }
+
+    public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public MemorySegment getRegisteredBuffer(int bufferIndex) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+        return registeredBuffersArray[bufferIndex];
+    }
+
+    public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset) {
+        return prepareReadv(fd, bufferSizes, offset, (byte) 0);
     }
 
     public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, SqeOptions... sqeOptions) {
+        return prepareReadv(fd, bufferSizes, offset, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, byte flags) {
         int nrVecs = bufferSizes.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            if (bufferSizes[i] < 0) {
+                throw new IllegalArgumentException("Invalid negative buffer size at index " + i + ": " + bufferSizes[i]);
+            }
         }
 
+        long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
-            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i]);
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i] + 1);
+            dataBuf.set(JAVA_BYTE, bufferSizes[i], (byte) 0);
             ZeroGcIovecBlock.setIovBase(blockAddr, i, dataBuf.address());
             ZeroGcIovecBlock.setIovLen(blockAddr, i, bufferSizes[i]);
         }
 
-        long id = blockAddr + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV, blockAddr);
+        long userData = ZeroGcUserData.encode(OperationType.READV, blockAddr);
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset) {
+        return prepareReadvFixed(fd, bufferIndices, offset, (byte) 0);
     }
 
     public long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset, SqeOptions... sqeOptions) {
+        return prepareReadvFixed(fd, bufferIndices, offset, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset, byte flags) {
         int nrVecs = bufferIndices.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            int idx = bufferIndices[i];
+            if (idx < 0 || idx >= registeredBuffers.size()) {
+                throw new IllegalArgumentException("Buffer index out of range: " + idx);
+            }
         }
 
+        long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
-            if (idx < 0 || idx >= registeredBuffers.size()) {
-                ioUring.releaseIovecBlock(blockAddr);
-                throw new IllegalArgumentException("Buffer index out of range: " + idx);
-            }
             MemorySegment registeredBuffer = registeredBuffers.get(idx);
             ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
             ZeroGcIovecBlock.setIovLen(blockAddr, i, registeredBuffer.byteSize());
         }
 
-        long id = blockAddr + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.READV_FIXED, blockAddr);
+        long userData = ZeroGcUserData.encode(OperationType.READV_FIXED, blockAddr);
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareWritevFixed(FileDescriptor fd, int[] bufferIndices, long[] lengths, long offset) {
+        return prepareWritevFixed(fd, bufferIndices, lengths, offset, (byte) 0);
     }
 
     public long prepareWritevFixed(FileDescriptor fd, int[] bufferIndices, long[] lengths, long offset, SqeOptions... sqeOptions) {
+        return prepareWritevFixed(fd, bufferIndices, lengths, offset, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareWritevFixed(FileDescriptor fd, int[] bufferIndices, long[] lengths, long offset, byte flags) {
         int nrVecs = bufferIndices.length;
         if (lengths.length != nrVecs) {
             throw new IllegalArgumentException("lengths array must have the same length as bufferIndices");
         }
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            int idx = bufferIndices[i];
+            if (idx < 0 || idx >= registeredBufferAddresses.length) {
+                throw new IllegalArgumentException("Buffer index out of range: " + idx);
+            }
+            if (lengths[i] < 0 || lengths[i] > registeredBufferSizes[idx]) {
+                throw new IllegalArgumentException("Length " + lengths[i] + " exceeds registered buffer size for index " + idx);
+            }
         }
 
+        long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
-            if (idx < 0 || idx >= registeredBuffers.size()) {
-                ioUring.releaseIovecBlock(blockAddr);
-                throw new IllegalArgumentException("Buffer index out of range: " + idx);
-            }
-            MemorySegment registeredBuffer = registeredBuffers.get(idx);
-            if (lengths[i] > registeredBuffer.byteSize()) {
-                ioUring.releaseIovecBlock(blockAddr);
-                throw new IllegalArgumentException("Length " + lengths[i] + " exceeds registered buffer size for index " + idx);
-            }
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
+            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBufferAddresses[idx]);
             ZeroGcIovecBlock.setIovLen(blockAddr, i, lengths[i]);
         }
 
-        long id = blockAddr + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV_FIXED, blockAddr);
+        long userData = ZeroGcUserData.encode(OperationType.WRITEV_FIXED, blockAddr);
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset) {
+        return prepareWritev(fd, buffers, offset, (byte) 0);
     }
 
     public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, SqeOptions... sqeOptions) {
+        return prepareWritev(fd, buffers, offset, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, byte flags) {
         int nrVecs = buffers.length;
-        if (nrVecs > IovecBlockPool.MAX_VECS) {
-            throw new IllegalArgumentException("nrVecs " + nrVecs + " exceeds MAX_VECS " + IovecBlockPool.MAX_VECS);
+        if (nrVecs <= 0 || nrVecs > IovecBlockPool.MAX_VECS) {
+            throw new IllegalArgumentException("nrVecs " + nrVecs + " out of range (1.." + IovecBlockPool.MAX_VECS + ")");
+        }
+        for (int i = 0; i < nrVecs; i++) {
+            if (buffers[i] == null) {
+                throw new IllegalArgumentException("Null buffer at index " + i);
+            }
         }
 
+        long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
 
@@ -207,183 +382,270 @@ public class JUring implements AutoCloseable {
             ZeroGcIovecBlock.setIovLen(blockAddr, i, buffers[i].length);
         }
 
-        long id = blockAddr + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd.getFd(), OperationType.WRITEV, blockAddr);
+        long userData = ZeroGcUserData.encode(OperationType.WRITEV, blockAddr);
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
         ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareOpen(String filePath, int flags, int mode) {
+        return prepareOpen(filePath, flags, mode, (byte) 0);
     }
 
     public long prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
-        byte[] pathBytes = filePath.getBytes();
+        return prepareOpen(filePath, flags, mode, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    public long prepareOpen(Path filePath, int mode, LinuxOpenOptions... openOptions) {
+        return prepareOpen(filePath.toString(), LinuxOpenOptions.combineOptions(openOptions), mode, (byte) 0);
+    }
+
+    private long prepareOpen(String filePath, int flags, int mode, byte sqeFlags) {
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
         MemorySegment pathBuffer = NativeDispatcher.C.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
-        long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, -1, OperationType.OPEN, pathBuffer);
+        long sqe = getSqe(sqeFlags, false);
+        long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-
-        ioUring.prepareOpenAt(sqe, pathBuffer, flags, mode);
+        ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags | 0x80000 /* O_CLOEXEC */, mode);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex) {
+        return prepareOpenDirect(filePath, flags, mode, fileIndex, (byte) 0);
     }
 
     public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
-        byte[] pathBytes = filePath.getBytes();
+        return prepareOpenDirect(filePath, flags, mode, fileIndex, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    public long prepareOpenDirect(Path filePath, int mode, int fileIndex, LinuxOpenOptions... openOptions) {
+        return prepareOpenDirect(filePath.toString(), LinuxOpenOptions.combineOptions(openOptions), mode, fileIndex, (byte) 0);
+    }
+
+    private long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, byte sqeFlags) {
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
+        long sqe = getSqe(sqeFlags, false);
         MemorySegment pathBuffer = NativeDispatcher.C.alloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
         pathBuffer.set(JAVA_BYTE, pathBytes.length, (byte) 0);
 
-        long id = pathBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fileIndex, OperationType.OPEN, pathBuffer);
+        long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareOpenDirectAt(sqe, pathBuffer, flags, mode, fileIndex);
+        ioUring.prepareOpenDirectAt(sqe, pathBuffer.address(), flags & ~0x80000 /* O_CLOEXEC not allowed for direct */, mode, fileIndex);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareClose(FileDescriptor fd) {
+        return prepareCloseInternal(fd.getFd(), (byte) 0);
     }
 
     public long prepareClose(FileDescriptor fd, SqeOptions... sqeOptions) {
-        return prepareCloseInternal(fd.getFd(), sqeOptions);
+        return prepareCloseInternal(fd.getFd(), SqeOptions.combineOptions(sqeOptions));
+    }
+
+    public long prepareCloseDirect(int fileIndex) {
+        return prepareCloseDirect(fileIndex, (byte) 0);
     }
 
     public long prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
-        long id = ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fileIndex, OperationType.CLOSE, MemorySegment.NULL);
+        return prepareCloseDirect(fileIndex, SqeOptions.combineOptions(sqeOptions));
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
+    private long prepareCloseDirect(int fileIndex, byte flags) {
+        if (fileIndex < 0) {
+            throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
+        }
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
+
         ioUring.prepareCloseDirect(sqe, fileIndex);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
-    private long prepareReadInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
-        long address = NativeDispatcher.C.mallocAddress(readSize);
+    private long prepareReadInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
+        if (readSize < 0) {
+            throw new IllegalArgumentException("Invalid readSize: " + readSize);
+        }
+        long sqe = getSqe(flags, fixedFile);
+        long address = NativeDispatcher.C.mallocAddress(readSize + 1L);
+        MemorySegment.ofAddress(address).reinterpret(readSize + 1L).set(JAVA_BYTE, readSize, (byte) 0);
+        long userData = ZeroGcUserData.encode(OperationType.READ, address);
 
-        long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ, address);
-
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
 
-        return address;
+        return userData;
     }
 
-    private long prepareReadPooledInternal(int fdOrIndex, int readSize, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
+    private long prepareReadPooledInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
+        if (readBufferPool == null) {
+            throw new IllegalStateException("Read buffer pool has not been initialized; call setupReadBufferPool() first");
+        }
+        if (readSize < 0 || readSize > readBufferPool.bufferSize()) {
+            throw new IllegalArgumentException("Read size " + readSize + " out of range (0.." + readBufferPool.bufferSize() + ")");
+        }
+        long sqe = getSqe(flags, fixedFile);
         long address = readBufferPool.checkOut();
+        long userData = ZeroGcUserData.encode(OperationType.READ_POOLED, address);
 
-        long userData = ioUring.allocateUserData(address, fdOrIndex, OperationType.READ_POOLED, address);
-
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
 
-        return address;
+        return userData;
     }
 
-    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
-        long id = bytes.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, bytes);
+    static void validateNativeSegment(MemorySegment segment, boolean forRead) {
+        if (!segment.isNative()) {
+            throw new IllegalArgumentException("Segment must be native memory");
+        }
+        if (forRead && segment.isReadOnly()) {
+            throw new IllegalArgumentException("Segment must not be read-only for read operations");
+        }
+        if (!segment.scope().isAlive()) {
+            throw new IllegalStateException("Segment scope is already closed");
+        }
+        if (!segment.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("Segment is confined to another thread");
+        }
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
-        ioUring.prepareWrite(sqe, fdOrIndex, bytes, offset);
+    private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, byte flags, boolean fixedFile) {
+        validateNativeSegment(bytes, false);
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.WRITE_EXT, opId);
+
+        ioUring.prepareWrite(sqe, fdOrIndex, bytes.address(), bytes.byteSize(), offset);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
-    private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, SqeOptions[] sqeOptions, boolean fixedFile) {
+    private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, byte flags, boolean fixedFile) {
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
-        long id = buff.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE, buff);
-
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
-        ioUring.setUserData(sqe, userData);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
-        ioUring.prepareWrite(sqe, fdOrIndex, buff, offset);
 
-        return id;
+        long sqe = getSqe(flags, fixedFile);
+        long userData = ZeroGcUserData.encode(OperationType.WRITE, buff.address());
+
+        ioUring.prepareWrite(sqe, fdOrIndex, buff.address(), bytes.length, offset);
+        ioUring.setUserData(sqe, userData);
+
+        return userData;
     }
 
-    private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+    private long prepareReadFixedInternal(int fdOrIndex, int readSize, long offset, int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (readSize > registeredBuffer.byteSize()) {
+        if (readSize < 0 || readSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Read size exceeds registered buffer size");
         }
 
-        long id = registeredBuffer.address();
-        long userData = ioUring.allocateUserDataFixed(id, fdOrIndex, OperationType.READ_FIXED, registeredBuffer, bufferIndex);
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId);
 
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
-        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBuffer, readSize, offset, bufferIndex);
+        ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], readSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
-    private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+    private long prepareWriteFixedInternal(int fdOrIndex, byte[] bytes, long offset, int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (bytes.length > registeredBuffer.byteSize()) {
+        if (bytes.length > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
+        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], bytes.length, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
-        MemorySegment.copy(bytes, 0, registeredBuffer, JAVA_BYTE, 0, bytes.length);
-        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.length, offset, bufferIndex);
 
-        return id;
+        return userData;
     }
 
-    private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, SqeOptions[] sqeOptions, boolean fixedFile) {
-        if (bufferIndex < 0 || bufferIndex >= registeredBuffers.size()) {
+    private long prepareWriteFixedInternal(int fdOrIndex, MemorySegment bytes, long offset, int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
 
-        MemorySegment registeredBuffer = registeredBuffers.get(bufferIndex);
-        if (bytes.byteSize() > registeredBuffer.byteSize()) {
+        long byteSize = bytes.byteSize();
+        if (byteSize < 0 || byteSize > registeredBufferSizes[bufferIndex]) {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long id = registeredBuffer.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.WRITE_FIXED, registeredBuffer);
+        if (!bytes.scope().isAlive()) {
+            throw new IllegalStateException("Segment scope is already closed");
+        }
+        if (!bytes.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("Segment is confined to another thread");
+        }
 
-        MemorySegment sqe = getSqe(sqeOptions, fixedFile);
+        long targetAddr = registeredBufferAddresses[bufferIndex];
+        if (!bytes.isNative() || bytes.address() != targetAddr) {
+            MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
+        }
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, targetAddr, byteSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
-        MemorySegment.copy(bytes, 0, registeredBuffer, 0, bytes.byteSize());
-        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBuffer, bytes.byteSize(), offset, bufferIndex);
 
-        return id;
+        return userData;
     }
 
-    private long prepareCloseInternal(int fdOrIndex, SqeOptions[] sqeOptions) {
-        long id = ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fdOrIndex, OperationType.CLOSE, MemorySegment.NULL);
+    private long prepareWriteFixedZeroCopyInternal(int fdOrIndex, int writeSize, long offset, int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
+        if (writeSize < 0 || writeSize > registeredBufferSizes[bufferIndex]) {
+            throw new IllegalArgumentException("Write size exceeds registered buffer size");
+        }
+
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], writeSize, offset, bufferIndex);
+        ioUring.setUserData(sqe, userData);
+
+        return userData;
+    }
+
+    private long prepareCloseInternal(int fdOrIndex, byte flags) {
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
 
         ioUring.prepareClose(sqe, fdOrIndex);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
     public int createServerSocket(int port, int backlog) {
@@ -393,116 +655,182 @@ public class JUring implements AutoCloseable {
         return fd;
     }
 
-
     public int createClientSocket() {
         return NativeDispatcher.C.createSocket();
     }
 
-    public long prepareAccept(int serverFd, SqeOptions... sqeOptions) {
-        // No per-operation buffer needed when not capturing the peer address.
-        long id = ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, serverFd, OperationType.ACCEPT, MemorySegment.NULL);
+    public long prepareAccept(int serverFd) {
+        return prepareAccept(serverFd, (byte) 0);
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareAccept(sqe, serverFd, MemorySegment.NULL, MemorySegment.NULL, 0);
+    public long prepareAccept(int serverFd, SqeOptions... sqeOptions) {
+        return prepareAccept(serverFd, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareAccept(int serverFd, byte flags) {
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.ACCEPT, opId);
+
+        ioUring.prepareAccept(sqe, serverFd, 0L, 0L, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareMultishotAccept(int serverFd) {
+        return prepareMultishotAccept(serverFd, (byte) 0);
     }
 
     public long prepareMultishotAccept(int serverFd, SqeOptions... sqeOptions) {
-        long id = ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, serverFd, OperationType.MULTISHOT_ACCEPT, MemorySegment.NULL);
+        return prepareMultishotAccept(serverFd, SqeOptions.combineOptions(sqeOptions));
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareMultishotAccept(sqe, serverFd, MemorySegment.NULL, MemorySegment.NULL, 0);
+    private long prepareMultishotAccept(int serverFd, byte flags) {
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.MULTISHOT_ACCEPT, opId);
+
+        ioUring.prepareMultishotAccept(sqe, serverFd, 0L, 0L, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareConnect(int fd, String host, int port) {
+        return prepareConnect(fd, host, port, (byte) 0);
     }
 
     public long prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
-        // malloc the sockaddr_in so it outlives this stack frame until CQE arrives
+        return prepareConnect(fd, host, port, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareConnect(int fd, String host, int port, byte flags) {
         MemorySegment addr = NativeDispatcher.C.allocSockaddrIn(host, port);
+        final long sqe;
+        try {
+            sqe = getSqe(flags, false);
+        } catch (RuntimeException e) {
+            NativeDispatcher.C.free(addr.address());
+            throw e;
+        }
+        long userData = ZeroGcUserData.encode(OperationType.CONNECT, addr.address());
 
-        long id = addr.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd, OperationType.CONNECT, addr);
-
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareConnect(sqe, fd, addr, (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
+        ioUring.prepareConnect(sqe, fd, addr.address(), (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareRecv(int fd, int length) {
+        return prepareRecv(fd, length, (byte) 0);
     }
 
     public long prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
+        return prepareRecv(fd, length, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareRecv(int fd, int length, byte flags) {
+        if (length < 0) {
+            throw new IllegalArgumentException("Invalid recv length: " + length);
+        }
+        long sqe = getSqe(flags, false);
         MemorySegment buf = NativeDispatcher.C.alloc(length);
+        long userData = ZeroGcUserData.encode(OperationType.RECV, buf.address());
 
-        long id = buf.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd, OperationType.RECV, buf);
-
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareRecv(sqe, fd, buf, length, 0);
+        ioUring.prepareRecv(sqe, fd, buf.address(), length, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareRecv(int fd, MemorySegment buffer, int length) {
+        return prepareRecv(fd, buffer, length, (byte) 0);
     }
 
     public long prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        long id = buffer.address() + ThreadLocalRandom.current().nextLong();
-        // RECV_EXT: buffer not freed on completion; caller owns it
-        long userData = ioUring.allocateUserData(id, fd, OperationType.RECV_EXT, buffer);
+        return prepareRecv(fd, buffer, length, SqeOptions.combineOptions(sqeOptions));
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareRecv(sqe, fd, buffer, length, 0);
+    private long prepareRecv(int fd, MemorySegment buffer, int length, byte flags) {
+        if (length < 0 || length > buffer.byteSize()) {
+            throw new IllegalArgumentException("Invalid recv length: " + length);
+        }
+        validateNativeSegment(buffer, true);
+        long sqe = getSqe(flags, false);
+        long userData = ZeroGcUserData.encode(OperationType.RECV_EXT, buffer.address());
+
+        ioUring.prepareRecv(sqe, fd, buffer.address(), length, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareSend(int fd, byte[] bytes) {
+        return prepareSend(fd, bytes, (byte) 0);
     }
 
     public long prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
+        return prepareSend(fd, bytes, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareSend(int fd, byte[] bytes, byte flags) {
+        if (bytes == null) {
+            throw new IllegalArgumentException("bytes must not be null");
+        }
+        long sqe = getSqe(flags, false);
         MemorySegment buf = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buf, JAVA_BYTE, 0, bytes.length);
 
-        long id = buf.address() + ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, fd, OperationType.SEND, buf);
+        long userData = ZeroGcUserData.encode(OperationType.SEND, buf.address());
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareSend(sqe, fd, buf, bytes.length, 0);
+        ioUring.prepareSend(sqe, fd, buf.address(), bytes.length, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
+    }
+
+    public long prepareSend(int fd, MemorySegment buffer, int length) {
+        return prepareSend(fd, buffer, length, (byte) 0);
     }
 
     public long prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        long id = buffer.address() + ThreadLocalRandom.current().nextLong();
-        // SEND_EXT: buffer not freed on completion; caller owns it
-        long userData = ioUring.allocateUserData(id, fd, OperationType.SEND_EXT, buffer);
+        return prepareSend(fd, buffer, length, SqeOptions.combineOptions(sqeOptions));
+    }
 
-        MemorySegment sqe = getSqe(sqeOptions, false);
-        ioUring.prepareSend(sqe, fd, buffer, length, 0);
+    private long prepareSend(int fd, MemorySegment buffer, int length, byte flags) {
+        if (length < 0 || length > buffer.byteSize()) {
+            throw new IllegalArgumentException("Invalid send length: " + length);
+        }
+        validateNativeSegment(buffer, false);
+        long sqe = getSqe(flags, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.SEND_EXT, opId);
+
+        ioUring.prepareSend(sqe, fd, buffer.address(), length, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
     public long prepareCancel(long targetOpId) {
-        long id = ThreadLocalRandom.current().nextLong();
-        long userData = ioUring.allocateUserData(id, -1, OperationType.CANCEL, MemorySegment.NULL);
+        long sqe = getSqe((byte) 0, false);
+        long opId = opSeq++;
+        long userData = ZeroGcUserData.encode(OperationType.CANCEL, opId);
 
-        MemorySegment sqe = getSqe(new SqeOptions[0], false);
-        // flags = 0: cancel the first matching SQE with this user_data
         ioUring.prepareCancel(sqe, targetOpId, 0);
         ioUring.setUserData(sqe, userData);
 
-        return id;
+        return userData;
     }
 
-    private MemorySegment getSqe(SqeOptions[] sqeOptions, boolean fixedFile) {
-        MemorySegment sqe = ioUring.getSqe();
-        if (sqe != null) {
-            byte flags = SqeOptions.combineOptions(sqeOptions);
-            if (fixedFile) flags |= SqeOptions.IOSQE_FIXED_FILE.value;
+    private long getSqe(byte flags, boolean fixedFile) {
+        long sqe = ioUring.getSqe();
+        if (sqe == 0L) {
+            throw new IllegalStateException("Submission queue ring is full; call submit() before preparing more operations");
+        }
+        if (fixedFile) flags |= SqeOptions.IOSQE_FIXED_FILE.value;
+        if (flags != 0) {
             ioUring.setSqeFlag(sqe, flags);
         }
         return sqe;
@@ -510,6 +838,49 @@ public class JUring implements AutoCloseable {
 
     public void submit() {
         ioUring.submit();
+    }
+
+    /**
+     * Submits all queued SQEs and waits until at least {@code minComplete} CQEs are available.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @return number of completions currently available in the CQ ring
+     */
+    public int submitAndWait(int minComplete) {
+        return ioUring.submitAndWait(minComplete);
+    }
+
+    /**
+     * Submits all queued SQEs, waits until at least {@code minComplete} CQEs are available,
+     * and drains ready CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int submitAndWaitForBatchResult(int minComplete, ResultConsumer consumer) {
+        return ioUring.submitAndWaitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
+    }
+
+    /**
+     * Submits all queued SQEs, waits until at least {@code minComplete} CQEs are available,
+     * and reaps up to {@code maxReap} CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for before returning
+     * @param maxReap     maximum number of completions to reap
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        return ioUring.submitAndWaitForBatchResult(minComplete, maxReap, consumer);
+    }
+
+    public int forEachBatchResult(int batchSize, ResultConsumer consumer) {
+        return ioUring.peekForBatchResult(batchSize, consumer);
+    }
+
+    public int peekForBatchResult(int batchSize, ResultConsumer consumer) {
+        return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
     public List<Result> peekForBatchResult(int batchSize) {
@@ -520,14 +891,53 @@ public class JUring implements AutoCloseable {
         return ioUring.waitForBatchResult(batchSize);
     }
 
+    /**
+     * Waits until at least {@code minComplete} CQEs are available and reaps them into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
+        return ioUring.waitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
+    }
+
+    /**
+     * Waits until at least {@code minComplete} CQEs are available and reaps up to {@code maxReap} CQEs into {@code consumer}.
+     *
+     * @param minComplete minimum number of completions to wait for
+     * @param maxReap     maximum number of completions to reap
+     * @param consumer    zero-allocation completion callback
+     * @return number of completions reaped
+     */
+    public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        return ioUring.waitForBatchResult(minComplete, maxReap, consumer);
+    }
+
     public Result waitForResult() {
         return ioUring.waitForResult();
     }
 
+    public Result waitForResult(Result target) {
+        return ioUring.waitForResult(target);
+    }
+
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
+        if (this.registeredBuffersArray != null && this.registeredBuffersArray.length > 0) {
+            throw new IllegalStateException("Buffers are already registered; cannot register twice");
+        }
         MemorySegment[] result = ioUring.registerBuffers(size, nrOfBuffers);
         registeredBuffers.clear();
         registeredBuffers.addAll(Arrays.asList(result));
+        this.registeredBuffersArray = result;
+        this.registeredBufferAddresses = new long[result.length];
+        this.registeredBufferSizes = new long[result.length];
+        this.bufferInUse = new boolean[nrOfBuffers];
+        for (int i = 0; i < result.length; i++) {
+            this.registeredBufferAddresses[i] = result[i].address();
+            this.registeredBufferSizes[i] = result[i].byteSize();
+        }
+        ioUring.setRegisteredBuffers(result);
         freeBufferStack = new int[nrOfBuffers];
         freeBufferTop = nrOfBuffers;
         for (int i = 0; i < nrOfBuffers; i++) {
@@ -536,22 +946,38 @@ public class JUring implements AutoCloseable {
         return result;
     }
 
-    /**
-     * Check out a registered buffer index from the pool.
-     * Returns -1 if no buffers are available.
-     */
     public int checkOutBuffer() {
         if (freeBufferTop == 0) {
             return -1;
         }
-        return freeBufferStack[--freeBufferTop];
+        int idx = freeBufferStack[--freeBufferTop];
+        if (bufferInUse != null && idx >= 0 && idx < bufferInUse.length) {
+            bufferInUse[idx] = true;
+        }
+        return idx;
     }
 
-    /**
-     * Return a registered buffer index to the pool after use.
-     */
     public void checkInBuffer(int bufferIndex) {
+        if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
+            throw new IllegalArgumentException("Invalid bufferIndex: " + bufferIndex);
+        }
+        if (!bufferInUse[bufferIndex]) {
+            throw new IllegalStateException("Buffer index " + bufferIndex + " is already checked in (double check-in)");
+        }
+        bufferInUse[bufferIndex] = false;
         freeBufferStack[freeBufferTop++] = bufferIndex;
+    }
+
+    boolean isRingFdRegistered() {
+        return ioUring.isRingFdRegistered();
+    }
+
+    boolean isSqNeedWakeup() {
+        return ioUring.isSqNeedWakeup();
+    }
+
+    int ringFd() {
+        return ioUring.ringFd();
     }
 
     public int registerFiles(FileDescriptor... fileDescriptors) {
@@ -566,11 +992,19 @@ public class JUring implements AutoCloseable {
         return ioUring.registerFilesUpdate(offset, fileDescriptors);
     }
 
+    /**
+     * Closes the ring and releases all associated off-heap resources.
+     * <p>
+     * For rings initialized with {@link IoUringOptions#IORING_SETUP_SINGLE_ISSUER}, {@code close()}
+     * must be invoked on the owner (submitting) thread so that kernel-registered ring file descriptors
+     * are properly unregistered from the calling task table.
+     */
     @Override
     public void close() {
+        ioUring.close();
         if (readBufferPool != null) {
             readBufferPool.close();
+            readBufferPool = null;
         }
-        ioUring.close();
     }
 }

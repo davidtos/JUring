@@ -14,10 +14,9 @@ import static java.lang.foreign.MemoryLayout.PathElement.*;
  * }
  *}
  */
-public class Iovec {
+class Iovec {
 
     Iovec() {
-        // Should not be called directly
     }
 
     private static final GroupLayout $LAYOUT = MemoryLayout.structLayout(

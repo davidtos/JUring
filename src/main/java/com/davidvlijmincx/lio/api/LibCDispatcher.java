@@ -5,6 +5,10 @@ import com.davidvlijmincx.lio.api.functions.*;
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandleProxies;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.VarHandle;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.function.Consumer;
 import java.util.function.IntConsumer;
 
@@ -14,8 +18,11 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 import static java.lang.foreign.ValueLayout.JAVA_SHORT;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
+/**
+ * Dispatcher for native C standard library and Linux system calls.
+ */
 record LibCDispatcher(FreeAddress freeLong,
-        Consumer<MemorySegment> free,
+                      Consumer<MemorySegment> free,
                       Open open,
                       IntConsumer close,
                       Malloc malloc,
@@ -25,14 +32,30 @@ record LibCDispatcher(FreeAddress freeLong,
                       Socket socket,
                       Bind bind,
                       Listen listen,
-                      SetSockOpt setsockopt) {
+                      SetSockOpt setsockopt,
+                      Mmap mmap,
+                      Munmap munmap,
+                      IoUringSetup ioUringSetup,
+                      IoUringEnter ioUringEnter,
+                      IoUringRegister ioUringRegister,
+                      Eventfd eventfd,
+                      WriteAddress write,
+                      Fcntl fcntl) {
 
-    // sockaddr_in layout (Linux x86-64):
-    //   uint16_t sin_family  @ offset 0  (2 bytes)
-    //   uint16_t sin_port    @ offset 2  (2 bytes, network byte order)
-    //   uint32_t sin_addr    @ offset 4  (4 bytes, network byte order)
-    //   char     sin_zero[8] @ offset 8  (8 bytes padding)
-    // total: 16 bytes
+    // eventfd(2) flags
+    static final int EFD_CLOEXEC = 0x80000;
+    static final int EFD_NONBLOCK = 0x800;
+
+    // mmap(2) constants (Linux x86-64 / aarch64)
+    static final int PROT_READ = 0x1;
+    static final int PROT_WRITE = 0x2;
+    static final int MAP_SHARED = 0x01;
+    static final int MAP_POPULATE = 0x8000;
+    static final long MAP_FAILED = -1L;
+
+    static final StructLayout CAPTURE_STATE_LAYOUT = Linker.Option.captureStateLayout();
+    private static final VarHandle ERRNO_HANDLE = CAPTURE_STATE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("errno"));
+
     static final GroupLayout SOCKADDR_IN_LAYOUT = MemoryLayout.structLayout(
             JAVA_SHORT.withName("sin_family"),
             JAVA_SHORT.withName("sin_port"),
@@ -40,40 +63,101 @@ record LibCDispatcher(FreeAddress freeLong,
             MemoryLayout.sequenceLayout(8, JAVA_BYTE).withName("sin_zero")
     ).withName("sockaddr_in");
 
-    // AF_INET = 2 (Linux)
     static final short AF_INET = 2;
-    // SOL_SOCKET = 1
     static final int SOL_SOCKET = 1;
-    // SO_REUSEADDR = 2
     static final int SO_REUSEADDR = 2;
-    // SO_REUSEPORT = 15
     static final int SO_REUSEPORT = 15;
-    // SOCK_STREAM = 1
     static final int SOCK_STREAM = 1;
 
     private static final Linker linker = Linker.nativeLinker();
 
     static LibCDispatcher create() {
         return new LibCDispatcher(
-                link(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), true),
-                link(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), true),
-                link(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT), true),
-                link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT), true),
-                link(Malloc.class, "malloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG), true),
-                link(MallocAddress.class, "malloc", FunctionDescriptor.of(JAVA_LONG, ValueLayout.JAVA_LONG), true),
-                link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_INT), false),
-                link(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG), true),
-                link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT), true),
-                link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true),
-                link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), true),
-                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT), true)
+                linkCritical(FreeAddress.class, "free", FunctionDescriptor.ofVoid(JAVA_LONG), false),
+                linkCritical(Consumer.class, "free", FunctionDescriptor.ofVoid(ADDRESS), false),
+                linkCaptureErrno(Open.class, "open", FunctionDescriptor.of(ValueLayout.JAVA_INT, ADDRESS, ValueLayout.JAVA_INT, ValueLayout.JAVA_INT)),
+                link(IntConsumer.class, "close", FunctionDescriptor.ofVoid(ValueLayout.JAVA_INT)),
+                linkCritical(Malloc.class, "malloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG), false),
+                linkCritical(MallocAddress.class, "malloc", FunctionDescriptor.of(JAVA_LONG, ValueLayout.JAVA_LONG), false),
+                link(Strerror.class, "strerror", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_INT)),
+                linkCritical(Calloc.class, "calloc", FunctionDescriptor.of(ADDRESS, ValueLayout.JAVA_LONG, ValueLayout.JAVA_LONG), false),
+                link(Socket.class, "socket", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(Bind.class, "bind", FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)),
+                link(Listen.class, "listen", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(SetSockOpt.class, "setsockopt", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)),
+                linkCaptureErrno(Mmap.class, "mmap", FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_INT, JAVA_INT, JAVA_INT, JAVA_LONG)),
+                link(Munmap.class, "munmap", FunctionDescriptor.of(JAVA_INT, JAVA_LONG, JAVA_LONG)),
+                linkSyscallCaptureErrno(IoUringSetup.class, 425L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS)),
+                linkSyscallCaptureErrno(IoUringEnter.class, 426L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
+                linkSyscallCaptureErrno(IoUringRegister.class, 427L, FunctionDescriptor.of(JAVA_LONG, JAVA_LONG, JAVA_LONG, JAVA_LONG, ADDRESS, JAVA_LONG)),
+                link(Eventfd.class, "eventfd", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)),
+                link(WriteAddress.class, "write", FunctionDescriptor.of(JAVA_LONG, JAVA_INT, JAVA_LONG, JAVA_LONG)),
+                linkVariadic(Fcntl.class, "fcntl", FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT), 2)
         );
     }
 
-    private static <T> T link(Class<T> type, String name, FunctionDescriptor descriptor, boolean critical) {
+    private static <T> T link(Class<T> type, String name, FunctionDescriptor descriptor) {
         MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
-        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(critical));
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor);
         return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkVariadic(Class<T> type, String name, FunctionDescriptor descriptor, int firstVariadic) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.firstVariadicArg(firstVariadic));
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkCritical(Class<T> type, String name, FunctionDescriptor descriptor, boolean allowHeapAccess) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.critical(allowHeapAccess));
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkCaptureErrno(Class<T> type, String name, FunctionDescriptor descriptor) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow(name);
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor, Linker.Option.captureCallState("errno"));
+        return MethodHandleProxies.asInterfaceInstance(type, handle);
+    }
+
+    private static <T> T linkSyscallCaptureErrno(Class<T> type, long sysno, FunctionDescriptor descriptor) {
+        MemorySegment symbol = linker.defaultLookup().findOrThrow("syscall");
+        MethodHandle handle = linker.downcallHandle(symbol, descriptor,
+                Linker.Option.captureCallState("errno"),
+                Linker.Option.firstVariadicArg(1));
+        MethodHandle bound = MethodHandles.insertArguments(handle, 1, sysno);
+        return MethodHandleProxies.asInterfaceInstance(type, bound);
+    }
+
+    static int errno(MemorySegment callState) {
+        return (int) ERRNO_HANDLE.get(callState, 0L);
+    }
+
+    static void setErrno(MemorySegment callState, int err) {
+        ERRNO_HANDLE.set(callState, 0L, err);
+    }
+
+    static final Charset PATH_CHARSET;
+    static {
+        String enc = System.getProperty("sun.jnu.encoding");
+        Charset cs;
+        try {
+            cs = (enc != null) ? Charset.forName(enc) : StandardCharsets.UTF_8;
+        } catch (Exception e) {
+            cs = StandardCharsets.UTF_8;
+        }
+        PATH_CHARSET = cs;
+    }
+
+    static byte[] encodePath(String path) {
+        if (path.indexOf('\0') >= 0) {
+            throw new IllegalArgumentException("Path contains embedded NUL character: " + path);
+        }
+        return path.getBytes(PATH_CHARSET);
+    }
+
+    int fcntl(int fd, int cmd) {
+        return fcntl.fcntl(fd, cmd);
     }
 
     void free(long address) {
@@ -85,7 +169,18 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     int open(String path, int flags, int mode) {
-        return open.open(MemorySegment.ofArray((path + "\0").getBytes()), flags, mode);
+        byte[] pathBytes = encodePath(path);
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment callState = arena.allocate(CAPTURE_STATE_LAYOUT);
+            MemorySegment cPath = arena.allocate(pathBytes.length + 1);
+            MemorySegment.copy(pathBytes, 0, cPath, JAVA_BYTE, 0, pathBytes.length);
+            cPath.set(JAVA_BYTE, pathBytes.length, (byte) 0);
+            int fd = open.open(callState, cPath, flags | 0x80000 /* O_CLOEXEC */, mode);
+            if (fd < 0) {
+                return -errno(callState);
+            }
+            return fd;
+        }
     }
 
     void close(int fd) {
@@ -101,23 +196,101 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     String strerror(int errno) {
-        return strerror.strerror(errno).reinterpret(Long.MAX_VALUE).getString(0);
+        return strerror.strerror(Math.abs(errno)).reinterpret(Long.MAX_VALUE).getString(0);
     }
 
     MemorySegment calloc(long size) {
         return calloc.calloc(1L, size).reinterpret(size);
     }
 
+    /**
+     * Maps {@code length} bytes of {@code fd} at {@code offset}.
+     *
+     * @return the address of the mapping, or {@code -errno} when the mapping failed
+     */
+    long mmap(long length, int prot, int flags, int fd, long offset) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            long address = mmap.mmap(callState, 0L, length, prot, flags, fd, offset);
+            if (address == MAP_FAILED) {
+                return -errno(callState);
+            }
+            return address;
+        }
+    }
+
+    int munmap(long address, long length) {
+        return munmap.munmap(address, length);
+    }
+
+    int ioUringSetup(MemorySegment callState, int entries, MemorySegment params) {
+        long res = ioUringSetup.ioUringSetup(callState, entries, params);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringSetup(int entries, MemorySegment params) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringSetup(callState, entries, params);
+        }
+    }
+
+    int ioUringEnter(MemorySegment callState, int fd, int toSubmit, int minComplete, int flags, MemorySegment arg, long argSize) {
+        long res = ioUringEnter.ioUringEnter(callState, fd, toSubmit, minComplete, flags, arg, argSize);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringEnter(int fd, int toSubmit, int minComplete, int flags, MemorySegment arg, long argSize) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringEnter(callState, fd, toSubmit, minComplete, flags, arg, argSize);
+        }
+    }
+
+    int ioUringRegister(MemorySegment callState, int fd, int opcode, MemorySegment arg, int nrArgs) {
+        long res = ioUringRegister.ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        if (res < 0) {
+            return -errno(callState);
+        }
+        return (int) res;
+    }
+
+    int ioUringRegister(int fd, int opcode, MemorySegment arg, int nrArgs) {
+        try (Arena callArena = Arena.ofConfined()) {
+            MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
+            return ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        }
+    }
+
+    /**
+     * Allocates an array of {@code iovec} structures backed by a contiguous, page-aligned buffer slab.
+     *
+     * @param arena      the memory arena governing the lifecycle of the iovec array and buffer slab
+     * @param bufferSize the size of each buffer in bytes
+     * @param nrIovecs   the number of iovec buffers to allocate
+     * @return an {@link IovecStructure} containing the native iovec array and individual buffer segments
+     */
     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
         MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
+        boolean sectorAligned = bufferSize >= 512 && (bufferSize & 511L) == 0;
+        long alignment = (bufferSize >= 4096 && (bufferSize & 4095L) == 0) ? 4096L
+                : sectorAligned ? 512L : 64L;
+        long stride = sectorAligned ? bufferSize : Math.addExact(bufferSize, 1L);
+        MemorySegment slab = arena.allocate(Math.addExact(Math.multiplyExact(stride, nrIovecs), sectorAligned ? 1L : 0L), alignment);
 
         for (int i = 0; i < nrIovecs; i++) {
             MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
-            MemorySegment buffer = malloc(bufferSize);
+            MemorySegment buffer = slab.asSlice((long) i * stride, bufferSize);
 
             Iovec.iov_base(nthIovec, buffer);
-            Iovec.iov_len(nthIovec, buffer.byteSize());
+            Iovec.iov_len(nthIovec, bufferSize);
             buffers[i] = buffer;
         }
 
@@ -166,12 +339,9 @@ record LibCDispatcher(FreeAddress freeLong,
     void bindAndListen(int fd, int port, int backlog) {
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment addr = arena.allocate(SOCKADDR_IN_LAYOUT);
-            // zero the struct (sin_zero padding must be zero)
             addr.fill((byte) 0);
             addr.set(JAVA_SHORT, 0, AF_INET);
-            // htons: reverse bytes of the port (network byte order)
             addr.set(JAVA_SHORT, 2, Short.reverseBytes((short) port));
-            // INADDR_ANY = 0, already zeroed
             addr.set(JAVA_INT, 4, 0);
 
             int r = bind.bind(fd, addr, (int) SOCKADDR_IN_LAYOUT.byteSize());
@@ -187,22 +357,38 @@ record LibCDispatcher(FreeAddress freeLong,
     }
 
     MemorySegment allocSockaddrIn(String host, int port) {
+        if (port < 0 || port > 0xFFFF) {
+            throw new IllegalArgumentException("Invalid port: " + port);
+        }
+        int ip = parseIpv4(host);
         MemorySegment addr = malloc(SOCKADDR_IN_LAYOUT.byteSize());
         addr.fill((byte) 0);
         addr.set(JAVA_SHORT, 0, AF_INET);
         addr.set(JAVA_SHORT, 2, Short.reverseBytes((short) port));
-        addr.set(JAVA_INT, 4, Integer.reverseBytes(parseIpv4(host)));
+        addr.set(JAVA_INT, 4, Integer.reverseBytes(ip));
         return addr;
     }
 
     private static int parseIpv4(String host) {
-        String[] parts = host.split("\\.");
+        if (host == null) {
+            throw new IllegalArgumentException("Invalid IPv4 address: null");
+        }
+        String[] parts = host.split("\\.", -1);
         if (parts.length != 4) {
             throw new IllegalArgumentException("Invalid IPv4 address: " + host);
         }
         int result = 0;
         for (String part : parts) {
-            result = (result << 8) | (Integer.parseInt(part) & 0xFF);
+            int octet;
+            try {
+                octet = Integer.parseInt(part);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid IPv4 address: " + host, e);
+            }
+            if (octet < 0 || octet > 255) {
+                throw new IllegalArgumentException("Invalid IPv4 address: " + host);
+            }
+            result = (result << 8) | octet;
         }
         return result;
     }

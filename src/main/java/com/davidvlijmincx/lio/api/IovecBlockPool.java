@@ -1,14 +1,17 @@
 package com.davidvlijmincx.lio.api;
 
+/**
+ * Pool of pre-allocated native memory blocks for vectored I/O.
+ */
 final class IovecBlockPool {
 
-    /** Maximum number of iovec entries per pooled slot. */
+    /**
+     * Maximum number of iovec entries per pooled slot.
+     */
     public static final int MAX_VECS = 64;
 
     /**
-     * Byte size of one pooled slot:
-     *   8 bytes for the leading count (long) + MAX_VECS * 16 bytes per iovec struct.
-     * iovec on Linux x86-64: { void *iov_base (8 bytes), size_t iov_len (8 bytes) } = 16 bytes.
+     * Byte size of one pooled slot.
      */
     public static final long SLOT_BYTES = 8L + (long) MAX_VECS * 16L; // 1032
 

@@ -1,5 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
+/**
+ * Types of asynchronous operations supported by io_uring.
+ */
 public enum OperationType {
     READ(0),
     WRITE(1),
@@ -19,7 +22,9 @@ public enum OperationType {
     MULTISHOT_ACCEPT(15),
     CANCEL(16),
     READ_FIXED(17),
-    READ_POOLED(18);
+    READ_POOLED(18),
+    NOP(19),
+    WRITE_EXT(20);
 
     private static final OperationType[] VALUES = values();
 

@@ -12,10 +12,8 @@ import java.nio.file.Path;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
-import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class ReadvWritevTest {
 
@@ -33,31 +31,25 @@ class ReadvWritevTest {
 
     @Test
     void readvSplitsFileIntoMultipleBuffers() {
-        // read_file contains "Hello, World!" (13 bytes)
-        // Split: first 7 bytes "Hello, " and next 6 bytes "World!"
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
             long id = jUring.prepareReadv(fd, new int[]{7, 6}, 0);
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadvResult readvResult) {
-                assertEquals(id, readvResult.id());
-                // total bytes read should be 13
-                assertEquals(13, readvResult.result());
+            assertEquals(id, result.id());
 
-                MemorySegment[] buffers = readvResult.buffers();
-                assertEquals(2, buffers.length);
+            assertEquals(13, result.result());
 
-                String first = buffers[0].getString(0);
-                String second = buffers[1].getString(0);
+            MemorySegment[] buffers = result.buffers();
+            assertEquals(2, buffers.length);
 
-                readvResult.freeBuffers();
+            String first = buffers[0].getString(0);
+            String second = buffers[1].getString(0);
 
-                assertEquals("Hello, ", first);
-                assertEquals("World!", second);
-            } else {
-                fail("Result is not a ReadvResult: " + result);
-            }
+            result.freeBuffers();
+
+            assertEquals("Hello, ", first);
+            assertEquals("World!", second);
         }
     }
 
@@ -67,8 +59,8 @@ class ReadvWritevTest {
         Files.write(path, "Clean content".getBytes());
 
         byte[][] input = {
-            "Hello, ".getBytes(),
-            "World!".getBytes()
+                "Hello, ".getBytes(),
+                "World!".getBytes()
         };
         int expectedBytes = "Hello, ".length() + "World!".length(); // 13
 
@@ -77,12 +69,8 @@ class ReadvWritevTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(expectedBytes, wResult);
-            } else {
-                fail("Result is not a WriteResult: " + result);
-            }
+            assertEquals(id, result.id());
+            assertEquals(expectedBytes, result.result());
 
             String writtenContent = Files.readString(path);
             assertEquals("Hello, World!", writtenContent);
@@ -103,21 +91,17 @@ class ReadvWritevTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof ReadvResult readvResult) {
-                assertEquals(id, readvResult.id());
-                assertEquals(13, readvResult.result());
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
 
-                MemorySegment[] buffers = readvResult.buffers();
-                assertEquals(2, buffers.length);
+            MemorySegment[] buffers = result.buffers();
+            assertEquals(2, buffers.length);
 
-                String first = buffers[0].getString(0);
-                String second = buffers[1].getString(0);
+            String first = buffers[0].getString(0);
+            String second = buffers[1].getString(0);
 
-                assertEquals("Hello, ", first);
-                assertEquals("World!", second);
-            } else {
-                fail("Result is not a ReadvResult: " + result);
-            }
+            assertEquals("Hello, ", first);
+            assertEquals("World!", second);
 
             jUring.checkInBuffer(b0);
             jUring.checkInBuffer(b1);
@@ -144,12 +128,8 @@ class ReadvWritevTest {
             jUring.submit();
             Result result = jUring.waitForResult();
 
-            if (result instanceof WriteResult(long wId, long wResult)) {
-                assertEquals(id, wId);
-                assertEquals(13, wResult);
-            } else {
-                fail("Result is not a WriteResult: " + result);
-            }
+            assertEquals(id, result.id());
+            assertEquals(13, result.result());
 
             String writtenContent = Files.readString(path);
             assertEquals("Hello, World!", writtenContent);

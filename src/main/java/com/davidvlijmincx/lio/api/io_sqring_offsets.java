@@ -24,7 +24,7 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  * }
  * }
  */
-public class io_sqring_offsets {
+class io_sqring_offsets {
 
     io_sqring_offsets() {
         // Should not be called directly

@@ -5,6 +5,7 @@ final class ReadBufferPool {
     private final long[] slots;
     private final int bufferSize;
     private int top;
+    private boolean closed;
 
     ReadBufferPool(int capacity, int bufferSize) {
         this.bufferSize = bufferSize;
@@ -13,6 +14,10 @@ final class ReadBufferPool {
         for (int i = 0; i < capacity; i++) {
             slots[top++] = NativeDispatcher.C.mallocAddress(bufferSize);
         }
+    }
+
+    int bufferSize() {
+        return bufferSize;
     }
 
     long checkOut() {
@@ -31,6 +36,10 @@ final class ReadBufferPool {
     }
 
     void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         while (top > 0) {
             NativeDispatcher.C.free(slots[--top]);
         }

@@ -1,106 +1,44 @@
 package com.davidvlijmincx.lio.api;
 
-import java.lang.foreign.*;
-import java.lang.invoke.VarHandle;
+/**
+ * Zero-allocation {@code user_data} bit-packer and unpacker.
+ */
+final class ZeroGcUserData {
 
-import static java.lang.foreign.ValueLayout.*;
+    public static final int TYPE_SHIFT = 56;
+    public static final long TYPE_MASK = 0xFFL;
+    public static final long PAYLOAD_MASK = 0x00FFFFFFFFFFFFFFL;
 
-public final class ZeroGcUserData {
+    public static final int BUFFER_INDEX_SHIFT = 40;
+    public static final long BUFFER_INDEX_MASK = 0xFFFFL;
+    public static final long FIXED_OP_ID_MASK = (1L << BUFFER_INDEX_SHIFT) - 1;
 
-    private static final AddressLayout C_POINTER = ValueLayout.ADDRESS
-            .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE));
+    private ZeroGcUserData() {}
 
-    static final GroupLayout LAYOUT = MemoryLayout.structLayout(
-            JAVA_LONG.withName("id"),
-            C_POINTER.withName("buffer"),
-            JAVA_INT.withName("fd"),
-            JAVA_INT.withName("type"),
-            JAVA_INT.withName("bindex")
-    ).withName("UserData");
-
-    private static final long OFF_ID = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("id"));
-    private static final long OFF_BUFFER = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("buffer"));
-    private static final long OFF_FD = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("fd"));
-    private static final long OFF_TYPE = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("type"));
-    private static final long BUFFER_INDEX = LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("bindex"));
-
-
-    private static final VarHandle VH_LONG = JAVA_LONG.varHandle();
-    private static final VarHandle VH_INT = JAVA_INT.varHandle();
-    private static final VarHandle VH_ADDR = ADDRESS.varHandle();
-    private static final VarHandle VH_POINTER = C_POINTER.varHandle();
-
-    private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
-
-
-    public static long getByteSize() {
-        return LAYOUT.byteSize();
+    public static long encode(OperationType type, long payload) {
+        return (((long) type.getIndex() & TYPE_MASK) << TYPE_SHIFT) | (payload & PAYLOAD_MASK);
     }
 
-    public static long createUserData(long id, int fd, OperationType type, MemorySegment buffer) {
-        long address = NativeDispatcher.C.mallocAddress(LAYOUT.byteSize());
-
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
-        VH_ADDR.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
-
-        return address;
+    public static long encodeFixed(OperationType type, int bufferIndex, long opId) {
+        return (((long) type.getIndex() & TYPE_MASK) << TYPE_SHIFT)
+                | (((long) bufferIndex & BUFFER_INDEX_MASK) << BUFFER_INDEX_SHIFT)
+                | (opId & FIXED_OP_ID_MASK);
     }
 
-    public static long createUserData(long id, int fd, OperationType type, long buffer) {
-        long address = NativeDispatcher.C.mallocAddress(LAYOUT.byteSize());
-
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
-
-        return address;
-    }
-
-    public static long getId(long address) {
-        return (long) VH_LONG.get(GLOBAL_MEMORY, address + OFF_ID);
-    }
-
-    public static int getFd(long address) {
-        return (int) VH_INT.get(GLOBAL_MEMORY, address + OFF_FD);
-    }
-
-    public static OperationType getType(long address) {
-        int typeIndex = (int) VH_INT.get(GLOBAL_MEMORY, address + OFF_TYPE);
+    public static OperationType getType(long userData) {
+        int typeIndex = (int) ((userData >>> TYPE_SHIFT) & TYPE_MASK);
         return OperationType.valueOf(typeIndex);
     }
 
-    public static long getBufferAddress(long address) {
-        return (long) VH_LONG.get(GLOBAL_MEMORY, address + OFF_BUFFER);
+    public static long getPayload(long userData) {
+        return userData & PAYLOAD_MASK;
     }
 
-    public static MemorySegment getBufferSegment(long address) {
-        return (MemorySegment) VH_POINTER.get(GLOBAL_MEMORY, address + OFF_BUFFER);
+    public static int getBufferIndex(long userData) {
+        return (int) ((userData >>> BUFFER_INDEX_SHIFT) & BUFFER_INDEX_MASK);
     }
 
-    public static int getBufferIndex(long address) {
-        return (int) VH_INT.get(GLOBAL_MEMORY, address + BUFFER_INDEX);
+    public static long getFixedOpId(long userData) {
+        return userData & FIXED_OP_ID_MASK;
     }
-
-    public static void write(long address, long id, int fd, OperationType type, MemorySegment buffer) {
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
-        VH_ADDR.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
-    }
-
-    public static void write(long address, long id, int fd, OperationType type, long buffer) {
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_ID, id);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_FD, fd);
-        VH_INT.set(GLOBAL_MEMORY, address + OFF_TYPE, type.getIndex());
-        VH_LONG.set(GLOBAL_MEMORY, address + OFF_BUFFER, buffer);
-    }
-
-    public static void write(long address, long id, int fd, OperationType type, MemorySegment buffer, int bufferIndex) {
-        write(address, id, fd, type, buffer);
-        VH_INT.set(GLOBAL_MEMORY, address + BUFFER_INDEX, bufferIndex);
-    }
-
 }

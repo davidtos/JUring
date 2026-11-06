@@ -8,7 +8,10 @@ import java.lang.invoke.VarHandle;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-public class ZeroGcCqe {
+/**
+ * Zero-allocation accessor for native {@code io_uring_cqe} structures.
+ */
+class ZeroGcCqe {
 
     static final GroupLayout CQE_LAYOUT = MemoryLayout.structLayout(
             JAVA_LONG.withName("user_data"),
