@@ -312,4 +312,12 @@ public class VirtualThreadBenchmark {
             deviceCounters.deviceReadBytes += Math.max(0, (sectorsEnd - sectorsStart) * 512);
         }
     }
+
+    public static void main(String[] args) throws Exception {
+        org.openjdk.jmh.runner.options.Options opt = new org.openjdk.jmh.runner.options.OptionsBuilder()
+                .include(VirtualThreadBenchmark.class.getSimpleName())
+                .forks(1)
+                .build();
+        new org.openjdk.jmh.runner.Runner(opt).run();
+    }
 }

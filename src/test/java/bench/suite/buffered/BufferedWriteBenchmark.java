@@ -3,6 +3,7 @@ package bench.suite.buffered;
 import bench.suite.common.DatasetManager;
 import bench.suite.common.IoHelper;
 import bench.suite.common.StorageAuxCounters;
+import bench.suite.direct.DirectReadBenchmark;
 import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.JUring;
 import com.davidvlijmincx.lio.api.LinuxOpenOptions;
@@ -176,5 +177,13 @@ public class BufferedWriteBenchmark {
         }
 
         counters.record((long) totalTasks * DatasetManager.DEFAULT_BUFFER_SIZE);
+    }
+
+    public static void main(String[] args) throws Exception {
+        org.openjdk.jmh.runner.options.Options opt = new org.openjdk.jmh.runner.options.OptionsBuilder()
+                .include(BufferedWriteBenchmark.class.getSimpleName())
+                .forks(1)
+                .build();
+        new org.openjdk.jmh.runner.Runner(opt).run();
     }
 }

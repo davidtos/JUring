@@ -547,4 +547,12 @@ public class DirectLatencyBenchmark {
             new org.openjdk.jmh.runner.Runner(opt).run();
         }
     }
+
+    public static void main(String[] args) throws Exception {
+        org.openjdk.jmh.runner.options.Options opt = new org.openjdk.jmh.runner.options.OptionsBuilder()
+                .include(DirectLatencyBenchmark.class.getSimpleName())
+                .forks(1)
+                .build();
+        new org.openjdk.jmh.runner.Runner(opt).run();
+    }
 }

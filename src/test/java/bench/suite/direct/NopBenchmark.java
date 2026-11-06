@@ -92,4 +92,12 @@ public class NopBenchmark {
         counters.record(0L);
         blackhole.consume(state.reapedCount);
     }
+
+    public static void main(String[] args) throws Exception {
+        org.openjdk.jmh.runner.options.Options opt = new org.openjdk.jmh.runner.options.OptionsBuilder()
+                .include(NopBenchmark.class.getSimpleName())
+                .forks(1)
+                .build();
+        new org.openjdk.jmh.runner.Runner(opt).run();
+    }
 }
