@@ -536,7 +536,7 @@ public class JUring implements AutoCloseable {
         validateNativeSegment(bytes, false);
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encodeWriteExt(opId);
+        long userData = ZeroGcUserData.encode(OperationType.WRITE_EXT, opId);
 
         ioUring.prepareWrite(sqe, fdOrIndex, bytes.address(), bytes.byteSize(), offset);
         ioUring.setUserData(sqe, userData);

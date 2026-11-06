@@ -23,7 +23,8 @@ public enum OperationType {
     CANCEL(16),
     READ_FIXED(17),
     READ_POOLED(18),
-    NOP(19);
+    NOP(19),
+    WRITE_EXT(20);
 
     private static final OperationType[] VALUES = values();
 

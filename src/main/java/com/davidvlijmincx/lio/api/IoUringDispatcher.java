@@ -765,10 +765,6 @@ final class IoUringDispatcher implements AutoCloseable {
         return count;
     }
 
-    void cqeSeen() {
-        cqAdvance(1);
-    }
-
     void cqAdvance(int count) {
         if (count <= 0) return;
         inFlightCount -= count;
@@ -1544,8 +1540,8 @@ final class IoUringDispatcher implements AutoCloseable {
             case 19 /* NOP */ -> {
                 target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
             }
-            case ZeroGcUserData.TYPE_WRITE_EXT /* 20: WRITE (external MemorySegment) */ -> {
-                target.set(userData, result, OperationType.WRITE, 0L, null, -1, null, cqeFlags);
+            case 20 /* WRITE_EXT */ -> {
+                target.set(userData, result, OperationType.WRITE_EXT, 0L, null, -1, null, cqeFlags);
             }
         }
     }

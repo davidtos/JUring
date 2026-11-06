@@ -62,8 +62,6 @@ public class JUringBlocking implements AutoCloseable {
     @SuppressWarnings("unused")
     private volatile long freeBufTail;
 
-    public static final int AT_FDCWD = -100;
-
     private static final class ControlTask<T> {
         final Callable<T> action;
         final Thread caller;
