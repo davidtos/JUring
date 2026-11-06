@@ -2,7 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -47,7 +46,6 @@ class DirectIoTest {
     }
 
     @Test
-    @DisplayName("Direct I/O Write of 4096 bytes")
     void testDirectIoWrite(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_write_test.txt");
 
@@ -75,7 +73,6 @@ class DirectIoTest {
     }
 
     @Test
-    @DisplayName("Direct I/O Read of 4096 bytes")
     void testDirectIoRead(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_read_test.txt");
 
@@ -108,7 +105,6 @@ class DirectIoTest {
     }
 
     @Test
-    @DisplayName("Direct I/O Zero-Copy Write of 4096 bytes")
     void testDirectIoZeroCopyWrite(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_zero_copy_write_test.txt");
 
@@ -142,7 +138,6 @@ class DirectIoTest {
     }
 
     @Test
-    @DisplayName("Direct I/O Write and Read round-trip of 4096 bytes")
     void testDirectIoWriteAndReadRoundTrip(@TempDir Path tempDir) throws IOException {
         Path testFile = tempDir.resolve("direct_io_roundtrip_test.txt");
 

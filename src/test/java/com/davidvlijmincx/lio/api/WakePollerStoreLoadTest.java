@@ -56,17 +56,17 @@ public class WakePollerStoreLoadTest {
     @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Submitter saw old flags; kernel saw new tail and continues.")
     @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter saw NEED_WAKEUP and wakes kernel; kernel saw old tail.")
     @Outcome(id = "1, 1", expect = Expect.ACCEPTABLE, desc = "Both observed each other.")
-    @Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Lost SQPOLL wakeup! Both bypassed each other's stores (B10 fence missing).")
+    @Outcome(id = "0, 0", expect = Expect.FORBIDDEN, desc = "Lost SQPOLL wakeup! Both bypassed each other's stores (missing StoreLoad barrier).")
     @State
-    public static class SqPollWakeupB10Test {
+    public static class SqPollWakeupTest {
         private static final VarHandle VH_TAIL;
         private static final VarHandle VH_FLAGS;
 
         static {
             try {
                 MethodHandles.Lookup l = MethodHandles.lookup();
-                VH_TAIL = l.findVarHandle(SqPollWakeupB10Test.class, "sqTail", int.class);
-                VH_FLAGS = l.findVarHandle(SqPollWakeupB10Test.class, "sqFlags", int.class);
+                VH_TAIL = l.findVarHandle(SqPollWakeupTest.class, "sqTail", int.class);
+                VH_FLAGS = l.findVarHandle(SqPollWakeupTest.class, "sqFlags", int.class);
             } catch (ReflectiveOperationException e) {
                 throw new ExceptionInInitializerError(e);
             }
@@ -79,7 +79,7 @@ public class WakePollerStoreLoadTest {
         public void submitter(II_Result r) {
             // Write tail with setRelease as in IoUringDispatcher
             VH_TAIL.setRelease(this, 1);
-            // B10 StoreLoad fence
+            // StoreLoad barrier before checking flags
             VarHandle.fullFence();
             // Read flags as in IoUringDispatcher
             r.r1 = (int) VH_FLAGS.getVolatile(this);

@@ -884,11 +884,6 @@ public class JUringBlocking implements AutoCloseable {
         return bufs[bufferIndex];
     }
 
-    /**
-     * Checks out a registered buffer index from the pool.
-     *
-     * @return registered buffer index, or {@code -1} if none available
-     */
     public int checkOutBuffer() {
         final int[] bufArr = this.freeBufBuffer;
         final long[] seqArr = this.freeBufSeq;
@@ -916,11 +911,6 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
-    /**
-     * Returns a registered buffer index to the pool.
-     *
-     * @param bufferIndex index of the buffer to return
-     */
     public void checkInBuffer(int bufferIndex) {
         final MemorySegment[] bufs = this.registeredBuffers;
         final int[] bufArr = this.freeBufBuffer;

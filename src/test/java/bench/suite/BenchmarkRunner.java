@@ -355,10 +355,7 @@ public class BenchmarkRunner {
                 : "UNPINNED";
 
         if (hasTracepoints) {
-            System.out.println("\n==================================================================================================================================");
-            System.out.println("                                      HARDWARE / KERNEL SYSCALL TRACEPOINTS PER OP (--syscalls)                                   ");
-            System.out.println(" Environment: Pinning = " + pinStatus);
-            System.out.println("==================================================================================================================================");
+            System.out.printf("%nHardware / Kernel Syscall Tracepoints Per Op (--syscalls) [Pinning: %s]%n", pinStatus);
             System.out.printf("%-42s | %18s | %14s | %16s | %12s | %12s | %10s%n",
                     "Benchmark (params)", "Throughput (ops/s)", "all sys_enter", "io_uring_enter", "pread64/op", "pwrite64/op", "futex/op");
             System.out.println("-".repeat(130));
@@ -399,14 +396,11 @@ public class BenchmarkRunner {
                 System.out.printf("%-42s | %18s | %14s | %16s | %12s | %12s | %10s%n",
                         label, scoreCell, allSysCell, ioUringCell, preadCell, pwriteCell, futexCell);
             }
-            System.out.println("==================================================================================================================================\n");
+            System.out.println();
             return;
         }
 
-        System.out.println("\n==================================================================================================================");
-        System.out.println("                               DERIVED PER-OP METRICS (CPU + HARDWARE CYCLES)                                     ");
-        System.out.println(" Environment: Pinning = " + pinStatus);
-        System.out.println("==================================================================================================================");
+        System.out.printf("%nDerived Per-Op Metrics (CPU + Hardware Cycles) [Pinning: %s]%n", pinStatus);
         System.out.printf("%-42s | %18s | %14s | %13s | %13s%n",
                 "Benchmark (params)", "Throughput (ops/s)", "task-clock/op", "cycles:u/op", "cycles:k/op");
         System.out.println("-".repeat(110));
@@ -441,16 +435,14 @@ public class BenchmarkRunner {
             System.out.printf("%-42s | %18s | %14s | %13s | %13s%n",
                     label, scoreCell, taskClockCell, cyclesUCell, cyclesKCell);
         }
-        System.out.println("==================================================================================================================\n");
+        System.out.println();
     }
 
     private static void runScalingSuite(boolean quick, boolean full, boolean decision, boolean attachGc, boolean attachAsync,
                                         Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
                                         List<String> customJvmArgs, String customRff, String resultsDir,
                                         Integer customForks, Integer customWi, Integer customI, Integer customW, Integer customR) throws RunnerException {
-        System.out.println("================================================================================");
-        System.out.println("          Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)         ");
-        System.out.println("================================================================================");
+        System.out.println("Launching Multi-Thread Scaling Suite (1, 2, 4, 8, 16 Threads)");
 
         int[] threadLevels = (customThreads != null && customThreads > 0)
                 ? new int[]{customThreads}
@@ -529,9 +521,7 @@ public class BenchmarkRunner {
     }
 
     private static void printScalingMatrix(Map<String, Map<Integer, Double>> matrix, int[] threadLevels) {
-        System.out.println("\n====================================================================================================");
-        System.out.println("                        MULTI-THREAD SCALING BENCHMARK COMPARISON MATRIX                            ");
-        System.out.println("====================================================================================================");
+        System.out.println("\nMulti-Thread Scaling Benchmark Comparison Matrix:");
 
         StringBuilder header = new StringBuilder(String.format("%-34s", "Benchmark Engine"));
         for (int t : threadLevels) {
@@ -553,7 +543,7 @@ public class BenchmarkRunner {
             }
             System.out.println(row);
         }
-        System.out.println("====================================================================================================");
+        System.out.println();
 
         // Print Key Architectural Findings if full scaling sweep was performed
         if (threadLevels.length >= 4) {
@@ -590,7 +580,7 @@ public class BenchmarkRunner {
                             juWrite16, (juWrite16 * 4096.0) / (1024.0 * 1024.0));
                 }
             }
-            System.out.println("====================================================================================================\n");
+            System.out.println();
         }
     }
 
@@ -607,9 +597,7 @@ public class BenchmarkRunner {
                                                      Integer customThreads, List<String> customIncludes, Map<String, List<String>> customParams,
                                                      List<String> customJvmArgs, String customRff, String resultsDir,
                                                      Integer customForks, Integer customWi, Integer customI, Integer customW, Integer customR) throws RunnerException {
-        System.out.println("================================================================================");
-        System.out.println("   Virtual Threads Equal Platform Thread Budget Suite (1, 4, 8, 16 Threads)     ");
-        System.out.println("================================================================================");
+        System.out.println("Virtual Threads Equal Platform Thread Budget Suite (1, 4, 8, 16 Threads)");
 
         int[] budgetLevels = (customThreads != null && customThreads > 0)
                 ? new int[]{customThreads}
@@ -719,11 +707,9 @@ public class BenchmarkRunner {
         }
 
         // Print final summary table
-        System.out.println("\n==================================================================================================================");
-        System.out.println("                 VIRTUAL THREADS EQUAL PLATFORM THREAD BUDGET SCALING SUMMARY                    ");
-        System.out.println("==================================================================================================================");
+        System.out.println("\nVirtual Threads Equal Platform Thread Budget Scaling Summary:");
         System.out.printf("%-10s | %-15s | %-24s | %18s | %14s | %10s%n", "Budget", "Engine", "Breakdown", "Throughput (ops/s)", "Bandwidth", "Speedup");
-        System.out.println("------------------------------------------------------------------------------------------------------------------");
+        System.out.println("-".repeat(110));
         for (int t : budgetLevels) {
             Double fc = fcScores.get(t);
             Double ju = juringScores.get(t);
@@ -741,9 +727,8 @@ public class BenchmarkRunner {
             String juBreakdown = (t == 1) ? "1 carrier + 1 poller (2T)" : (carriers + " carriers + " + pollers + " pollers");
             System.out.printf("%-10s | %-15s | %-24s | %18s | %14s | %10s%n",
                     t + " Thread(s)", "JUringBlocking", juBreakdown, juStr, juMb, spStr);
-            System.out.println("------------------------------------------------------------------------------------------------------------------");
+            System.out.println("-".repeat(110));
         }
-        System.out.println("==================================================================================================================");
 
         // Merge JSON files into combined effectiveRff
         if (effectiveRff != null && !createdJsonFiles.isEmpty()) {

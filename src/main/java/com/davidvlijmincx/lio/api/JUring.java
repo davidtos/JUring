@@ -9,7 +9,7 @@ import java.util.List;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- *  facade for Linux {@code io_uring}.
+ * Pure Java API for Linux {@code io_uring}.
  * <p>
  * <b>Thread Safety:</b> {@code JUring} is <b>NOT</b> thread-safe. A single instance must only be
  * accessed by one thread at a time (e.g. pinned to a dedicated event loop or worker thread).
@@ -136,22 +136,10 @@ public class JUring implements AutoCloseable {
         return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
-    /**
-     * Prepares a no-op ({@code IORING_OP_NOP}) submission queue entry.
-     * Useful for testing ring round-trip overhead and waking a ring without I/O.
-     *
-     * @return the userData token identifying this operation
-     */
     public long prepareNop() {
         return prepareNopInternal((byte) 0);
     }
 
-    /**
-     * Prepares a no-op ({@code IORING_OP_NOP}) submission queue entry with SQE flags.
-     *
-     * @param sqeOptions SQE flags to set on the entry
-     * @return the userData token identifying this operation
-     */
     public long prepareNop(SqeOptions... sqeOptions) {
         return prepareNopInternal(SqeOptions.combineOptions(sqeOptions));
     }
@@ -229,67 +217,22 @@ public class JUring implements AutoCloseable {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
-    /**
-     * Prepares a zero-copy fixed-buffer write using data already populated in the registered buffer.
-     *
-     * @param fd          open target file descriptor
-     * @param writeSize   number of bytes to write from the registered buffer
-     * @param offset      file offset in bytes
-     * @param bufferIndex index of the pre-registered buffer containing the write payload
-     * @return the token identifying this operation
-     */
     public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex) {
         return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, (byte) 0, false);
     }
 
-    /**
-     * Prepares a zero-copy fixed-buffer write with custom SQE options.
-     *
-     * @param fd          open target file descriptor
-     * @param writeSize   number of bytes to write
-     * @param offset      file offset in bytes
-     * @param bufferIndex index of the pre-registered buffer
-     * @param sqeOptions  optional flags to apply to the submission queue entry
-     * @return the token identifying this operation
-     */
     public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
     }
 
-    /**
-     * Prepares a zero-copy fixed-buffer write targeting a registered file index.
-     *
-     * @param indexFD     slot index in the registered file table
-     * @param writeSize   number of bytes to write
-     * @param offset      file offset in bytes
-     * @param bufferIndex index of the pre-registered buffer
-     * @return the token identifying this operation
-     */
     public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
         return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, (byte) 0, true);
     }
 
-    /**
-     * Prepares a zero-copy fixed-buffer write targeting a registered file index with custom SQE options.
-     *
-     * @param indexFD     slot index in the registered file table
-     * @param writeSize   number of bytes to write
-     * @param offset      file offset in bytes
-     * @param bufferIndex index of the pre-registered buffer
-     * @param sqeOptions  optional flags to apply to the submission queue entry
-     * @return the token identifying this operation
-     */
     public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
-    /**
-     * Retrieves the registered buffer at {@code bufferIndex}.
-     *
-     * @param bufferIndex index of the registered buffer
-     * @return the {@link MemorySegment} representing the registered buffer
-     * @throws IllegalArgumentException if {@code bufferIndex} is out of bounds
-     */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
         if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
@@ -1012,11 +955,6 @@ public class JUring implements AutoCloseable {
         return result;
     }
 
-    /**
-     * Checks out a registered buffer index from the pool.
-     *
-     * @return buffer index, or -1 if no buffers are available
-     */
     public int checkOutBuffer() {
         if (freeBufferTop == 0) {
             return -1;
@@ -1028,11 +966,6 @@ public class JUring implements AutoCloseable {
         return idx;
     }
 
-    /**
-     * Returns a registered buffer index to the pool after use.
-     *
-     * @param bufferIndex index of the buffer to return
-     */
     public void checkInBuffer(int bufferIndex) {
         if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
             throw new IllegalArgumentException("Invalid bufferIndex: " + bufferIndex);

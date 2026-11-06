@@ -79,11 +79,6 @@ public class Result implements AutoCloseable {
         return cqeFlags;
     }
 
-    /**
-     * Returns true if this operation produces more completion queue entries.
-     *
-     * @return true if more completions are expected
-     */
     public boolean hasMore() {
         return (cqeFlags & IoUringDispatcher.IORING_CQE_F_MORE) != 0;
     }
@@ -113,11 +108,6 @@ public class Result implements AutoCloseable {
         return MemorySegment.NULL;
     }
 
-    /**
-     * Returns a {@link MemorySegment} sliced to the exact number of bytes transferred.
-     *
-     * @return memory segment of transferred bytes
-     */
     public MemorySegment validBuffer() {
         MemorySegment buf = buffer();
         if (buf.equals(MemorySegment.NULL) || result <= 0) {
@@ -127,11 +117,6 @@ public class Result implements AutoCloseable {
         return buf.byteSize() == validLen ? buf : buf.asSlice(0, validLen);
     }
 
-    /**
-     * Copies the transferred bytes into a new byte array.
-     *
-     * @return byte array containing transferred bytes
-     */
     public byte[] toByteArray() {
         MemorySegment valid = validBuffer();
         if (valid.equals(MemorySegment.NULL)) {
@@ -140,39 +125,18 @@ public class Result implements AutoCloseable {
         return valid.toArray(JAVA_BYTE);
     }
 
-    /**
-     * Decodes the transferred bytes as a UTF-8 string.
-     *
-     * @return decoded string
-     */
     public String getString() {
         return getString(StandardCharsets.UTF_8);
     }
 
-    /**
-     * Decodes the transferred bytes as a UTF-8 string (alias for {@link #getString()}).
-     *
-     * @return decoded string
-     */
     public String asString() {
         return getString(StandardCharsets.UTF_8);
     }
 
-    /**
-     * Decodes the transferred bytes using the specified charset.
-     *
-     * @param charset character set for decoding
-     * @return decoded string
-     */
     public String getString(Charset charset) {
         return new String(toByteArray(), charset);
     }
 
-    /**
-     * Wraps the transferred bytes as a direct ByteBuffer.
-     *
-     * @return byte buffer containing transferred bytes
-     */
     public ByteBuffer asByteBuffer() {
         MemorySegment valid = validBuffer();
         return valid.equals(MemorySegment.NULL) ? ByteBuffer.allocate(0) : valid.asByteBuffer();

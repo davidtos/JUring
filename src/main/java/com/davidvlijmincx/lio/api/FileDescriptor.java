@@ -2,9 +2,6 @@ package com.davidvlijmincx.lio.api;
 
 import java.nio.file.Path;
 
-/**
- * Safe wrapper around a native Linux file descriptor integer.
- */
 public class FileDescriptor implements AutoCloseable {
 
     private final int fd;
@@ -14,8 +11,7 @@ public class FileDescriptor implements AutoCloseable {
         int opened = NativeDispatcher.C.open(path, flags.getValue(), mode);
         if (opened < 0) {
             int err = -opened;
-            String errName = (err == 2) ? "ENOENT" : ("errno=" + err);
-            throw new RuntimeException("Failed to open '" + path + "': " + errName + " - " + NativeDispatcher.C.strerror(err));
+            throw new RuntimeException("Failed to open '" + path + "': " + NativeDispatcher.C.strerror(err) + " (errno " + err + ")");
         }
         this.fd = opened;
     }
@@ -32,8 +28,7 @@ public class FileDescriptor implements AutoCloseable {
         int opened = NativeDispatcher.C.open(path, LinuxOpenOptions.combineOptions(flags), mode);
         if (opened < 0) {
             int err = -opened;
-            String errName = (err == 2) ? "ENOENT" : ("errno=" + err);
-            throw new RuntimeException("Failed to open '" + path + "': " + errName + " - " + NativeDispatcher.C.strerror(err));
+            throw new RuntimeException("Failed to open '" + path + "': " + NativeDispatcher.C.strerror(err) + " (errno " + err + ")");
         }
         this.fd = opened;
     }
@@ -42,12 +37,6 @@ public class FileDescriptor implements AutoCloseable {
         this(path.toString(), 0644, flags);
     }
 
-    /**
-     * Creates a file descriptor from a native descriptor value.
-     *
-     * @param fd native file descriptor
-     * @throws IllegalArgumentException if fd is negative
-     */
     FileDescriptor(int fd) {
         if (fd < 0) {
             throw new IllegalArgumentException("Invalid file descriptor: " + fd);
@@ -55,11 +44,6 @@ public class FileDescriptor implements AutoCloseable {
         this.fd = fd;
     }
 
-    /**
-     * Returns the native file descriptor integer.
-     *
-     * @return the file descriptor
-     */
     public int getFd() {
         return fd;
     }

@@ -1,15 +1,13 @@
 package com.davidvlijmincx.lio.api;
 
+import com.sun.management.ThreadMXBean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.reflect.Method;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -22,39 +20,20 @@ class ZeroAllocationHotPathTest {
     private static final int FILE_BLOCKS = 256; // 1 MB file
     private static final int BENCHMARK_OPS = 100_000;
 
-    private static final Object THREAD_BEAN;
-    private static final MethodHandle GET_ALLOCATED_BYTES_MH;
+    private static final ThreadMXBean THREAD_BEAN;
 
     static {
-        try {
-            Class<?> mfClass = Class.forName("java.lang.management.ManagementFactory");
-            Method getThreadMXBean = mfClass.getMethod("getThreadMXBean");
-            Object bean = getThreadMXBean.invoke(null);
-
-            Class<?> sunThreadMXBeanClass = Class.forName("com.sun.management.ThreadMXBean");
-            if (!sunThreadMXBeanClass.isInstance(bean)) {
-                throw new UnsupportedOperationException("com.sun.management.ThreadMXBean not available");
-            }
-
-            Method isSupported = sunThreadMXBeanClass.getMethod("isThreadAllocatedMemorySupported");
-            boolean supported = (boolean) isSupported.invoke(bean);
-            if (!supported) {
-                throw new UnsupportedOperationException("Thread allocated memory measurement is not supported");
-            }
-
-            Method isEnabled = sunThreadMXBeanClass.getMethod("isThreadAllocatedMemoryEnabled");
-            boolean enabled = (boolean) isEnabled.invoke(bean);
-            if (!enabled) {
-                Method setEnabled = sunThreadMXBeanClass.getMethod("setThreadAllocatedMemoryEnabled", boolean.class);
-                setEnabled.invoke(bean, true);
-            }
-
-            THREAD_BEAN = bean;
-            Method getBytesMethod = sunThreadMXBeanClass.getMethod("getThreadAllocatedBytes", long.class);
-            GET_ALLOCATED_BYTES_MH = MethodHandles.lookup().unreflect(getBytesMethod);
-        } catch (Throwable t) {
-            throw new ExceptionInInitializerError(t);
+        java.lang.management.ThreadMXBean bean = ManagementFactory.getThreadMXBean();
+        if (!(bean instanceof ThreadMXBean sunBean)) {
+            throw new UnsupportedOperationException("com.sun.management.ThreadMXBean not available");
         }
+        if (!sunBean.isThreadAllocatedMemorySupported()) {
+            throw new UnsupportedOperationException("Thread allocated memory measurement is not supported");
+        }
+        if (!sunBean.isThreadAllocatedMemoryEnabled()) {
+            sunBean.setThreadAllocatedMemoryEnabled(true);
+        }
+        THREAD_BEAN = sunBean;
     }
 
     private JUring ring;
@@ -76,11 +55,7 @@ class ZeroAllocationHotPathTest {
     }
 
     private static long getThreadAllocatedBytes(long threadId) {
-        try {
-            return (long) GET_ALLOCATED_BYTES_MH.invoke(THREAD_BEAN, threadId);
-        } catch (Throwable t) {
-            throw new RuntimeException(t);
-        }
+        return THREAD_BEAN.getThreadAllocatedBytes(threadId);
     }
 
     private static class ReapingConsumer implements ResultConsumer {

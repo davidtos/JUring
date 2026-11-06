@@ -45,29 +45,25 @@ public class PreflightCheck {
         }
 
         public void printReport() {
-            System.out.println("================================================================================");
-            System.out.println("                     JUring Benchmark Suite Preflight Check                     ");
-            System.out.println("================================================================================");
+            System.out.println("JUring Benchmark Suite Preflight Check:");
 
             for (String line : info) {
-                System.out.println(" [OK] " + line);
+                System.out.println("  [OK] " + line);
             }
 
             for (String warn : warnings) {
-                System.out.println(" [WARN] " + warn);
+                System.out.println("  [WARN] " + warn);
             }
 
             for (String err : errors) {
-                System.out.println(" [FAIL] " + err);
+                System.out.println("  [FAIL] " + err);
             }
 
-            System.out.println("--------------------------------------------------------------------------------");
             if (isSuccess()) {
-                System.out.println("Preflight status: READY FOR BENCHMARKING");
+                System.out.println("Status: READY FOR BENCHMARKING");
             } else {
-                System.out.println("Preflight status: FAILED - Please resolve errors above before benchmarking");
+                System.err.println("Status: FAILED - Please resolve errors above before benchmarking");
             }
-            System.out.println("================================================================================");
         }
     }
 

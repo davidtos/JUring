@@ -1,16 +1,21 @@
 # JUring: Pure Java io_uring via Project Panama
 
-A `io_uring` implementation in Java using FFM (JEP 454).
-Eliminates Virtual Thread carrier pinning on file I/O while matching Fio `ioengine=io_uring` in performance. 
+An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory (FFM) API (JEP 454).
 
-- **Zero Native Dependencies:** Pure Java FFM downcalls and Varhandle. No JNI, C, or `liburing.so` (anymore).
-- **Zero-Allocation Hot Path:** 0 bytes allocated on the calling thread after initialization.
-- **Carrier-Free Loom I/O:** Decouples Virtual Threads from OS carriers via an M:N poller ring.
-- **Tested using JMH and JCStress:** JMH to verify performance and JCStress for the memory barriers.
+In standard Java, file I/O operations are synchronous and blocking. When using Virtual Threads (Project Loom), file operations issue blocking system calls (`pread64`/`pwrite64`) that pin carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`.
 
-> The focus of this project for now is random direct I/O.
+- **Zero Native Dependencies:** Pure Java FFM downcalls and VarHandles. No JNI, C code, or `liburing.so`.
+- **Zero-Allocation Hot Path:** 0 heap bytes allocated on the calling thread after initialization during steady state.
+- **Virtual Thread Friendly:** Includes a blocking wrapper (`JUringBlocking`) that unmounts Virtual Threads via `LockSupport`, freeing up carrier threads while waiting on storage.
+- **Direct NVMe I/O:** Focuses on random direct I/O (`O_DIRECT`), registered files, and fixed buffers to drive high queue depths on fast NVMe drives.
+
+> The focus of this project for now is random direct I/O on Linux.
 
 ## Benchmark Results
+
+The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and standard Java `FileChannel`.
+
+Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern fast storage saturated on its own. JUring can submit batches of asynchronous requests up to higher queue depths on that same single thread.
 
 #### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
 
@@ -30,9 +35,13 @@ Eliminates Virtual Thread carrier pinning on file I/O while matching Fio `ioengi
 | `FileChannel.write`         | 72,409.4  ± 1,577.1  | 282.8 ± 6.2 MB/s   | -64.7%            | QD=1                        |
 | JUring (JMH)                | 193,768.7 ± 1,678.7  | 756.9 ± 6.6 MB/s   | -5.6%             | Batched `submitAndWait(1)`  |
 
-## Virtual Thread performance
-Virtual threads will pin their carrier thread when doing direct I/O using FileChannel. This causes more carrier threads to be spawned up to 256 carrier threads by default. This makes benchmarking kind of hard. To handle this, the chosen approach is to give the benchmark an equal "budget" of threads. BENCHMARK.md offers a default and 1000 carrier thread results.
-The following results run 1000 virtual threads at an equal budget.
+## Virtual Thread Performance
+
+Virtual threads pin their carrier thread when doing direct I/O with `FileChannel`. To keep CPUs utilized, the JVM scheduler compensates by creating additional carrier threads (up to 256 by default).
+
+To compare both approaches fairly, we give both an equal "budget" of platform threads. `JUringBlocking` runs dedicated poller threads that submit requests and wake the virtual threads when completions arrive.
+
+The following results run 1,000 virtual threads under an equal thread budget:
 
 | Total Platform Threads | Engine         | Thread Breakdown          | Throughput (ops/s)    | Bandwidth            | Speedup  | Notes                                  |
 |------------------------|----------------|---------------------------|-----------------------|----------------------|----------|----------------------------------------|
@@ -45,11 +54,13 @@ The following results run 1000 virtual threads at an equal budget.
 | 16 Thread(s)           | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline | Pinned in pread64, capped at QD=16     |
 | 16 Thread(s)           | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    | Clean unmount via park(), full NVMe QD |
 
-JUring needs a single thread to run, this is the poller that will park/wake the virtual threads and owns ring. 
+`JUringBlocking` uses dedicated poller threads to submit queue entries and wake parked virtual threads when operations complete. Full details and multiple workload datasets are documented in [BENCHMARK.md](BENCHMARK.md).
 
 ## Examples
 
-### Direct Read using Registered Files and Fixed Buffers
+### Direct Read with Registered Files and Fixed Buffers
+
+In this example we register both the file descriptor and a pool of direct memory buffers with the kernel. This avoids buffer mapping overhead per read:
 
 ```java
 import com.davidvlijmincx.lio.api.*;
@@ -100,6 +111,8 @@ public class DirectReadExample {
 
 ### Direct Write
 
+Writing data using registered files and fixed buffers:
+
 ```java
 import com.davidvlijmincx.lio.api.*;
 import java.lang.foreign.MemorySegment;
@@ -139,7 +152,9 @@ public class DirectWriteExample {
 }
 ```
 
-### Fused Submission and Completion Pipeline Loop
+### Pipeline Loop (Fused Submit & Reap)
+
+Here is how you can build an asynchronous pipeline that keeps the queue full while reaping completions in batches:
 
 ```java
 import com.davidvlijmincx.lio.api.*;
@@ -177,7 +192,9 @@ public class FusedPipelineLoop {
 }
 ```
 
-### Buffered I/O with MemorySegments and byte[]
+### Buffered I/O with MemorySegments and Byte Arrays
+
+You can also perform standard buffered reads and writes using off-heap `MemorySegment`s or heap byte arrays:
 
 ```java
 import com.davidvlijmincx.lio.api.*;
@@ -221,7 +238,9 @@ public class BufferedIoExample {
 }
 ```
 
-### Non-Blocking Virtual Thread Blocking API (`JUringBlocking`)
+### Virtual Threads with JUringBlocking
+
+If you want a synchronous-style blocking API that works cleanly with Virtual Threads, use `JUringBlocking`. The virtual thread unmounts while waiting for kernel completions, letting its carrier thread execute other tasks:
 
 ```java
 import com.davidvlijmincx.lio.api.*;
@@ -238,7 +257,7 @@ public class VirtualThreadExample {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment buf = arena.allocate(4096);
 
-                    // Unmounts the Virtual Thread cleanly via LockSupport.parkNanos()
+                    // Unmounts the Virtual Thread cleanly via LockSupport
                     // Releasing the underlying OS carrier thread immediately
                     long bytesRead = blockingRing.read(fd, buf, 0);
                     System.out.println("Virtual thread read " + bytesRead + " bytes");

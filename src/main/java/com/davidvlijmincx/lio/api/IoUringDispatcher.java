@@ -47,8 +47,6 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final int IORING_UNREGISTER_RING_FDS = 21;
     private static final byte INT_FLAG_REG_RING = 1;
 
-    static volatile Runnable FENCE_HOOK = null;
-
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
 
@@ -429,11 +427,6 @@ final class IoUringDispatcher implements AutoCloseable {
         iovecBlockPool.checkIn(address);
     }
 
-    /**
-     * Gets the next available SQE address in the submission ring.
-     *
-     * @return the raw native memory address of the SQE slot, or {@code 0L} if the queue is full
-     */
     long getSqe() {
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int tail = sqeTail;
@@ -599,9 +592,6 @@ final class IoUringDispatcher implements AutoCloseable {
         ZeroGcSqe.setFd(sqe, -1);
     }
 
-    /**
-     * Submits all prepared SQEs to the kernel.
-     */
     void submit() {
         int tail = sqeTail;
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -623,10 +613,6 @@ final class IoUringDispatcher implements AutoCloseable {
 
         if (sqpoll) {
             VarHandle.fullFence();
-            Runnable hook = FENCE_HOOK;
-            if (hook != null) {
-                hook.run();
-            }
             int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
             if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                 enterFlags |= IORING_ENTER_SQ_WAKEUP;
@@ -680,12 +666,6 @@ final class IoUringDispatcher implements AutoCloseable {
         callIoUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
     }
 
-    /**
-     * Submits pending SQEs and waits until at least {@code waitNr} CQEs are available.
-     *
-     * @param waitNr minimum completions required before returning
-     * @return number of completions currently available in the CQ ring
-     */
     int submitAndWait(int waitNr) {
         int tail = sqeTail;
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -714,10 +694,6 @@ final class IoUringDispatcher implements AutoCloseable {
             if (toSubmit > 0) {
                 if (sqpoll) {
                     VarHandle.fullFence();
-                    Runnable hook = FENCE_HOOK;
-                    if (hook != null) {
-                        hook.run();
-                    }
                     int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
                     if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                         enterFlags |= IORING_ENTER_SQ_WAKEUP;
@@ -864,9 +840,6 @@ final class IoUringDispatcher implements AutoCloseable {
         return ret;
     }
 
-    /**
-     * Initializes the io_uring submission and completion queues, memory-mapping the ring buffers.
-     */
     int queueInitParams(int queueDepth, MemorySegment ring, MemorySegment params) {
         int fd = libCDispatcher.ioUringSetup(this.callState, queueDepth, params);
         if (fd < 0) {
@@ -1025,11 +998,6 @@ final class IoUringDispatcher implements AutoCloseable {
         return 0;
     }
 
-    /**
-     * Registers the io_uring ring file descriptor with the kernel.
-     *
-     * @return 1 on success, or negative errno on failure
-     */
     int registerRingFd() {
         Thread current = Thread.currentThread();
         if (this.ringFd < 0 || current.isVirtual()) {
@@ -1054,11 +1022,6 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    /**
-     * Unregisters the ring file descriptor from the kernel-registered table.
-     *
-     * @return 0 on success, or negative errno
-     */
     int unregisterRingFd() {
         if (this.ringFd < 0 || this.enterFlagsBase == 0) {
             return 0;
@@ -1425,10 +1388,6 @@ final class IoUringDispatcher implements AutoCloseable {
             if (toSubmit > 0) {
                 if (sqpoll) {
                     VarHandle.fullFence();
-                    Runnable hook = FENCE_HOOK;
-                    if (hook != null) {
-                        hook.run();
-                    }
                     int sqFlags = (int) VH_INT.getVolatile(GLOBAL_MEMORY, sqKflagsAddr);
                     if ((sqFlags & IORING_SQ_NEED_WAKEUP) != 0) {
                         enterFlags |= IORING_ENTER_SQ_WAKEUP;
@@ -1515,9 +1474,6 @@ final class IoUringDispatcher implements AutoCloseable {
         return target;
     }
 
-    /**
-     * Populates a mutable {@link Result} instance directly from reaped CQE fields.
-     */
     void populateResultFromCqe(Result target, long userData, long result, int cqeFlags) {
         int typeIndex = (int) ((userData >>> ZeroGcUserData.TYPE_SHIFT) & ZeroGcUserData.TYPE_MASK);
 

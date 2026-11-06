@@ -22,8 +22,7 @@ public enum IoUringOptions {
     IORING_SETUP_NO_MMAP(1 << 14),
     IORING_SETUP_REGISTERED_FD_ONLY(1 << 15),
     IORING_SETUP_NO_SQARRAY(1 << 16),
-    IORING_SETUP_HYBRID_IOPOLL(1 << 17),
-    UNSUPPORTED_TEST_FLAG(1 << 30);
+    IORING_SETUP_HYBRID_IOPOLL(1 << 17);
 
     final int value;
 

@@ -5,26 +5,28 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="docs: simplify API javadocs">
+      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/BENCHMARK.md" beforeDir="false" afterPath="$PROJECT_DIR$/BENCHMARK.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/reference/fio_job.conf" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/fio/fio_job.conf" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/reference/fio_jobs.conf" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/fio/fio_jobs.conf" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/module-info.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/module-info.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkSuiteValidationTest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/FfmInvocationBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/FfmInvocationBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedReadBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/buffered/BufferedWriteBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/DatasetManager.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/DatasetManager.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/IoHelper.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/IoHelper.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectLatencyBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectLatencyBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectWriteBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/EqualQueueDepthBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/EqualQueueDepthBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/MultiThreadScalingBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/MultiThreadScalingBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/NopBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/NopBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/VirtualThreadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/VirtualThreadBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/BugVerificationTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/PreflightCheck.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/PreflightCheck.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Main.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Phase1BugProofTest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/Phase2VirtualThreadProofTest.java" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/FileDescriptorTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/FileDescriptorTest.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" afterDir="false" />
     </list>
@@ -34,7 +36,7 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="290" />
+    <option name="cachedIndexableFilesCount" value="83" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="Git.Settings">
@@ -129,60 +131,60 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
-    "Application.BenchmarkRunner.executor": "Run",
-    "Application.DirectReadBenchmark.executor": "Run",
-    "Application.DirectReadVisualVerificationTest.executor": "Run",
-    "Application.FioComparisonBenchmark.executor": "Run",
-    "Application.Phase1BugProofTest.executor": "Run",
-    "Application.RandomReadBenchMark.executor": "Run",
-    "CidrDebugProfileConversion": "true",
-    "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
-    "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
-    "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
-    "JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails.executor": "Run",
-    "JUnit.DirectIoTest.executor": "Run",
-    "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
-    "JUnit.JUringTest (1).executor": "Run",
-    "JUnit.JUringTest (2).executor": "Run",
-    "JUnit.JUringTest.executor": "Run",
-    "JUnit.JUringTest.readFromFile.executor": "Run",
-    "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
-    "JUnit.Phase2VirtualThreadProofTest.executor": "Run",
-    "JUnit.SocketTest.executor": "Run",
-    "JUnit.ZeroAllocationHotPathTest.executor": "Run",
-    "JUnit.api in JUring (1).executor": "Run",
-    "JUnit.api in JUring.executor": "Run",
-    "JUnit.api in JUring.test.executor": "Run",
-    "JUnit.com.davidvlijmincx.lio.api in JUring.executor": "Run",
-    "KEY_CHAT_IN_TOOLWINDOW": "false",
-    "Maven.JUring [verify].executor": "Run",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "/home/david/projects/JUring",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.jshint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.jshint": "",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "vue.rearranger.settings.migration": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
+    &quot;Application.BenchmarkRunner.executor&quot;: &quot;Run&quot;,
+    &quot;Application.DirectReadBenchmark.executor&quot;: &quot;Run&quot;,
+    &quot;Application.DirectReadVisualVerificationTest.executor&quot;: &quot;Run&quot;,
+    &quot;Application.FioComparisonBenchmark.executor&quot;: &quot;Run&quot;,
+    &quot;Application.Phase1BugProofTest.executor&quot;: &quot;Run&quot;,
+    &quot;Application.RandomReadBenchMark.executor&quot;: &quot;Run&quot;,
+    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.DirectIoTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.DirectIoTest.testDirectIoRead.executor&quot;: &quot;Debug&quot;,
+    &quot;JUnit.JUringTest (1).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest (2).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.readFromFile.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.JUringTest.sharedWorkerRingCreation.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.Phase2VirtualThreadProofTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.SocketTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.ZeroAllocationHotPathTest.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring (1).executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.api in JUring.test.executor&quot;: &quot;Run&quot;,
+    &quot;JUnit.com.davidvlijmincx.lio.api in JUring.executor&quot;: &quot;Run&quot;,
+    &quot;KEY_CHAT_IN_TOOLWINDOW&quot;: &quot;false&quot;,
+    &quot;Maven.JUring [verify].executor&quot;: &quot;Run&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/home/david/projects/JUring&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.jshint&quot;: &quot;&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   },
-  "keyToStringList": {
-    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
-      "TEXT"
+  &quot;keyToStringList&quot;: {
+    &quot;com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File&quot;: [
+      &quot;TEXT&quot;
     ]
   }
-}]]></component>
+}</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$" />
@@ -193,20 +195,7 @@
       <command value="mvn verify" />
     </option>
   </component>
-  <component name="RunManager" selected="JUnit.DirectIoTest">
-    <configuration name="DirectReadBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
-      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectReadBenchmark" />
-      <module name="JUring" />
-      <extension name="coverage">
-        <pattern>
-          <option name="PATTERN" value="bench.suite.direct.*" />
-          <option name="ENABLED" value="true" />
-        </pattern>
-      </extension>
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
+  <component name="RunManager" selected="JUnit.ZeroAllocationHotPathTest">
     <configuration name="FioComparisonBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark" />
       <module name="JUring" />
@@ -269,6 +258,22 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
+    <configuration name="ZeroAllocationHotPathTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.davidvlijmincx.lio.api.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.davidvlijmincx.lio.api" />
+      <option name="MAIN_CLASS_NAME" value="com.davidvlijmincx.lio.api.ZeroAllocationHotPathTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
     <configuration default="true" type="JUnit" factoryName="JUnit">
       <option name="TEST_OBJECT" value="class" />
       <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
@@ -278,11 +283,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="JUnit.ZeroAllocationHotPathTest" />
         <item itemvalue="JUnit.DirectIoTest" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
         <item itemvalue="Application.FioComparisonBenchmark" />
-        <item itemvalue="Application.DirectReadBenchmark" />
       </list>
     </recent_temporary>
   </component>
