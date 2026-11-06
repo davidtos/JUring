@@ -1,5 +1,5 @@
 ## Hardware Setup & Methodology
-Hardware has a big impact on the performance of I/O benchmarks. For full transparency, all benchmarks were run on this machine:
+Hardware has a big impact on the performance of the I/O benchmarks. For full transparency, all benchmarks were run on this machine:
 
 * **CPU:** 16 cores, 32 threads (SMT)
 * **RAM:** 64 GB
@@ -12,10 +12,10 @@ Hardware has a big impact on the performance of I/O benchmarks. For full transpa
 1. **`SINGLE_FILE` (10 GB):** A single 10 GB binary file.
 2. **`MULTI_FILE` (2,211 Files):** 2,211 files (~4.7 MB each, ~10.4 GB total).
 
-The idea behind this setup is to get a clear picture of how JUring performs under different workloads, both with a single large file and across thousands of open files.
+The idea behind this setup is to get a clear picture of how JUring performs under different workloads, both with a single large file and across thousands of open files. The big file is also there to match fio's workload.
 
 ### Single-Core Framework Overhead & Direct I/O Efficiency
-First, let's look at the baseline framework overhead (`NopBenchmark`), followed by single-thread 4KB Direct Reads and Direct Writes (`O_DIRECT`). We compare both QD=1 and QD=64 against standard Java `FileChannel`.
+The baseline framework overhead (`NopBenchmark`), followed by single-thread 4KB Direct Reads and Direct Writes (`O_DIRECT`). We compare both QD=1 and QD=64 against standard Java `FileChannel`.
 *Harness: 5 forks × 3 iterations × 3 s per tier*
 
 | Target                   | Concurrency / QD                  | Throughput (ops/s)      | Bandwidth          | Syscalls / op (`raw_syscalls:sys_enter`) | User CPU (`cycles:u/op`) | Kernel CPU (`cycles:k/op`) | Heap Alloc |
@@ -30,7 +30,7 @@ First, let's look at the baseline framework overhead (`NopBenchmark`), followed 
 
 > [!NOTE]
 > **Calling-Thread Memory Allocations:**
-> In steady state, JUring's submission and completion pipeline (submitting SQEs, reaping CQEs via `ResultConsumer`, and reusing fixed buffers) allocates 0 bytes on the calling thread. This is verified using `ThreadMXBean.getThreadAllocatedBytes` in [`ZeroAllocationHotPathTest.java`](src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java).
+> In a steady state, JUring's submission and completion pipeline (submitting SQEs, reaping CQEs via `ResultConsumer`, and reusing fixed buffers) allocates 0 bytes on the calling thread. This is verified in [`ZeroAllocationHotPathTest.java`](src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java).
 
 ### Equal Queue Depth Comparison (QD = 1, 16, 32, 64)
 Here is a direct comparison between standard Java `FileChannel` and `JUring` on a single thread across increasing hardware Queue Depths (QD = 1, 16, 32, 64) for 4KB random direct reads (`O_DIRECT`) on a 10 GB file.
@@ -73,10 +73,10 @@ Direct writes with NVMe drives under heavy random write loads:
 
 > [!NOTE]
 > **Direct Write Variance:**
-> Direct writes are notoriously tricky to benchmark accurately. Under sustained random direct write pressure, consumer NVMe SSD controllers often throttle once internal SLC caches fill up, which leads to high variance and wide error margins. I included the raw numbers here to show the realistic behavior on this hardware.
+> Direct writes are _very_ tricky to benchmark accurately. Under sustained random direct write pressure my storage seems to give up, which leads to high variance and wide error margins. I included the raw numbers here to show the realistic behavior on this hardware. I tried pauses between runs, flushing without success. IF you know a fix, let’s talk!
 
 ### Multi-File Scaling (2,211 Discrete Files)
-In this benchmark we spread the reads and writes across 2,211 discrete files to see how the kernel and file table registration perform with many open file descriptors.
+In this benchmark we spread the reads and writes across 2,211 discrete files to see how it performs with many open files.
 *Harness: 3 forks × 3 iterations × 3 s per tier*
 
 | Threads    | JUring Read (ops/s)   | FileChannel Read (ops/s) | Read Speedup | JUring Write (ops/s)  | FileChannel Write (ops/s) | Write Speedup |
@@ -88,7 +88,7 @@ In this benchmark we spread the reads and writes across 2,211 discrete files to 
 | 16 Threads | 400,720.3 ± 123,011.8 | 146,090.4 ± 315.6        | 2.7x         | 133,530.4 ± 397,418.0 | 171,070.4 ± 18,539.7      | 0.8x          |
 
 ### Virtual Threads Scaling (50 to 1,000 VTs)
-When Virtual Threads do file I/O using `FileChannel`, they block on `pread64` and pin the carrier thread. The JVM scheduler handles this by spawning additional carrier threads (up to 256 carriers by default) to keep the CPUs busy.
+When looking at this, remember that virtual threads will spawn more carrier threads to keep the CPUs busy.
 *Harness: 3 forks × 3 iterations × 3 s per tier*
 
 | Virtual Threads | JUringBlocking (ops/s) | Bandwidth            | FileChannel (ops/s)  | Bandwidth            | Speedup | JUring Syscalls/op | FC Syscalls/op | JUring CPU/op | FC CPU/op |
@@ -99,7 +99,7 @@ When Virtual Threads do file I/O using `FileChannel`, they block on `pread64` an
 | 500 VTs         | 413,256.9 ± 116,060.1  | 1,614.3 ± 453.4 MB/s | 444,553.8 ± 10,378.7 | 1,736.5 ± 40.5 MB/s  | 0.93x   | 3.8754             | 1.2930         | 28.4 µs       | 24.1 µs   |
 | 1000 VTs        | 413,265.4 ± 148,754.4  | 1,614.3 ± 581.1 MB/s | 426,301.9 ± 85,555.4 | 1,665.2 ± 334.2 MB/s | 0.97x   | 3.4514             | 1.2538         | 28.9 µs       | 23.6 µs   |
 
-Notice that as the virtual thread count goes up, `FileChannel` throughput stays high because the JVM scheduler keeps adding carrier threads behind the scenes.
+Notice that as the virtual thread count goes up, `FileChannel` throughput stays high because the JVM scheduler keeps adding carrier threads behind the sceness.
 
 #### Impact of Loom Carrier Thread Cap (`maxPoolSize=1024` vs default 256 at 1,000 VTs)
 If we raise the carrier thread limit to 1,024, `FileChannel` can spin up even more carrier threads:

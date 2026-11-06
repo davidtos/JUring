@@ -2,20 +2,20 @@
 
 An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory (FFM) API (JEP 454).
 
-In standard Java, file I/O operations are synchronous and blocking. When using Virtual Threads (Project Loom), file operations issue blocking system calls (`pread64`/`pwrite64`) that pin carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`.
+File I/O operations are synchronous and blocking. When using Virtual Threads, file operations issue blocking system calls that pin carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`!
 
-- **Zero Native Dependencies:** Pure Java FFM downcalls and VarHandles. No JNI, C code, or `liburing.so`.
-- **Zero-Allocation Hot Path:** 0 heap bytes allocated on the calling thread after initialization during steady state.
-- **Virtual Thread Friendly:** Includes a blocking wrapper (`JUringBlocking`) that unmounts Virtual Threads via `LockSupport`, freeing up carrier threads while waiting on storage.
-- **Direct NVMe I/O:** Focuses on random direct I/O (`O_DIRECT`), registered files, and fixed buffers to drive high queue depths on fast NVMe drives.
+- Pure Java FFM downcalls and VarHandles.
+- Zero heap alloc on the hot path after setup.
+- Virtual thread support using LockSupport with JUringBlocking a wrapper for JUring.
+- Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
-> The focus of this project for now is random direct I/O on Linux.
+> The focus of this project for now is random direct I/O on Linux. This seemed a fun challenging place to start, from which to build upon.
 
 ## Benchmark Results
 
 The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and standard Java `FileChannel`.
 
-Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern fast storage saturated on its own. JUring can submit batches of asynchronous requests up to higher queue depths on that same single thread.
+Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern fast storage saturated on its own. JUring can submit batches of asynchronous requests on a single thread using the queue depth of the storage.
 
 #### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
 
@@ -37,7 +37,7 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 
 ## Virtual Thread Performance
 
-Virtual threads pin their carrier thread when doing direct I/O with `FileChannel`. To keep CPUs utilized, the JVM scheduler compensates by creating additional carrier threads (up to 256 by default).
+Virtual threads pin their carrier thread when doing direct I/O with `FileChannel`. To keep CPUs busy, additional carrier threads (up to 256 by default) can be created.
 
 To compare both approaches fairly, we give both an equal "budget" of platform threads. `JUringBlocking` runs dedicated poller threads that submit requests and wake the virtual threads when completions arrive.
 
