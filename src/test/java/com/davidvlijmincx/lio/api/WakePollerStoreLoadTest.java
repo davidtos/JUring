@@ -19,6 +19,8 @@ import java.lang.invoke.VarHandle;
 @State
 public class WakePollerStoreLoadTest {
 
+    private int inKernel;
+    private int taskSubmitted;
     private static final VarHandle VH_IN_KERNEL;
     private static final VarHandle VH_TASK_SUBMITTED;
 

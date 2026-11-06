@@ -27,7 +27,7 @@ First, let's look at the baseline framework overhead (`NopBenchmark`), followed 
 | `FileChannel.write`      | 1T (QD=1, synchronous `pwrite64`) | 72,470.8 ± 1,044.1      | 283.1 ± 4.1 MB/s   | 1.0004                                   | 901.3                    | 25023.8                    | 0.050 B/op |
 | `JUring.write` (QD=1)    | 1T (QD=1, unbatched `O_DIRECT`)   | 72,409.4 ± 1,577.1      | 282.8 ± 6.2 MB/s   | 1.0022                                   | 724.5                    | 26086.7                    | 1.521 B/op |
 | `JUring.write` (QD=64)   | 1T (QD=64, batched pipeline)      | 191,163.1 ± 17,715.3    | 746.7 ± 69.2 MB/s  | 0.1445                                   | 286.3                    | 11941.4                    | 0.574 B/op |
-``
+
 > [!NOTE]
 > **Calling-Thread Memory Allocations:**
 > In steady state, JUring's submission and completion pipeline (submitting SQEs, reaping CQEs via `ResultConsumer`, and reusing fixed buffers) allocates 0 bytes on the calling thread. This is verified using `ThreadMXBean.getThreadAllocatedBytes` in [`ZeroAllocationHotPathTest.java`](src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java).

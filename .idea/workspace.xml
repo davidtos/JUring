@@ -4,31 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="docs: simplify API javadocs">
+    <list default="true" id="ef31d4a4-e67a-4040-87e1-e2cac4021e57" name="Changes" comment="clean up">
       <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/BENCHMARK.md" beforeDir="false" afterPath="$PROJECT_DIR$/BENCHMARK.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/reference/fio_job.conf" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/fio/fio_job.conf" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/reference/fio_jobs.conf" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/fio/fio_jobs.conf" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/FileDescriptor.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringDispatcher.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/IoUringOptions.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUring.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/Result.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/SqeOptions.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/ZeroGcUserData.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/module-info.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/module-info.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/common/PreflightCheck.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/common/PreflightCheck.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadBenchmark.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/direct/DirectReadVisualVerificationTest.java" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/DirectIoTest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/FileDescriptorTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/FileDescriptorTest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LibCDispatcher.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/davidvlijmincx/lio/api/LibCDispatcher.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/bench/suite/BenchmarkRunner.java" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/WakePollerStoreLoadTest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/resources/write_file" beforeDir="false" afterPath="$PROJECT_DIR$/src/test/resources/write_file" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -65,23 +48,23 @@
   </component>
   <component name="NextEditCompletionFeaturesState">
     <decayedCancelled>
-      <entry key="MS100" value="1.0" />
-      <entry key="MS500" value="1.0" />
-      <entry key="S2" value="1.0" />
-      <entry key="S5" value="1.0" />
-      <entry key="S10" value="1.0" />
-      <entry key="S30" value="1.0" />
-      <entry key="S60" value="1.0" />
-      <entry key="M2" value="1.0000000006270995" />
-      <entry key="M5" value="1.0019653539100393" />
-      <entry key="M10" value="1.4047177393857577" />
-      <entry key="M15" value="3.706298593729028" />
-      <entry key="M30" value="21.9815530526936" />
-      <entry key="H1" value="72.42305176050463" />
-      <entry key="H2" value="205.03898305619163" />
-      <entry key="H4" value="455.45526798069676" />
-      <entry key="D1" value="1018.0491071048906" />
-      <entry key="W1" value="1180.2674075772386" />
+      <entry key="MS100" value="1.4721559597589364" />
+      <entry key="MS500" value="2.4713265503612893" />
+      <entry key="S2" value="4.315160365463424" />
+      <entry key="S5" value="5.205198066329817" />
+      <entry key="S10" value="5.57887803544716" />
+      <entry key="S30" value="5.854098078449397" />
+      <entry key="S60" value="5.937551589788578" />
+      <entry key="M2" value="6.069237236000899" />
+      <entry key="M5" value="6.393883353766157" />
+      <entry key="M10" value="6.889764929327602" />
+      <entry key="M15" value="8.743834041472786" />
+      <entry key="M30" value="24.927904439549376" />
+      <entry key="H1" value="73.20774985121994" />
+      <entry key="H2" value="203.51967032219918" />
+      <entry key="H4" value="453.02629189194505" />
+      <entry key="D1" value="1020.8845590944695" />
+      <entry key="W1" value="1185.7425957247035" />
     </decayedCancelled>
     <decayedSelected>
       <entry key="MS100" value="0.0" />
@@ -103,23 +86,23 @@
       <entry key="W1" value="0.0" />
     </decayedSelected>
     <decayedShown>
-      <entry key="MS100" value="0.05111887865986132" />
-      <entry key="MS500" value="0.5517168700209797" />
-      <entry key="S2" value="0.8618448006053145" />
-      <entry key="S5" value="0.9422618900854682" />
-      <entry key="S10" value="0.9707017513559292" />
-      <entry key="S30" value="0.990136957332295" />
-      <entry key="S60" value="0.9950562583755227" />
-      <entry key="M2" value="0.9975250671668525" />
-      <entry key="M5" value="1.00097439337251" />
-      <entry key="M10" value="1.4041989923550757" />
-      <entry key="M15" value="3.7058715714140162" />
-      <entry key="M30" value="21.98104663026957" />
-      <entry key="H1" value="72.42232307895084" />
-      <entry key="H2" value="205.0376657712249" />
-      <entry key="H4" value="455.45358118754166" />
-      <entry key="D1" value="1018.0484282336349" />
-      <entry key="W1" value="1180.2672941145272" />
+      <entry key="MS100" value="1.1006109300858602" />
+      <entry key="MS500" value="2.3072235907912724" />
+      <entry key="S2" value="4.234777262690548" />
+      <entry key="S5" value="5.1657699629335525" />
+      <entry key="S10" value="5.557644572492838" />
+      <entry key="S30" value="5.846646643065838" />
+      <entry key="S60" value="5.93372174774096" />
+      <entry key="M2" value="6.06707476137265" />
+      <entry key="M5" value="6.3927163303539025" />
+      <entry key="M10" value="6.889051717779787" />
+      <entry key="M15" value="8.743262637644769" />
+      <entry key="M30" value="24.927340905371935" />
+      <entry key="H1" value="73.20700991368126" />
+      <entry key="H2" value="203.5183694794922" />
+      <entry key="H4" value="453.0246203827395" />
+      <entry key="D1" value="1020.8838796779767" />
+      <entry key="W1" value="1185.742481933092" />
     </decayedShown>
   </component>
   <component name="ProjectColorInfo">{
@@ -131,60 +114,61 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;Application.BenchmarkRunner.executor&quot;: &quot;Run&quot;,
-    &quot;Application.DirectReadBenchmark.executor&quot;: &quot;Run&quot;,
-    &quot;Application.DirectReadVisualVerificationTest.executor&quot;: &quot;Run&quot;,
-    &quot;Application.FioComparisonBenchmark.executor&quot;: &quot;Run&quot;,
-    &quot;Application.Phase1BugProofTest.executor&quot;: &quot;Run&quot;,
-    &quot;Application.RandomReadBenchMark.executor&quot;: &quot;Run&quot;,
-    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.DirectIoTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.DirectIoTest.testDirectIoRead.executor&quot;: &quot;Debug&quot;,
-    &quot;JUnit.JUringTest (1).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest (2).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.readFromFile.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.JUringTest.sharedWorkerRingCreation.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.Phase2VirtualThreadProofTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.SocketTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.ZeroAllocationHotPathTest.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring (1).executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.api in JUring.test.executor&quot;: &quot;Run&quot;,
-    &quot;JUnit.com.davidvlijmincx.lio.api in JUring.executor&quot;: &quot;Run&quot;,
-    &quot;KEY_CHAT_IN_TOOLWINDOW&quot;: &quot;false&quot;,
-    &quot;Maven.JUring [verify].executor&quot;: &quot;Run&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/home/david/projects/JUring&quot;,
-    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
-    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
-    &quot;node.js.selected.package.jshint&quot;: &quot;&quot;,
-    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "Application.BenchmarkRunner.executor": "Run",
+    "Application.DirectReadBenchmark.executor": "Run",
+    "Application.DirectReadVisualVerificationTest.executor": "Run",
+    "Application.FioComparisonBenchmark.executor": "Run",
+    "Application.Phase1BugProofTest.executor": "Run",
+    "Application.RandomReadBenchMark.executor": "Run",
+    "CidrDebugProfileConversion": "true",
+    "JUnit.BenchmarkSuiteValidationTest.executor": "Run",
+    "JUnit.BenchmarkSuiteValidationTest.testBitAccurateDirectRead.executor": "Debug",
+    "JUnit.BenchmarkSuiteValidationTest.testDatasetManagerAlignedTasks.executor": "Debug",
+    "JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails.executor": "Run",
+    "JUnit.DirectIoTest.executor": "Run",
+    "JUnit.DirectIoTest.testDirectIoRead.executor": "Debug",
+    "JUnit.JUringTest (1).executor": "Run",
+    "JUnit.JUringTest (2).executor": "Run",
+    "JUnit.JUringTest.executor": "Run",
+    "JUnit.JUringTest.readFromFile.executor": "Run",
+    "JUnit.JUringTest.sharedWorkerRingCreation.executor": "Run",
+    "JUnit.Phase2VirtualThreadProofTest.executor": "Run",
+    "JUnit.SocketTest.executor": "Run",
+    "JUnit.ZeroAllocationHotPathTest.executor": "Run",
+    "JUnit.api in JUring (1).executor": "Run",
+    "JUnit.api in JUring.executor": "Run",
+    "JUnit.api in JUring.test.executor": "Run",
+    "JUnit.com.davidvlijmincx.lio.api in JUring.executor": "Run",
+    "KEY_CHAT_IN_TOOLWINDOW": "false",
+    "Maven.JUring [test,-Pjcstress].executor": "Run",
+    "Maven.JUring [verify].executor": "Run",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.MCP Project settings loaded": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "/home/david/projects/JUring",
+    "node.js.detected.package.eslint": "true",
+    "node.js.detected.package.jshint": "true",
+    "node.js.detected.package.tslint": "true",
+    "node.js.selected.package.eslint": "(autodetect)",
+    "node.js.selected.package.jshint": "",
+    "node.js.selected.package.tslint": "(autodetect)",
+    "nodejs_package_manager_path": "npm",
+    "vue.rearranger.settings.migration": "true"
   },
-  &quot;keyToStringList&quot;: {
-    &quot;com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File&quot;: [
-      &quot;TEXT&quot;
+  "keyToStringList": {
+    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
+      "TEXT"
     ]
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$" />
@@ -193,23 +177,12 @@
   <component name="RunAnythingCache">
     <option name="myCommands">
       <command value="mvn verify" />
+      <command value="mvn test -Pjcstress" />
     </option>
   </component>
-  <component name="RunManager" selected="JUnit.ZeroAllocationHotPathTest">
-    <configuration name="FioComparisonBenchmark" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
-      <option name="MAIN_CLASS_NAME" value="bench.suite.direct.DirectLatencyBenchmark.FioComparisonBenchmark" />
-      <module name="JUring" />
-      <extension name="coverage">
-        <pattern>
-          <option name="PATTERN" value="bench.suite.direct.*" />
-          <option name="ENABLED" value="true" />
-        </pattern>
-      </extension>
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="BenchmarkSuiteValidationTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+  <component name="RunManager" selected="Application.BenchmarkRunner">
+    <configuration name="BenchmarkRunner" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
+      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkRunner" />
       <module name="JUring" />
       <extension name="coverage">
         <pattern>
@@ -217,10 +190,6 @@
           <option name="ENABLED" value="true" />
         </pattern>
       </extension>
-      <option name="PACKAGE_NAME" value="bench.suite" />
-      <option name="MAIN_CLASS_NAME" value="bench.suite.BenchmarkSuiteValidationTest" />
-      <option name="TEST_OBJECT" value="class" />
-      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
       <method v="2">
         <option name="Make" enabled="true" />
       </method>
@@ -281,13 +250,22 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
+    <configuration name="api in JUring" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="JUring" />
+      <option name="TEST_OBJECT" value="directory" />
+      <option name="VM_PARAMETERS" value="--enable-native-access=JUring --add-opens JUring/com.davidvlijmincx.lio.api=org.junit.platform.commons --add-opens JUring/bench.suite=org.junit.platform.commons --add-reads JUring=org.junit.jupiter.api,ALL-UNNAMED" />
+      <dir value="$PROJECT_DIR$/src/test/java/com/davidvlijmincx/lio/api" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Application.BenchmarkRunner" />
+        <item itemvalue="JUnit.api in JUring" />
         <item itemvalue="JUnit.ZeroAllocationHotPathTest" />
         <item itemvalue="JUnit.DirectIoTest" />
         <item itemvalue="JUnit.BenchmarkSuiteValidationTest.testFioStubExitCodeFails" />
-        <item itemvalue="JUnit.BenchmarkSuiteValidationTest" />
-        <item itemvalue="Application.FioComparisonBenchmark" />
       </list>
     </recent_temporary>
   </component>
@@ -333,6 +311,8 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
+    <option name="CHECK_CODE_SMELLS_BEFORE_PROJECT_COMMIT" value="false" />
+    <option name="CHECK_NEW_TODO" value="false" />
     <MESSAGE value="Remove jdk.unsupported module dependency and comment out ExtendedOpenOption.DIRECT" />
     <MESSAGE value="Remove specific result types and consolidate into a single `Result` interface" />
     <MESSAGE value="Introduce `ZeroGcSqe` for zero-allocation access to `io_uring_sqe` and add tests." />
@@ -350,7 +330,9 @@
     <MESSAGE value="bench: remove publication benchmark helper scripts" />
     <MESSAGE value="docs: clean up API javadocs" />
     <MESSAGE value="docs: simplify API javadocs" />
-    <option name="LAST_COMMIT_MESSAGE" value="docs: simplify API javadocs" />
+    <MESSAGE value="bench: remove direct read visual verification runner" />
+    <MESSAGE value="clean up" />
+    <option name="LAST_COMMIT_MESSAGE" value="clean up" />
   </component>
   <component name="XSLT-Support.FileAssociations.UIState">
     <expand />

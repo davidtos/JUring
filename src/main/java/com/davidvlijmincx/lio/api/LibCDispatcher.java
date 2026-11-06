@@ -160,13 +160,7 @@ record LibCDispatcher(FreeAddress freeLong,
         return fcntl.fcntl(fd, cmd);
     }
 
-    static volatile java.util.function.LongConsumer FREE_HOOK = null;
     void free(long address) {
-        java.util.function.LongConsumer hook = FREE_HOOK;
-        if (hook != null) {
-            hook.accept(address);
-            return;
-        }
         freeLong.free(address);
     }
 
