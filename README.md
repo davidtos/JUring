@@ -9,7 +9,7 @@ File I/O operations are synchronous and blocking. When using Virtual Threads, fi
 - Virtual thread support using LockSupport with JUringBlocking (wrapper for JUring).
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
-> The focus of this project for now is random direct I/O on Linux. This seemed a fun and challenging place to start, from which to build upon.
+> The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start, from which to build upon.
 
 ## Benchmark Results
 
@@ -21,7 +21,7 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 
 | Engine                     | Throughput (ops/s)   | Bandwidth (MB/s)    | Delta vs Best fio | Configuration              |
 |----------------------------|----------------------|---------------------|-------------------|----------------------------|
-| `fio` (default settings)   | 310,609.8 ± 12,688.8 | 1,213.3 ± 49.6 MB/s | —                 | Default submission / reap  |
+| `fio` (default settings)   | 310,609.8 ± 12,688.8 | 1,213.3 ± 49.6 MB/s | -                 | Default submission / reap  |
 | `fio` (best batching: B=8) | 322,908.4 ± 13,644.2 | 1,261.4 ± 53.3 MB/s | baseline          | `--iodepth_batch_submit=8` |
 | `FileChannel.read`         | 11,437.3 ± 21.9      | 44.7 ± 0.1 MB/s     | -96.5%            |                            |
 | JUring (JMH)               | 325,676.1 ± 9,495.2  | 1,272.2 ± 37.1 MB/s | +0.9%             | Batched `submitAndWait(1)` |
@@ -30,7 +30,7 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 
 | Engine                      | Throughput (ops/s)   | Bandwidth (MB/s)   | Delta vs Best fio | Configuration               |
 |-----------------------------|----------------------|--------------------|-------------------|-----------------------------|
-| `fio` (default settings)    | 214,941.3 ± 33,471.8 | 839.6 ± 130.7 MB/s | —                 | Default submission / reap   |
+| `fio` (default settings)    | 214,941.3 ± 33,471.8 | 839.6 ± 130.7 MB/s | -                 | Default submission / reap   |
 | `fio` (best batching: B=16) | 205,278.8 ± 64,687.3 | 801.9 ± 252.7 MB/s | baseline          | `--iodepth_batch_submit=16` |
 | `FileChannel.write`         | 72,409.4  ± 1,577.1  | 282.8 ± 6.2 MB/s   | -64.7%            | QD=1                        |
 | JUring (JMH)                | 193,768.7 ± 1,678.7  | 756.9 ± 6.6 MB/s   | -5.6%             | Batched `submitAndWait(1)`  |
