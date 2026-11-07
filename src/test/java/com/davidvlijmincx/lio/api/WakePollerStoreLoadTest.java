@@ -137,16 +137,16 @@ public class WakePollerStoreLoadTest {
         }
 
         private final Arena arena = Arena.ofShared();
-        private final MemorySegment sqeSegment = arena.allocate(ZeroGcSqe.SQE_SIZE);
+        private final MemorySegment sqeSegment = arena.allocate(Sqe.SQE_SIZE);
         private int sqTail;
 
         @Actor
         public void submitter() {
             long addr = sqeSegment.address();
-            ZeroGcSqe.zero(addr);
-            ZeroGcSqe.setOpcode(addr, (byte) 18);
-            ZeroGcSqe.setFd(addr, 4);
-            ZeroGcSqe.setLen(addr, 8192);
+            Sqe.zero(addr);
+            Sqe.setOpcode(addr, (byte) 18);
+            Sqe.setFd(addr, 4);
+            Sqe.setLen(addr, 8192);
             VH_TAIL.setRelease(this, 1);
         }
 
@@ -156,9 +156,9 @@ public class WakePollerStoreLoadTest {
             r.r1 = tail;
             if (tail == 1) {
                 long addr = sqeSegment.address();
-                r.r2 = Byte.toUnsignedInt(ZeroGcSqe.getOpcode(addr));
-                r.r3 = ZeroGcSqe.getFd(addr);
-                r.r4 = ZeroGcSqe.getLen(addr);
+                r.r2 = Byte.toUnsignedInt(Sqe.getOpcode(addr));
+                r.r3 = Sqe.getFd(addr);
+                r.r4 = Sqe.getLen(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;
@@ -186,7 +186,7 @@ public class WakePollerStoreLoadTest {
         }
 
         private final Arena arena = Arena.ofShared();
-        private final MemorySegment cqeSegment = arena.allocate(ZeroGcCqe.CQE_LAYOUT.byteSize());
+        private final MemorySegment cqeSegment = arena.allocate(Cqe.CQE_LAYOUT.byteSize());
         private int cqTail;
 
         @Actor
@@ -204,8 +204,8 @@ public class WakePollerStoreLoadTest {
             r.r1 = tail;
             if (tail == 1) {
                 long addr = cqeSegment.address();
-                r.r2 = ZeroGcCqe.getRes(addr);
-                r.r3 = (int) ZeroGcCqe.getUserData(addr);
+                r.r2 = Cqe.getRes(addr);
+                r.r3 = (int) Cqe.getUserData(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;

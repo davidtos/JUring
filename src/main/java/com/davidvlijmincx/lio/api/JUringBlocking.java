@@ -176,12 +176,12 @@ public class JUringBlocking implements AutoCloseable {
             this.slotState = new int[cap];
             this.slotThread = new Thread[cap];
 
-            this.eventFd = parent.libc.eventfd().eventfd(0, LibCDispatcher.EFD_CLOEXEC | LibCDispatcher.EFD_NONBLOCK);
+            this.eventFd = parent.libc.eventfd(0, LibCDispatcher.EFD_CLOEXEC | LibCDispatcher.EFD_NONBLOCK);
             if (this.eventFd < 0) {
                 throw new RuntimeException("Failed to create eventfd for worker " + workerId);
             }
-            this.eventfdReadBuf = parent.libc.mallocAddress().malloc(8L);
-            this.eventfdWriteBuf = parent.libc.mallocAddress().malloc(8L);
+            this.eventfdReadBuf = parent.libc.mallocAddress(8L);
+            this.eventfdWriteBuf = parent.libc.mallocAddress(8L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdReadBuf, 0L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdWriteBuf, 1L);
 
@@ -275,16 +275,16 @@ public class JUringBlocking implements AutoCloseable {
                     this.mpscHead = head + 1;
 
                     byte op = slotOpcode[slotId];
-                    ZeroGcSqe.setOpcode(sqe, op);
-                    ZeroGcSqe.setFlags(sqe, slotSqeFlags[slotId]);
-                    ZeroGcSqe.setFd(sqe, slotFd[slotId]);
-                    ZeroGcSqe.setOff(sqe, slotOff[slotId]);
-                    ZeroGcSqe.setAddr(sqe, slotAddr[slotId]);
-                    ZeroGcSqe.setLen(sqe, slotLen[slotId]);
-                    ZeroGcSqe.setRwFlags(sqe, slotRwFlags[slotId]);
-                    ZeroGcSqe.setBufIndex(sqe, slotBufIndex[slotId]);
-                    ZeroGcSqe.setFileIndex(sqe, slotFileIndex[slotId]);
-                    ZeroGcSqe.setUserData(sqe, slotId);
+                    Sqe.setOpcode(sqe, op);
+                    Sqe.setFlags(sqe, slotSqeFlags[slotId]);
+                    Sqe.setFd(sqe, slotFd[slotId]);
+                    Sqe.setOff(sqe, slotOff[slotId]);
+                    Sqe.setAddr(sqe, slotAddr[slotId]);
+                    Sqe.setLen(sqe, slotLen[slotId]);
+                    Sqe.setRwFlags(sqe, slotRwFlags[slotId]);
+                    Sqe.setBufIndex(sqe, slotBufIndex[slotId]);
+                    Sqe.setFileIndex(sqe, slotFileIndex[slotId]);
+                    Sqe.setUserData(sqe, slotId);
 
                     inFlightHolder[0]++;
                     if (isUnboundedOp(op)) {
@@ -296,12 +296,12 @@ public class JUringBlocking implements AutoCloseable {
                 if (!eventfdArmed) {
                     long sqe = dispatcher.getSqe();
                     if (sqe != 0L) {
-                        ZeroGcSqe.zero(sqe);
-                        ZeroGcSqe.setOpcode(sqe, IORING_OP_READ);
-                        ZeroGcSqe.setFd(sqe, eventFd);
-                        ZeroGcSqe.setAddr(sqe, eventfdReadBuf);
-                        ZeroGcSqe.setLen(sqe, 8);
-                        ZeroGcSqe.setUserData(sqe, EVENTFD_SENTINEL);
+                        Sqe.zero(sqe);
+                        Sqe.setOpcode(sqe, IORING_OP_READ);
+                        Sqe.setFd(sqe, eventFd);
+                        Sqe.setAddr(sqe, eventfdReadBuf);
+                        Sqe.setLen(sqe, 8);
+                        Sqe.setUserData(sqe, EVENTFD_SENTINEL);
                         eventfdArmed = true;
                         preparedNow++;
                     }
@@ -392,11 +392,11 @@ public class JUringBlocking implements AutoCloseable {
             if (inFlightHolder[0] > 0) {
                 long cancelSqe = dispatcher.getSqe();
                 if (cancelSqe != 0L) {
-                    ZeroGcSqe.zero(cancelSqe);
-                    ZeroGcSqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    ZeroGcSqe.setFd(cancelSqe, -1);
-                    ZeroGcSqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    ZeroGcSqe.setUserData(cancelSqe, CANCEL_SENTINEL);
+                    Sqe.zero(cancelSqe);
+                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                    Sqe.setFd(cancelSqe, -1);
+                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                    Sqe.setUserData(cancelSqe, CANCEL_SENTINEL);
                     dispatcher.submit();
                 }
                 while (inFlightHolder[0] > 0) {
@@ -482,7 +482,7 @@ public class JUringBlocking implements AutoCloseable {
             VarHandle.fullFence();
             if ((int) VH_WORKER_IN_KERNEL.getVolatile(this) != 0) {
                 if (VH_WORKER_IN_KERNEL.compareAndSet(this, 1, 0)) {
-                    parent.libc.write().write(eventFd, eventfdWriteBuf, 8L);
+                    parent.libc.write(eventFd, eventfdWriteBuf, 8L);
                 }
             }
             if ((int) VH_WORKER_POLLER_PARKED.getVolatile(this) != 0) {
@@ -628,13 +628,13 @@ public class JUringBlocking implements AutoCloseable {
                 ioUringDispatcher.close();
             }
             if (eventFd >= 0) {
-                parent.libc.close().accept(eventFd);
+                parent.libc.close(eventFd);
             }
             if (eventfdReadBuf != 0L) {
-                parent.libc.freeLong().free(eventfdReadBuf);
+                parent.libc.free(eventfdReadBuf);
             }
             if (eventfdWriteBuf != 0L) {
-                parent.libc.freeLong().free(eventfdWriteBuf);
+                parent.libc.free(eventfdWriteBuf);
             }
             for (int i = 0; i < slotCapacity; i++) {
                 Thread t = slotThread[i];

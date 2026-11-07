@@ -34,11 +34,8 @@ class DirectIoTest {
         }
     }
 
-    /**
-     * Generates 4096 bytes of text (64 lines of 64 bytes each).
-     */
     private static String generateBlockData() {
-        StringBuilder sb = new StringBuilder(BLOCK_SIZE);
+        var sb = new StringBuilder(BLOCK_SIZE);
         for (int i = 1; i <= 64; i++) {
             sb.append(String.format(Locale.ROOT, "Line %02d: %s\n", i, "x".repeat(54)));
         }
@@ -47,10 +44,10 @@ class DirectIoTest {
 
     @Test
     void testDirectIoWrite(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_io_write_test.txt");
+        var testFile = tempDir.resolve("direct_io_write_test.txt");
 
-        String expectedText = generateBlockData();
-        byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
+        var expectedText = generateBlockData();
+        var expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
         assertEquals(BLOCK_SIZE, expectedBytes.length);
 
         jUring.registerBuffers(BLOCK_SIZE, 2);
@@ -60,8 +57,8 @@ class DirectIoTest {
             jUring.submit();
 
             Result result = jUring.waitForResult();
-            assertEquals(writeId, result.id(), "Completed operation ID must match submitted ID");
-            assertEquals(BLOCK_SIZE, result.result(), "Direct I/O write must write exactly 4096 bytes");
+            assertEquals(writeId, result.id());
+            assertEquals(BLOCK_SIZE, result.result());
         }
 
         String writtenText = Files.readString(testFile, StandardCharsets.UTF_8);
@@ -71,10 +68,10 @@ class DirectIoTest {
 
     @Test
     void testDirectIoRead(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_io_read_test.txt");
+        var testFile = tempDir.resolve("direct_io_read_test.txt");
 
-        String expectedText = generateBlockData();
-        byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
+        var expectedText = generateBlockData();
+        var expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
         assertEquals(BLOCK_SIZE, expectedBytes.length);
 
         Files.write(testFile, expectedBytes);
@@ -87,8 +84,8 @@ class DirectIoTest {
             jUring.submit();
 
             Result result = jUring.waitForResult();
-            assertEquals(readId, result.id(), "Completed operation ID must match submitted ID");
-            assertEquals(BLOCK_SIZE, result.result(), "Direct I/O read must read exactly 4096 bytes");
+            assertEquals(readId, result.id());
+            assertEquals(BLOCK_SIZE, result.result());
 
             String actualText = result.getString(StandardCharsets.UTF_8);
             assertEquals(expectedText, actualText);
@@ -99,15 +96,15 @@ class DirectIoTest {
 
     @Test
     void testDirectIoZeroCopyWrite(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_io_zero_copy_write_test.txt");
+        var testFile = tempDir.resolve("direct_io_zero_copy_write_test.txt");
 
-        String expectedText = generateBlockData();
-        byte[] expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
+        var expectedText = generateBlockData();
+        var expectedBytes = expectedText.getBytes(StandardCharsets.UTF_8);
 
         jUring.registerBuffers(BLOCK_SIZE, 2);
 
         int bufIdx = jUring.checkOutBuffer();
-        assertTrue(bufIdx >= 0, "A registered buffer should be successfully checked out");
+        assertTrue(bufIdx >= 0);
         MemorySegment registeredBuffer = jUring.getRegisteredBuffer(bufIdx);
         MemorySegment.copy(MemorySegment.ofArray(expectedBytes), 0, registeredBuffer, 0, BLOCK_SIZE);
 

@@ -138,7 +138,7 @@ public class JUring implements AutoCloseable {
     private long prepareNopInternal(byte flags) {
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.NOP, opId);
+        long userData = UserData.encode(OperationType.NOP, opId);
         ioUring.prepareNop(sqe);
         ioUring.setUserData(sqe, userData);
         return userData;
@@ -252,18 +252,18 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
-        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+        IovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i] + 1);
             dataBuf.set(JAVA_BYTE, bufferSizes[i], (byte) 0);
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, dataBuf.address());
-            ZeroGcIovecBlock.setIovLen(blockAddr, i, bufferSizes[i]);
+            IovecBlock.setIovBase(blockAddr, i, dataBuf.address());
+            IovecBlock.setIovLen(blockAddr, i, bufferSizes[i]);
         }
 
-        long userData = ZeroGcUserData.encode(OperationType.READV, blockAddr);
+        long userData = UserData.encode(OperationType.READV, blockAddr);
 
-        ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
+        ioUring.prepareReadvAddress(sqe, fd.getFd(), IovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -291,18 +291,18 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
-        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+        IovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
             MemorySegment registeredBuffer = registeredBuffers.get(idx);
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
-            ZeroGcIovecBlock.setIovLen(blockAddr, i, registeredBuffer.byteSize());
+            IovecBlock.setIovBase(blockAddr, i, registeredBuffer.address());
+            IovecBlock.setIovLen(blockAddr, i, registeredBuffer.byteSize());
         }
 
-        long userData = ZeroGcUserData.encode(OperationType.READV_FIXED, blockAddr);
+        long userData = UserData.encode(OperationType.READV_FIXED, blockAddr);
 
-        ioUring.prepareReadvAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
+        ioUring.prepareReadvAddress(sqe, fd.getFd(), IovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -336,17 +336,17 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
-        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+        IovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             int idx = bufferIndices[i];
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, registeredBufferAddresses[idx]);
-            ZeroGcIovecBlock.setIovLen(blockAddr, i, lengths[i]);
+            IovecBlock.setIovBase(blockAddr, i, registeredBufferAddresses[idx]);
+            IovecBlock.setIovLen(blockAddr, i, lengths[i]);
         }
 
-        long userData = ZeroGcUserData.encode(OperationType.WRITEV_FIXED, blockAddr);
+        long userData = UserData.encode(OperationType.WRITEV_FIXED, blockAddr);
 
-        ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
+        ioUring.prepareWritevAddress(sqe, fd.getFd(), IovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -373,18 +373,18 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
-        ZeroGcIovecBlock.setCount(blockAddr, nrVecs);
+        IovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
             MemorySegment dataBuf = NativeDispatcher.C.alloc(buffers[i].length);
             MemorySegment.copy(buffers[i], 0, dataBuf, JAVA_BYTE, 0, buffers[i].length);
-            ZeroGcIovecBlock.setIovBase(blockAddr, i, dataBuf.address());
-            ZeroGcIovecBlock.setIovLen(blockAddr, i, buffers[i].length);
+            IovecBlock.setIovBase(blockAddr, i, dataBuf.address());
+            IovecBlock.setIovLen(blockAddr, i, buffers[i].length);
         }
 
-        long userData = ZeroGcUserData.encode(OperationType.WRITEV, blockAddr);
+        long userData = UserData.encode(OperationType.WRITEV, blockAddr);
 
-        ioUring.prepareWritevAddress(sqe, fd.getFd(), ZeroGcIovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
+        ioUring.prepareWritevAddress(sqe, fd.getFd(), IovecBlock.iovecArrayAddress(blockAddr), nrVecs, offset);
         ioUring.setUserData(sqe, userData);
 
         return userData;
@@ -408,7 +408,7 @@ public class JUring implements AutoCloseable {
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
         long sqe = getSqe(sqeFlags, false);
-        long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
+        long userData = UserData.encode(OperationType.OPEN, pathBuffer.address());
 
         ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags | 0x80000 /* O_CLOEXEC */, mode);
         ioUring.setUserData(sqe, userData);
@@ -438,7 +438,7 @@ public class JUring implements AutoCloseable {
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
         pathBuffer.set(JAVA_BYTE, pathBytes.length, (byte) 0);
 
-        long userData = ZeroGcUserData.encode(OperationType.OPEN, pathBuffer.address());
+        long userData = UserData.encode(OperationType.OPEN, pathBuffer.address());
 
         ioUring.prepareOpenDirectAt(sqe, pathBuffer.address(), flags & ~0x80000 /* O_CLOEXEC not allowed for direct */, mode, fileIndex);
         ioUring.setUserData(sqe, userData);
@@ -468,7 +468,7 @@ public class JUring implements AutoCloseable {
         }
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
+        long userData = UserData.encode(OperationType.CLOSE, opId);
 
         ioUring.prepareCloseDirect(sqe, fileIndex);
         ioUring.setUserData(sqe, userData);
@@ -483,7 +483,7 @@ public class JUring implements AutoCloseable {
         long sqe = getSqe(flags, fixedFile);
         long address = NativeDispatcher.C.mallocAddress(readSize + 1L);
         MemorySegment.ofAddress(address).reinterpret(readSize + 1L).set(JAVA_BYTE, readSize, (byte) 0);
-        long userData = ZeroGcUserData.encode(OperationType.READ, address);
+        long userData = UserData.encode(OperationType.READ, address);
 
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
@@ -500,7 +500,7 @@ public class JUring implements AutoCloseable {
         }
         long sqe = getSqe(flags, fixedFile);
         long address = readBufferPool.checkOut();
-        long userData = ZeroGcUserData.encode(OperationType.READ_POOLED, address);
+        long userData = UserData.encode(OperationType.READ_POOLED, address);
 
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);
         ioUring.setUserData(sqe, userData);
@@ -527,7 +527,7 @@ public class JUring implements AutoCloseable {
         validateNativeSegment(bytes, false);
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.WRITE_EXT, opId);
+        long userData = UserData.encode(OperationType.WRITE_EXT, opId);
 
         ioUring.prepareWrite(sqe, fdOrIndex, bytes.address(), bytes.byteSize(), offset);
         ioUring.setUserData(sqe, userData);
@@ -540,7 +540,7 @@ public class JUring implements AutoCloseable {
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
         long sqe = getSqe(flags, fixedFile);
-        long userData = ZeroGcUserData.encode(OperationType.WRITE, buff.address());
+        long userData = UserData.encode(OperationType.WRITE, buff.address());
 
         ioUring.prepareWrite(sqe, fdOrIndex, buff.address(), bytes.length, offset);
         ioUring.setUserData(sqe, userData);
@@ -559,7 +559,7 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId);
+        long userData = UserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId);
 
         ioUring.prepareReadFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], readSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
@@ -579,7 +579,7 @@ public class JUring implements AutoCloseable {
         MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], bytes.length, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
@@ -610,7 +610,7 @@ public class JUring implements AutoCloseable {
         }
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         ioUring.prepareWriteFixed(sqe, fdOrIndex, targetAddr, byteSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
@@ -629,7 +629,7 @@ public class JUring implements AutoCloseable {
 
         long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], writeSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
@@ -640,7 +640,7 @@ public class JUring implements AutoCloseable {
     private long prepareCloseInternal(int fdOrIndex, byte flags) {
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.CLOSE, opId);
+        long userData = UserData.encode(OperationType.CLOSE, opId);
 
         ioUring.prepareClose(sqe, fdOrIndex);
         ioUring.setUserData(sqe, userData);
@@ -670,7 +670,7 @@ public class JUring implements AutoCloseable {
     private long prepareAccept(int serverFd, byte flags) {
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.ACCEPT, opId);
+        long userData = UserData.encode(OperationType.ACCEPT, opId);
 
         ioUring.prepareAccept(sqe, serverFd, 0L, 0L, 0);
         ioUring.setUserData(sqe, userData);
@@ -689,7 +689,7 @@ public class JUring implements AutoCloseable {
     private long prepareMultishotAccept(int serverFd, byte flags) {
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.MULTISHOT_ACCEPT, opId);
+        long userData = UserData.encode(OperationType.MULTISHOT_ACCEPT, opId);
 
         ioUring.prepareMultishotAccept(sqe, serverFd, 0L, 0L, 0);
         ioUring.setUserData(sqe, userData);
@@ -714,7 +714,7 @@ public class JUring implements AutoCloseable {
             NativeDispatcher.C.free(addr.address());
             throw e;
         }
-        long userData = ZeroGcUserData.encode(OperationType.CONNECT, addr.address());
+        long userData = UserData.encode(OperationType.CONNECT, addr.address());
 
         ioUring.prepareConnect(sqe, fd, addr.address(), (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
         ioUring.setUserData(sqe, userData);
@@ -736,7 +736,7 @@ public class JUring implements AutoCloseable {
         }
         long sqe = getSqe(flags, false);
         MemorySegment buf = NativeDispatcher.C.alloc(length);
-        long userData = ZeroGcUserData.encode(OperationType.RECV, buf.address());
+        long userData = UserData.encode(OperationType.RECV, buf.address());
 
         ioUring.prepareRecv(sqe, fd, buf.address(), length, 0);
         ioUring.setUserData(sqe, userData);
@@ -758,7 +758,7 @@ public class JUring implements AutoCloseable {
         }
         validateNativeSegment(buffer, true);
         long sqe = getSqe(flags, false);
-        long userData = ZeroGcUserData.encode(OperationType.RECV_EXT, buffer.address());
+        long userData = UserData.encode(OperationType.RECV_EXT, buffer.address());
 
         ioUring.prepareRecv(sqe, fd, buffer.address(), length, 0);
         ioUring.setUserData(sqe, userData);
@@ -782,7 +782,7 @@ public class JUring implements AutoCloseable {
         MemorySegment buf = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buf, JAVA_BYTE, 0, bytes.length);
 
-        long userData = ZeroGcUserData.encode(OperationType.SEND, buf.address());
+        long userData = UserData.encode(OperationType.SEND, buf.address());
 
         ioUring.prepareSend(sqe, fd, buf.address(), bytes.length, 0);
         ioUring.setUserData(sqe, userData);
@@ -805,7 +805,7 @@ public class JUring implements AutoCloseable {
         validateNativeSegment(buffer, false);
         long sqe = getSqe(flags, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.SEND_EXT, opId);
+        long userData = UserData.encode(OperationType.SEND_EXT, opId);
 
         ioUring.prepareSend(sqe, fd, buffer.address(), length, 0);
         ioUring.setUserData(sqe, userData);
@@ -816,7 +816,7 @@ public class JUring implements AutoCloseable {
     public long prepareCancel(long targetOpId) {
         long sqe = getSqe((byte) 0, false);
         long opId = opSeq++;
-        long userData = ZeroGcUserData.encode(OperationType.CANCEL, opId);
+        long userData = UserData.encode(OperationType.CANCEL, opId);
 
         ioUring.prepareCancel(sqe, targetOpId, 0);
         ioUring.setUserData(sqe, userData);

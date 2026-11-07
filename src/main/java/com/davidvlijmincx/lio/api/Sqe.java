@@ -8,9 +8,9 @@ import java.lang.invoke.VarHandle;
 import static java.lang.foreign.ValueLayout.*;
 
 /**
- * Zero-allocation accessor and mutator for native {@code io_uring_sqe} structures.
+ * Accessor and mutator for native {@code io_uring_sqe} structures.
  */
-final class ZeroGcSqe {
+final class Sqe {
 
     static final GroupLayout SQE_LAYOUT = MemoryLayout.structLayout(
             JAVA_BYTE.withName("opcode"),
@@ -48,7 +48,7 @@ final class ZeroGcSqe {
 
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
 
-    private ZeroGcSqe() {}
+    private Sqe() {}
 
     /**
      * Zeroes all 64 bytes of an SQE slot in-place.

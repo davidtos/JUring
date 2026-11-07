@@ -1,21 +1,21 @@
-# JUring: Pure Java io_uring via Project Panama
+# JUring: Java io_uring via Project Panama
 
-An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory (FFM) API (JEP 454).
+An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory API (JEP 454).
 
-File I/O operations are synchronous and blocking. When using Virtual Threads, file operations issue blocking system calls that pin carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`!
+File I/O operations are synchronous and blocking. When using Virtual Threads, file operations issue blocking system calls that prevent unmounting from carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`!
 
-- Pure Java FFM downcalls and VarHandles.
+- Only Java FFM downcalls and VarHandles.
 - Zero heap alloc on the hot path after setup.
-- Virtual thread support using LockSupport with JUringBlocking a wrapper for JUring.
+- Virtual thread support using LockSupport with JUringBlocking (wrapper for JUring).
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
-> The focus of this project for now is random direct I/O on Linux. This seemed a fun challenging place to start, from which to build upon.
+> The focus of this project for now is random direct I/O on Linux. This seemed a fun and challenging place to start, from which to build upon.
 
 ## Benchmark Results
 
-The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and standard Java `FileChannel`.
+The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and `FileChannel`.
 
-Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern fast storage saturated on its own. JUring can submit batches of asynchronous requests on a single thread using the queue depth of the storage.
+Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern storage saturated on its own. JUring can submit batches of asynchronous requests on a single thread using the queue depth of the storage medium.
 
 #### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
 
@@ -37,22 +37,20 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 
 ## Virtual Thread Performance
 
-Virtual threads pin their carrier thread when doing direct I/O with `FileChannel`. To keep CPUs busy, additional carrier threads (up to 256 by default) can be created.
+When a virtual thread performs direct I/O with `FileChannel`, the carrier thread blocks and additional carrier threads can be created to prevent a performance degradation (up to 256 by default). To compare both approaches, both are given an equal budget of platform threads. `JUringBlocking` runs dedicated poller threads that submit requests and wake virtual threads via `LockSupport.unpark()` when completions arrive.
 
-To compare both approaches fairly, we give both an equal "budget" of platform threads. `JUringBlocking` runs dedicated poller threads that submit requests and wake the virtual threads when completions arrive.
+The following results run 1,000 virtual threads under a fixed platform thread budget:
 
-The following results run 1,000 virtual threads under an equal thread budget:
-
-| Total Platform Threads | Engine         | Thread Breakdown          | Throughput (ops/s)    | Bandwidth            | Speedup  | Notes                              |
-|------------------------|----------------|---------------------------|-----------------------|----------------------|----------|------------------------------------|
-| 1 Thread(s)            | FileChannel    | 1 carriers                | 11,433.8 ± 31.5       | 44.7 ± 0.1 MB/s      | baseline | Pinned in pread64, capped at QD=1  |
-| 1 Thread(s)            | JUringBlocking | 1 carrier + 1 poller (2T) | 399,108.7 ± 89,551.6  | 1,559.0 ± 349.8 MB/s | 34.91x   | Minimum decoupled M:N poller       |
-| 4 Thread(s)            | FileChannel    | 4 carriers                | 43,080.4 ± 220.6      | 168.3 ± 0.9 MB/s     | baseline | Pinned in pread64, capped at QD=4  |
-| 4 Thread(s)            | JUringBlocking | 2 carriers + 2 pollers    | 452,192.8 ± 1,262.9   | 1,766.4 ± 4.9 MB/s   | 10.50x   | Clean unmount via park()           |
-| 8 Thread(s)            | FileChannel    | 8 carriers                | 73,003.5 ± 23,547.5   | 285.2 ± 92.0 MB/s    | baseline | Pinned in pread64, capped at QD=8  |
-| 8 Thread(s)            | JUringBlocking | 4 carriers + 4 pollers    | 389,340.6 ± 158,626.3 | 1,520.9 ± 619.6 MB/s | 5.33x    | Clean unmount via park()           |
-| 16 Thread(s)           | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline | Pinned in pread64, capped at QD=16 |
-| 16 Thread(s)           | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    | Clean unmount via park()           |
+| Platform Thread Budget | Engine         | Thread Breakdown          | Throughput (ops/s)    | Bandwidth            | Speedup  |
+|------------------------|----------------|---------------------------|-----------------------|----------------------|----------|
+| 1–2 Threads (Min)      | FileChannel    | 1 carrier                 | 11,433.8 ± 31.5       | 44.7 ± 0.1 MB/s      | baseline |
+| 1–2 Threads (Min)      | JUringBlocking | 1 carrier + 1 poller (2T) | 399,108.7 ± 89,551.6  | 1,559.0 ± 349.8 MB/s | 34.91x   |
+| 4 Threads              | FileChannel    | 4 carriers                | 43,080.4 ± 220.6      | 168.3 ± 0.9 MB/s     | baseline |
+| 4 Threads              | JUringBlocking | 2 carriers + 2 pollers    | 452,192.8 ± 1,262.9   | 1,766.4 ± 4.9 MB/s   | 10.50x   |
+| 8 Threads              | FileChannel    | 8 carriers                | 73,003.5 ± 23,547.5   | 285.2 ± 92.0 MB/s    | baseline |
+| 8 Threads              | JUringBlocking | 4 carriers + 4 pollers    | 389,340.6 ± 158,626.3 | 1,520.9 ± 619.6 MB/s | 5.33x    |
+| 16 Threads             | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline |
+| 16 Threads             | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    |
 
 `JUringBlocking` uses dedicated poller threads to submit queue entries and wake parked virtual threads when operations complete. Full details and multiple workload datasets are documented in [BENCHMARK.md](BENCHMARK.md).
 
@@ -257,8 +255,6 @@ public class VirtualThreadExample {
                 try (Arena arena = Arena.ofConfined()) {
                     MemorySegment buf = arena.allocate(4096);
 
-                    // Unmounts the Virtual Thread cleanly via LockSupport
-                    // Releasing the underlying OS carrier thread immediately
                     long bytesRead = blockingRing.read(fd, buf, 0);
                     System.out.println("Virtual thread read " + bytesRead + " bytes");
                 }

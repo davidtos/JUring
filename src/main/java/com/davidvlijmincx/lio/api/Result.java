@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * Unified, mutable result class for {@code io_uring} completion events.
+ * Result of an {@code io_uring} completion event.
  */
 public class Result implements AutoCloseable {
 

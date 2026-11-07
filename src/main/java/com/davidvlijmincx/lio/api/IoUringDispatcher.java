@@ -1,9 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
-import com.davidvlijmincx.lio.api.functions.IoUringEnter;
-import com.davidvlijmincx.lio.api.functions.IoUringRegister;
-
 import java.lang.foreign.*;
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
@@ -65,9 +63,24 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final int IORING_REGISTER_IOWQ_MAX_WORKERS = 19;
 
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
-    private static final IoUringEnter ioUringEnter = libCDispatcher.ioUringEnter();
+    private static final MethodHandle MH_IO_URING_ENTER = LibCDispatcher.MH_IO_URING_ENTER;
+    private static final MethodHandle MH_IO_URING_REGISTER = LibCDispatcher.MH_IO_URING_REGISTER;
 
-    private static final IoUringRegister ioUringRegister = libCDispatcher.ioUringRegister();
+    private static long enter(MemorySegment callState, long fd, long toSubmit, long minComplete, long flags, MemorySegment arg, long argSize) {
+        try {
+            return (long) MH_IO_URING_ENTER.invokeExact(callState, fd, toSubmit, minComplete, flags, arg, argSize);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static long register(MemorySegment callState, long fd, long opcode, MemorySegment arg, long nrArgs) {
+        try {
+            return (long) MH_IO_URING_REGISTER.invokeExact(callState, fd, opcode, arg, nrArgs);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
 
     private static final GroupLayout ring_layout;
     private static final GroupLayout io_uring_cq_layout;
@@ -299,7 +312,7 @@ final class IoUringDispatcher implements AutoCloseable {
         long probeSize = 16L + (long) nrOps * 8L;
         MemorySegment probeBuf = libCDispatcher.calloc(probeSize);
         try {
-            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_PROBE, probeBuf, nrOps);
+            long res = register(this.callState, this.ringFd, IORING_REGISTER_PROBE, probeBuf, nrOps);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 throw new UnsupportedOperationException("Kernel does not support IORING_REGISTER_PROBE (Linux 5.6+ required): errno=" + err + " - " + libCDispatcher.strerror(err));
@@ -412,9 +425,9 @@ final class IoUringDispatcher implements AutoCloseable {
         sqeTail = tail + 1;
         inFlightCount++;
 
-        ZeroGcSqe.zero(sqe_addr);
+        Sqe.zero(sqe_addr);
         if (sqeShift > 6) {
-            ZeroGcSqe.zero(sqe_addr + 64L);
+            Sqe.zero(sqe_addr + 64L);
         }
         return sqe_addr;
     }
@@ -424,143 +437,143 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void setSqeFlag(long sqe, byte flags) {
-        ZeroGcSqe.setFlags(sqe, flags);
+        Sqe.setFlags(sqe, flags);
     }
 
     void setUserData(long sqe, long userData) {
-        ZeroGcSqe.setUserData(sqe, userData);
+        Sqe.setUserData(sqe, userData);
     }
 
     void prepareOpenAt(long sqe, long filePathAddress, int flags, int mode) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_OPENAT);
-        ZeroGcSqe.setFd(sqe, AT_FDCWD);
-        ZeroGcSqe.setOff(sqe, 0L);
-        ZeroGcSqe.setAddr(sqe, filePathAddress);
-        ZeroGcSqe.setLen(sqe, mode);
-        ZeroGcSqe.setRwFlags(sqe, flags);
+        Sqe.setOpcode(sqe, IORING_OP_OPENAT);
+        Sqe.setFd(sqe, AT_FDCWD);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, filePathAddress);
+        Sqe.setLen(sqe, mode);
+        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareOpenDirectAt(long sqe, long filePathAddress, int flags, int mode, int fileIndex) {
         prepareOpenAt(sqe, filePathAddress, flags, mode);
-        ZeroGcSqe.setFileIndex(sqe, fileIndex + 1);
+        Sqe.setFileIndex(sqe, fileIndex + 1);
     }
 
     void prepareClose(long sqe, int fd) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_CLOSE);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, 0L);
-        ZeroGcSqe.setAddr(sqe, 0L);
-        ZeroGcSqe.setLen(sqe, 0);
+        Sqe.setOpcode(sqe, IORING_OP_CLOSE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
     }
 
     void prepareCloseDirect(long sqe, int fileIndex) {
         prepareClose(sqe, 0);
-        ZeroGcSqe.setFileIndex(sqe, fileIndex + 1);
+        Sqe.setFileIndex(sqe, fileIndex + 1);
     }
 
     void prepareRead(long sqe, int fd, long bufferAddress, long size, long offset) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_READ);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, bufferAddress);
-        ZeroGcSqe.setLen(sqe, (int) size);
+        Sqe.setOpcode(sqe, IORING_OP_READ);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, bufferAddress);
+        Sqe.setLen(sqe, (int) size);
     }
 
     void prepareReadFixed(long sqe, int fd, long bufferAddress, long nbytes, long offset, int bufferIndex) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_READ_FIXED);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, bufferAddress);
-        ZeroGcSqe.setLen(sqe, (int) nbytes);
-        ZeroGcSqe.setBufIndex(sqe, (short) bufferIndex);
+        Sqe.setOpcode(sqe, IORING_OP_READ_FIXED);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, bufferAddress);
+        Sqe.setLen(sqe, (int) nbytes);
+        Sqe.setBufIndex(sqe, (short) bufferIndex);
     }
 
     void prepareWrite(long sqe, int fd, long bufferAddress, long size, long offset) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_WRITE);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, bufferAddress);
-        ZeroGcSqe.setLen(sqe, (int) size);
+        Sqe.setOpcode(sqe, IORING_OP_WRITE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, bufferAddress);
+        Sqe.setLen(sqe, (int) size);
     }
 
     void prepareWriteFixed(long sqe, int fd, long bufferAddress, long nbytes, long offset, int bufferIndex) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_WRITE_FIXED);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, bufferAddress);
-        ZeroGcSqe.setLen(sqe, (int) nbytes);
-        ZeroGcSqe.setBufIndex(sqe, (short) bufferIndex);
+        Sqe.setOpcode(sqe, IORING_OP_WRITE_FIXED);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, bufferAddress);
+        Sqe.setLen(sqe, (int) nbytes);
+        Sqe.setBufIndex(sqe, (short) bufferIndex);
     }
 
     void prepareReadvAddress(long sqe, int fd, long iovecAddr, int nrVecs, long offset) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_READV);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, iovecAddr);
-        ZeroGcSqe.setLen(sqe, nrVecs);
+        Sqe.setOpcode(sqe, IORING_OP_READV);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, iovecAddr);
+        Sqe.setLen(sqe, nrVecs);
     }
 
     void prepareWritevAddress(long sqe, int fd, long iovecAddr, int nrVecs, long offset) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_WRITEV);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, offset);
-        ZeroGcSqe.setAddr(sqe, iovecAddr);
-        ZeroGcSqe.setLen(sqe, nrVecs);
+        Sqe.setOpcode(sqe, IORING_OP_WRITEV);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setAddr(sqe, iovecAddr);
+        Sqe.setLen(sqe, nrVecs);
     }
 
     void prepareAccept(long sqe, int fd, long addr, long addrLen, int flags) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_ACCEPT);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, addrLen);
-        ZeroGcSqe.setAddr(sqe, addr);
-        ZeroGcSqe.setLen(sqe, 0);
-        ZeroGcSqe.setRwFlags(sqe, flags);
+        Sqe.setOpcode(sqe, IORING_OP_ACCEPT);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, addrLen);
+        Sqe.setAddr(sqe, addr);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareMultishotAccept(long sqe, int fd, long addr, long addrLen, int flags) {
         prepareAccept(sqe, fd, addr, addrLen, flags);
-        short prio = ZeroGcSqe.getIoprio(sqe);
-        ZeroGcSqe.setIoprio(sqe, (short) (prio | IORING_ACCEPT_MULTISHOT));
+        short prio = Sqe.getIoprio(sqe);
+        Sqe.setIoprio(sqe, (short) (prio | IORING_ACCEPT_MULTISHOT));
     }
 
     void prepareConnect(long sqe, int fd, long addr, int addrLen) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_CONNECT);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, (long) addrLen);
-        ZeroGcSqe.setAddr(sqe, addr);
-        ZeroGcSqe.setLen(sqe, 0);
+        Sqe.setOpcode(sqe, IORING_OP_CONNECT);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, (long) addrLen);
+        Sqe.setAddr(sqe, addr);
+        Sqe.setLen(sqe, 0);
     }
 
     void prepareRecv(long sqe, int fd, long buf, long len, int flags) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_RECV);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, 0L);
-        ZeroGcSqe.setAddr(sqe, buf);
-        ZeroGcSqe.setLen(sqe, (int) len);
-        ZeroGcSqe.setRwFlags(sqe, flags);
+        Sqe.setOpcode(sqe, IORING_OP_RECV);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, buf);
+        Sqe.setLen(sqe, (int) len);
+        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareSend(long sqe, int fd, long buf, long len, int flags) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_SEND);
-        ZeroGcSqe.setFd(sqe, fd);
-        ZeroGcSqe.setOff(sqe, 0L);
-        ZeroGcSqe.setAddr(sqe, buf);
-        ZeroGcSqe.setLen(sqe, (int) len);
-        ZeroGcSqe.setRwFlags(sqe, flags);
+        Sqe.setOpcode(sqe, IORING_OP_SEND);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, buf);
+        Sqe.setLen(sqe, (int) len);
+        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareCancel(long sqe, long userDataToCancel, int flags) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
-        ZeroGcSqe.setFd(sqe, -1);
-        ZeroGcSqe.setOff(sqe, 0L);
-        ZeroGcSqe.setAddr(sqe, userDataToCancel);
-        ZeroGcSqe.setLen(sqe, 0);
-        ZeroGcSqe.setRwFlags(sqe, flags);
+        Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+        Sqe.setFd(sqe, -1);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, userDataToCancel);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareNop(long sqe) {
-        ZeroGcSqe.setOpcode(sqe, IORING_OP_NOP);
-        ZeroGcSqe.setFd(sqe, -1);
+        Sqe.setOpcode(sqe, IORING_OP_NOP);
+        Sqe.setFd(sqe, -1);
     }
 
     void submit() {
@@ -594,7 +607,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         if (needEnter) {
             while (true) {
-                long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                long res = enter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
                 if (res >= 0) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -634,7 +647,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void flushDeferredTaskrun() {
-        ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        enter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
     }
 
     int submitAndWait(int waitNr) {
@@ -680,7 +693,7 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
@@ -726,7 +739,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -781,7 +794,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -975,7 +988,7 @@ final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, -1);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, this.ringFd);
-            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
+            long res = register(this.callState, this.ringFd, IORING_REGISTER_RING_FDS, up, 1);
             if (res == 1L) {
                 int regFd = up.get(JAVA_INT, 0L);
                 this.enterRingFd = regFd;
@@ -1008,7 +1021,7 @@ final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, regSlot);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, 0L);
-            long res = ioUringRegister.ioUringRegister(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
+            long res = register(this.callState, this.ringFd, IORING_UNREGISTER_RING_FDS, up, 1);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -1062,7 +1075,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
         int fd = this.ringFd;
-        long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_BUFFERS, iovecs, nrIovecs);
+        long res = register(this.callState, fd, IORING_REGISTER_BUFFERS, iovecs, nrIovecs);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1093,7 +1106,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
         int fd = this.ringFd;
-        long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
+        long res = register(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
         if (res < 0) {
             return -LibCDispatcher.errno(this.callState);
         }
@@ -1124,7 +1137,7 @@ final class IoUringDispatcher implements AutoCloseable {
             up.set(JAVA_INT, 0L, offset);
             up.set(JAVA_INT, 4L, 0);
             up.set(JAVA_LONG, 8L, fdArray.address());
-            long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_FILES_UPDATE, up, count);
+            long res = register(this.callState, fd, IORING_REGISTER_FILES_UPDATE, up, count);
             if (res < 0) {
                 return -LibCDispatcher.errno(this.callState);
             }
@@ -1155,7 +1168,7 @@ final class IoUringDispatcher implements AutoCloseable {
             MemorySegment values = tempArena.allocate(JAVA_INT, 2);
             values.setAtIndex(JAVA_INT, 0, bounded);
             values.setAtIndex(JAVA_INT, 1, unbounded);
-            long res = ioUringRegister.ioUringRegister(this.callState, fd, IORING_REGISTER_IOWQ_MAX_WORKERS, values, 2);
+            long res = register(this.callState, fd, IORING_REGISTER_IOWQ_MAX_WORKERS, values, 2);
             if (res < 0) {
                 throw new RuntimeException("Failed to register max workers: " + libCDispatcher.strerror(LibCDispatcher.errno(this.callState)));
             }
@@ -1188,9 +1201,9 @@ final class IoUringDispatcher implements AutoCloseable {
             for (int i = 0; i < count; i++) {
                 int index = (head + i) & mask;
                 long address = cqes + ((long) index << shift);
-                long userData = ZeroGcCqe.getUserData(address);
-                int res = ZeroGcCqe.getRes(address);
-                int flags = ZeroGcCqe.getFlags(address);
+                long userData = Cqe.getUserData(address);
+                int res = Cqe.getRes(address);
+                int flags = Cqe.getFlags(address);
 
                 populateResultFromCqe(reusableResult, userData, res, flags);
                 processed = i + 1;
@@ -1242,9 +1255,9 @@ final class IoUringDispatcher implements AutoCloseable {
             for (int i = 0; i < count; i++) {
                 int index = (head + i) & mask;
                 long address = cqes + ((long) index << shift);
-                long userData = ZeroGcCqe.getUserData(address);
-                int res = ZeroGcCqe.getRes(address);
-                int flags = ZeroGcCqe.getFlags(address);
+                long userData = Cqe.getUserData(address);
+                int res = Cqe.getRes(address);
+                int flags = Cqe.getFlags(address);
                 processed = i + 1;
                 consumer.accept(userData, res, flags);
             }
@@ -1272,9 +1285,9 @@ final class IoUringDispatcher implements AutoCloseable {
             for (int i = 0; i < count; i++) {
                 int index = (head + i) & mask;
                 long address = cqes + ((long) index << shift);
-                long userData = ZeroGcCqe.getUserData(address);
-                int res = ZeroGcCqe.getRes(address);
-                int flags = ZeroGcCqe.getFlags(address);
+                long userData = Cqe.getUserData(address);
+                int res = Cqe.getRes(address);
+                int flags = Cqe.getFlags(address);
 
                 Result r = new Result();
                 r.setRegisteredBuffers(this.registeredBuffers);
@@ -1316,7 +1329,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
@@ -1379,7 +1392,7 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
-            long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
@@ -1431,9 +1444,9 @@ final class IoUringDispatcher implements AutoCloseable {
 
         long cqeAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
 
-        long userData = ZeroGcCqe.getUserData(cqeAddress);
-        int res = ZeroGcCqe.getRes(cqeAddress);
-        int flags = ZeroGcCqe.getFlags(cqeAddress);
+        long userData = Cqe.getUserData(cqeAddress);
+        int res = Cqe.getRes(cqeAddress);
+        int flags = Cqe.getFlags(cqeAddress);
 
         target.setRegisteredBuffers(this.registeredBuffers);
         populateResultFromCqe(target, userData, res, flags);
@@ -1442,32 +1455,32 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void populateResultFromCqe(Result target, long userData, long result, int cqeFlags) {
-        int typeIndex = (int) ((userData >>> ZeroGcUserData.TYPE_SHIFT) & ZeroGcUserData.TYPE_MASK);
+        int typeIndex = (int) ((userData >>> UserData.TYPE_SHIFT) & UserData.TYPE_MASK);
 
         switch (typeIndex) {
             case 17 /* READ_FIXED */ -> {
-                int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
+                int bufferIdx = UserData.getBufferIndex(userData);
                 long regBufAddr = (registeredBufferAddresses != null && bufferIdx >= 0 && bufferIdx < registeredBufferAddresses.length)
                         ? registeredBufferAddresses[bufferIdx] : 0L;
                 target.set(userData, result, OperationType.READ_FIXED, regBufAddr, null, bufferIdx, null, cqeFlags);
             }
             case 2 /* WRITE_FIXED */ -> {
-                int bufferIdx = ZeroGcUserData.getBufferIndex(userData);
+                int bufferIdx = UserData.getBufferIndex(userData);
                 target.set(userData, result, OperationType.WRITE_FIXED, 0L, null, bufferIdx, null, cqeFlags);
             }
             case 0 /* READ */, 18 /* READ_POOLED */ -> {
-                long bufferAddr = ZeroGcUserData.getPayload(userData);
+                long bufferAddr = UserData.getPayload(userData);
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case 1 /* WRITE */ -> {
-                long buffAddr = ZeroGcUserData.getPayload(userData);
+                long buffAddr = UserData.getPayload(userData);
                 if (buffAddr != 0L) {
                     libCDispatcher.free(buffAddr);
                 }
                 target.set(userData, result, OperationType.WRITE, 0L, null, -1, null, cqeFlags);
             }
             case 3 /* OPEN */ -> {
-                long pathAddr = ZeroGcUserData.getPayload(userData);
+                long pathAddr = UserData.getPayload(userData);
                 if (pathAddr != 0L) {
                     libCDispatcher.free(pathAddr);
                 }
@@ -1477,14 +1490,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 target.set(userData, result, OperationType.CLOSE, 0L, null, -1, null, cqeFlags);
             }
             case 5 /* READV */, 7 /* READV_FIXED */ -> {
-                long blockAddr = ZeroGcUserData.getPayload(userData);
-                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
+                long blockAddr = UserData.getPayload(userData);
+                int count = (int) IovecBlock.getCount(blockAddr);
 
                 MemorySegment[] buffers = new MemorySegment[count];
                 long remaining = result > 0 ? result : 0L;
                 for (int i = 0; i < count; i++) {
-                    long base = ZeroGcIovecBlock.getIovBase(blockAddr, i);
-                    long len = ZeroGcIovecBlock.getIovLen(blockAddr, i);
+                    long base = IovecBlock.getIovBase(blockAddr, i);
+                    long len = IovecBlock.getIovLen(blockAddr, i);
                     long valid = Math.min(len, remaining);
                     remaining -= valid;
                     MemorySegment seg = MemorySegment.ofAddress(base).reinterpret(len + 1);
@@ -1497,16 +1510,16 @@ final class IoUringDispatcher implements AutoCloseable {
                 target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers, cqeFlags);
             }
             case 6 /* WRITEV */ -> {
-                long blockAddr = ZeroGcUserData.getPayload(userData);
-                int count = (int) ZeroGcIovecBlock.getCount(blockAddr);
+                long blockAddr = UserData.getPayload(userData);
+                int count = (int) IovecBlock.getCount(blockAddr);
                 for (int i = 0; i < count; i++) {
-                    libCDispatcher.free(ZeroGcIovecBlock.getIovBase(blockAddr, i));
+                    libCDispatcher.free(IovecBlock.getIovBase(blockAddr, i));
                 }
                 iovecBlockPool.checkIn(blockAddr);
                 target.set(userData, result, OperationType.WRITEV, 0L, null, -1, null, cqeFlags);
             }
             case 8 /* WRITEV_FIXED */ -> {
-                long blockAddr = ZeroGcUserData.getPayload(userData);
+                long blockAddr = UserData.getPayload(userData);
                 iovecBlockPool.checkIn(blockAddr);
                 target.set(userData, result, OperationType.WRITEV_FIXED, 0L, null, -1, null, cqeFlags);
             }
@@ -1514,18 +1527,18 @@ final class IoUringDispatcher implements AutoCloseable {
                 target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, null, cqeFlags);
             }
             case 10 /* CONNECT */ -> {
-                long connectAddr = ZeroGcUserData.getPayload(userData);
+                long connectAddr = UserData.getPayload(userData);
                 if (connectAddr != 0L) {
                     libCDispatcher.free(connectAddr);
                 }
                 target.set(userData, result, OperationType.CONNECT, 0L, null, -1, null, cqeFlags);
             }
             case 11 /* RECV */, 14 /* RECV_EXT */ -> {
-                long bufferAddr = ZeroGcUserData.getPayload(userData);
+                long bufferAddr = UserData.getPayload(userData);
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case 12 /* SEND */ -> {
-                long sendBuf = ZeroGcUserData.getPayload(userData);
+                long sendBuf = UserData.getPayload(userData);
                 if (sendBuf != 0L) {
                     libCDispatcher.free(sendBuf);
                 }
@@ -1563,15 +1576,15 @@ final class IoUringDispatcher implements AutoCloseable {
             if (inFlightCount > 0) {
                 long cancelSqe = getSqe();
                 if (cancelSqe != 0L) {
-                    ZeroGcSqe.zero(cancelSqe);
-                    ZeroGcSqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    ZeroGcSqe.setFd(cancelSqe, -1);
-                    ZeroGcSqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    ZeroGcSqe.setUserData(cancelSqe, Long.MIN_VALUE + 1);
+                    Sqe.zero(cancelSqe);
+                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                    Sqe.setFd(cancelSqe, -1);
+                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                    Sqe.setUserData(cancelSqe, Long.MIN_VALUE + 1);
                     submit();
                 }
                 while (inFlightCount > 0) {
-                    long res = ioUringEnter.ioUringEnter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+                    long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
                     if (res < 0) {
                         int err = LibCDispatcher.errno(this.callState);
                         if (err != 11 /* EAGAIN */ && err != 16 /* EBUSY */ && err != 4 /* EINTR */) {
