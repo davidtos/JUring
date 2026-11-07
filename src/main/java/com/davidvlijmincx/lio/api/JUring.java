@@ -58,12 +58,44 @@ public class JUring implements AutoCloseable {
         return prepareReadInternal(fd.getFd(), readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    public long prepareRead(FileDescriptor fd, MemorySegment buffer, long offset) {
+        return prepareReadInternal(fd.getFd(), buffer, Math.toIntExact(buffer.byteSize()), offset, (byte) 0, false);
+    }
+
+    public long prepareRead(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
+        return prepareReadInternal(fd.getFd(), buffer, Math.toIntExact(buffer.byteSize()), offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareRead(FileDescriptor fd, MemorySegment buffer, int readSize, long offset) {
+        return prepareReadInternal(fd.getFd(), buffer, readSize, offset, (byte) 0, false);
+    }
+
+    public long prepareRead(FileDescriptor fd, MemorySegment buffer, int readSize, long offset, SqeOptions... sqeOptions) {
+        return prepareReadInternal(fd.getFd(), buffer, readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
     public long prepareRead(int indexFD, int readSize, long offset) {
         return prepareReadInternal(indexFD, readSize, offset, (byte) 0, true);
     }
 
     public long prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareRead(int indexFD, MemorySegment buffer, long offset) {
+        return prepareReadInternal(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, (byte) 0, true);
+    }
+
+    public long prepareRead(int indexFD, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
+        return prepareReadInternal(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    public long prepareRead(int indexFD, MemorySegment buffer, int readSize, long offset) {
+        return prepareReadInternal(indexFD, buffer, readSize, offset, (byte) 0, true);
+    }
+
+    public long prepareRead(int indexFD, MemorySegment buffer, int readSize, long offset, SqeOptions... sqeOptions) {
+        return prepareReadInternal(indexFD, buffer, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
     public void setupReadBufferPool(int bufferSize, int capacity) {
@@ -491,6 +523,20 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    private long prepareReadInternal(int fdOrIndex, MemorySegment buffer, int readSize, long offset, byte flags, boolean fixedFile) {
+        if (readSize < 0 || readSize > buffer.byteSize()) {
+            throw new IllegalArgumentException("Invalid readSize: " + readSize);
+        }
+        validateNativeSegment(buffer, true);
+        long sqe = getSqe(flags, fixedFile);
+        long userData = UserData.encode(OperationType.READ_EXT, buffer.address());
+
+        ioUring.prepareRead(sqe, fdOrIndex, buffer.address(), readSize, offset);
+        ioUring.setUserData(sqe, userData);
+
+        return userData;
+    }
+
     private long prepareReadPooledInternal(int fdOrIndex, int readSize, long offset, byte flags, boolean fixedFile) {
         if (readBufferPool == null) {
             throw new IllegalStateException("Read buffer pool has not been initialized; call setupReadBufferPool() first");
@@ -643,171 +689,6 @@ public class JUring implements AutoCloseable {
         long userData = UserData.encode(OperationType.CLOSE, opId);
 
         ioUring.prepareClose(sqe, fdOrIndex);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public int createServerSocket(int port, int backlog) {
-        int fd = NativeDispatcher.C.createSocket();
-        NativeDispatcher.C.setReuseAddrAndPort(fd);
-        NativeDispatcher.C.bindAndListen(fd, port, backlog);
-        return fd;
-    }
-
-    public int createClientSocket() {
-        return NativeDispatcher.C.createSocket();
-    }
-
-    public long prepareAccept(int serverFd) {
-        return prepareAccept(serverFd, (byte) 0);
-    }
-
-    public long prepareAccept(int serverFd, SqeOptions... sqeOptions) {
-        return prepareAccept(serverFd, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareAccept(int serverFd, byte flags) {
-        long sqe = getSqe(flags, false);
-        long opId = opSeq++;
-        long userData = UserData.encode(OperationType.ACCEPT, opId);
-
-        ioUring.prepareAccept(sqe, serverFd, 0L, 0L, 0);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareMultishotAccept(int serverFd) {
-        return prepareMultishotAccept(serverFd, (byte) 0);
-    }
-
-    public long prepareMultishotAccept(int serverFd, SqeOptions... sqeOptions) {
-        return prepareMultishotAccept(serverFd, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareMultishotAccept(int serverFd, byte flags) {
-        long sqe = getSqe(flags, false);
-        long opId = opSeq++;
-        long userData = UserData.encode(OperationType.MULTISHOT_ACCEPT, opId);
-
-        ioUring.prepareMultishotAccept(sqe, serverFd, 0L, 0L, 0);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareConnect(int fd, String host, int port) {
-        return prepareConnect(fd, host, port, (byte) 0);
-    }
-
-    public long prepareConnect(int fd, String host, int port, SqeOptions... sqeOptions) {
-        return prepareConnect(fd, host, port, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareConnect(int fd, String host, int port, byte flags) {
-        MemorySegment addr = NativeDispatcher.C.allocSockaddrIn(host, port);
-        final long sqe;
-        try {
-            sqe = getSqe(flags, false);
-        } catch (RuntimeException e) {
-            NativeDispatcher.C.free(addr.address());
-            throw e;
-        }
-        long userData = UserData.encode(OperationType.CONNECT, addr.address());
-
-        ioUring.prepareConnect(sqe, fd, addr.address(), (int) LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize());
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareRecv(int fd, int length) {
-        return prepareRecv(fd, length, (byte) 0);
-    }
-
-    public long prepareRecv(int fd, int length, SqeOptions... sqeOptions) {
-        return prepareRecv(fd, length, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareRecv(int fd, int length, byte flags) {
-        if (length < 0) {
-            throw new IllegalArgumentException("Invalid recv length: " + length);
-        }
-        long sqe = getSqe(flags, false);
-        MemorySegment buf = NativeDispatcher.C.alloc(length);
-        long userData = UserData.encode(OperationType.RECV, buf.address());
-
-        ioUring.prepareRecv(sqe, fd, buf.address(), length, 0);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareRecv(int fd, MemorySegment buffer, int length) {
-        return prepareRecv(fd, buffer, length, (byte) 0);
-    }
-
-    public long prepareRecv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        return prepareRecv(fd, buffer, length, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareRecv(int fd, MemorySegment buffer, int length, byte flags) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid recv length: " + length);
-        }
-        validateNativeSegment(buffer, true);
-        long sqe = getSqe(flags, false);
-        long userData = UserData.encode(OperationType.RECV_EXT, buffer.address());
-
-        ioUring.prepareRecv(sqe, fd, buffer.address(), length, 0);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareSend(int fd, byte[] bytes) {
-        return prepareSend(fd, bytes, (byte) 0);
-    }
-
-    public long prepareSend(int fd, byte[] bytes, SqeOptions... sqeOptions) {
-        return prepareSend(fd, bytes, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareSend(int fd, byte[] bytes, byte flags) {
-        if (bytes == null) {
-            throw new IllegalArgumentException("bytes must not be null");
-        }
-        long sqe = getSqe(flags, false);
-        MemorySegment buf = NativeDispatcher.C.alloc(bytes.length);
-        MemorySegment.copy(bytes, 0, buf, JAVA_BYTE, 0, bytes.length);
-
-        long userData = UserData.encode(OperationType.SEND, buf.address());
-
-        ioUring.prepareSend(sqe, fd, buf.address(), bytes.length, 0);
-        ioUring.setUserData(sqe, userData);
-
-        return userData;
-    }
-
-    public long prepareSend(int fd, MemorySegment buffer, int length) {
-        return prepareSend(fd, buffer, length, (byte) 0);
-    }
-
-    public long prepareSend(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        return prepareSend(fd, buffer, length, SqeOptions.combineOptions(sqeOptions));
-    }
-
-    private long prepareSend(int fd, MemorySegment buffer, int length, byte flags) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid send length: " + length);
-        }
-        validateNativeSegment(buffer, false);
-        long sqe = getSqe(flags, false);
-        long opId = opSeq++;
-        long userData = UserData.encode(OperationType.SEND_EXT, opId);
-
-        ioUring.prepareSend(sqe, fd, buffer.address(), length, 0);
         ioUring.setUserData(sqe, userData);
 
         return userData;

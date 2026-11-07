@@ -32,19 +32,6 @@ final class LibCDispatcher {
     static final StructLayout CAPTURE_STATE_LAYOUT = Linker.Option.captureStateLayout();
     private static final VarHandle ERRNO_HANDLE = CAPTURE_STATE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("errno"));
 
-    static final GroupLayout SOCKADDR_IN_LAYOUT = MemoryLayout.structLayout(
-            JAVA_SHORT.withName("sin_family"),
-            JAVA_SHORT.withName("sin_port"),
-            JAVA_INT.withName("sin_addr"),
-            MemoryLayout.sequenceLayout(8, JAVA_BYTE).withName("sin_zero")
-    ).withName("sockaddr_in");
-
-    static final short AF_INET = 2;
-    static final int SOL_SOCKET = 1;
-    static final int SO_REUSEADDR = 2;
-    static final int SO_REUSEPORT = 15;
-    static final int SOCK_STREAM = 1;
-
     private static final Linker linker = Linker.nativeLinker();
 
     static final MethodHandle MH_FREE_LONG;
@@ -55,10 +42,6 @@ final class LibCDispatcher {
     static final MethodHandle MH_MALLOC_ADDRESS;
     static final MethodHandle MH_STRERROR;
     static final MethodHandle MH_CALLOC;
-    static final MethodHandle MH_SOCKET;
-    static final MethodHandle MH_BIND;
-    static final MethodHandle MH_LISTEN;
-    static final MethodHandle MH_SETSOCKOPT;
     static final MethodHandle MH_MMAP;
     static final MethodHandle MH_MUNMAP;
     static final MethodHandle MH_IO_URING_SETUP;
@@ -115,26 +98,6 @@ final class LibCDispatcher {
                 lookup.findOrThrow("calloc"),
                 FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
                 Linker.Option.critical(false)
-        );
-
-        MH_SOCKET = linker.downcallHandle(
-                lookup.findOrThrow("socket"),
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT)
-        );
-
-        MH_BIND = linker.downcallHandle(
-                lookup.findOrThrow("bind"),
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
-        );
-
-        MH_LISTEN = linker.downcallHandle(
-                lookup.findOrThrow("listen"),
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)
-        );
-
-        MH_SETSOCKOPT = linker.downcallHandle(
-                lookup.findOrThrow("setsockopt"),
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_INT, ADDRESS, JAVA_INT)
         );
 
         MH_MMAP = linker.downcallHandle(
@@ -400,38 +363,6 @@ final class LibCDispatcher {
         }
     }
 
-    int socket(int domain, int type, int protocol) {
-        try {
-            return (int) MH_SOCKET.invokeExact(domain, type, protocol);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    int bind(int fd, MemorySegment addr, int addrlen) {
-        try {
-            return (int) MH_BIND.invokeExact(fd, addr, addrlen);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    int listen(int fd, int backlog) {
-        try {
-            return (int) MH_LISTEN.invokeExact(fd, backlog);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    int setsockopt(int fd, int level, int optname, MemorySegment optval, int optlen) {
-        try {
-            return (int) MH_SETSOCKOPT.invokeExact(fd, level, optname, optval, optlen);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     IovecStructure allocateIovec(Arena arena, long bufferSize, long nrIovecs) {
         MemorySegment iovecArray = Iovec.allocateArray(nrIovecs, arena);
         MemorySegment[] buffers = new MemorySegment[(int) nrIovecs];
@@ -461,85 +392,5 @@ final class LibCDispatcher {
             return calloc(size);
         }
         return malloc(size);
-    }
-
-    int createSocket() {
-        int fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) {
-            throw new RuntimeException("socket() failed (returned " + fd + ")");
-        }
-        return fd;
-    }
-
-    void setReuseAddrAndPort(int fd) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment optval = arena.allocate(JAVA_INT);
-            optval.set(JAVA_INT, 0, 1);
-            int r1 = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, optval, (int) JAVA_INT.byteSize());
-            if (r1 < 0) {
-                throw new RuntimeException("setsockopt(SO_REUSEADDR) failed (returned " + r1 + ")");
-            }
-            int r2 = setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, optval, (int) JAVA_INT.byteSize());
-            if (r2 < 0) {
-                throw new RuntimeException("setsockopt(SO_REUSEPORT) failed (returned " + r2 + ")");
-            }
-        }
-    }
-
-    void bindAndListen(int fd, int port, int backlog) {
-        try (Arena arena = Arena.ofConfined()) {
-            MemorySegment addr = arena.allocate(SOCKADDR_IN_LAYOUT);
-            addr.fill((byte) 0);
-            addr.set(JAVA_SHORT, 0, AF_INET);
-            addr.set(JAVA_SHORT, 2, Short.reverseBytes((short) port));
-            addr.set(JAVA_INT, 4, 0);
-
-            int r = bind(fd, addr, (int) SOCKADDR_IN_LAYOUT.byteSize());
-            if (r < 0) {
-                throw new RuntimeException("bind() failed on port " + port + " (returned " + r + ")");
-            }
-
-            r = listen(fd, backlog);
-            if (r < 0) {
-                throw new RuntimeException("listen() failed (returned " + r + ")");
-            }
-        }
-    }
-
-    MemorySegment allocSockaddrIn(String host, int port) {
-        if (port < 0 || port > 0xFFFF) {
-            throw new IllegalArgumentException("Invalid port: " + port);
-        }
-        int ip = parseIpv4(host);
-        MemorySegment addr = malloc(SOCKADDR_IN_LAYOUT.byteSize());
-        addr.fill((byte) 0);
-        addr.set(JAVA_SHORT, 0, AF_INET);
-        addr.set(JAVA_SHORT, 2, Short.reverseBytes((short) port));
-        addr.set(JAVA_INT, 4, Integer.reverseBytes(ip));
-        return addr;
-    }
-
-    private static int parseIpv4(String host) {
-        if (host == null) {
-            throw new IllegalArgumentException("Invalid IPv4 address: null");
-        }
-        String[] parts = host.split("\\.", -1);
-        if (parts.length != 4) {
-            throw new IllegalArgumentException("Invalid IPv4 address: " + host);
-        }
-        int result = 0;
-        for (String part : parts) {
-            int octet;
-            try {
-                octet = Integer.parseInt(part);
-            } catch (NumberFormatException e) {
-                throw new IllegalArgumentException("Invalid IPv4 address: " + host, e);
-            }
-            if (octet < 0 || octet > 255) {
-                throw new IllegalArgumentException("Invalid IPv4 address: " + host);
-            }
-            result = (result << 8) | octet;
-        }
-        return result;
     }
 }

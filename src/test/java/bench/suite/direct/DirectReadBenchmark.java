@@ -31,7 +31,7 @@ public class DirectReadBenchmark {
 
     @State(Scope.Benchmark)
     public static class BenchmarkState {
-        @Param({ "SINGLE_FILE"})
+        @Param({"MULTI_FILE", "SINGLE_FILE"})
         public String distribution = "MULTI_FILE";
 
         public DatasetManager dataset;
@@ -51,7 +51,7 @@ public class DirectReadBenchmark {
     @State(Scope.Thread)
     public static class JuringThreadState {
 
-        @Param({ "64", "128"})
+        @Param({"1", "16", "64", "128"})
         public int qd;
 
         public JUring ring;
@@ -254,7 +254,7 @@ public class DirectReadBenchmark {
         blackhole.consume(state.reapedCount);
     }
 
-   // @Benchmark
+    @Benchmark
     public void fileChannelDirectRead(FileChannelThreadState state, BenchmarkState benchState, StorageAuxCounters counters, Blackhole blackhole) throws IOException {
         final FileChannel[] channels = state.channels;
         final int totalTasks = DatasetManager.DEFAULT_TASK_COUNT;

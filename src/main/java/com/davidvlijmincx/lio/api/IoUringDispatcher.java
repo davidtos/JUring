@@ -14,25 +14,16 @@ import static java.lang.foreign.ValueLayout.*;
  */
 final class IoUringDispatcher implements AutoCloseable {
 
-    /**
-     * Set in CQE flags when a multishot SQE will generate more CQEs.
-     */
-    static final int IORING_CQE_F_MORE = 1 << 1;
-
     static final byte IORING_OP_NOP = 0;
     static final byte IORING_OP_READV = 1;
     static final byte IORING_OP_WRITEV = 2;
     static final byte IORING_OP_READ_FIXED = 4;
     static final byte IORING_OP_WRITE_FIXED = 5;
-    static final byte IORING_OP_ACCEPT = 13;
     static final byte IORING_OP_ASYNC_CANCEL = 14;
-    static final byte IORING_OP_CONNECT = 16;
     static final byte IORING_OP_OPENAT = 18;
     static final byte IORING_OP_CLOSE = 19;
     static final byte IORING_OP_READ = 22;
     static final byte IORING_OP_WRITE = 23;
-    static final byte IORING_OP_SEND = 26;
-    static final byte IORING_OP_RECV = 27;
 
     // Enter flags
     private static final int IORING_ENTER_GETEVENTS = 1;
@@ -46,8 +37,6 @@ final class IoUringDispatcher implements AutoCloseable {
 
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
-
-    private static final short IORING_ACCEPT_MULTISHOT = 1;
 
     private static final int EBADF = 9;
     private static final int EINTR = 4;
@@ -519,47 +508,6 @@ final class IoUringDispatcher implements AutoCloseable {
         Sqe.setOff(sqe, offset);
         Sqe.setAddr(sqe, iovecAddr);
         Sqe.setLen(sqe, nrVecs);
-    }
-
-    void prepareAccept(long sqe, int fd, long addr, long addrLen, int flags) {
-        Sqe.setOpcode(sqe, IORING_OP_ACCEPT);
-        Sqe.setFd(sqe, fd);
-        Sqe.setOff(sqe, addrLen);
-        Sqe.setAddr(sqe, addr);
-        Sqe.setLen(sqe, 0);
-        Sqe.setRwFlags(sqe, flags);
-    }
-
-    void prepareMultishotAccept(long sqe, int fd, long addr, long addrLen, int flags) {
-        prepareAccept(sqe, fd, addr, addrLen, flags);
-        short prio = Sqe.getIoprio(sqe);
-        Sqe.setIoprio(sqe, (short) (prio | IORING_ACCEPT_MULTISHOT));
-    }
-
-    void prepareConnect(long sqe, int fd, long addr, int addrLen) {
-        Sqe.setOpcode(sqe, IORING_OP_CONNECT);
-        Sqe.setFd(sqe, fd);
-        Sqe.setOff(sqe, (long) addrLen);
-        Sqe.setAddr(sqe, addr);
-        Sqe.setLen(sqe, 0);
-    }
-
-    void prepareRecv(long sqe, int fd, long buf, long len, int flags) {
-        Sqe.setOpcode(sqe, IORING_OP_RECV);
-        Sqe.setFd(sqe, fd);
-        Sqe.setOff(sqe, 0L);
-        Sqe.setAddr(sqe, buf);
-        Sqe.setLen(sqe, (int) len);
-        Sqe.setRwFlags(sqe, flags);
-    }
-
-    void prepareSend(long sqe, int fd, long buf, long len, int flags) {
-        Sqe.setOpcode(sqe, IORING_OP_SEND);
-        Sqe.setFd(sqe, fd);
-        Sqe.setOff(sqe, 0L);
-        Sqe.setAddr(sqe, buf);
-        Sqe.setLen(sqe, (int) len);
-        Sqe.setRwFlags(sqe, flags);
     }
 
     void prepareCancel(long sqe, long userDataToCancel, int flags) {
@@ -1458,7 +1406,7 @@ final class IoUringDispatcher implements AutoCloseable {
         int typeIndex = (int) ((userData >>> UserData.TYPE_SHIFT) & UserData.TYPE_MASK);
 
         switch (typeIndex) {
-            case 17 /* READ_FIXED */ -> {
+            case 10 /* READ_FIXED */ -> {
                 int bufferIdx = UserData.getBufferIndex(userData);
                 long regBufAddr = (registeredBufferAddresses != null && bufferIdx >= 0 && bufferIdx < registeredBufferAddresses.length)
                         ? registeredBufferAddresses[bufferIdx] : 0L;
@@ -1468,7 +1416,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 int bufferIdx = UserData.getBufferIndex(userData);
                 target.set(userData, result, OperationType.WRITE_FIXED, 0L, null, bufferIdx, null, cqeFlags);
             }
-            case 0 /* READ */, 18 /* READ_POOLED */ -> {
+            case 0 /* READ */, 11 /* READ_POOLED */, 14 /* READ_EXT */ -> {
                 long bufferAddr = UserData.getPayload(userData);
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
@@ -1523,37 +1471,13 @@ final class IoUringDispatcher implements AutoCloseable {
                 iovecBlockPool.checkIn(blockAddr);
                 target.set(userData, result, OperationType.WRITEV_FIXED, 0L, null, -1, null, cqeFlags);
             }
-            case 9 /* ACCEPT */, 15 /* MULTISHOT_ACCEPT */ -> {
-                target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, null, cqeFlags);
-            }
-            case 10 /* CONNECT */ -> {
-                long connectAddr = UserData.getPayload(userData);
-                if (connectAddr != 0L) {
-                    libCDispatcher.free(connectAddr);
-                }
-                target.set(userData, result, OperationType.CONNECT, 0L, null, -1, null, cqeFlags);
-            }
-            case 11 /* RECV */, 14 /* RECV_EXT */ -> {
-                long bufferAddr = UserData.getPayload(userData);
-                target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
-            }
-            case 12 /* SEND */ -> {
-                long sendBuf = UserData.getPayload(userData);
-                if (sendBuf != 0L) {
-                    libCDispatcher.free(sendBuf);
-                }
-                target.set(userData, result, OperationType.SEND, 0L, null, -1, null, cqeFlags);
-            }
-            case 13 /* SEND_EXT */ -> {
-                target.set(userData, result, OperationType.SEND_EXT, 0L, null, -1, null, cqeFlags);
-            }
-            case 16 /* CANCEL */ -> {
+            case 9 /* CANCEL */ -> {
                 target.set(userData, result, OperationType.CANCEL, 0L, null, -1, null, cqeFlags);
             }
-            case 19 /* NOP */ -> {
+            case 12 /* NOP */ -> {
                 target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
             }
-            case 20 /* WRITE_EXT */ -> {
+            case 13 /* WRITE_EXT */ -> {
                 target.set(userData, result, OperationType.WRITE_EXT, 0L, null, -1, null, cqeFlags);
             }
         }

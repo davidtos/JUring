@@ -171,8 +171,8 @@ class SqeTest {
     @Test
     void testUserDataEdgeCases() {
         long maxPayload = 0x00FFFFFFFFFFFFFFL;
-        long encodedMax = UserData.encode(OperationType.MULTISHOT_ACCEPT, maxPayload);
-        assertEquals(OperationType.MULTISHOT_ACCEPT, UserData.getType(encodedMax));
+        long encodedMax = UserData.encode(OperationType.WRITE_EXT, maxPayload);
+        assertEquals(OperationType.WRITE_EXT, UserData.getType(encodedMax));
         assertEquals(maxPayload, UserData.getPayload(encodedMax));
 
         int maxBufIdx = 0xFFFF;

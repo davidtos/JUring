@@ -222,7 +222,7 @@ public class JUringBlocking implements AutoCloseable {
         private void pollerLoop() {
             final IoUringDispatcher dispatcher = this.ioUringDispatcher;
             final int sqEntries = dispatcher.sqRingEntries();
-            final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = unboundedInFlight
+            final int[] inFlightHolder = new int[1]; // [0] = totalInFlight
 
             final IoUringDispatcher.RawCqeConsumer cqeConsumer = (userData, res, flags) -> {
                 if (userData == EVENTFD_SENTINEL || userData == CANCEL_SENTINEL) {
@@ -232,10 +232,6 @@ public class JUringBlocking implements AutoCloseable {
                     return;
                 }
                 int slotId = (int) userData;
-                byte op = slotOpcode[slotId];
-                if (isUnboundedOp(op)) {
-                    inFlightHolder[1]--;
-                }
                 inFlightHolder[0]--;
                 slotResult[slotId] = res;
                 Thread vt = slotThread[slotId];
@@ -257,7 +253,7 @@ public class JUringBlocking implements AutoCloseable {
                 runPendingControlTask();
 
                 int preparedNow = 0;
-                while ((inFlightHolder[0] - inFlightHolder[1]) < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
+                while (inFlightHolder[0] < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
                     long head = this.mpscHead;
                     int idx = (int) (head & this.slotMask);
                     long seq = (long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx);
@@ -287,9 +283,6 @@ public class JUringBlocking implements AutoCloseable {
                     Sqe.setUserData(sqe, slotId);
 
                     inFlightHolder[0]++;
-                    if (isUnboundedOp(op)) {
-                        inFlightHolder[1]++;
-                    }
                     preparedNow++;
                 }
 
@@ -310,53 +303,34 @@ public class JUringBlocking implements AutoCloseable {
                 int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
 
                 int totalInFlight = inFlightHolder[0];
-                int unboundedInFlight = inFlightHolder[1];
 
                 if (totalInFlight > 0) {
-                    if (unboundedInFlight == 0) {
-                        if (preparedNow > 0) {
-                            if (reaped == 0 && (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1) && controlTask.get() == null) {
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                                VarHandle.fullFence();
-                                if (!running || controlTask.get() != null) {
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                } else {
-                                    dispatcher.submitAndWait(1);
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                                }
+                    if (preparedNow > 0) {
+                        if (reaped == 0 && inFlightHolder[0] >= (sqEntries - 1) && controlTask.get() == null) {
+                            VH_WORKER_IN_KERNEL.setVolatile(this, 1);
+                            VarHandle.fullFence();
+                            if (!running || controlTask.get() != null) {
+                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                             } else {
-                                dispatcher.submit();
+                                dispatcher.submitAndWait(1);
+                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                             }
                         } else {
-                            if (reaped == 0 && controlTask.get() == null) {
-                                boolean canAcceptMore = (inFlightHolder[0] - inFlightHolder[1]) < (sqEntries - 1);
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                                VarHandle.fullFence();
-                                if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                } else {
-                                    dispatcher.submitAndWait(1);
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                                }
-                            }
-                        }
-                    } else {
-                        if (preparedNow > 0) {
                             dispatcher.submit();
                         }
-                        if (reaped == 0 && dispatcher.isDeferTaskrun()) {
-                            dispatcher.flushDeferredTaskrun();
-                            reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                        }
-                        if (reaped == 0 && (!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1)) && controlTask.get() == null) {
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
+                    } else {
+                        if (reaped == 0 && controlTask.get() == null) {
+                            boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                            VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                             VarHandle.fullFence();
-                            if ((!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1)) && controlTask.get() == null && running) {
-                                LockSupport.parkNanos(this, 50_000L);
+                            if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
+                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                            } else {
+                                dispatcher.submitAndWait(1);
+                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                             }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                         }
                     }
                 } else {
@@ -378,7 +352,7 @@ public class JUringBlocking implements AutoCloseable {
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
                             VarHandle.fullFence();
                             if (!hasPendingMpsc() && controlTask.get() == null && running) {
-                                LockSupport.parkNanos(this, 50_000L);
+                                LockSupport.park(this);
                             }
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                         }
@@ -404,10 +378,6 @@ public class JUringBlocking implements AutoCloseable {
                     dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                 }
             }
-        }
-
-        private static boolean isUnboundedOp(byte op) {
-            return op == IORING_OP_ACCEPT || op == IORING_OP_RECV || op == IORING_OP_CONNECT || op == IORING_OP_SEND;
         }
 
         private boolean hasPendingMpsc() {
@@ -458,7 +428,7 @@ public class JUringBlocking implements AutoCloseable {
                 if (!running && !task.done) {
                     throw new IllegalStateException("JUringBlocking is closed");
                 }
-                LockSupport.parkNanos(this, 10_000_000L);
+                LockSupport.park(this);
                 if (!task.done) {
                     wakePoller();
                 }
@@ -578,12 +548,7 @@ public class JUringBlocking implements AutoCloseable {
                     if (!running && (int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                         throw new IllegalStateException("JUringBlocking closed while waiting for I/O completion");
                     }
-                    if (spins < 64) {
-                        Thread.onSpinWait();
-                        spins++;
-                        continue;
-                    }
-                    LockSupport.parkNanos(this, 10_000_000L);
+                    LockSupport.park(this);
                     if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                         wakePoller();
                     }
@@ -1166,111 +1131,6 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
         return res;
-    }
-
-    public int createServerSocket(int port, int backlog) {
-        int fd = libc.createSocket();
-        libc.setReuseAddrAndPort(fd);
-        libc.bindAndListen(fd, port, backlog);
-        return fd;
-    }
-
-    public int createClientSocket() {
-        return libc.createSocket();
-    }
-
-    public int accept(int serverFd, SqeOptions... sqeOptions) {
-        return (int) getWorker().submitAndAwaitSlot(
-                IORING_OP_ACCEPT,
-                SqeOptions.combineOptions(sqeOptions),
-                serverFd,
-                0L,
-                0L,
-                0,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
-    }
-
-    public int connect(int fd, String host, int port, SqeOptions... sqeOptions) {
-        MemorySegment sockAddr = libc.allocSockaddrIn(host, port);
-        return (int) getWorker().submitAndAwaitSlot(
-                IORING_OP_CONNECT,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize(),
-                sockAddr.address(),
-                0,
-                0,
-                (short) 0,
-                0,
-                sockAddr.address()
-        );
-    }
-
-    public long recv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid recv length: " + length);
-        }
-        validateNativeSegment(buffer, true);
-        try {
-            return getWorker().submitAndAwaitSlot(
-                    IORING_OP_RECV,
-                    SqeOptions.combineOptions(sqeOptions),
-                    fd,
-                    0L,
-                    buffer.address(),
-                    length,
-                    0,
-                    (short) 0,
-                    0,
-                    0L
-            );
-        } finally {
-            Reference.reachabilityFence(buffer);
-        }
-    }
-
-    public long send(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid send length: " + length);
-        }
-        validateNativeSegment(buffer, false);
-        try {
-            return getWorker().submitAndAwaitSlot(
-                    IORING_OP_SEND,
-                    SqeOptions.combineOptions(sqeOptions),
-                    fd,
-                    0L,
-                    buffer.address(),
-                    length,
-                    0,
-                    (short) 0,
-                    0,
-                    0L
-            );
-        } finally {
-            Reference.reachabilityFence(buffer);
-        }
-    }
-
-    public long send(int fd, byte[] bytes, SqeOptions... sqeOptions) {
-        MemorySegment sendBuf = libc.alloc(bytes.length);
-        MemorySegment.copy(bytes, 0, sendBuf, JAVA_BYTE, 0, bytes.length);
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_SEND,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                0L,
-                sendBuf.address(),
-                bytes.length,
-                0,
-                (short) 0,
-                0,
-                sendBuf.address()
-        );
     }
 
     @Override

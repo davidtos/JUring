@@ -19,29 +19,53 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class DatasetManager {
 
     public static Path resolveBaseDataDir() {
-        var sysProp = System.getProperty("juring.data.dir");
+        String sysProp = System.getProperty("juring.data.dir");
         if (sysProp != null && !sysProp.isBlank()) {
             return Path.of(sysProp);
         }
-        var env = System.getenv("JURING_DATA_DIR");
+        String env = System.getenv("JURING_DATA_DIR");
         if (env != null && !env.isBlank()) {
             return Path.of(env);
         }
-        var mntTestData = Path.of("/mnt/TestData");
+        Path benchData = Path.of("./bench-data");
+        if (Files.exists(benchData)) {
+            return benchData;
+        }
+        Path localTestData = Path.of("/home/david/testData");
+        if (Files.exists(localTestData)) {
+            return localTestData;
+        }
+        Path mntTestData = Path.of("/mnt/TestData");
         if (Files.exists(mntTestData)) {
             return mntTestData;
         }
-        return Path.of("./bench-data");
+        return benchData;
     }
 
     public static Path resolveReadDir(Path base) {
-        var readFiles = base.resolve("read_files");
-        return Files.isDirectory(readFiles) ? readFiles : base;
+        if (Files.isDirectory(base.resolve("text_files"))) {
+            return base.resolve("text_files");
+        }
+        if (Files.isDirectory(base.resolve("read_files"))) {
+            return base.resolve("read_files");
+        }
+        if (Files.isDirectory(base.resolve("read"))) {
+            return base.resolve("read");
+        }
+        if (Files.isDirectory(base.resolve("multi_file"))) {
+            return base.resolve("multi_file");
+        }
+        return base;
     }
 
     public static Path resolveWriteDir(Path base) {
-        var writeFiles = base.resolve("write_files");
-        return Files.isDirectory(writeFiles) ? writeFiles : base;
+        if (Files.isDirectory(base.resolve("write_files"))) {
+            return base.resolve("write_files");
+        }
+        if (Files.isDirectory(base.resolve("write"))) {
+            return base.resolve("write");
+        }
+        return base;
     }
 
     public static final Path DEFAULT_DATA_DIR = resolveBaseDataDir();
@@ -96,15 +120,19 @@ public class DatasetManager {
         this.taskCount = taskCount;
 
         if (distribution == FileDistribution.SINGLE_FILE) {
-            var singleFile = resolveSingleBenchFile(workloadType);
+            Path singleFile = resolveSingleBenchFile(workloadType);
             if (singleFile != null && Files.exists(singleFile)) {
                 this.uniquePaths = new Path[]{ singleFile };
             } else {
                 this.uniquePaths = discoverFiles(baseDir, 1);
             }
         } else {
-            var scanDir = (workloadType == WorkloadType.READ) ? resolveReadDir(baseDir) : resolveWriteDir(baseDir);
-            this.uniquePaths = discoverFiles(scanDir, MAX_MULTI_FILES);
+            Path scanDir = (workloadType == WorkloadType.READ) ? resolveReadDir(baseDir) : resolveWriteDir(baseDir);
+            Path[] discovered = discoverFiles(scanDir, MAX_MULTI_FILES);
+            if (discovered.length == 0 && workloadType == WorkloadType.READ && !scanDir.equals(baseDir.resolve("text_files"))) {
+                discovered = discoverFiles(baseDir.resolve("text_files"), MAX_MULTI_FILES);
+            }
+            this.uniquePaths = discovered;
         }
 
         if (this.uniquePaths.length == 0) {

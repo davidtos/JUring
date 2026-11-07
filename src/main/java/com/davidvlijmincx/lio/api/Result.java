@@ -79,10 +79,6 @@ public class Result implements AutoCloseable {
         return cqeFlags;
     }
 
-    public boolean hasMore() {
-        return (cqeFlags & IoUringDispatcher.IORING_CQE_F_MORE) != 0;
-    }
-
     public long bufferAddress() {
         return bufferAddress;
     }
@@ -158,12 +154,8 @@ public class Result implements AutoCloseable {
         return result;
     }
 
-    public long bytesSent() {
-        return result;
-    }
-
     private boolean ownsMallocBuffer() {
-        return type == null || type == OperationType.READ || type == OperationType.RECV;
+        return type == null || type == OperationType.READ;
     }
 
     public void freeBuffer() {
