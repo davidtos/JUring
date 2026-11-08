@@ -30,10 +30,9 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final int IORING_ENTER_SQ_WAKEUP = 2;
     private static final int IORING_ENTER_REGISTERED_RING = 1 << 4;
 
-    // Register opcodes & internal flags
+    // Register opcodes
     private static final int IORING_REGISTER_RING_FDS = 20;
     private static final int IORING_UNREGISTER_RING_FDS = 21;
-    private static final byte INT_FLAG_REG_RING = 1;
 
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
@@ -71,50 +70,10 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    private static final GroupLayout ring_layout;
-    private static final GroupLayout io_uring_cq_layout;
-    private static final GroupLayout io_uring_sq_layout;
-
-    private static final VarHandle ringFdHandle;
-    private static final VarHandle enterRingFdHandle;
-    private static final VarHandle ringFlagsHandle;
-    private static final VarHandle ringFeaturesHandle;
-    private static final VarHandle ringIntFlagsHandle;
-
-    private static final VarHandle sq_khead_handle;
-    private static final VarHandle sq_ktail_handle;
-    private static final VarHandle sq_kring_mask_handle;
-    private static final VarHandle sq_kring_entries_handle;
-    private static final VarHandle sq_kflags_handle;
-    private static final VarHandle sq_kdropped_handle;
-    private static final VarHandle sq_array_handle;
-    private static final VarHandle sq_sqes_handle;
-    private static final VarHandle sq_sqe_head_handle;
-    private static final VarHandle sq_sqe_tail_handle;
-    private static final VarHandle sq_ring_sz_handle;
-    private static final VarHandle sq_ring_ptr_handle;
-    private static final VarHandle sq_ring_mask_handle;
-    private static final VarHandle sq_ring_entries_handle;
-
-    private static final VarHandle cq_khead_handle;
-    private static final VarHandle cq_ktail_handle;
-    private static final VarHandle cq_kring_mask_handle;
-    private static final VarHandle cq_kring_entries_handle;
-    private static final VarHandle cq_kflags_handle;
-    private static final VarHandle cq_koverflow_handle;
-    private static final VarHandle cq_cqes_handle;
-    private static final VarHandle cq_ring_sz_handle;
-    private static final VarHandle cq_ring_ptr_handle;
-    private static final VarHandle cq_ring_mask_handle;
-    private static final VarHandle cq_ring_entries_handle;
-
     private static final VarHandle VH_INT = JAVA_INT.varHandle();
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
     private final Arena arena;
     private final IovecBlockPool iovecBlockPool;
-    private final MemorySegment ring;
-    private final MemorySegment cqePtr;
-    private final MemorySegment cqePtrPtr;
     private final MemorySegment callState;
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
@@ -132,6 +91,8 @@ final class IoUringDispatcher implements AutoCloseable {
     private int cqeShift = 4;
     private Thread registeredThread;
     private boolean closed;
+    private long sqRingPtr;
+    private long sqRingSz;
     private long sqKheadAddr;
     private long sqKtailAddr;
     private long sqKflagsAddr;
@@ -142,6 +103,8 @@ final class IoUringDispatcher implements AutoCloseable {
     private int sqeTail;
     private int inFlightCount;
 
+    private long cqRingPtr;
+    private long cqRingSz;
     private long cqKheadAddr;
     private long cqKtailAddr;
     private long cqCqesAddr;
@@ -150,105 +113,16 @@ final class IoUringDispatcher implements AutoCloseable {
 
     public static final int AT_FDCWD = -100;
 
-    static {
-        io_uring_sq_layout = MemoryLayout.structLayout(
-                JAVA_LONG.withName("khead"),
-                JAVA_LONG.withName("ktail"),
-                JAVA_LONG.withName("kring_mask"),
-                JAVA_LONG.withName("kring_entries"),
-                JAVA_LONG.withName("kflags"),
-                JAVA_LONG.withName("kdropped"),
-                JAVA_LONG.withName("array"),
-                JAVA_LONG.withName("sqes"),
-                JAVA_INT.withName("sqe_head"),
-                JAVA_INT.withName("sqe_tail"),
-                JAVA_LONG.withName("ring_sz"),
-                JAVA_LONG.withName("ring_ptr"),
-                JAVA_INT.withName("ring_mask"),
-                JAVA_INT.withName("ring_entries"),
-                MemoryLayout.sequenceLayout(2, JAVA_INT).withName("pad")
-        ).withName("io_uring_sq");
-
-        io_uring_cq_layout = MemoryLayout.structLayout(
-                JAVA_LONG.withName("khead"),
-                JAVA_LONG.withName("ktail"),
-                JAVA_LONG.withName("kring_mask"),
-                JAVA_LONG.withName("kring_entries"),
-                JAVA_LONG.withName("kflags"),
-                JAVA_LONG.withName("koverflow"),
-                JAVA_LONG.withName("cqes"),
-                JAVA_LONG.withName("ring_sz"),
-                JAVA_LONG.withName("ring_ptr"),
-                JAVA_INT.withName("ring_mask"),
-                JAVA_INT.withName("ring_entries"),
-                MemoryLayout.sequenceLayout(2, JAVA_INT).withName("pad")
-        ).withName("io_uring_cq");
-
-        ring_layout = MemoryLayout.structLayout(
-                io_uring_sq_layout.withName("sq"),
-                io_uring_cq_layout.withName("cq"),
-                JAVA_INT.withName("flags"),
-                JAVA_INT.withName("ring_fd"),
-                JAVA_INT.withName("features"),
-                JAVA_INT.withName("enter_ring_fd"),
-                JAVA_BYTE.withName("int_flags"),
-                MemoryLayout.sequenceLayout(3, JAVA_BYTE).withName("pad"),
-                JAVA_INT.withName("pad2")
-        ).withName("io_uring");
-
-        ringFdHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("ring_fd"));
-        enterRingFdHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("enter_ring_fd"));
-        ringFlagsHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("flags"));
-        ringFeaturesHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("features"));
-        ringIntFlagsHandle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("int_flags"));
-
-        sq_khead_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("khead"));
-        sq_ktail_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("ktail"));
-        sq_kring_mask_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("kring_mask"));
-        sq_kring_entries_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("kring_entries"));
-        sq_kflags_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("kflags"));
-        sq_kdropped_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("kdropped"));
-        sq_array_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("array"));
-        sq_sqes_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("sqes"));
-        sq_sqe_head_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("sqe_head"));
-        sq_sqe_tail_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("sqe_tail"));
-        sq_ring_sz_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("ring_sz"));
-        sq_ring_ptr_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("ring_ptr"));
-        sq_ring_mask_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("ring_mask"));
-        sq_ring_entries_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("sq"), MemoryLayout.PathElement.groupElement("ring_entries"));
-
-        cq_khead_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("khead"));
-        cq_ktail_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("ktail"));
-        cq_kring_mask_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("kring_mask"));
-        cq_kring_entries_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("kring_entries"));
-        cq_kflags_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("kflags"));
-        cq_koverflow_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("koverflow"));
-        cq_cqes_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("cqes"));
-        cq_ring_sz_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("ring_sz"));
-        cq_ring_ptr_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("ring_ptr"));
-        cq_ring_mask_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("ring_mask"));
-        cq_ring_entries_handle = ring_layout.varHandle(MemoryLayout.PathElement.groupElement("cq"), MemoryLayout.PathElement.groupElement("ring_entries"));
-    }
-
     public IoUringDispatcher(Arena arena,
                             IovecBlockPool iovecBlockPool,
-                            MemorySegment ring,
-                            MemorySegment cqePtr,
-                            MemorySegment cqePtrPtr,
                             MemorySegment callState) {
         this.arena = arena;
         this.iovecBlockPool = iovecBlockPool;
-        this.ring = ring;
-        this.cqePtr = cqePtr;
-        this.cqePtrPtr = cqePtrPtr;
         this.callState = callState;
     }
+
     public Arena arena() {
         return arena;
-    }
-
-    public MemorySegment ring() {
-        return ring;
     }
 
     public void setRegisteredBuffers(MemorySegment[] registeredBuffers) {
@@ -328,8 +202,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     static IoUringDispatcher create(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringOptions) {
-        MemorySegment ring = NativeDispatcher.C.calloc(ring_layout.byteSize());
-        IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
+        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
 
         int combinedFlags = IoUringOptions.combineOptions(ioUringOptions);
         int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, combinedFlags);
@@ -355,22 +228,18 @@ final class IoUringDispatcher implements AutoCloseable {
         return dispatcher;
     }
 
-    private static IoUringDispatcher getDispatcher(MemorySegment ring, int queueDepth) {
+    private static IoUringDispatcher getDispatcher(int queueDepth) {
         Arena arena = Arena.ofShared();
         MemorySegment callState = arena.allocate(LibCDispatcher.CAPTURE_STATE_LAYOUT);
         return new IoUringDispatcher(
                 arena,
                 new IovecBlockPool(queueDepth),
-                ring,
-                libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize()),
-                libCDispatcher.alloc(AddressLayout.ADDRESS.byteSize() * 500),
                 callState
         );
     }
 
     public IoUringDispatcher getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
-        MemorySegment ring = NativeDispatcher.C.calloc(ring_layout.byteSize());
-        IoUringDispatcher dispatcher = getDispatcher(ring, queueDepth);
+        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
         try {
             int ring_fd = this.ringFd;
@@ -380,7 +249,7 @@ final class IoUringDispatcher implements AutoCloseable {
             io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
             io_uring_params.wq_fd(params, ring_fd);
 
-            var ret = dispatcher.queueInitParams(queueDepth, ring, params);
+            var ret = dispatcher.queueInitParams(queueDepth, params);
             if (ret < 0) {
                 dispatcher.close();
                 throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(-ret));
@@ -676,15 +545,13 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    int waitCqe(MemorySegment cqePtr) {
+    long waitCqe() {
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             if (head != tail) {
                 int index = head & cqRingMask;
-                long cqeAddr = cqCqesAddr + ((long) index << cqeShift);
-                cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
-                return 0;
+                return cqCqesAddr + ((long) index << cqeShift);
             }
 
             long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
@@ -696,34 +563,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 return -err;
             }
         }
-    }
-
-    int peekCqe(MemorySegment ring, MemorySegment cqePtr) {
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
-        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-        if (head != tail) {
-            int index = head & cqRingMask;
-            long cqeAddr = cqCqesAddr + ((long) index << cqeShift);
-            cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
-            return 0;
-        }
-        return -11; // -EAGAIN
-    }
-
-    int peekBatchCqe(MemorySegment ring, MemorySegment cqePtrPtr, int batchSize) {
-        int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
-        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-        int available = tail - head;
-        int count = Math.min(available, batchSize);
-        long cqes = cqCqesAddr;
-        int mask = cqRingMask;
-        int shift = cqeShift;
-        for (int i = 0; i < count; i++) {
-            int index = (head + i) & mask;
-            long cqeAddr = cqes + ((long) index << shift);
-            cqePtrPtr.setAtIndex(JAVA_LONG, i, cqeAddr);
-        }
-        return count;
     }
 
     void cqAdvance(int count) {
@@ -763,12 +602,12 @@ final class IoUringDispatcher implements AutoCloseable {
         if (sqThreadIdleMs > 0) {
             io_uring_params.sq_thread_idle(params, sqThreadIdleMs);
         }
-        int ret = queueInitParams(queueDepth, this.ring, params);
+        int ret = queueInitParams(queueDepth, params);
         libCDispatcher.free(params);
         return ret;
     }
 
-    int queueInitParams(int queueDepth, MemorySegment ring, MemorySegment params) {
+    int queueInitParams(int queueDepth, MemorySegment params) {
         int fd = libCDispatcher.ioUringSetup(this.callState, queueDepth, params);
         if (fd < 0) {
             return fd;
@@ -831,39 +670,17 @@ final class IoUringDispatcher implements AutoCloseable {
             return (int) sqes_ptr;
         }
 
-        ringFdHandle.set(ring, 0L, fd);
-        enterRingFdHandle.set(ring, 0L, fd);
-        ringFlagsHandle.set(ring, 0L, flags);
-        ringFeaturesHandle.set(ring, 0L, features);
-        ringIntFlagsHandle.set(ring, 0L, (byte) 0);
-
         long sq_khead = sq_ring_ptr + io_sqring_offsets.head(sq_off);
         long sq_ktail = sq_ring_ptr + io_sqring_offsets.tail(sq_off);
         long sq_kring_mask = sq_ring_ptr + io_sqring_offsets.ring_mask(sq_off);
         long sq_kring_entries = sq_ring_ptr + io_sqring_offsets.ring_entries(sq_off);
         long sq_kflags = sq_ring_ptr + io_sqring_offsets.flags(sq_off);
-        long sq_kdropped = sq_ring_ptr + io_sqring_offsets.dropped(sq_off);
-
-        sq_khead_handle.set(ring, 0L, sq_khead);
-        sq_ktail_handle.set(ring, 0L, sq_ktail);
-        sq_kring_mask_handle.set(ring, 0L, sq_kring_mask);
-        sq_kring_entries_handle.set(ring, 0L, sq_kring_entries);
-        sq_kflags_handle.set(ring, 0L, sq_kflags);
-        sq_kdropped_handle.set(ring, 0L, sq_kdropped);
-        sq_sqes_handle.set(ring, 0L, sqes_ptr);
-        sq_sqe_head_handle.set(ring, 0L, 0);
-        sq_sqe_tail_handle.set(ring, 0L, 0);
-        sq_ring_sz_handle.set(ring, 0L, sq_ring_sz);
-        sq_ring_ptr_handle.set(ring, 0L, sq_ring_ptr);
 
         int sq_mask = (int) VH_INT.get(GLOBAL_MEMORY, sq_kring_mask);
         int sq_ents = (int) VH_INT.get(GLOBAL_MEMORY, sq_kring_entries);
-        sq_ring_mask_handle.set(ring, 0L, sq_mask);
-        sq_ring_entries_handle.set(ring, 0L, sq_ents);
 
         if ((flags & IoUringOptions.IORING_SETUP_NO_SQARRAY.value) == 0) {
             long sq_array = sq_ring_ptr + io_sqring_offsets.array(sq_off);
-            sq_array_handle.set(ring, 0L, sq_array);
             for (int i = 0; i < sq_ents; i++) {
                 VH_INT.set(GLOBAL_MEMORY, sq_array + (long) i * 4L, i);
             }
@@ -873,27 +690,10 @@ final class IoUringDispatcher implements AutoCloseable {
         long cq_ktail = cq_ring_ptr + io_cqring_offsets.tail(cq_off);
         long cq_kring_mask = cq_ring_ptr + io_cqring_offsets.ring_mask(cq_off);
         long cq_kring_entries = cq_ring_ptr + io_cqring_offsets.ring_entries(cq_off);
-        long cq_koverflow = cq_ring_ptr + io_cqring_offsets.overflow(cq_off);
         long cq_cqes_addr = cq_ring_ptr + io_cqring_offsets.cqes(cq_off);
-
-        cq_khead_handle.set(ring, 0L, cq_khead);
-        cq_ktail_handle.set(ring, 0L, cq_ktail);
-        cq_kring_mask_handle.set(ring, 0L, cq_kring_mask);
-        cq_kring_entries_handle.set(ring, 0L, cq_kring_entries);
-        cq_koverflow_handle.set(ring, 0L, cq_koverflow);
-        cq_cqes_handle.set(ring, 0L, cq_cqes_addr);
-        cq_ring_sz_handle.set(ring, 0L, cq_ring_sz);
-        cq_ring_ptr_handle.set(ring, 0L, cq_ring_ptr);
-
-        int cq_off_flags = io_cqring_offsets.flags(cq_off);
-        if (cq_off_flags != 0) {
-            cq_kflags_handle.set(ring, 0L, cq_ring_ptr + cq_off_flags);
-        }
 
         int cq_mask = (int) VH_INT.get(GLOBAL_MEMORY, cq_kring_mask);
         int cq_ents = (int) VH_INT.get(GLOBAL_MEMORY, cq_kring_entries);
-        cq_ring_mask_handle.set(ring, 0L, cq_mask);
-        cq_ring_entries_handle.set(ring, 0L, cq_ents);
 
         this.ringFd = fd;
         this.enterRingFd = fd;
@@ -904,6 +704,8 @@ final class IoUringDispatcher implements AutoCloseable {
         this.isSingleIssuer = (flags & IoUringOptions.IORING_SETUP_SINGLE_ISSUER.value) != 0;
         this.sqeShift = 6 + sqe_shift;
         this.cqeShift = 4 + cqe_shift;
+        this.sqRingPtr = sq_ring_ptr;
+        this.sqRingSz = sq_ring_sz;
         this.sqKheadAddr = sq_khead;
         this.sqKtailAddr = sq_ktail;
         this.sqKflagsAddr = this.isSqPoll ? sq_kflags : 0L;
@@ -913,6 +715,8 @@ final class IoUringDispatcher implements AutoCloseable {
         this.sqeHead = 0;
         this.sqeTail = 0;
 
+        this.cqRingPtr = cq_ring_ptr;
+        this.cqRingSz = cq_ring_sz;
         this.cqKheadAddr = cq_khead;
         this.cqKtailAddr = cq_ktail;
         this.cqCqesAddr = cq_cqes_addr;
@@ -942,8 +746,6 @@ final class IoUringDispatcher implements AutoCloseable {
                 this.enterRingFd = regFd;
                 this.enterFlagsBase = IORING_ENTER_REGISTERED_RING;
                 this.registeredThread = current;
-                enterRingFdHandle.set(this.ring, 0L, regFd);
-                ringIntFlagsHandle.set(this.ring, 0L, INT_FLAG_REG_RING);
                 return 1;
             }
             return -LibCDispatcher.errno(this.callState);
@@ -959,8 +761,6 @@ final class IoUringDispatcher implements AutoCloseable {
         this.enterRingFd = this.ringFd;
         this.enterFlagsBase = 0;
         this.registeredThread = null;
-        enterRingFdHandle.set(this.ring, 0L, this.ringFd);
-        ringIntFlagsHandle.set(this.ring, 0L, (byte) 0);
         if (Thread.currentThread() != regThread) {
             return 0;
         }
@@ -989,7 +789,7 @@ final class IoUringDispatcher implements AutoCloseable {
         return this.ringFd;
     }
 
-    void queueExit(MemorySegment ring) {
+    void queueExit() {
         int fd = this.ringFd;
         if (fd < 0) return;
 
@@ -1004,24 +804,18 @@ final class IoUringDispatcher implements AutoCloseable {
             libCDispatcher.munmap(sqes_addr, sqes_sz);
         }
 
-        long sq_ring_ptr = (long) sq_ring_ptr_handle.get(ring, 0L);
-        long sq_ring_sz = (long) sq_ring_sz_handle.get(ring, 0L);
-        long cq_ring_ptr = (long) cq_ring_ptr_handle.get(ring, 0L);
-        long cq_ring_sz = (long) cq_ring_sz_handle.get(ring, 0L);
-
-        if (cq_ring_ptr != 0L && cq_ring_ptr != sq_ring_ptr && cq_ring_sz != 0L) {
-            libCDispatcher.munmap(cq_ring_ptr, cq_ring_sz);
+        if (cqRingPtr != 0L && cqRingPtr != sqRingPtr && cqRingSz != 0L) {
+            libCDispatcher.munmap(cqRingPtr, cqRingSz);
         }
-        if (sq_ring_ptr != 0L && sq_ring_sz != 0L) {
-            libCDispatcher.munmap(sq_ring_ptr, sq_ring_sz);
+        if (sqRingPtr != 0L && sqRingSz != 0L) {
+            libCDispatcher.munmap(sqRingPtr, sqRingSz);
         }
 
         libCDispatcher.close(fd);
-        ringFdHandle.set(ring, 0L, -1);
         this.ringFd = -1;
     }
 
-    int registerBuffers(MemorySegment ring, MemorySegment iovecs, int nrIovecs) {
+    int registerBuffers(MemorySegment iovecs, int nrIovecs) {
         int fd = this.ringFd;
         long res = register(this.callState, fd, IORING_REGISTER_BUFFERS, iovecs, nrIovecs);
         if (res < 0) {
@@ -1032,7 +826,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
     LibCDispatcher.IovecStructure allocateAndRegisterBuffers(int bufferSize, int nrIovecs) {
         var iovecStructure = libCDispatcher.allocateIovec(arena, bufferSize, nrIovecs);
-        int ret = registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
+        int ret = registerBuffers(iovecStructure.iovecArray(), nrIovecs);
         if (ret < 0) {
             throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
         }
@@ -1041,7 +835,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void registerExistingIovecStructure(LibCDispatcher.IovecStructure iovecStructure, int nrIovecs) {
-        int ret = registerBuffers(ring, iovecStructure.iovecArray(), nrIovecs);
+        int ret = registerBuffers(iovecStructure.iovecArray(), nrIovecs);
         if (ret < 0) {
             throw new RuntimeException("Failed to register buffers: " + libCDispatcher.strerror(-ret));
         }
@@ -1052,7 +846,7 @@ final class IoUringDispatcher implements AutoCloseable {
         return allocateAndRegisterBuffers(bufferSize, nrIovecs).buffers();
     }
 
-    int registerFiles(MemorySegment ring, MemorySegment fdArray, int count) {
+    int registerFiles(MemorySegment fdArray, int count) {
         int fd = this.ringFd;
         long res = register(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
         if (res < 0) {
@@ -1070,7 +864,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
             }
 
-            int ret = registerFiles(ring, fdArray, count);
+            int ret = registerFiles(fdArray, count);
             if (ret < 0) {
                 throw new RuntimeException("Failed to register files: " + libCDispatcher.strerror(-ret));
             }
@@ -1078,7 +872,7 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    int registerFilesUpdate(MemorySegment ring, int offset, MemorySegment fdArray, int count) {
+    int registerFilesUpdate(int offset, MemorySegment fdArray, int count) {
         int fd = this.ringFd;
         try (Arena tempArena = Arena.ofConfined()) {
             MemorySegment up = tempArena.allocate(16L);
@@ -1102,7 +896,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 fdArray.setAtIndex(JAVA_INT, i, fileDescriptors[i]);
             }
 
-            int ret = registerFilesUpdate(ring, offset, fdArray, count);
+            int ret = registerFilesUpdate(offset, fdArray, count);
             if (ret < 0) {
                 throw new RuntimeException("Failed to update registered files: " + libCDispatcher.strerror(-ret));
             }
@@ -1385,12 +1179,10 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     Result waitForResult(Result target) {
-        int ret = waitCqe(cqePtr);
-        if (ret < 0) {
-            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-ret));
+        long cqeAddress = waitCqe();
+        if (cqeAddress < 0) {
+            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror((int) -cqeAddress));
         }
-
-        long cqeAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
 
         long userData = Cqe.getUserData(cqeAddress);
         int res = Cqe.getRes(cqeAddress);
@@ -1448,11 +1240,7 @@ final class IoUringDispatcher implements AutoCloseable {
                     long len = IovecBlock.getIovLen(blockAddr, i);
                     long valid = Math.min(len, remaining);
                     remaining -= valid;
-                    MemorySegment seg = MemorySegment.ofAddress(base).reinterpret(len + 1);
-                    if (typeIndex == 5 /* READV */ || valid < len || (len & 511L) != 0) {
-                        seg.set(JAVA_BYTE, valid, (byte) 0);
-                    }
-                    buffers[i] = seg;
+                    buffers[i] = MemorySegment.ofAddress(base).reinterpret(valid);
                 }
                 iovecBlockPool.checkIn(blockAddr);
                 target.set(userData, result, OperationType.valueOf(typeIndex), 0L, null, -1, buffers, cqeFlags);
@@ -1484,11 +1272,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void closeRing() {
-        queueExit(ring);
-    }
-
-    void closeArena() {
-        NativeDispatcher.C.free(ring);
+        queueExit();
     }
 
     private void drainAndCancel() {
@@ -1537,9 +1321,6 @@ final class IoUringDispatcher implements AutoCloseable {
         closed = true;
         closeRing();
         iovecBlockPool.close();
-        libCDispatcher.free(cqePtr);
-        libCDispatcher.free(cqePtrPtr);
-        closeArena();
         arena.close();
     }
 }

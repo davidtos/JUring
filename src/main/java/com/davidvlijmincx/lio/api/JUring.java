@@ -287,8 +287,7 @@ public class JUring implements AutoCloseable {
         IovecBlock.setCount(blockAddr, nrVecs);
 
         for (int i = 0; i < nrVecs; i++) {
-            MemorySegment dataBuf = NativeDispatcher.C.alloc(bufferSizes[i] + 1);
-            dataBuf.set(JAVA_BYTE, bufferSizes[i], (byte) 0);
+            MemorySegment dataBuf = NativeDispatcher.C.alloc(Math.max(1, bufferSizes[i]));
             IovecBlock.setIovBase(blockAddr, i, dataBuf.address());
             IovecBlock.setIovLen(blockAddr, i, bufferSizes[i]);
         }
@@ -513,8 +512,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Invalid readSize: " + readSize);
         }
         long sqe = getSqe(flags, fixedFile);
-        long address = NativeDispatcher.C.mallocAddress(readSize + 1L);
-        MemorySegment.ofAddress(address).reinterpret(readSize + 1L).set(JAVA_BYTE, readSize, (byte) 0);
+        long address = NativeDispatcher.C.mallocAddress(Math.max(1L, readSize));
         long userData = UserData.encode(OperationType.READ, address);
 
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);

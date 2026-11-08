@@ -223,7 +223,7 @@ public class JUringBlocking implements AutoCloseable {
         private void pollerLoop() {
             final IoUringDispatcher dispatcher = this.ioUringDispatcher;
             final int sqEntries = dispatcher.sqRingEntries();
-            final int[] inFlightHolder = new int[1]; // [0] = totalInFlight
+            final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = expectedFromUnpark
 
             final IoUringDispatcher.RawCqeConsumer cqeConsumer = (userData, res, flags) -> {
                 if (userData == EVENTFD_SENTINEL || userData == CANCEL_SENTINEL) {
@@ -238,6 +238,7 @@ public class JUringBlocking implements AutoCloseable {
                 Thread vt = slotThread[slotId];
                 if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_DONE)) {
                     if (vt != null) {
+                        inFlightHolder[1]++;
                         LockSupport.unpark(vt);
                     }
                 } else {
@@ -252,11 +253,12 @@ public class JUringBlocking implements AutoCloseable {
                 }
             };
 
+            int unsubmitted = 0;
+
             while (running) {
                 runPendingControlTask();
 
-                int preparedNow = 0;
-                while (inFlightHolder[0] < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
+                while (inFlightHolder[0] < (sqEntries - 1) && unsubmitted < (sqEntries - 1)) {
                     long head = this.mpscHead;
                     int idx = (int) (head & this.slotMask);
                     long seq = (long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx);
@@ -286,73 +288,87 @@ public class JUringBlocking implements AutoCloseable {
                     Sqe.setUserData(sqe, slotId);
 
                     inFlightHolder[0]++;
-                    preparedNow++;
-                }
-
-                if (!eventfdArmed) {
-                    long sqe = dispatcher.getSqe();
-                    if (sqe != 0L) {
-                        Sqe.zero(sqe);
-                        Sqe.setOpcode(sqe, IORING_OP_READ);
-                        Sqe.setFd(sqe, eventFd);
-                        Sqe.setAddr(sqe, eventfdReadBuf);
-                        Sqe.setLen(sqe, 8);
-                        Sqe.setUserData(sqe, EVENTFD_SENTINEL);
-                        eventfdArmed = true;
-                        preparedNow++;
+                    if (inFlightHolder[1] > 0) {
+                        inFlightHolder[1]--;
                     }
+                    unsubmitted++;
                 }
 
                 int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
 
-                int totalInFlight = inFlightHolder[0];
+                boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                if (reaped > 0 || (canAcceptMore && hasPendingMpsc()) || controlTask.get() != null) {
+                    if (unsubmitted >= (sqEntries >>> 1)) {
+                        dispatcher.submit();
+                        unsubmitted = 0;
+                    }
+                    continue;
+                }
 
-                if (totalInFlight > 0) {
-                    if (reaped == 0 && controlTask.get() == null) {
-                        boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                // Coalesce submissions from recently unparked VTs or concurrent submission bursts
+                // before setting inKernel = 1 or entering the kernel.
+                if (canAcceptMore && (inFlightHolder[1] > 0 || (unsubmitted > 0 && inFlightHolder[0] > 1))) {
+                    int maxSpins = inFlightHolder[1] > 0 ? 2000 : 200;
+                    boolean found = false;
+                    for (int spin = 0; spin < maxSpins; spin++) {
+                        if (hasPendingMpsc() || !running || controlTask.get() != null) {
+                            found = true;
+                            break;
+                        }
+                        Thread.onSpinWait();
+                    }
+                    inFlightHolder[1] = 0;
+                    if (found) {
+                        continue;
+                    }
+                }
+
+                if (inFlightHolder[0] > 0) {
+                    if (controlTask.get() == null && running) {
+                        if (!eventfdArmed) {
+                            long sqe = dispatcher.getSqe();
+                            if (sqe != 0L) {
+                                Sqe.zero(sqe);
+                                Sqe.setOpcode(sqe, IORING_OP_READ);
+                                Sqe.setFd(sqe, eventFd);
+                                Sqe.setAddr(sqe, eventfdReadBuf);
+                                Sqe.setLen(sqe, 8);
+                                Sqe.setUserData(sqe, EVENTFD_SENTINEL);
+                                eventfdArmed = true;
+                                unsubmitted++;
+                            }
+                        }
+                        canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
                         VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                         VarHandle.fullFence();
                         if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                            if (preparedNow > 0) {
+                            if (unsubmitted > 0) {
                                 dispatcher.submit();
+                                unsubmitted = 0;
                             }
                         } else {
+                            unsubmitted = 0;
                             dispatcher.submitAndWait(1);
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                             dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                         }
-                    } else if (preparedNow > 0) {
+                    } else if (unsubmitted > 0) {
                         dispatcher.submit();
+                        unsubmitted = 0;
                     }
                 } else {
-                    if (controlTask.get() == null && running) {
-                        if (eventfdArmed) {
-                            VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                            VarHandle.fullFence();
-                            if (!running || controlTask.get() != null || hasPendingMpsc()) {
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                if (preparedNow > 0) {
-                                    dispatcher.submit();
-                                }
-                            } else {
-                                dispatcher.submitAndWait(1);
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                            }
-                        } else {
-                            if (preparedNow > 0) {
-                                dispatcher.submit();
-                            }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
-                            VarHandle.fullFence();
-                            if (!hasPendingMpsc() && controlTask.get() == null && running) {
-                                LockSupport.park(this);
-                            }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
-                        }
-                    } else if (preparedNow > 0) {
+                    if (unsubmitted > 0) {
                         dispatcher.submit();
+                        unsubmitted = 0;
+                    }
+                    if (controlTask.get() == null && running) {
+                        VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
+                        VarHandle.fullFence();
+                        if (!hasPendingMpsc() && controlTask.get() == null && running) {
+                            LockSupport.park(this);
+                        }
+                        VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                     }
                 }
             }

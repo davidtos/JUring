@@ -49,8 +49,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("Hello, World!", string);
 
@@ -70,8 +69,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("Hello, World!", string);
 
@@ -179,7 +177,7 @@ class JUringTest {
 
             assertEquals(id, result.id());
 
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("World!", string);
 
@@ -252,8 +250,7 @@ class JUringTest {
                 assertEquals(id, readResult.id());
                 assertEquals(13, readResult.result());
 
-                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-                String string = readResult.buffer().getString(0);
+                String string = readResult.getString();
                 assertEquals("Hello, World!", string);
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -303,8 +300,7 @@ class JUringTest {
             Result readResult2 = jUring.waitForResult();
 
             assertEquals(id2, readResult2.id());
-            readResult2.buffer().set(JAVA_BYTE, (int)readResult2.result(), (byte) 0);
-            String content = readResult2.buffer().getString(0);
+            String content = readResult2.getString();
             readResult2.freeBuffer();
             assertEquals("third file content", content);
 
@@ -313,8 +309,7 @@ class JUringTest {
             Result readResult1 = jUring.waitForResult();
 
             assertEquals(id1, readResult1.id());
-            readResult1.buffer().set(JAVA_BYTE, (int)readResult1.result(), (byte) 0);
-            content = readResult1.buffer().getString(0);
+            content = readResult1.getString();
             readResult1.freeBuffer();
             assertEquals("second file content", content);
         }
@@ -333,8 +328,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
             
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             assertEquals("Hello, World!", string);
         }
     }
@@ -354,8 +348,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
             
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             assertEquals("Hello, World!", string);
 
         }
@@ -377,8 +370,7 @@ class JUringTest {
         assertEquals(readId, readResult.id());
         assertEquals(13, readResult.result());
 
-        readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-        String content = readResult.buffer().getString(0);
+        String content = readResult.getString();
         readResult.freeBuffer();
         assertEquals("Hello, World!", content);
 
@@ -408,8 +400,7 @@ class JUringTest {
             assertEquals(readId, readResult.id());
             assertEquals(19, readResult.result());
 
-            readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-            String content = readResult.buffer().getString(0);
+            String content = readResult.getString();
             readResult.freeBuffer();
             assertEquals("second file content", content);
         }
@@ -561,8 +552,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(7, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            assertEquals("Hello, ", result.buffer().getString(0));
+            assertEquals("Hello, ", result.getString());
         }
     }
 
@@ -602,8 +592,7 @@ class JUringTest {
             assertEquals(13, result.result());
             assertEquals(bufIdx, result.bufferIdx());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            assertEquals("Hello, World!", result.buffer().getString(0));
+            assertEquals("Hello, World!", result.getString());
 
             jUring.checkInBuffer(bufIdx);
         }

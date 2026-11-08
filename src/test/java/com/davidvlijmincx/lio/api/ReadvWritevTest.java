@@ -6,12 +6,14 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
@@ -43,8 +45,8 @@ class ReadvWritevTest {
             MemorySegment[] buffers = result.buffers();
             assertEquals(2, buffers.length);
 
-            String first = buffers[0].getString(0);
-            String second = buffers[1].getString(0);
+            String first = new String(buffers[0].toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+            String second = new String(buffers[1].toArray(JAVA_BYTE), StandardCharsets.UTF_8);
 
             result.freeBuffers();
 
@@ -97,8 +99,8 @@ class ReadvWritevTest {
             MemorySegment[] buffers = result.buffers();
             assertEquals(2, buffers.length);
 
-            String first = buffers[0].getString(0);
-            String second = buffers[1].getString(0);
+            String first = new String(buffers[0].toArray(JAVA_BYTE), StandardCharsets.UTF_8);
+            String second = new String(buffers[1].toArray(JAVA_BYTE), StandardCharsets.UTF_8);
 
             assertEquals("Hello, ", first);
             assertEquals("World!", second);
