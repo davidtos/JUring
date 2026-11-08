@@ -10,9 +10,9 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Zero-allocation accessor for the iovec block pool slots.
+ * Accessor for the iovec block pool slots.
  */
-final class ZeroGcIovecBlock {
+final class IovecBlock {
 
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
 
@@ -26,7 +26,7 @@ final class ZeroGcIovecBlock {
 
     static final long IOVEC_ARRAY_OFFSET = Long.BYTES; // 8
 
-    private ZeroGcIovecBlock() {}
+    private IovecBlock() {}
 
     public static void setCount(long blockAddr, long count) {
         VH_LONG.set(GLOBAL_MEMORY, blockAddr, count);

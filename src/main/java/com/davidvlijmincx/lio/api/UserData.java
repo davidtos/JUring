@@ -1,9 +1,9 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Zero-allocation {@code user_data} bit-packer and unpacker.
+ * {@code user_data} bit-packer and unpacker.
  */
-final class ZeroGcUserData {
+final class UserData {
 
     public static final int TYPE_SHIFT = 56;
     public static final long TYPE_MASK = 0xFFL;
@@ -13,7 +13,7 @@ final class ZeroGcUserData {
     public static final long BUFFER_INDEX_MASK = 0xFFFFL;
     public static final long FIXED_OP_ID_MASK = (1L << BUFFER_INDEX_SHIFT) - 1;
 
-    private ZeroGcUserData() {}
+    private UserData() {}
 
     public static long encode(OperationType type, long payload) {
         return (((long) type.getIndex() & TYPE_MASK) << TYPE_SHIFT) | (payload & PAYLOAD_MASK);

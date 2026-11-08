@@ -739,6 +739,43 @@ class JUringTest {
     }
 
     @Test
+    void readFromFileIntoMemorySegment() {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            MemorySegment buf = arena.allocate(14);
+            long id = jUring.prepareRead(fd, buf, 0);
+            jUring.submit();
+
+            try (Result result = jUring.waitForResult()) {
+                assertEquals(id, result.id());
+                assertEquals(13, result.result());
+                assertEquals("Hello, World!", result.getString());
+            }
+
+            buf.set(JAVA_BYTE, 13, (byte) 0);
+            assertEquals("Hello, World!", buf.getString(0));
+        }
+    }
+
+    @Test
+    void readFromRegisteredFileIntoMemorySegment() {
+        try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            assertEquals(0, jUring.registerFiles(fd));
+
+            MemorySegment buf = arena.allocate(14);
+            long id = jUring.prepareRead(0, buf, 7, 7);
+            jUring.submit();
+
+            try (Result result = jUring.waitForResult()) {
+                assertEquals(id, result.id());
+                assertEquals(6, result.result());
+                assertEquals("World!", result.getString());
+            }
+        }
+    }
+
+    @Test
     void registeredBuffersArePageAlignedAndContiguous() {
         MemorySegment[] buffers = jUring.registerBuffers(4096, 4);
         assertEquals(4, buffers.length);

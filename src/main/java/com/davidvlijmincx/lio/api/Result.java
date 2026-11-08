@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * Unified, mutable result class for {@code io_uring} completion events.
+ * Result of an {@code io_uring} completion event.
  */
 public class Result implements AutoCloseable {
 
@@ -77,10 +77,6 @@ public class Result implements AutoCloseable {
 
     public int cqeFlags() {
         return cqeFlags;
-    }
-
-    public boolean hasMore() {
-        return (cqeFlags & IoUringDispatcher.IORING_CQE_F_MORE) != 0;
     }
 
     public long bufferAddress() {
@@ -158,12 +154,8 @@ public class Result implements AutoCloseable {
         return result;
     }
 
-    public long bytesSent() {
-        return result;
-    }
-
     private boolean ownsMallocBuffer() {
-        return type == null || type == OperationType.READ || type == OperationType.RECV;
+        return type == null || type == OperationType.READ;
     }
 
     public void freeBuffer() {

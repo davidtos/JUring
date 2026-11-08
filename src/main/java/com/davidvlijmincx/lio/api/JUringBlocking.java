@@ -24,6 +24,7 @@ public class JUringBlocking implements AutoCloseable {
     private static final int STATE_IDLE = 0;
     private static final int STATE_PARKED = 1;
     private static final int STATE_DONE = 2;
+    private static final int STATE_ABANDONED = 3;
 
     private static final VarHandle VH_INT_ARRAY = MethodHandles.arrayElementVarHandle(int[].class);
     private static final VarHandle VH_LONG_ARRAY = MethodHandles.arrayElementVarHandle(long[].class);
@@ -176,12 +177,12 @@ public class JUringBlocking implements AutoCloseable {
             this.slotState = new int[cap];
             this.slotThread = new Thread[cap];
 
-            this.eventFd = parent.libc.eventfd().eventfd(0, LibCDispatcher.EFD_CLOEXEC | LibCDispatcher.EFD_NONBLOCK);
+            this.eventFd = parent.libc.eventfd(0, LibCDispatcher.EFD_CLOEXEC | LibCDispatcher.EFD_NONBLOCK);
             if (this.eventFd < 0) {
                 throw new RuntimeException("Failed to create eventfd for worker " + workerId);
             }
-            this.eventfdReadBuf = parent.libc.mallocAddress().malloc(8L);
-            this.eventfdWriteBuf = parent.libc.mallocAddress().malloc(8L);
+            this.eventfdReadBuf = parent.libc.mallocAddress(8L);
+            this.eventfdWriteBuf = parent.libc.mallocAddress(8L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdReadBuf, 0L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdWriteBuf, 1L);
 
@@ -222,7 +223,7 @@ public class JUringBlocking implements AutoCloseable {
         private void pollerLoop() {
             final IoUringDispatcher dispatcher = this.ioUringDispatcher;
             final int sqEntries = dispatcher.sqRingEntries();
-            final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = unboundedInFlight
+            final int[] inFlightHolder = new int[1]; // [0] = totalInFlight
 
             final IoUringDispatcher.RawCqeConsumer cqeConsumer = (userData, res, flags) -> {
                 if (userData == EVENTFD_SENTINEL || userData == CANCEL_SENTINEL) {
@@ -232,22 +233,20 @@ public class JUringBlocking implements AutoCloseable {
                     return;
                 }
                 int slotId = (int) userData;
-                byte op = slotOpcode[slotId];
-                if (isUnboundedOp(op)) {
-                    inFlightHolder[1]--;
-                }
                 inFlightHolder[0]--;
                 slotResult[slotId] = res;
                 Thread vt = slotThread[slotId];
-                if (vt != null) {
-                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_DONE);
-                    LockSupport.unpark(vt);
+                if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_DONE)) {
+                    if (vt != null) {
+                        LockSupport.unpark(vt);
+                    }
                 } else {
                     long toFree = slotFreeAddr[slotId];
                     if (toFree != 0L) {
                         slotFreeAddr[slotId] = 0L;
                         parent.libc.free(toFree);
                     }
+                    slotThread[slotId] = null;
                     VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
                     releaseSlot(slotId);
                 }
@@ -257,7 +256,7 @@ public class JUringBlocking implements AutoCloseable {
                 runPendingControlTask();
 
                 int preparedNow = 0;
-                while ((inFlightHolder[0] - inFlightHolder[1]) < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
+                while (inFlightHolder[0] < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
                     long head = this.mpscHead;
                     int idx = (int) (head & this.slotMask);
                     long seq = (long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx);
@@ -275,33 +274,30 @@ public class JUringBlocking implements AutoCloseable {
                     this.mpscHead = head + 1;
 
                     byte op = slotOpcode[slotId];
-                    ZeroGcSqe.setOpcode(sqe, op);
-                    ZeroGcSqe.setFlags(sqe, slotSqeFlags[slotId]);
-                    ZeroGcSqe.setFd(sqe, slotFd[slotId]);
-                    ZeroGcSqe.setOff(sqe, slotOff[slotId]);
-                    ZeroGcSqe.setAddr(sqe, slotAddr[slotId]);
-                    ZeroGcSqe.setLen(sqe, slotLen[slotId]);
-                    ZeroGcSqe.setRwFlags(sqe, slotRwFlags[slotId]);
-                    ZeroGcSqe.setBufIndex(sqe, slotBufIndex[slotId]);
-                    ZeroGcSqe.setFileIndex(sqe, slotFileIndex[slotId]);
-                    ZeroGcSqe.setUserData(sqe, slotId);
+                    Sqe.setOpcode(sqe, op);
+                    Sqe.setFlags(sqe, slotSqeFlags[slotId]);
+                    Sqe.setFd(sqe, slotFd[slotId]);
+                    Sqe.setOff(sqe, slotOff[slotId]);
+                    Sqe.setAddr(sqe, slotAddr[slotId]);
+                    Sqe.setLen(sqe, slotLen[slotId]);
+                    Sqe.setRwFlags(sqe, slotRwFlags[slotId]);
+                    Sqe.setBufIndex(sqe, slotBufIndex[slotId]);
+                    Sqe.setFileIndex(sqe, slotFileIndex[slotId]);
+                    Sqe.setUserData(sqe, slotId);
 
                     inFlightHolder[0]++;
-                    if (isUnboundedOp(op)) {
-                        inFlightHolder[1]++;
-                    }
                     preparedNow++;
                 }
 
                 if (!eventfdArmed) {
                     long sqe = dispatcher.getSqe();
                     if (sqe != 0L) {
-                        ZeroGcSqe.zero(sqe);
-                        ZeroGcSqe.setOpcode(sqe, IORING_OP_READ);
-                        ZeroGcSqe.setFd(sqe, eventFd);
-                        ZeroGcSqe.setAddr(sqe, eventfdReadBuf);
-                        ZeroGcSqe.setLen(sqe, 8);
-                        ZeroGcSqe.setUserData(sqe, EVENTFD_SENTINEL);
+                        Sqe.zero(sqe);
+                        Sqe.setOpcode(sqe, IORING_OP_READ);
+                        Sqe.setFd(sqe, eventFd);
+                        Sqe.setAddr(sqe, eventfdReadBuf);
+                        Sqe.setLen(sqe, 8);
+                        Sqe.setUserData(sqe, EVENTFD_SENTINEL);
                         eventfdArmed = true;
                         preparedNow++;
                     }
@@ -310,78 +306,53 @@ public class JUringBlocking implements AutoCloseable {
                 int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
 
                 int totalInFlight = inFlightHolder[0];
-                int unboundedInFlight = inFlightHolder[1];
 
                 if (totalInFlight > 0) {
-                    if (unboundedInFlight == 0) {
-                        if (preparedNow > 0) {
-                            if (reaped == 0 && (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1) && controlTask.get() == null) {
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                                VarHandle.fullFence();
-                                if (!running || controlTask.get() != null) {
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                } else {
-                                    dispatcher.submitAndWait(1);
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                                }
-                            } else {
+                    if (reaped == 0 && controlTask.get() == null) {
+                        boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                        VH_WORKER_IN_KERNEL.setVolatile(this, 1);
+                        VarHandle.fullFence();
+                        if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
+                            VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                            if (preparedNow > 0) {
                                 dispatcher.submit();
                             }
                         } else {
-                            if (reaped == 0 && controlTask.get() == null) {
-                                boolean canAcceptMore = (inFlightHolder[0] - inFlightHolder[1]) < (sqEntries - 1);
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                                VarHandle.fullFence();
-                                if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                } else {
-                                    dispatcher.submitAndWait(1);
-                                    VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                                }
-                            }
+                            dispatcher.submitAndWait(1);
+                            VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                            dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                         }
-                    } else {
-                        if (preparedNow > 0) {
-                            dispatcher.submit();
-                        }
-                        if (reaped == 0 && dispatcher.isDeferTaskrun()) {
-                            dispatcher.flushDeferredTaskrun();
-                            reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                        }
-                        if (reaped == 0 && (!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1)) && controlTask.get() == null) {
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
-                            VarHandle.fullFence();
-                            if ((!hasPendingMpsc() || (inFlightHolder[0] - inFlightHolder[1]) >= (sqEntries - 1)) && controlTask.get() == null && running) {
-                                LockSupport.parkNanos(this, 50_000L);
-                            }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
-                        }
-                    }
-                } else {
-                    if (preparedNow > 0) {
+                    } else if (preparedNow > 0) {
                         dispatcher.submit();
                     }
+                } else {
                     if (controlTask.get() == null && running) {
                         if (eventfdArmed) {
                             VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                             VarHandle.fullFence();
                             if (!running || controlTask.get() != null || hasPendingMpsc()) {
                                 VH_WORKER_IN_KERNEL.setVolatile(this, 0);
+                                if (preparedNow > 0) {
+                                    dispatcher.submit();
+                                }
                             } else {
                                 dispatcher.submitAndWait(1);
                                 VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                                 dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                             }
                         } else {
+                            if (preparedNow > 0) {
+                                dispatcher.submit();
+                            }
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
                             VarHandle.fullFence();
                             if (!hasPendingMpsc() && controlTask.get() == null && running) {
-                                LockSupport.parkNanos(this, 50_000L);
+                                LockSupport.park(this);
                             }
                             VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                         }
+                    } else if (preparedNow > 0) {
+                        dispatcher.submit();
                     }
                 }
             }
@@ -392,11 +363,11 @@ public class JUringBlocking implements AutoCloseable {
             if (inFlightHolder[0] > 0) {
                 long cancelSqe = dispatcher.getSqe();
                 if (cancelSqe != 0L) {
-                    ZeroGcSqe.zero(cancelSqe);
-                    ZeroGcSqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    ZeroGcSqe.setFd(cancelSqe, -1);
-                    ZeroGcSqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    ZeroGcSqe.setUserData(cancelSqe, CANCEL_SENTINEL);
+                    Sqe.zero(cancelSqe);
+                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                    Sqe.setFd(cancelSqe, -1);
+                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                    Sqe.setUserData(cancelSqe, CANCEL_SENTINEL);
                     dispatcher.submit();
                 }
                 while (inFlightHolder[0] > 0) {
@@ -404,10 +375,6 @@ public class JUringBlocking implements AutoCloseable {
                     dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                 }
             }
-        }
-
-        private static boolean isUnboundedOp(byte op) {
-            return op == IORING_OP_ACCEPT || op == IORING_OP_RECV || op == IORING_OP_CONNECT || op == IORING_OP_SEND;
         }
 
         private boolean hasPendingMpsc() {
@@ -458,7 +425,7 @@ public class JUringBlocking implements AutoCloseable {
                 if (!running && !task.done) {
                     throw new IllegalStateException("JUringBlocking is closed");
                 }
-                LockSupport.parkNanos(this, 10_000_000L);
+                LockSupport.park(this);
                 if (!task.done) {
                     wakePoller();
                 }
@@ -482,7 +449,7 @@ public class JUringBlocking implements AutoCloseable {
             VarHandle.fullFence();
             if ((int) VH_WORKER_IN_KERNEL.getVolatile(this) != 0) {
                 if (VH_WORKER_IN_KERNEL.compareAndSet(this, 1, 0)) {
-                    parent.libc.write().write(eventFd, eventfdWriteBuf, 8L);
+                    parent.libc.write(eventFd, eventfdWriteBuf, 8L);
                 }
             }
             if ((int) VH_WORKER_POLLER_PARKED.getVolatile(this) != 0) {
@@ -573,17 +540,11 @@ public class JUringBlocking implements AutoCloseable {
             boolean completed = false;
             try {
                 boolean interrupted = false;
-                int spins = 0;
                 while ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                     if (!running && (int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                         throw new IllegalStateException("JUringBlocking closed while waiting for I/O completion");
                     }
-                    if (spins < 64) {
-                        Thread.onSpinWait();
-                        spins++;
-                        continue;
-                    }
-                    LockSupport.parkNanos(this, 10_000_000L);
+                    LockSupport.park(this);
                     if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                         wakePoller();
                     }
@@ -597,7 +558,7 @@ public class JUringBlocking implements AutoCloseable {
                 completed = true;
                 return slotResult[slotId];
             } finally {
-                if (completed) {
+                if (completed || !VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_ABANDONED)) {
                     long toFree = slotFreeAddr[slotId];
                     if (toFree != 0L) {
                         slotFreeAddr[slotId] = 0L;
@@ -606,10 +567,6 @@ public class JUringBlocking implements AutoCloseable {
                     slotThread[slotId] = null;
                     VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
                     releaseSlot(slotId);
-                } else {
-                    // Waiter threw an exception (interrupted or closed while in flight).
-                    // Ownership of buffer and slot release stays strictly with the poller thread.
-                    slotThread[slotId] = null;
                 }
             }
         }
@@ -628,13 +585,13 @@ public class JUringBlocking implements AutoCloseable {
                 ioUringDispatcher.close();
             }
             if (eventFd >= 0) {
-                parent.libc.close().accept(eventFd);
+                parent.libc.close(eventFd);
             }
             if (eventfdReadBuf != 0L) {
-                parent.libc.freeLong().free(eventfdReadBuf);
+                parent.libc.free(eventfdReadBuf);
             }
             if (eventfdWriteBuf != 0L) {
-                parent.libc.freeLong().free(eventfdWriteBuf);
+                parent.libc.free(eventfdWriteBuf);
             }
             for (int i = 0; i < slotCapacity; i++) {
                 Thread t = slotThread[i];
@@ -1166,111 +1123,6 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
         return res;
-    }
-
-    public int createServerSocket(int port, int backlog) {
-        int fd = libc.createSocket();
-        libc.setReuseAddrAndPort(fd);
-        libc.bindAndListen(fd, port, backlog);
-        return fd;
-    }
-
-    public int createClientSocket() {
-        return libc.createSocket();
-    }
-
-    public int accept(int serverFd, SqeOptions... sqeOptions) {
-        return (int) getWorker().submitAndAwaitSlot(
-                IORING_OP_ACCEPT,
-                SqeOptions.combineOptions(sqeOptions),
-                serverFd,
-                0L,
-                0L,
-                0,
-                0,
-                (short) 0,
-                0,
-                0L
-        );
-    }
-
-    public int connect(int fd, String host, int port, SqeOptions... sqeOptions) {
-        MemorySegment sockAddr = libc.allocSockaddrIn(host, port);
-        return (int) getWorker().submitAndAwaitSlot(
-                IORING_OP_CONNECT,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                LibCDispatcher.SOCKADDR_IN_LAYOUT.byteSize(),
-                sockAddr.address(),
-                0,
-                0,
-                (short) 0,
-                0,
-                sockAddr.address()
-        );
-    }
-
-    public long recv(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid recv length: " + length);
-        }
-        validateNativeSegment(buffer, true);
-        try {
-            return getWorker().submitAndAwaitSlot(
-                    IORING_OP_RECV,
-                    SqeOptions.combineOptions(sqeOptions),
-                    fd,
-                    0L,
-                    buffer.address(),
-                    length,
-                    0,
-                    (short) 0,
-                    0,
-                    0L
-            );
-        } finally {
-            Reference.reachabilityFence(buffer);
-        }
-    }
-
-    public long send(int fd, MemorySegment buffer, int length, SqeOptions... sqeOptions) {
-        if (length < 0 || length > buffer.byteSize()) {
-            throw new IllegalArgumentException("Invalid send length: " + length);
-        }
-        validateNativeSegment(buffer, false);
-        try {
-            return getWorker().submitAndAwaitSlot(
-                    IORING_OP_SEND,
-                    SqeOptions.combineOptions(sqeOptions),
-                    fd,
-                    0L,
-                    buffer.address(),
-                    length,
-                    0,
-                    (short) 0,
-                    0,
-                    0L
-            );
-        } finally {
-            Reference.reachabilityFence(buffer);
-        }
-    }
-
-    public long send(int fd, byte[] bytes, SqeOptions... sqeOptions) {
-        MemorySegment sendBuf = libc.alloc(bytes.length);
-        MemorySegment.copy(bytes, 0, sendBuf, JAVA_BYTE, 0, bytes.length);
-        return getWorker().submitAndAwaitSlot(
-                IORING_OP_SEND,
-                SqeOptions.combineOptions(sqeOptions),
-                fd,
-                0L,
-                sendBuf.address(),
-                bytes.length,
-                0,
-                (short) 0,
-                0,
-                sendBuf.address()
-        );
     }
 
     @Override

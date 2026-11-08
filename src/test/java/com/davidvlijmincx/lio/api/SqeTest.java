@@ -10,7 +10,7 @@ import java.lang.foreign.ValueLayout;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ZeroGcSqeTest {
+class SqeTest {
 
     private Arena arena;
     private MemorySegment sqeSegment;
@@ -19,7 +19,7 @@ class ZeroGcSqeTest {
     @BeforeEach
     void setUp() {
         arena = Arena.ofConfined();
-        sqeSegment = arena.allocate(ZeroGcSqe.SQE_SIZE);
+        sqeSegment = arena.allocate(Sqe.SQE_SIZE);
         sqeAddress = sqeSegment.address();
     }
 
@@ -31,109 +31,109 @@ class ZeroGcSqeTest {
     @Test
     void testZeroClearsAll64Bytes() {
         sqeSegment.fill((byte) 0xFF);
-        for (long i = 0; i < ZeroGcSqe.SQE_SIZE; i++) {
+        for (long i = 0; i < Sqe.SQE_SIZE; i++) {
             assertEquals((byte) 0xFF, sqeSegment.get(ValueLayout.JAVA_BYTE, i));
         }
 
-        ZeroGcSqe.zero(sqeAddress);
+        Sqe.zero(sqeAddress);
 
-        for (long i = 0; i < ZeroGcSqe.SQE_SIZE; i++) {
+        for (long i = 0; i < Sqe.SQE_SIZE; i++) {
             assertEquals((byte) 0, sqeSegment.get(ValueLayout.JAVA_BYTE, i), "Byte at offset " + i + " was not zeroed");
         }
     }
 
     @Test
     void testGettersAndSetters() {
-        ZeroGcSqe.zero(sqeAddress);
+        Sqe.zero(sqeAddress);
 
-        ZeroGcSqe.setOpcode(sqeAddress, (byte) 22);
-        assertEquals((byte) 22, ZeroGcSqe.getOpcode(sqeAddress));
+        Sqe.setOpcode(sqeAddress, (byte) 22);
+        assertEquals((byte) 22, Sqe.getOpcode(sqeAddress));
 
-        ZeroGcSqe.setFlags(sqeAddress, (byte) 0x02);
-        assertEquals((byte) 0x02, ZeroGcSqe.getFlags(sqeAddress));
+        Sqe.setFlags(sqeAddress, (byte) 0x02);
+        assertEquals((byte) 0x02, Sqe.getFlags(sqeAddress));
 
-        ZeroGcSqe.addFlags(sqeAddress, (byte) 0x04);
-        assertEquals((byte) 0x06, ZeroGcSqe.getFlags(sqeAddress));
+        Sqe.addFlags(sqeAddress, (byte) 0x04);
+        assertEquals((byte) 0x06, Sqe.getFlags(sqeAddress));
 
-        ZeroGcSqe.setIoprio(sqeAddress, (short) 123);
-        assertEquals((short) 123, ZeroGcSqe.getIoprio(sqeAddress));
+        Sqe.setIoprio(sqeAddress, (short) 123);
+        assertEquals((short) 123, Sqe.getIoprio(sqeAddress));
 
-        ZeroGcSqe.setFd(sqeAddress, 42);
-        assertEquals(42, ZeroGcSqe.getFd(sqeAddress));
+        Sqe.setFd(sqeAddress, 42);
+        assertEquals(42, Sqe.getFd(sqeAddress));
 
-        ZeroGcSqe.setOff(sqeAddress, 1024L);
-        assertEquals(1024L, ZeroGcSqe.getOff(sqeAddress));
+        Sqe.setOff(sqeAddress, 1024L);
+        assertEquals(1024L, Sqe.getOff(sqeAddress));
 
-        ZeroGcSqe.setAddr(sqeAddress, 0x123456789ABCDEFL);
-        assertEquals(0x123456789ABCDEFL, ZeroGcSqe.getAddr(sqeAddress));
+        Sqe.setAddr(sqeAddress, 0x123456789ABCDEFL);
+        assertEquals(0x123456789ABCDEFL, Sqe.getAddr(sqeAddress));
 
-        ZeroGcSqe.setLen(sqeAddress, 4096);
-        assertEquals(4096, ZeroGcSqe.getLen(sqeAddress));
+        Sqe.setLen(sqeAddress, 4096);
+        assertEquals(4096, Sqe.getLen(sqeAddress));
 
-        ZeroGcSqe.setUserData(sqeAddress, 0xFEEDFACEDEADBEEFL);
-        assertEquals(0xFEEDFACEDEADBEEFL, ZeroGcSqe.getUserData(sqeAddress));
+        Sqe.setUserData(sqeAddress, 0xFEEDFACEDEADBEEFL);
+        assertEquals(0xFEEDFACEDEADBEEFL, Sqe.getUserData(sqeAddress));
 
-        ZeroGcSqe.setFileIndex(sqeAddress, 5);
-        assertEquals(5, ZeroGcSqe.getFileIndex(sqeAddress));
+        Sqe.setFileIndex(sqeAddress, 5);
+        assertEquals(5, Sqe.getFileIndex(sqeAddress));
     }
 
     @Test
     void testAbsoluteOffsetsSqe() {
-        assertEquals(64, ZeroGcSqe.SQE_SIZE, "io_uring_sqe must be exactly 64 bytes");
+        assertEquals(64, Sqe.SQE_SIZE, "io_uring_sqe must be exactly 64 bytes");
 
         sqeSegment.fill((byte) 0);
 
         sqeSegment.set(ValueLayout.JAVA_BYTE, 0, (byte) 22);
-        assertEquals((byte) 22, ZeroGcSqe.getOpcode(sqeAddress));
-        ZeroGcSqe.setOpcode(sqeAddress, (byte) 23);
+        assertEquals((byte) 22, Sqe.getOpcode(sqeAddress));
+        Sqe.setOpcode(sqeAddress, (byte) 23);
         assertEquals((byte) 23, sqeSegment.get(ValueLayout.JAVA_BYTE, 0));
 
         sqeSegment.set(ValueLayout.JAVA_BYTE, 1, (byte) 0x05);
-        assertEquals((byte) 0x05, ZeroGcSqe.getFlags(sqeAddress));
+        assertEquals((byte) 0x05, Sqe.getFlags(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_SHORT, 2, (short) 100);
-        assertEquals((short) 100, ZeroGcSqe.getIoprio(sqeAddress));
+        assertEquals((short) 100, Sqe.getIoprio(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_INT, 4, 1234);
-        assertEquals(1234, ZeroGcSqe.getFd(sqeAddress));
+        assertEquals(1234, Sqe.getFd(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_LONG, 8, 0x1122334455667788L);
-        assertEquals(0x1122334455667788L, ZeroGcSqe.getOff(sqeAddress));
+        assertEquals(0x1122334455667788L, Sqe.getOff(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_LONG, 16, 0x8877665544332211L);
-        assertEquals(0x8877665544332211L, ZeroGcSqe.getAddr(sqeAddress));
+        assertEquals(0x8877665544332211L, Sqe.getAddr(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_INT, 24, 4096);
-        assertEquals(4096, ZeroGcSqe.getLen(sqeAddress));
+        assertEquals(4096, Sqe.getLen(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_INT, 28, 0x07);
-        assertEquals(0x07, ZeroGcSqe.getRwFlags(sqeAddress));
+        assertEquals(0x07, Sqe.getRwFlags(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_LONG, 32, 0xCAFEBABE12345678L);
-        assertEquals(0xCAFEBABE12345678L, ZeroGcSqe.getUserData(sqeAddress));
+        assertEquals(0xCAFEBABE12345678L, Sqe.getUserData(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_SHORT, 40, (short) 42);
-        assertEquals((short) 42, ZeroGcSqe.getBufIndex(sqeAddress));
+        assertEquals((short) 42, Sqe.getBufIndex(sqeAddress));
 
         sqeSegment.set(ValueLayout.JAVA_INT, 44, 99);
-        assertEquals(99, ZeroGcSqe.getFileIndex(sqeAddress));
+        assertEquals(99, Sqe.getFileIndex(sqeAddress));
     }
 
     @Test
     void testAbsoluteOffsetsCqe() {
-        assertEquals(16, ZeroGcCqe.CQE_LAYOUT.byteSize(), "io_uring_cqe must be exactly 16 bytes");
+        assertEquals(16, Cqe.CQE_LAYOUT.byteSize(), "io_uring_cqe must be exactly 16 bytes");
         try (Arena a = Arena.ofConfined()) {
             MemorySegment cqe = a.allocate(16);
             long addr = cqe.address();
 
             cqe.set(ValueLayout.JAVA_LONG, 0, 0x123456789ABCDEF0L);
-            assertEquals(0x123456789ABCDEF0L, ZeroGcCqe.getUserData(addr));
+            assertEquals(0x123456789ABCDEF0L, Cqe.getUserData(addr));
 
             cqe.set(ValueLayout.JAVA_INT, 8, 4096);
-            assertEquals(4096, ZeroGcCqe.getRes(addr));
+            assertEquals(4096, Cqe.getRes(addr));
 
             cqe.set(ValueLayout.JAVA_INT, 12, 0x02);
-            assertEquals(0x02, ZeroGcCqe.getFlags(addr));
+            assertEquals(0x02, Cqe.getFlags(addr));
         }
     }
 
@@ -152,35 +152,35 @@ class ZeroGcSqeTest {
     }
 
     @Test
-    void testZeroGcUserDataEncoding() {
+    void testUserDataEncoding() {
         long ptr = 0x00007FFFF7DC1234L;
-        long encoded = ZeroGcUserData.encode(OperationType.READ, ptr);
+        long encoded = UserData.encode(OperationType.READ, ptr);
 
-        assertEquals(OperationType.READ, ZeroGcUserData.getType(encoded));
-        assertEquals(ptr, ZeroGcUserData.getPayload(encoded));
+        assertEquals(OperationType.READ, UserData.getType(encoded));
+        assertEquals(ptr, UserData.getPayload(encoded));
 
         int bufIdx = 42;
         long opId = 987654321L;
-        long encodedFixed = ZeroGcUserData.encodeFixed(OperationType.READ_FIXED, bufIdx, opId);
+        long encodedFixed = UserData.encodeFixed(OperationType.READ_FIXED, bufIdx, opId);
 
-        assertEquals(OperationType.READ_FIXED, ZeroGcUserData.getType(encodedFixed));
-        assertEquals(bufIdx, ZeroGcUserData.getBufferIndex(encodedFixed));
-        assertEquals(opId, ZeroGcUserData.getFixedOpId(encodedFixed));
+        assertEquals(OperationType.READ_FIXED, UserData.getType(encodedFixed));
+        assertEquals(bufIdx, UserData.getBufferIndex(encodedFixed));
+        assertEquals(opId, UserData.getFixedOpId(encodedFixed));
     }
 
     @Test
-    void testZeroGcUserDataEdgeCases() {
+    void testUserDataEdgeCases() {
         long maxPayload = 0x00FFFFFFFFFFFFFFL;
-        long encodedMax = ZeroGcUserData.encode(OperationType.MULTISHOT_ACCEPT, maxPayload);
-        assertEquals(OperationType.MULTISHOT_ACCEPT, ZeroGcUserData.getType(encodedMax));
-        assertEquals(maxPayload, ZeroGcUserData.getPayload(encodedMax));
+        long encodedMax = UserData.encode(OperationType.WRITE_EXT, maxPayload);
+        assertEquals(OperationType.WRITE_EXT, UserData.getType(encodedMax));
+        assertEquals(maxPayload, UserData.getPayload(encodedMax));
 
         int maxBufIdx = 0xFFFF;
         long maxFixedOpId = 0xFFFFFFFFFFL;
-        long encodedFixedMax = ZeroGcUserData.encodeFixed(OperationType.WRITE_FIXED, maxBufIdx, maxFixedOpId);
-        assertEquals(OperationType.WRITE_FIXED, ZeroGcUserData.getType(encodedFixedMax));
-        assertEquals(maxBufIdx, ZeroGcUserData.getBufferIndex(encodedFixedMax));
-        assertEquals(maxFixedOpId, ZeroGcUserData.getFixedOpId(encodedFixedMax));
+        long encodedFixedMax = UserData.encodeFixed(OperationType.WRITE_FIXED, maxBufIdx, maxFixedOpId);
+        assertEquals(OperationType.WRITE_FIXED, UserData.getType(encodedFixedMax));
+        assertEquals(maxBufIdx, UserData.getBufferIndex(encodedFixedMax));
+        assertEquals(maxFixedOpId, UserData.getFixedOpId(encodedFixedMax));
     }
 
     @Test

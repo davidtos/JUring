@@ -1,16 +1,21 @@
 package bench.suite.common;
 
+import com.davidvlijmincx.lio.api.FileDescriptor;
+import com.davidvlijmincx.lio.api.LinuxOpenOptions;
+
+import java.lang.foreign.Arena;
+import java.lang.foreign.FunctionDescriptor;
+import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
+import java.lang.invoke.MethodHandle;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.util.List;
 
-/**
- * Shared I/O utility providing sector alignment, direct buffer allocation,
- * reflective access to ExtendedOpenOption.DIRECT, and OS RLIMIT_MEMLOCK inspection.
- */
 public final class IoHelper {
 
     public static final int DEFAULT_SECTOR_SIZE = 4096;
@@ -35,30 +40,16 @@ public final class IoHelper {
 
     private IoHelper() {}
 
-    /**
-     * Allocates a direct ByteBuffer aligned to the specified alignment boundary (typically 4096 bytes).
-     *
-     * @param capacity  the usable capacity in bytes
-     * @param alignment the alignment boundary in bytes (e.g. 4096)
-     * @return an aligned direct ByteBuffer whose position is 0 and limit is capacity
-     */
     public static ByteBuffer allocateAligned(int capacity, int alignment) {
         if (alignment <= 0) {
             alignment = DEFAULT_SECTOR_SIZE;
         }
-        ByteBuffer raw = ByteBuffer.allocateDirect(capacity + alignment);
-        ByteBuffer aligned = raw.alignedSlice(alignment);
+        var raw = ByteBuffer.allocateDirect(capacity + alignment);
+        var aligned = raw.alignedSlice(alignment);
         aligned.limit(capacity);
         return aligned.slice(0, capacity);
     }
 
-    /**
-     * Validates that a native memory address is strictly aligned to the given boundary.
-     *
-     * @param address   the native memory address
-     * @param alignment the required alignment in bytes
-     * @return true if aligned, false otherwise
-     */
     public static boolean checkAlignment(long address, int alignment) {
         if (alignment <= 0) {
             alignment = DEFAULT_SECTOR_SIZE;
@@ -66,13 +57,6 @@ public final class IoHelper {
         return (address % alignment) == 0;
     }
 
-    /**
-     * Validates that a file offset is strictly aligned to the given boundary.
-     *
-     * @param offset    the file offset in bytes
-     * @param alignment the required alignment in bytes
-     * @return true if aligned, false otherwise
-     */
     public static boolean checkOffsetAlignment(long offset, int alignment) {
         if (alignment <= 0) {
             alignment = DEFAULT_SECTOR_SIZE;
@@ -80,32 +64,16 @@ public final class IoHelper {
         return (offset % alignment) == 0;
     }
 
-    /**
-     * Retrieves com.sun.nio.file.ExtendedOpenOption.DIRECT via reflection,
-     *
-     * @return the OpenOption for ExtendedOpenOption.DIRECT, or null if unavailable
-     */
     public static OpenOption getDirectOpenOption() {
         return DIRECT_OPEN_OPTION;
     }
 
-    /**
-     * Retrieves the native address of a direct ByteBuffer using the Foreign Function & Memory API.
-     *
-     * @param buffer direct ByteBuffer
-     * @return native starting address
-     */
     public static long getAddress(ByteBuffer buffer) {
         return MemorySegment.ofBuffer(buffer).address();
     }
 
-    /**
-     * Inspects /proc/self/limits to determine the process soft RLIMIT_MEMLOCK limit.
-     *
-     * @return maximum locked memory in bytes, or Long.MAX_VALUE if unlimited
-     */
     public static long detectMemlockLimit() {
-        Path limitsPath = Path.of("/proc/self/limits");
+        var limitsPath = Path.of("/proc/self/limits");
         if (!Files.exists(limitsPath)) {
             return Long.MAX_VALUE;
         }
@@ -116,7 +84,7 @@ public final class IoHelper {
                 if (line.startsWith("Max locked memory")) {
                     String[] tokens = line.substring("Max locked memory".length()).trim().split("\\s+");
                     if (tokens.length > 0) {
-                        String softLimitStr = tokens[0].trim();
+                        var softLimitStr = tokens[0].trim();
                         if ("unlimited".equalsIgnoreCase(softLimitStr)) {
                             return Long.MAX_VALUE;
                         }
@@ -131,14 +99,6 @@ public final class IoHelper {
         return Long.MAX_VALUE;
     }
 
-    /**
-     * Calculates a safe number of registered buffers per thread so that multi-thread ring setups
-     * do not exceed RLIMIT_MEMLOCK.
-     *
-     * @param bufferSize size of each buffer in bytes (e.g. 4096)
-     * @param threads    number of concurrent benchmark threads
-     * @return safe buffer count per thread (bounded between 16 and 512)
-     */
     public static int getSafeBufferCount(int bufferSize, int threads) {
         long limit = detectMemlockLimit();
         if (limit == Long.MAX_VALUE) {
@@ -148,7 +108,6 @@ public final class IoHelper {
         int activeThreads = Math.max(1, threads);
         long ringOverhead = 64 * 1024L * activeThreads;
         long usableLimit = Math.max(0, limit - ringOverhead);
-        // Reserve 75% of usable limit across all threads, leave 25% safety margin
         long safeTotalBudget = (usableLimit * 3) / 4;
         long budgetPerThread = safeTotalBudget / activeThreads;
         int maxBuffers = (int) (budgetPerThread / bufferSize);
@@ -156,27 +115,27 @@ public final class IoHelper {
     }
 
     public static final int POSIX_FADV_DONTNEED = 4;
-    private static final java.lang.invoke.MethodHandle POSIX_FADVISE_MH;
-    private static final java.lang.invoke.MethodHandle MINCORE_MH;
+    private static final MethodHandle POSIX_FADVISE_MH;
+    private static final MethodHandle MINCORE_MH;
 
     static {
-        java.lang.invoke.MethodHandle fadvise = null;
-        java.lang.invoke.MethodHandle mincore = null;
+        MethodHandle fadvise = null;
+        MethodHandle mincore = null;
         try {
-            java.lang.foreign.Linker linker = java.lang.foreign.Linker.nativeLinker();
-            java.lang.foreign.SymbolLookup stdlib = linker.defaultLookup();
+            Linker linker = Linker.nativeLinker();
+            SymbolLookup stdlib = linker.defaultLookup();
             var fadviseOpt = stdlib.find("posix_fadvise");
             if (fadviseOpt.isPresent()) {
-                var desc = java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
-                        java.lang.foreign.ValueLayout.JAVA_INT, java.lang.foreign.ValueLayout.JAVA_LONG,
-                        java.lang.foreign.ValueLayout.JAVA_LONG, java.lang.foreign.ValueLayout.JAVA_INT);
+                var desc = FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT, ValueLayout.JAVA_LONG,
+                        ValueLayout.JAVA_LONG, ValueLayout.JAVA_INT);
                 fadvise = linker.downcallHandle(fadviseOpt.get(), desc);
             }
             var mincoreOpt = stdlib.find("mincore");
             if (mincoreOpt.isPresent()) {
-                var desc = java.lang.foreign.FunctionDescriptor.of(java.lang.foreign.ValueLayout.JAVA_INT,
-                        java.lang.foreign.ValueLayout.ADDRESS, java.lang.foreign.ValueLayout.JAVA_LONG,
-                        java.lang.foreign.ValueLayout.ADDRESS);
+                var desc = FunctionDescriptor.of(ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS, ValueLayout.JAVA_LONG,
+                        ValueLayout.ADDRESS);
                 mincore = linker.downcallHandle(mincoreOpt.get(), desc);
             }
         } catch (Throwable t) {
@@ -198,7 +157,7 @@ public final class IoHelper {
     }
 
     public static int posixFadvise(Path path, long offset, long len, int advice) {
-        try (var fd = new com.davidvlijmincx.lio.api.FileDescriptor(path, com.davidvlijmincx.lio.api.LinuxOpenOptions.READ)) {
+        try (var fd = new FileDescriptor(path, LinuxOpenOptions.READ)) {
             return posixFadvise(fd.getFd(), offset, len, advice);
         } catch (Exception e) {
             return -1;
@@ -231,13 +190,13 @@ public final class IoHelper {
         if (targetPage < 0 || targetPage >= pages) {
             return false;
         }
-        try (var arena = java.lang.foreign.Arena.ofConfined()) {
+        try (var arena = Arena.ofConfined()) {
             MemorySegment vec = arena.allocate((int) pages);
             int ret = mincore(mappedSegment, mappedSegment.byteSize(), vec);
             if (ret != 0) {
                 return false;
             }
-            byte b = vec.get(java.lang.foreign.ValueLayout.JAVA_BYTE, targetPage);
+            byte b = vec.get(ValueLayout.JAVA_BYTE, targetPage);
             return (b & 1) != 0;
         }
     }

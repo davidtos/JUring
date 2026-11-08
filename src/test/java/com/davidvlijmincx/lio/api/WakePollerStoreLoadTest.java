@@ -78,6 +78,7 @@ public class WakePollerStoreLoadTest {
         @Actor
         public void kernelSqThread(II_Result r) {
             VH_FLAGS.setVolatile(this, 1);
+            VarHandle.fullFence();
             r.r2 = (int) VH_TAIL.getAcquire(this);
         }
     }
@@ -136,17 +137,17 @@ public class WakePollerStoreLoadTest {
             }
         }
 
-        private final Arena arena = Arena.ofShared();
-        private final MemorySegment sqeSegment = arena.allocate(ZeroGcSqe.SQE_SIZE);
+        private final Arena arena = Arena.ofAuto();
+        private final MemorySegment sqeSegment = arena.allocate(Sqe.SQE_SIZE);
         private int sqTail;
 
         @Actor
         public void submitter() {
             long addr = sqeSegment.address();
-            ZeroGcSqe.zero(addr);
-            ZeroGcSqe.setOpcode(addr, (byte) 18);
-            ZeroGcSqe.setFd(addr, 4);
-            ZeroGcSqe.setLen(addr, 8192);
+            Sqe.zero(addr);
+            Sqe.setOpcode(addr, (byte) 18);
+            Sqe.setFd(addr, 4);
+            Sqe.setLen(addr, 8192);
             VH_TAIL.setRelease(this, 1);
         }
 
@@ -156,9 +157,9 @@ public class WakePollerStoreLoadTest {
             r.r1 = tail;
             if (tail == 1) {
                 long addr = sqeSegment.address();
-                r.r2 = Byte.toUnsignedInt(ZeroGcSqe.getOpcode(addr));
-                r.r3 = ZeroGcSqe.getFd(addr);
-                r.r4 = ZeroGcSqe.getLen(addr);
+                r.r2 = Byte.toUnsignedInt(Sqe.getOpcode(addr));
+                r.r3 = Sqe.getFd(addr);
+                r.r4 = Sqe.getLen(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;
@@ -185,8 +186,8 @@ public class WakePollerStoreLoadTest {
             }
         }
 
-        private final Arena arena = Arena.ofShared();
-        private final MemorySegment cqeSegment = arena.allocate(ZeroGcCqe.CQE_LAYOUT.byteSize());
+        private final Arena arena = Arena.ofAuto();
+        private final MemorySegment cqeSegment = arena.allocate(Cqe.CQE_LAYOUT.byteSize());
         private int cqTail;
 
         @Actor
@@ -204,8 +205,8 @@ public class WakePollerStoreLoadTest {
             r.r1 = tail;
             if (tail == 1) {
                 long addr = cqeSegment.address();
-                r.r2 = ZeroGcCqe.getRes(addr);
-                r.r3 = (int) ZeroGcCqe.getUserData(addr);
+                r.r2 = Cqe.getRes(addr);
+                r.r3 = (int) Cqe.getUserData(addr);
             } else {
                 r.r2 = 0;
                 r.r3 = 0;
@@ -243,66 +244,56 @@ public class WakePollerStoreLoadTest {
     }
 
     @JCStressTest
-    @Outcome(id = "8", expect = Expect.ACCEPTABLE, desc = "Head not yet advanced; toSubmit = 8.")
-    @Outcome(id = "0", expect = Expect.ACCEPTABLE, desc = "Head advance observed; toSubmit = 0, loop terminates.")
-    @Outcome(id = "-1", expect = Expect.FORBIDDEN, desc = "Negative toSubmit calculation (underflow).")
+    @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Slot still in STATE_PARKED; result not yet published.")
+    @Outcome(id = "2, 4096", expect = Expect.ACCEPTABLE, desc = "Slot in STATE_DONE; CQE result visible to virtual thread.")
+    @Outcome(id = "2, 0", expect = Expect.FORBIDDEN, desc = "Slot marked STATE_DONE, but slotResult write was reordered/invisible.")
     @State
-    public static class LoopTerminationHeadProgressTest {
-        private static final VarHandle VH_HEAD;
+    public static class SlotCompletionHandoffTest {
+        private static final VarHandle VH_INT_ARRAY = MethodHandles.arrayElementVarHandle(int[].class);
+        private static final int STATE_PARKED = 1;
+        private static final int STATE_DONE = 2;
 
-        static {
-            try {
-                VH_HEAD = MethodHandles.lookup().findVarHandle(LoopTerminationHeadProgressTest.class, "sqHead", int.class);
-            } catch (ReflectiveOperationException e) {
-                throw new ExceptionInInitializerError(e);
+        private final int[] slotState = new int[]{STATE_PARKED};
+        private final long[] slotResult = new long[1];
+
+        @Actor
+        public void pollerCompleter() {
+            slotResult[0] = 4096L;
+            VH_INT_ARRAY.compareAndSet(slotState, 0, STATE_PARKED, STATE_DONE);
+        }
+
+        @Actor
+        public void virtualThreadWaiter(IJ_Result r) {
+            int state = (int) VH_INT_ARRAY.getAcquire(slotState, 0);
+            r.r1 = state;
+            if (state == STATE_DONE) {
+                r.r2 = slotResult[0];
+            } else {
+                r.r2 = 0L;
             }
-        }
-
-        private int sqHead;
-
-        @Actor
-        public void kernelConsumer() {
-            VH_HEAD.setRelease(this, 8);
-        }
-
-        @Actor
-        public void dispatcherLoopCheck(I_Result r) {
-            int head = (int) VH_HEAD.getAcquire(this);
-            int toSubmit = Math.max(0, 8 - head);
-            r.r1 = toSubmit;
         }
     }
 
     @JCStressTest
-    @Outcome(id = "0, 0", expect = Expect.ACCEPTABLE, desc = "Control task not yet finished.")
-    @Outcome(id = "1, 999", expect = Expect.ACCEPTABLE, desc = "Control task done; result fully visible.")
-    @Outcome(id = "1, 0", expect = Expect.FORBIDDEN, desc = "Task marked done, but result not visible.")
+    @Outcome(id = "false, 0", expect = Expect.ACCEPTABLE, desc = "Control task not yet finished.")
+    @Outcome(id = "true, 999", expect = Expect.ACCEPTABLE, desc = "Control task done; result fully visible.")
+    @Outcome(id = "true, 0", expect = Expect.FORBIDDEN, desc = "Task marked done, but result not visible.")
     @State
     public static class ControlTaskHandoffTest {
-        private static final VarHandle VH_DONE;
-
-        static {
-            try {
-                VH_DONE = MethodHandles.lookup().findVarHandle(ControlTaskHandoffTest.class, "done", int.class);
-            } catch (ReflectiveOperationException e) {
-                throw new ExceptionInInitializerError(e);
-            }
-        }
-
         private int resultValue;
-        private int done;
+        private volatile boolean done;
 
         @Actor
         public void pollerWorker() {
             resultValue = 999;
-            VH_DONE.setRelease(this, 1);
+            done = true;
         }
 
         @Actor
-        public void callerThread(II_Result r) {
-            int d = (int) VH_DONE.getAcquire(this);
+        public void callerThread(ZI_Result r) {
+            boolean d = done;
             r.r1 = d;
-            if (d == 1) {
+            if (d) {
                 r.r2 = resultValue;
             } else {
                 r.r2 = 0;

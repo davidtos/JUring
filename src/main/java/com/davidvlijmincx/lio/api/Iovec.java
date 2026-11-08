@@ -8,7 +8,7 @@ import static java.lang.foreign.MemoryLayout.PathElement.*;
 
 /**
  * {@snippet lang = c:
- * struct com.davidvlijmincx.lio.api.iovec {
+ * struct iovec {
  *     void *iov_base;
  *     size_t iov_len;
  * }
@@ -23,7 +23,7 @@ class Iovec {
             ValueLayout.ADDRESS
                     .withTargetLayout(MemoryLayout.sequenceLayout(Long.MAX_VALUE, ValueLayout.JAVA_BYTE)).withName("iov_base"),
             JAVA_LONG.withName("iov_len")
-    ).withName("com.davidvlijmincx.lio.api.iovec");
+    ).withName("iovec");
 
     /**
      * The layout of this struct

@@ -81,9 +81,9 @@ class ZeroAllocationHotPathTest {
 
     @Test
     void testHotPathNopBatchedZeroAllocations() {
-        final int qd = 64;
-        final int submitBatch = 32;
-        final ReapingConsumer consumer = new ReapingConsumer(ring);
+        int qd = 64;
+        int submitBatch = 32;
+        var consumer = new ReapingConsumer(ring);
         long threadId = Thread.currentThread().threadId();
 
         int zeroCount = 0;
@@ -106,16 +106,14 @@ class ZeroAllocationHotPathTest {
         long bytesAfter = getThreadAllocatedBytes(threadId);
         long allocated = bytesAfter - bytesBefore;
 
-        assertEquals(BENCHMARK_OPS, consumer.count, "Must have reaped exactly all benchmark operations");
-        assertEquals(0L, allocated,
-                String.format("Hot path NOP pipeline must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                        allocated, BENCHMARK_OPS));
+        assertEquals(BENCHMARK_OPS, consumer.count);
+        assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
     }
 
     @Test
     void testHotPathNopSubmitAndWaitZeroAllocations() {
-        final int qd = 32;
-        final ReapingConsumer consumer = new ReapingConsumer(ring);
+        int qd = 32;
+        var consumer = new ReapingConsumer(ring);
         long threadId = Thread.currentThread().threadId();
 
         int zeroCount = 0;
@@ -138,23 +136,21 @@ class ZeroAllocationHotPathTest {
         long bytesAfter = getThreadAllocatedBytes(threadId);
         long allocated = bytesAfter - bytesBefore;
 
-        assertEquals(BENCHMARK_OPS, consumer.count, "Must have reaped exactly all benchmark operations");
-        assertEquals(0L, allocated,
-                String.format("Hot path NOP submitAndWait must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                        allocated, BENCHMARK_OPS));
+        assertEquals(BENCHMARK_OPS, consumer.count);
+        assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
     }
 
     @Test
     void testHotPathDirectReadZeroAllocations(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_read_zero_alloc.bin");
+        var testFile = tempDir.resolve("direct_read_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
 
-        final int qd = 64;
+        int qd = 64;
         ring.registerBuffers(BLOCK_SIZE, qd);
 
         try (FileDescriptor fd = new FileDescriptor(testFile, LinuxOpenOptions.READ_DIRECT)) {
             ring.registerFiles(fd);
-            final ReapingConsumer consumer = new ReapingConsumer(ring);
+            var consumer = new ReapingConsumer(ring);
             long threadId = Thread.currentThread().threadId();
 
             int zeroCount = 0;
@@ -177,24 +173,22 @@ class ZeroAllocationHotPathTest {
             long bytesAfter = getThreadAllocatedBytes(threadId);
             long allocated = bytesAfter - bytesBefore;
 
-            assertEquals(BENCHMARK_OPS, consumer.count, "Must have reaped exactly all benchmark operations");
-            assertEquals(0L, allocated,
-                    String.format("Hot path Direct Read must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                            allocated, BENCHMARK_OPS));
+            assertEquals(BENCHMARK_OPS, consumer.count);
+            assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
         }
     }
 
     @Test
     void testHotPathDirectWriteZeroAllocations(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_write_zero_alloc.bin");
+        var testFile = tempDir.resolve("direct_write_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
 
-        final int qd = 64;
+        int qd = 64;
         ring.registerBuffers(BLOCK_SIZE, qd);
 
         try (FileDescriptor fd = new FileDescriptor(testFile, LinuxOpenOptions.WRITE_DIRECT, LinuxOpenOptions.READ_DIRECT)) {
             ring.registerFiles(fd);
-            final ReapingConsumer consumer = new ReapingConsumer(ring);
+            var consumer = new ReapingConsumer(ring);
             long threadId = Thread.currentThread().threadId();
 
             int zeroCount = 0;
@@ -217,16 +211,14 @@ class ZeroAllocationHotPathTest {
             long bytesAfter = getThreadAllocatedBytes(threadId);
             long allocated = bytesAfter - bytesBefore;
 
-            assertEquals(BENCHMARK_OPS, consumer.count, "Must have reaped exactly all benchmark operations");
-            assertEquals(0L, allocated,
-                    String.format("Hot path Direct Write must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                            allocated, BENCHMARK_OPS));
+            assertEquals(BENCHMARK_OPS, consumer.count);
+            assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
         }
     }
 
     @Test
     void testHotPathNopSingleWaitForResultZeroAllocations() {
-        final Result reusableResult = new Result();
+        var reusableResult = new Result();
         long threadId = Thread.currentThread().threadId();
 
         int zeroCount = 0;
@@ -247,21 +239,19 @@ class ZeroAllocationHotPathTest {
         long bytesAfter = getThreadAllocatedBytes(threadId);
         long allocated = bytesAfter - bytesBefore;
 
-        assertEquals(0L, allocated,
-                String.format("Hot path unbatched NOP must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                        allocated, BENCHMARK_OPS));
+        assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
     }
 
     @Test
     void testHotPathDirectReadSingleZeroAllocations(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_read_single_zero_alloc.bin");
+        var testFile = tempDir.resolve("direct_read_single_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
 
         ring.registerBuffers(BLOCK_SIZE, 1);
 
         try (FileDescriptor fd = new FileDescriptor(testFile, LinuxOpenOptions.READ_DIRECT)) {
             ring.registerFiles(fd);
-            final Result reusableResult = new Result();
+            var reusableResult = new Result();
             long threadId = Thread.currentThread().threadId();
 
             int zeroCount = 0;
@@ -282,22 +272,20 @@ class ZeroAllocationHotPathTest {
             long bytesAfter = getThreadAllocatedBytes(threadId);
             long allocated = bytesAfter - bytesBefore;
 
-            assertEquals(0L, allocated,
-                    String.format("Hot path unbatched Direct Read must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                            allocated, BENCHMARK_OPS));
+            assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
         }
     }
 
     @Test
     void testHotPathDirectWriteSingleZeroAllocations(@TempDir Path tempDir) throws IOException {
-        Path testFile = tempDir.resolve("direct_write_single_zero_alloc.bin");
+        var testFile = tempDir.resolve("direct_write_single_zero_alloc.bin");
         prepareTestFile(testFile, FILE_BLOCKS * BLOCK_SIZE);
 
         ring.registerBuffers(BLOCK_SIZE, 1);
 
         try (FileDescriptor fd = new FileDescriptor(testFile, LinuxOpenOptions.WRITE_DIRECT, LinuxOpenOptions.READ_DIRECT)) {
             ring.registerFiles(fd);
-            final Result reusableResult = new Result();
+            var reusableResult = new Result();
             long threadId = Thread.currentThread().threadId();
 
             int zeroCount = 0;
@@ -318,9 +306,7 @@ class ZeroAllocationHotPathTest {
             long bytesAfter = getThreadAllocatedBytes(threadId);
             long allocated = bytesAfter - bytesBefore;
 
-            assertEquals(0L, allocated,
-                    String.format("Hot path unbatched Direct Write must allocate 0 heap bytes, but allocated %,d bytes across %,d ops",
-                            allocated, BENCHMARK_OPS));
+            assertEquals(0L, allocated, "Expected 0 heap bytes allocated, got " + allocated);
         }
     }
 
