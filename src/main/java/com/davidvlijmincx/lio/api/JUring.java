@@ -5,6 +5,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
@@ -435,10 +436,10 @@ public class JUring implements AutoCloseable {
 
     private long prepareOpen(String filePath, int flags, int mode, byte sqeFlags) {
         byte[] pathBytes = LibCDispatcher.encodePath(filePath);
+        long sqe = getSqe(sqeFlags, false);
         MemorySegment pathBuffer = NativeDispatcher.C.calloc(pathBytes.length + 1);
         MemorySegment.copy(pathBytes, 0, pathBuffer, JAVA_BYTE, 0, pathBytes.length);
 
-        long sqe = getSqe(sqeFlags, false);
         long userData = UserData.encode(OperationType.OPEN, pathBuffer.address());
 
         ioUring.prepareOpenAt(sqe, pathBuffer.address(), flags | 0x80000 /* O_CLOEXEC */, mode);
@@ -580,10 +581,11 @@ public class JUring implements AutoCloseable {
     }
 
     private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, byte flags, boolean fixedFile) {
+        Objects.requireNonNull(bytes, "bytes");
+        long sqe = getSqe(flags, fixedFile);
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
-        long sqe = getSqe(flags, fixedFile);
         long userData = UserData.encode(OperationType.WRITE, buff.address());
 
         ioUring.prepareWrite(sqe, fdOrIndex, buff.address(), bytes.length, offset);
@@ -620,8 +622,8 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
         long sqe = getSqe(flags, fixedFile);
+        MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
@@ -648,11 +650,11 @@ public class JUring implements AutoCloseable {
             throw new WrongThreadException("Segment is confined to another thread");
         }
 
+        long sqe = getSqe(flags, fixedFile);
         long targetAddr = registeredBufferAddresses[bufferIndex];
         if (!bytes.isNative() || bytes.address() != targetAddr) {
             MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
         }
-        long sqe = getSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 

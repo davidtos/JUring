@@ -26,6 +26,17 @@ public class JUringBlocking implements AutoCloseable {
     private static final int STATE_DONE = 2;
     private static final int STATE_ABANDONED = 3;
 
+    private static final int SPINS_BEFORE_YIELD = 64;
+
+    static int onContendedSpin(int spins) {
+        if (spins < SPINS_BEFORE_YIELD) {
+            Thread.onSpinWait();
+            return spins + 1;
+        }
+        Thread.yield();
+        return 0;
+    }
+
     private static final VarHandle VH_INT_ARRAY = MethodHandles.arrayElementVarHandle(int[].class);
     private static final VarHandle VH_LONG_ARRAY = MethodHandles.arrayElementVarHandle(long[].class);
     private static final VarHandle VH_FREE_BUF_HEAD;
@@ -429,11 +440,12 @@ public class JUringBlocking implements AutoCloseable {
                 }
             }
             ControlTask<T> task = new ControlTask<>(action, Thread.currentThread());
+            int spins = 0;
             while (!controlTask.compareAndSet(null, task)) {
                 if (!running) {
                     throw new IllegalStateException("JUringBlocking is closed");
                 }
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
             wakePoller();
             boolean interrupted = false;
@@ -476,6 +488,7 @@ public class JUringBlocking implements AutoCloseable {
         private int acquireSlot() {
             final int mask = this.slotMask;
             final int cap = this.slotCapacity;
+            int spins = 0;
             while (true) {
                 if (!running) {
                     throw new IllegalStateException("JUringBlocking is closed");
@@ -492,14 +505,16 @@ public class JUringBlocking implements AutoCloseable {
                     }
                 } else if (dif < 0) {
                     LockSupport.parkNanos(this, 10_000L);
+                    spins = 0;
                 } else {
-                    Thread.onSpinWait();
+                    spins = onContendedSpin(spins);
                 }
             }
         }
 
         private void releaseSlot(int slotId) {
             final int mask = this.slotMask;
+            int spins = 0;
             while (true) {
                 long pos = (long) VH_WORKER_FREE_SLOT_TAIL.getVolatile(this);
                 int idx = (int) (pos & mask);
@@ -512,7 +527,7 @@ public class JUringBlocking implements AutoCloseable {
                         return;
                     }
                 } else {
-                    Thread.onSpinWait();
+                    spins = onContendedSpin(spins);
                 }
             }
         }
@@ -529,7 +544,15 @@ public class JUringBlocking implements AutoCloseable {
                 int fileIndex,
                 long freeAddrOnComplete
         ) {
-            int slotId = acquireSlot();
+            int slotId;
+            try {
+                slotId = acquireSlot();
+            } catch (Throwable t) {
+                if (freeAddrOnComplete != 0L) {
+                    parent.libc.free(freeAddrOnComplete);
+                }
+                throw t;
+            }
             slotOpcode[slotId] = opcode;
             slotSqeFlags[slotId] = sqeFlags;
             slotFd[slotId] = fd;
@@ -545,8 +568,9 @@ public class JUringBlocking implements AutoCloseable {
 
             long tail = (long) VH_WORKER_MPSC_TAIL.getAndAdd(this, 1L);
             int idx = (int) (tail & this.slotMask);
+            int spins = 0;
             while ((long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx) != tail) {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
             this.mpscBuffer[idx] = slotId;
             VH_LONG_ARRAY.setRelease(this.mpscSeq, idx, tail + 1);
@@ -858,6 +882,7 @@ public class JUringBlocking implements AutoCloseable {
         }
         final int mask = this.registeredBufMask;
         final int cap = mask + 1;
+        int spins = 0;
         while (true) {
             long pos = (long) VH_FREE_BUF_HEAD.getVolatile(this);
             int idx = (int) (pos & mask);
@@ -872,7 +897,7 @@ public class JUringBlocking implements AutoCloseable {
             } else if (dif < 0) {
                 return -1;
             } else {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
         }
     }
@@ -889,6 +914,7 @@ public class JUringBlocking implements AutoCloseable {
             throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
         final int mask = this.registeredBufMask;
+        int spins = 0;
         while (true) {
             long pos = (long) VH_FREE_BUF_TAIL.getVolatile(this);
             long head = (long) VH_FREE_BUF_HEAD.getVolatile(this);
@@ -909,9 +935,9 @@ public class JUringBlocking implements AutoCloseable {
                 if (pos - currentHead >= totalBuffers) {
                     throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
                 }
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             } else {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
         }
     }

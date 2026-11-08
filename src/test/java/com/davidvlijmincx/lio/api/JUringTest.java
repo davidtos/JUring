@@ -17,9 +17,7 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.*;
 
 class JUringTest {
 
@@ -776,6 +774,67 @@ class JUringTest {
             assertEquals(4096L, buffers[i].byteSize());
             assertEquals(0L, buffers[i].address() & 4095L, "Registered buffer " + i + " must be 4096-byte page aligned");
             assertEquals(baseAddr + (long) i * 4096L, buffers[i].address(), "Registered buffers must form a contiguous slab");
+        }
+    }
+
+    @Test
+    void prepareOpenThrowsWhenRingFullWithoutLeaking() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER)) {
+            ring.prepareNop();
+            ring.prepareNop();
+
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareOpen("nonexistent_test_path", 0, 0)
+            );
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
+        }
+    }
+
+    @Test
+    void prepareWriteThrowsWhenRingFullWithoutLeaking() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            ring.prepareNop();
+            ring.prepareNop();
+
+            byte[] data = "Hello leak test".getBytes();
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareWrite(fd, data, 0)
+            );
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
+        }
+    }
+
+    @Test
+    void prepareWriteFixedDoesNotOverwriteRegisteredBufferWhenRingFull() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            MemorySegment[] bufs = ring.registerBuffers(64, 1);
+            bufs[0].fill((byte) 0xAA);
+
+            ring.prepareNop();
+            ring.prepareNop();
+
+            byte[] data = "New content".getBytes();
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareWriteFixed(fd, data, 0, 0)
+            );
+
+            // Verify registered buffer byte 0 is still 0xAA (not overwritten)
+            assertEquals((byte) 0xAA, bufs[0].get(JAVA_BYTE, 0L));
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
         }
     }
 }

@@ -133,6 +133,10 @@ Here is a breakdown where the platform thread budget is held equal between both 
 | 16 Threads             | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline |
 | 16 Threads             | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    |
 
+> [!NOTE]
+> **Buffer Registration in `VirtualThreadBenchmark`:**
+> In `VirtualThreadBenchmark.java`, `JUringVirtualThreadState` uses `ring.read(fileIdx, buf, fileOffset)` (registered file descriptor with caller-allocated aligned `MemorySegment`), whereas `FileChannel` uses `channel.read(buf, fileOffset)`. Unlike `DirectReadBenchmark`, `JUringBlocking` does **not** use kernel pre-registered fixed buffers (`readFixed`) here. This makes the test strictly fair to `FileChannel` (which cannot use registered buffers), and `JUringBlocking` still achieves 452,192 ops/s (1.77 GB/s) on just 2 carrier threads + 2 poller threads.
+
 ### Project Panama (FFM API) Downcall Overhead
 To see where the dispatch overhead comes from, we benchmarked different ways of invoking foreign functions using the FFM API:
 
