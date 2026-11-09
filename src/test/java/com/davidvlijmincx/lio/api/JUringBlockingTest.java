@@ -10,6 +10,8 @@ import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
@@ -18,6 +20,7 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class JUringBlockingTest {
 
@@ -372,7 +375,7 @@ class JUringBlockingTest {
 
             int threads = 16;
             var executor = Executors.newFixedThreadPool(threads);
-            java.util.List<Future<String>> futures = new java.util.ArrayList<>();
+            List<Future<String>> futures = new ArrayList<>();
             for (int i = 0; i < threads; i++) {
                 futures.add(executor.submit(() -> {
                     try (Arena arena = Arena.ofConfined()) {
@@ -388,5 +391,42 @@ class JUringBlockingTest {
             }
             executor.shutdown();
         }
+    }
+
+    @Test
+    void virtualThreadHeavyContentionTest() throws Exception {
+     try (JUringBlocking blocking = new JUringBlocking(32, 1, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+             var vts = Executors.newVirtualThreadPerTaskExecutor()) {
+
+            int totalTasks = 200;
+            List<Future<Long>> futures = new ArrayList<>(totalTasks);
+            for (int i = 0; i < totalTasks; i++) {
+                futures.add(vts.submit(() -> {
+                    try (Arena arena = Arena.ofConfined()) {
+                        MemorySegment buf = arena.allocate(13);
+                        return blocking.read(fd, buf, 13, 0);
+                    }
+                }));
+            }
+
+            for (var f : futures) {
+                assertEquals(13L, f.get());
+            }
+        }
+    }
+
+    @Test
+    void closedRingFreesMemoryOnWriteException() {
+        JUringBlocking blocking = new JUringBlocking(10, 1, IORING_SETUP_SINGLE_ISSUER);
+        FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
+        blocking.close();
+
+        byte[] bytes = "Leak test when closed".getBytes(StandardCharsets.UTF_8);
+        assertThrows(IllegalStateException.class, () ->
+                blocking.write(fd, bytes, 0)
+        );
+
+        fd.close();
     }
 }

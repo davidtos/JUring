@@ -16,12 +16,7 @@ public class StorageAuxCounters {
      * Total I/O bytes processed during the invocation.
      */
     public long bytesProcessed;
-
-    /**
-     * Increments the counters for an invocation.
-     *
-     * @param bytes number of bytes read or written
-     */
+    
     public void record(long bytes) {
         this.bytesProcessed += bytes;
     }

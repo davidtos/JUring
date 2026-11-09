@@ -1,0 +1,26 @@
+# profile used for 4KB Random Direct Read benchmarks in README.md / BENCHMARK.md
+# Run command: fio src/test/resources/fio/fio_randread_qd64.fio
+[global]
+ioengine=io_uring
+direct=1
+bs=4k
+size=10G
+filename=single_file_bench.bin
+rw=randread
+iodepth=64
+fixedbufs=1
+registerfiles=1
+time_based=1
+runtime=30s
+ramp_time=5s
+norandommap=1
+randrepeat=0
+lat_percentiles=1
+
+[fio_randread_default]
+# Default fio submission / reap behavior (~1.52 io_uring_enter calls/op)
+
+# To reproduce optimal batching (B=8, ~0.73 io_uring_enter calls/op), uncomment:
+# iodepth_batch_submit=8
+# iodepth_batch_complete_min=1
+# iodepth_batch_complete_max=64

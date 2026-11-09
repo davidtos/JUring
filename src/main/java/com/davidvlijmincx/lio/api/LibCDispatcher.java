@@ -369,12 +369,11 @@ final class LibCDispatcher {
         boolean sectorAligned = bufferSize >= 512 && (bufferSize & 511L) == 0;
         long alignment = (bufferSize >= 4096 && (bufferSize & 4095L) == 0) ? 4096L
                 : sectorAligned ? 512L : 64L;
-        long stride = sectorAligned ? bufferSize : Math.addExact(bufferSize, 1L);
-        MemorySegment slab = arena.allocate(Math.addExact(Math.multiplyExact(stride, nrIovecs), sectorAligned ? 1L : 0L), alignment);
+        MemorySegment slab = arena.allocate(Math.multiplyExact(bufferSize, nrIovecs), alignment);
 
         for (int i = 0; i < nrIovecs; i++) {
             MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
-            MemorySegment buffer = slab.asSlice((long) i * stride, bufferSize);
+            MemorySegment buffer = slab.asSlice((long) i * bufferSize, bufferSize);
 
             Iovec.iov_base(nthIovec, buffer);
             Iovec.iov_len(nthIovec, bufferSize);

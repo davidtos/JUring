@@ -26,6 +26,17 @@ public class JUringBlocking implements AutoCloseable {
     private static final int STATE_DONE = 2;
     private static final int STATE_ABANDONED = 3;
 
+    private static final int SPINS_BEFORE_YIELD = 64;
+
+    static int onContendedSpin(int spins) {
+        if (spins < SPINS_BEFORE_YIELD) {
+            Thread.onSpinWait();
+            return spins + 1;
+        }
+        Thread.yield();
+        return 0;
+    }
+
     private static final VarHandle VH_INT_ARRAY = MethodHandles.arrayElementVarHandle(int[].class);
     private static final VarHandle VH_LONG_ARRAY = MethodHandles.arrayElementVarHandle(long[].class);
     private static final VarHandle VH_FREE_BUF_HEAD;
@@ -223,7 +234,7 @@ public class JUringBlocking implements AutoCloseable {
         private void pollerLoop() {
             final IoUringDispatcher dispatcher = this.ioUringDispatcher;
             final int sqEntries = dispatcher.sqRingEntries();
-            final int[] inFlightHolder = new int[1]; // [0] = totalInFlight
+            final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = expectedFromUnpark
 
             final IoUringDispatcher.RawCqeConsumer cqeConsumer = (userData, res, flags) -> {
                 if (userData == EVENTFD_SENTINEL || userData == CANCEL_SENTINEL) {
@@ -238,6 +249,7 @@ public class JUringBlocking implements AutoCloseable {
                 Thread vt = slotThread[slotId];
                 if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_DONE)) {
                     if (vt != null) {
+                        inFlightHolder[1]++;
                         LockSupport.unpark(vt);
                     }
                 } else {
@@ -252,11 +264,12 @@ public class JUringBlocking implements AutoCloseable {
                 }
             };
 
+            int unsubmitted = 0;
+
             while (running) {
                 runPendingControlTask();
 
-                int preparedNow = 0;
-                while (inFlightHolder[0] < (sqEntries - 1) && preparedNow < (sqEntries - 1)) {
+                while (inFlightHolder[0] < (sqEntries - 1) && unsubmitted < (sqEntries - 1)) {
                     long head = this.mpscHead;
                     int idx = (int) (head & this.slotMask);
                     long seq = (long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx);
@@ -286,73 +299,87 @@ public class JUringBlocking implements AutoCloseable {
                     Sqe.setUserData(sqe, slotId);
 
                     inFlightHolder[0]++;
-                    preparedNow++;
-                }
-
-                if (!eventfdArmed) {
-                    long sqe = dispatcher.getSqe();
-                    if (sqe != 0L) {
-                        Sqe.zero(sqe);
-                        Sqe.setOpcode(sqe, IORING_OP_READ);
-                        Sqe.setFd(sqe, eventFd);
-                        Sqe.setAddr(sqe, eventfdReadBuf);
-                        Sqe.setLen(sqe, 8);
-                        Sqe.setUserData(sqe, EVENTFD_SENTINEL);
-                        eventfdArmed = true;
-                        preparedNow++;
+                    if (inFlightHolder[1] > 0) {
+                        inFlightHolder[1]--;
                     }
+                    unsubmitted++;
                 }
 
                 int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
 
-                int totalInFlight = inFlightHolder[0];
+                boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                if (reaped > 0 || (canAcceptMore && hasPendingMpsc()) || controlTask.get() != null) {
+                    if (unsubmitted >= (sqEntries >>> 1)) {
+                        dispatcher.submit();
+                        unsubmitted = 0;
+                    }
+                    continue;
+                }
 
-                if (totalInFlight > 0) {
-                    if (reaped == 0 && controlTask.get() == null) {
-                        boolean canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
+                // Coalesce submissions from recently unparked VTs or concurrent submission bursts
+                // before setting inKernel = 1 or entering the kernel.
+                if (canAcceptMore && (inFlightHolder[1] > 0 || (unsubmitted > 0 && inFlightHolder[0] > 1))) {
+                    int maxSpins = inFlightHolder[1] > 0 ? 2000 : 200;
+                    boolean found = false;
+                    for (int spin = 0; spin < maxSpins; spin++) {
+                        if (hasPendingMpsc() || !running || controlTask.get() != null) {
+                            found = true;
+                            break;
+                        }
+                        Thread.onSpinWait();
+                    }
+                    inFlightHolder[1] = 0;
+                    if (found) {
+                        continue;
+                    }
+                }
+
+                if (inFlightHolder[0] > 0) {
+                    if (controlTask.get() == null && running) {
+                        if (!eventfdArmed) {
+                            long sqe = dispatcher.getSqe();
+                            if (sqe != 0L) {
+                                Sqe.zero(sqe);
+                                Sqe.setOpcode(sqe, IORING_OP_READ);
+                                Sqe.setFd(sqe, eventFd);
+                                Sqe.setAddr(sqe, eventfdReadBuf);
+                                Sqe.setLen(sqe, 8);
+                                Sqe.setUserData(sqe, EVENTFD_SENTINEL);
+                                eventfdArmed = true;
+                                unsubmitted++;
+                            }
+                        }
+                        canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
                         VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                         VarHandle.fullFence();
                         if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                            if (preparedNow > 0) {
+                            if (unsubmitted > 0) {
                                 dispatcher.submit();
+                                unsubmitted = 0;
                             }
                         } else {
+                            unsubmitted = 0;
                             dispatcher.submitAndWait(1);
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                             dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
                         }
-                    } else if (preparedNow > 0) {
+                    } else if (unsubmitted > 0) {
                         dispatcher.submit();
+                        unsubmitted = 0;
                     }
                 } else {
-                    if (controlTask.get() == null && running) {
-                        if (eventfdArmed) {
-                            VH_WORKER_IN_KERNEL.setVolatile(this, 1);
-                            VarHandle.fullFence();
-                            if (!running || controlTask.get() != null || hasPendingMpsc()) {
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                if (preparedNow > 0) {
-                                    dispatcher.submit();
-                                }
-                            } else {
-                                dispatcher.submitAndWait(1);
-                                VH_WORKER_IN_KERNEL.setVolatile(this, 0);
-                                dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
-                            }
-                        } else {
-                            if (preparedNow > 0) {
-                                dispatcher.submit();
-                            }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
-                            VarHandle.fullFence();
-                            if (!hasPendingMpsc() && controlTask.get() == null && running) {
-                                LockSupport.park(this);
-                            }
-                            VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
-                        }
-                    } else if (preparedNow > 0) {
+                    if (unsubmitted > 0) {
                         dispatcher.submit();
+                        unsubmitted = 0;
+                    }
+                    if (controlTask.get() == null && running) {
+                        VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
+                        VarHandle.fullFence();
+                        if (!hasPendingMpsc() && controlTask.get() == null && running) {
+                            LockSupport.park(this);
+                        }
+                        VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
                     }
                 }
             }
@@ -413,11 +440,12 @@ public class JUringBlocking implements AutoCloseable {
                 }
             }
             ControlTask<T> task = new ControlTask<>(action, Thread.currentThread());
+            int spins = 0;
             while (!controlTask.compareAndSet(null, task)) {
                 if (!running) {
                     throw new IllegalStateException("JUringBlocking is closed");
                 }
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
             wakePoller();
             boolean interrupted = false;
@@ -460,6 +488,7 @@ public class JUringBlocking implements AutoCloseable {
         private int acquireSlot() {
             final int mask = this.slotMask;
             final int cap = this.slotCapacity;
+            int spins = 0;
             while (true) {
                 if (!running) {
                     throw new IllegalStateException("JUringBlocking is closed");
@@ -476,14 +505,16 @@ public class JUringBlocking implements AutoCloseable {
                     }
                 } else if (dif < 0) {
                     LockSupport.parkNanos(this, 10_000L);
+                    spins = 0;
                 } else {
-                    Thread.onSpinWait();
+                    spins = onContendedSpin(spins);
                 }
             }
         }
 
         private void releaseSlot(int slotId) {
             final int mask = this.slotMask;
+            int spins = 0;
             while (true) {
                 long pos = (long) VH_WORKER_FREE_SLOT_TAIL.getVolatile(this);
                 int idx = (int) (pos & mask);
@@ -496,7 +527,7 @@ public class JUringBlocking implements AutoCloseable {
                         return;
                     }
                 } else {
-                    Thread.onSpinWait();
+                    spins = onContendedSpin(spins);
                 }
             }
         }
@@ -513,7 +544,15 @@ public class JUringBlocking implements AutoCloseable {
                 int fileIndex,
                 long freeAddrOnComplete
         ) {
-            int slotId = acquireSlot();
+            int slotId;
+            try {
+                slotId = acquireSlot();
+            } catch (Throwable t) {
+                if (freeAddrOnComplete != 0L) {
+                    parent.libc.free(freeAddrOnComplete);
+                }
+                throw t;
+            }
             slotOpcode[slotId] = opcode;
             slotSqeFlags[slotId] = sqeFlags;
             slotFd[slotId] = fd;
@@ -529,8 +568,9 @@ public class JUringBlocking implements AutoCloseable {
 
             long tail = (long) VH_WORKER_MPSC_TAIL.getAndAdd(this, 1L);
             int idx = (int) (tail & this.slotMask);
+            int spins = 0;
             while ((long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx) != tail) {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
             this.mpscBuffer[idx] = slotId;
             VH_LONG_ARRAY.setRelease(this.mpscSeq, idx, tail + 1);
@@ -842,6 +882,7 @@ public class JUringBlocking implements AutoCloseable {
         }
         final int mask = this.registeredBufMask;
         final int cap = mask + 1;
+        int spins = 0;
         while (true) {
             long pos = (long) VH_FREE_BUF_HEAD.getVolatile(this);
             int idx = (int) (pos & mask);
@@ -856,7 +897,7 @@ public class JUringBlocking implements AutoCloseable {
             } else if (dif < 0) {
                 return -1;
             } else {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
         }
     }
@@ -873,6 +914,7 @@ public class JUringBlocking implements AutoCloseable {
             throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
         final int mask = this.registeredBufMask;
+        int spins = 0;
         while (true) {
             long pos = (long) VH_FREE_BUF_TAIL.getVolatile(this);
             long head = (long) VH_FREE_BUF_HEAD.getVolatile(this);
@@ -893,9 +935,9 @@ public class JUringBlocking implements AutoCloseable {
                 if (pos - currentHead >= totalBuffers) {
                     throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
                 }
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             } else {
-                Thread.onSpinWait();
+                spins = onContendedSpin(spins);
             }
         }
     }

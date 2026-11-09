@@ -2,20 +2,22 @@
 
 An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory API (JEP 454).
 
-File I/O operations are synchronous and blocking. When using Virtual Threads, file operations issue blocking system calls that prevent unmounting from carrier threads. JUring talks directly to the Linux `io_uring` kernel interface from Java without JNI, C wrappers, or `liburing.so`!
+File I/O operations are synchronous and blocking. When using Virtual Threads, file operations prevent unmounting from carrier threads. JUring talks directly to `io_uring` from Java without JNI, C wrappers, or `liburing.so`.
 
 - Only Java FFM downcalls and VarHandles.
 - Zero heap alloc on the hot path after setup.
 - Virtual thread support using LockSupport with JUringBlocking (wrapper for JUring).
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
-> The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start, from which to build upon.
+> [!NOTE]
+> - The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start.
+> - I tried my best to recreate `fio`'s workload in `JMH`. I think it gives a good indication of the performance. `JUring` and `FileChannel` do run the exact same workload.
 
 ## Benchmark Results
 
 The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and `FileChannel`.
 
-Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern storage saturated on its own. JUring can submit batches of asynchronous requests on a single thread using the queue depth of the storage medium.
+Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on a single thread. It cannot keep modern storage saturated on its own. JUring can submit batches of asynchronous requests on a single thread using the queue depth of the storage device.
 
 #### 4KB Random Direct Read (`randread`, QD=64, 10 GB File, `O_DIRECT`, Fixed Buffers, Registered Files)
 
@@ -34,6 +36,10 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 | `fio` (best batching: B=16) | 205,278.8 ± 64,687.3 | 801.9 ± 252.7 MB/s | baseline          | `--iodepth_batch_submit=16` |
 | `FileChannel.write`         | 72,409.4  ± 1,577.1  | 282.8 ± 6.2 MB/s   | -64.7%            | QD=1                        |
 | JUring (JMH)                | 193,768.7 ± 1,678.7  | 756.9 ± 6.6 MB/s   | -5.6%             | Batched `submitAndWait(1)`  |
+
+> [!NOTE]
+> - Under continuous write load (after the drive's pseudo-SLC cache is exhausted), JUring and `fio` achieve identical throughput (~190k IOPS write, ~325k IOPS read), both hitting the physical flash limits of the NVMe storage.
+> - Letting the NVMe "rest", JUring can report higher single-threaded burst write throughput than standard `fio` (~450k vs ~320k IOPS). This is not because Java is faster than native C, but because of `IORING_SETUP_DEFER_TASKRUN`, without it, they perform the same.
 
 ## Virtual Thread Performance
 
@@ -78,10 +84,10 @@ public class DirectReadExample {
                 IORING_SETUP_DEFER_TASKRUN);
              FileDescriptor fd = new FileDescriptor(Path.of("/mnt/TestData/large_dataset.bin"), LinuxOpenOptions.READ_DIRECT)) {
 
-            // Pre-register file descriptor into kernel fixed table
+            // Pre-register file descriptor
             ring.registerFiles(fd);
 
-            // Pre-register DMA buffers with kernel
+            // Pre-register buffers
             MemorySegment[] buffers = ring.registerBuffers(bufferSize, queueDepth);
 
             // Submit asynchronous direct read requests
@@ -238,7 +244,7 @@ public class BufferedIoExample {
 
 ### Virtual Threads with JUringBlocking
 
-If you want a synchronous-style blocking API that works cleanly with Virtual Threads, use `JUringBlocking`. The virtual thread unmounts while waiting for kernel completions, letting its carrier thread execute other tasks:
+If you want a synchronous-style blocking API that works with Virtual Threads, use `JUringBlocking`. The virtual thread unmounts while waiting for kernel completions, letting its carrier thread execute other tasks:
 
 ```java
 import com.davidvlijmincx.lio.api.*;

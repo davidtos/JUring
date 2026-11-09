@@ -25,6 +25,8 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.*;
@@ -339,7 +341,7 @@ public class DirectLatencyBenchmark {
                     if (resultsDir != null && !resultsDir.isBlank()) {
                         outDir = Path.of(resultsDir);
                     } else {
-                        String date = new java.text.SimpleDateFormat("yyyy-MM-dd_HHmmss").format(new java.util.Date());
+                        String date = new SimpleDateFormat("yyyy-MM-dd_HHmmss").format(new Date());
                         outDir = Path.of("results", date);
                     }
                     Files.createDirectories(outDir);

@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -17,9 +18,7 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.WRITE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.fail;
+import static org.junit.jupiter.api.Assertions.*;
 
 class JUringTest {
 
@@ -49,8 +48,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("Hello, World!", string);
 
@@ -70,8 +68,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("Hello, World!", string);
 
@@ -179,7 +176,7 @@ class JUringTest {
 
             assertEquals(id, result.id());
 
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             result.freeBuffer();
             assertEquals("World!", string);
 
@@ -252,8 +249,7 @@ class JUringTest {
                 assertEquals(id, readResult.id());
                 assertEquals(13, readResult.result());
 
-                readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-                String string = readResult.buffer().getString(0);
+                String string = readResult.getString();
                 assertEquals("Hello, World!", string);
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -303,8 +299,7 @@ class JUringTest {
             Result readResult2 = jUring.waitForResult();
 
             assertEquals(id2, readResult2.id());
-            readResult2.buffer().set(JAVA_BYTE, (int)readResult2.result(), (byte) 0);
-            String content = readResult2.buffer().getString(0);
+            String content = readResult2.getString();
             readResult2.freeBuffer();
             assertEquals("third file content", content);
 
@@ -313,8 +308,7 @@ class JUringTest {
             Result readResult1 = jUring.waitForResult();
 
             assertEquals(id1, readResult1.id());
-            readResult1.buffer().set(JAVA_BYTE, (int)readResult1.result(), (byte) 0);
-            content = readResult1.buffer().getString(0);
+            content = readResult1.getString();
             readResult1.freeBuffer();
             assertEquals("second file content", content);
         }
@@ -333,8 +327,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
             
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             assertEquals("Hello, World!", string);
         }
     }
@@ -354,8 +347,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(13, result.result());
             
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            String string = result.buffer().getString(0);
+            String string = result.getString();
             assertEquals("Hello, World!", string);
 
         }
@@ -377,8 +369,7 @@ class JUringTest {
         assertEquals(readId, readResult.id());
         assertEquals(13, readResult.result());
 
-        readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-        String content = readResult.buffer().getString(0);
+        String content = readResult.getString();
         readResult.freeBuffer();
         assertEquals("Hello, World!", content);
 
@@ -408,8 +399,7 @@ class JUringTest {
             assertEquals(readId, readResult.id());
             assertEquals(19, readResult.result());
 
-            readResult.buffer().set(JAVA_BYTE, readResult.result(), (byte) 0);
-            String content = readResult.buffer().getString(0);
+            String content = readResult.getString();
             readResult.freeBuffer();
             assertEquals("second file content", content);
         }
@@ -561,8 +551,7 @@ class JUringTest {
             assertEquals(id, result.id());
             assertEquals(7, result.result());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            assertEquals("Hello, ", result.buffer().getString(0));
+            assertEquals("Hello, ", result.getString());
         }
     }
 
@@ -602,8 +591,7 @@ class JUringTest {
             assertEquals(13, result.result());
             assertEquals(bufIdx, result.bufferIdx());
 
-            result.buffer().set(JAVA_BYTE, result.result(), (byte) 0);
-            assertEquals("Hello, World!", result.buffer().getString(0));
+            assertEquals("Hello, World!", result.getString());
 
             jUring.checkInBuffer(bufIdx);
         }
@@ -741,7 +729,7 @@ class JUringTest {
     @Test
     void readFromFileIntoMemorySegment() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+             Arena arena = Arena.ofConfined()) {
             MemorySegment buf = arena.allocate(14);
             long id = jUring.prepareRead(fd, buf, 0);
             jUring.submit();
@@ -760,7 +748,7 @@ class JUringTest {
     @Test
     void readFromRegisteredFileIntoMemorySegment() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+             Arena arena = Arena.ofConfined()) {
             assertEquals(0, jUring.registerFiles(fd));
 
             MemorySegment buf = arena.allocate(14);
@@ -787,6 +775,66 @@ class JUringTest {
             assertEquals(4096L, buffers[i].byteSize());
             assertEquals(0L, buffers[i].address() & 4095L, "Registered buffer " + i + " must be 4096-byte page aligned");
             assertEquals(baseAddr + (long) i * 4096L, buffers[i].address(), "Registered buffers must form a contiguous slab");
+        }
+    }
+
+    @Test
+    void prepareOpenThrowsWhenRingFullWithoutLeaking() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER)) {
+            ring.prepareNop();
+            ring.prepareNop();
+
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareOpen("nonexistent_test_path", 0, 0)
+            );
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
+        }
+    }
+
+    @Test
+    void prepareWriteThrowsWhenRingFullWithoutLeaking() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            ring.prepareNop();
+            ring.prepareNop();
+
+            byte[] data = "Hello leak test".getBytes();
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareWrite(fd, data, 0)
+            );
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
+        }
+    }
+
+    @Test
+    void prepareWriteFixedDoesNotOverwriteRegisteredBufferWhenRingFull() {
+        try (JUring ring = new JUring(2, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0)) {
+            MemorySegment[] bufs = ring.registerBuffers(64, 1);
+            bufs[0].fill((byte) 0xAA);
+
+            ring.prepareNop();
+            ring.prepareNop();
+
+            byte[] data = "New content".getBytes();
+            assertThrows(IllegalStateException.class, () ->
+                    ring.prepareWriteFixed(fd, data, 0, 0)
+            );
+
+            assertEquals((byte) 0xAA, bufs[0].get(JAVA_BYTE, 0L));
+
+            int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {
+                assertEquals(OperationType.NOP, res.type());
+            });
+            assertEquals(2, reaped);
         }
     }
 }

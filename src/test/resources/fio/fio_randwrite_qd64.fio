@@ -1,0 +1,26 @@
+# Exact fio job profile used for 4KB Random Direct Write benchmarks in README.md / BENCHMARK.md
+# Run command: fio src/test/resources/fio/fio_randwrite_qd64.fio
+[global]
+ioengine=io_uring
+direct=1
+bs=4k
+size=10G
+filename=single_file_bench.bin
+rw=randwrite
+iodepth=64
+fixedbufs=1
+registerfiles=1
+time_based=1
+runtime=30s
+ramp_time=5s
+norandommap=1
+randrepeat=0
+lat_percentiles=1
+
+[fio_randwrite_default]
+# Default fio submission / reap behavior
+
+# To reproduce batched submission (B=16), uncomment:
+# iodepth_batch_submit=16
+# iodepth_batch_complete_min=1
+# iodepth_batch_complete_max=64

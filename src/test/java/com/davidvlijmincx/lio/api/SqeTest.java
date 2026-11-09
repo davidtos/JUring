@@ -8,6 +8,7 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
+import static java.lang.foreign.MemoryLayout.PathElement.groupElement;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SqeTest {
@@ -140,15 +141,15 @@ class SqeTest {
     @Test
     void testAbsoluteOffsetsParams() {
         assertEquals(120, io_uring_params.layout().byteSize(), "io_uring_params must be exactly 120 bytes");
-        assertEquals(0, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_entries")));
-        assertEquals(4, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("cq_entries")));
-        assertEquals(8, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("flags")));
-        assertEquals(12, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_thread_cpu")));
-        assertEquals(16, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_thread_idle")));
-        assertEquals(20, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("features")));
-        assertEquals(24, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("wq_fd")));
-        assertEquals(40, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("sq_off")));
-        assertEquals(80, io_uring_params.layout().byteOffset(java.lang.foreign.MemoryLayout.PathElement.groupElement("cq_off")));
+        assertEquals(0, io_uring_params.layout().byteOffset(groupElement("sq_entries")));
+        assertEquals(4, io_uring_params.layout().byteOffset(groupElement("cq_entries")));
+        assertEquals(8, io_uring_params.layout().byteOffset(groupElement("flags")));
+        assertEquals(12, io_uring_params.layout().byteOffset(groupElement("sq_thread_cpu")));
+        assertEquals(16, io_uring_params.layout().byteOffset(groupElement("sq_thread_idle")));
+        assertEquals(20, io_uring_params.layout().byteOffset(groupElement("features")));
+        assertEquals(24, io_uring_params.layout().byteOffset(groupElement("wq_fd")));
+        assertEquals(40, io_uring_params.layout().byteOffset(groupElement("sq_off")));
+        assertEquals(80, io_uring_params.layout().byteOffset(groupElement("cq_off")));
     }
 
     @Test

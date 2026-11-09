@@ -1,7 +1,6 @@
 package bench.suite;
 
 import org.openjdk.jmh.annotations.*;
-import org.openjdk.jmh.infra.Blackhole;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
@@ -57,7 +56,6 @@ public class FfmInvocationBenchmark {
         MemorySegment symbol = LINKER.defaultLookup().findOrThrow("abs");
         mhInstance = LINKER.downcallHandle(symbol, DESC);
 
-        // Pattern used in LibCDispatcher.java:
         proxyStandard = MethodHandleProxies.asInterfaceInstance(NativeAbs.class, MH_STATIC_STANDARD);
         proxyCritical = MethodHandleProxies.asInterfaceInstance(NativeAbs.class, MH_STATIC_CRITICAL);
 

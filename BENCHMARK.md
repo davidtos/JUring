@@ -1,9 +1,9 @@
 ## Hardware Setup & Methodology
-Hardware has a big impact on the performance of the I/O benchmarks. For full transparency, all benchmarks were run on this machine:
+Hardware has a big impact on the performance of the I/O benchmarks numbers. Sounds obvious, but for full transparency, all benchmarks were run on this machine:
 
 * **CPU:** 16 cores, 32 threads (SMT)
 * **RAM:** 64 GB
-* **Storage:** GIGABYTE GP-ASM2NE6100TTTD (1TB PCIe NVMe)
+* **Storage:** GIGABYTE GP-ASM2NE6100TTTD (1TB PCIe NVMe) (80% full)
 * **Filesystem & OS:** Linux Kernel `7.0.12-201.fc44.x86_64`, ext4, mount options `rw,nosuid,nodev,relatime,seclabel`
 * **Java Runtime:** OpenJDK version "25.0.3"
 * **Harness & Profiling:** JMH with `perf` and kernel `raw_syscalls:sys_enter` tracepoints
@@ -12,7 +12,7 @@ Hardware has a big impact on the performance of the I/O benchmarks. For full tra
 1. **`SINGLE_FILE` (10 GB):** A single 10 GB binary file.
 2. **`MULTI_FILE` (2,211 Files):** 2,211 files (~4.7 MB each, ~10.4 GB total).
 
-The idea behind this setup is to get a clear picture of how JUring performs under different workloads, both with a single large file and across thousands of open files. The big file is also there to match fio's workload.
+The idea behind this setup is to get a clear picture of how JUring performs under different workloads, both with a single large file and across thousands of open files. The big file is there to match fio's workload.
 
 ### Single-Core Framework Overhead & Direct I/O Efficiency
 The baseline framework overhead (`NopBenchmark`), followed by single-thread 4KB Direct Reads and Direct Writes (`O_DIRECT`). We compare both QD=1 and QD=64 against standard Java `FileChannel`.
@@ -29,8 +29,7 @@ The baseline framework overhead (`NopBenchmark`), followed by single-thread 4KB 
 | `JUring.write` (QD=64)   | 1T (QD=64, batched pipeline)      | 191,163.1 ± 17,715.3    | 746.7 ± 69.2 MB/s  | 0.1445                                   | 286.3                    | 11941.4                    | 0.574 B/op |
 
 > [!NOTE]
-> **Calling-Thread Memory Allocations:**
-> In a steady state, JUring's submission and completion pipeline (submitting SQEs, reaping CQEs via `ResultConsumer`, and reusing fixed buffers) allocates 0 bytes on the calling thread. This is verified in [`ZeroAllocationHotPathTest.java`](src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java).
+> After init, JUring's submission and completion pipeline (submitting SQEs, reaping CQEs via `ResultConsumer`, and reusing fixed buffers) allocates 0 bytes on the calling thread. This is verified in [`ZeroAllocationHotPathTest.java`](src/test/java/com/davidvlijmincx/lio/api/ZeroAllocationHotPathTest.java).
 
 ### Equal Queue Depth Comparison (QD = 1, 16, 32, 64)
 Here is a direct comparison between standard Java `FileChannel` and `JUring` on a single thread across increasing hardware Queue Depths (QD = 1, 16, 32, 64) for 4KB random direct reads (`O_DIRECT`) on a 10 GB file.
@@ -72,7 +71,6 @@ Direct writes with NVMe drives under heavy random write loads:
 | 16 Threads | 16T × QD=64 (QD=1024) | 16T × QD=1 (QD=16)      | 169,392.2 ± 147,763.7 | 661.7 ± 577.2 MB/s | 189,421.1 ± 38,013.8  | 739.9 ± 148.5 MB/s | 0.9x    |
 
 > [!NOTE]
-> **Direct Write Variance:**
 > Direct writes are _very_ tricky to benchmark accurately. Under sustained random direct write pressure my storage seems to give up, which leads to high variance and wide error margins. I included the raw numbers here to show the realistic behavior on this hardware. I tried pauses between runs, flushing without success. IF you know a fix, let’s talk!
 
 ### Multi-File Scaling (2,211 Discrete Files)
@@ -110,7 +108,7 @@ If we raise the carrier thread limit to 1,024, `FileChannel` can spin up even mo
 | `-Djdk.virtualThreadScheduler.maxPoolSize=1024` | 1,000           | JUringBlocking | 425,417.5 ± 86,203.3 | 1,661.8 ± 336.7 MB/s |
 
 #### Equal Thread Budget (Carrier Threads Limited to JUring Poller Count)
-To see what happens when carrier threads cannot expand indefinitely, we can limit the carrier thread pool to 4 platform threads (matching the 4 poller threads used by `JUringBlocking`).
+To see what happens when carrier threads cannot expand indefinitely, we can limit the carrier thread pool to 4 platform threads.
 
 When carrier threads are capped, `FileChannel` gets throttled because its carrier threads block waiting on storage. `JUringBlocking` unmounts the virtual thread via `LockSupport.park()`, so carrier threads stay free to execute other work:
 
@@ -133,8 +131,12 @@ Here is a breakdown where the platform thread budget is held equal between both 
 | 16 Threads             | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline |
 | 16 Threads             | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    |
 
+> [!NOTE]
+> **Buffer Registration in `VirtualThreadBenchmark`:**
+> In `VirtualThreadBenchmark.java`, `JUringVirtualThreadState` uses `ring.read(fileIdx, buf, fileOffset)` (registered file descriptor with caller allocated aligned `MemorySegment`), whereas `FileChannel` uses `channel.read(buf, fileOffset)`. Unlike `DirectReadBenchmark`, `JUringBlocking` does **not** use kernel pre-registered fixed buffers (`readFixed`) here. This makes the test strictly fair to `FileChannel` (which cannot use registered buffers), and `JUringBlocking` still achieves 452,192 ops/s (1.77 GB/s) on just 2 carrier threads + 2 poller threads.
+
 ### Project Panama (FFM API) Downcall Overhead
-To see where the dispatch overhead comes from, we benchmarked different ways of invoking foreign functions using the FFM API:
+To see where the overhead comes from, we benchmarked different ways of invoking foreign functions using the FFM API:
 
 | Invocation Strategy                       | Call Mechanism                         | Average Time (ns/op) |
 |-------------------------------------------|----------------------------------------|----------------------|
