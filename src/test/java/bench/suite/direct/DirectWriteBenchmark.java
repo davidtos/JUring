@@ -368,10 +368,20 @@ public class DirectWriteBenchmark {
             }
             this.inFlight = 0;
 
-            ring = new JUring(Math.max(256, qd * 2),
-                    IORING_SETUP_SINGLE_ISSUER,
-                    IORING_SETUP_COOP_TASKRUN,
-                    IORING_SETUP_DEFER_TASKRUN);
+            String ringFlagsMode = System.getProperty("juring.bench.ring.flags", "defer").trim().toLowerCase();
+            if ("default".equals(ringFlagsMode) || "fio".equals(ringFlagsMode) || "standard".equals(ringFlagsMode)) {
+                System.out.printf("[DirectWriteBenchmark] Ring initialized in STANDARD FIO mode (no DEFER_TASKRUN, 0 flags)%n");
+                ring = new JUring(Math.max(256, qd * 2));
+            } else if ("sqpoll".equals(ringFlagsMode)) {
+                System.out.printf("[DirectWriteBenchmark] Ring initialized with IORING_SETUP_SQPOLL%n");
+                ring = new JUring(Math.max(256, qd * 2), 2000, IORING_SETUP_SQPOLL);
+            } else {
+                System.out.printf("[DirectWriteBenchmark] Ring initialized in DEFER_TASKRUN mode (SINGLE_ISSUER + DEFER_TASKRUN)%n");
+                ring = new JUring(Math.max(256, qd * 2),
+                        IORING_SETUP_SINGLE_ISSUER,
+                        IORING_SETUP_COOP_TASKRUN,
+                        IORING_SETUP_DEFER_TASKRUN);
+            }
 
             fileDescriptors = benchState.dataset.openFileDescriptors(LinuxOpenOptions.WRITE_DIRECT);
             int regRet = ring.registerFiles(fileDescriptors);
@@ -630,6 +640,7 @@ public class DirectWriteBenchmark {
         Boolean explicitTrim = null;
         int restSeconds = -1;
         long preconditionGb = -1;
+        String ringFlags = "defer";
 
         for (String arg : args) {
             if ("--burst".equalsIgnoreCase(arg) || "-burst".equalsIgnoreCase(arg)) {
@@ -638,6 +649,8 @@ public class DirectWriteBenchmark {
                 mode = WriteBenchmarkMode.SUSTAINED;
             } else if (arg.startsWith("--engine=")) {
                 engine = arg.substring("--engine=".length()).toLowerCase();
+            } else if (arg.startsWith("--ring-flags=")) {
+                ringFlags = arg.substring("--ring-flags=".length()).toLowerCase();
             } else if (arg.startsWith("--distribution=")) {
                 distribution = arg.substring("--distribution=".length()).toUpperCase();
             } else if (arg.startsWith("--qd=")) {
@@ -689,6 +702,10 @@ public class DirectWriteBenchmark {
                 mode == WriteBenchmarkMode.BURST ? "Peak pseudo-SLC cache speed on rested drive"
                         : "Steady-state TLC folding speed with preconditioning");
         System.out.printf("  Engine(s):       %s%n", engine);
+        System.out.printf("  Ring Flags:      %s (%s)%n", ringFlags,
+                "fio".equals(ringFlags) || "standard".equals(ringFlags) ? "standard multi-issuer fio-like (0 flags)"
+                        : "sqpoll".equals(ringFlags) ? "IORING_SETUP_SQPOLL kernel thread polling"
+                        : "IORING_SETUP_DEFER_TASKRUN + SINGLE_ISSUER");
         System.out.printf("  Distribution:    %s%n", distribution);
         System.out.printf("  Queue Depth:     %d%n", qd);
         System.out.printf("  Warmup:          %d iters x %d s%n", warmupIters, warmupTime);
@@ -699,6 +716,7 @@ public class DirectWriteBenchmark {
         System.out.println("================================================================================");
 
         System.setProperty("juring.bench.write.mode", mode.name().toLowerCase());
+        System.setProperty("juring.bench.ring.flags", ringFlags);
         System.setProperty("juring.bench.trim", String.valueOf(trim));
         System.setProperty("juring.bench.rest.seconds", String.valueOf(restSeconds));
         System.setProperty("juring.bench.precondition.gb", String.valueOf(preconditionGb));
@@ -725,6 +743,7 @@ public class DirectWriteBenchmark {
                 "--enable-native-access=ALL-UNNAMED",
                 "-Djuring.bench.drive.prepped=true",
                 "-Djuring.bench.write.mode=" + mode.name().toLowerCase(),
+                "-Djuring.bench.ring.flags=" + ringFlags,
                 "-Djuring.bench.trim=" + trim,
                 "-Djuring.bench.rest.seconds=" + restSeconds,
                 "-Djuring.bench.precondition.gb=" + preconditionGb
