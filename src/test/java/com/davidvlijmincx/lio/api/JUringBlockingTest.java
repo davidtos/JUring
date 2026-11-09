@@ -10,6 +10,8 @@ import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
@@ -373,7 +375,7 @@ class JUringBlockingTest {
 
             int threads = 16;
             var executor = Executors.newFixedThreadPool(threads);
-            java.util.List<Future<String>> futures = new java.util.ArrayList<>();
+            List<Future<String>> futures = new ArrayList<>();
             for (int i = 0; i < threads; i++) {
                 futures.add(executor.submit(() -> {
                     try (Arena arena = Arena.ofConfined()) {
@@ -398,7 +400,7 @@ class JUringBlockingTest {
              var vts = Executors.newVirtualThreadPerTaskExecutor()) {
 
             int totalTasks = 200;
-            java.util.List<Future<Long>> futures = new java.util.ArrayList<>(totalTasks);
+            List<Future<Long>> futures = new ArrayList<>(totalTasks);
             for (int i = 0; i < totalTasks; i++) {
                 futures.add(vts.submit(() -> {
                     try (Arena arena = Arena.ofConfined()) {

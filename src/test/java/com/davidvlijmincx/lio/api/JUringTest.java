@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -728,7 +729,7 @@ class JUringTest {
     @Test
     void readFromFileIntoMemorySegment() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+             Arena arena = Arena.ofConfined()) {
             MemorySegment buf = arena.allocate(14);
             long id = jUring.prepareRead(fd, buf, 0);
             jUring.submit();
@@ -747,7 +748,7 @@ class JUringTest {
     @Test
     void readFromRegisteredFileIntoMemorySegment() {
         try (FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+             Arena arena = Arena.ofConfined()) {
             assertEquals(0, jUring.registerFiles(fd));
 
             MemorySegment buf = arena.allocate(14);

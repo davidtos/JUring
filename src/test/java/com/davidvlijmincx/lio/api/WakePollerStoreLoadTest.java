@@ -5,6 +5,7 @@ import org.openjdk.jcstress.infra.results.*;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
@@ -193,9 +194,9 @@ public class WakePollerStoreLoadTest {
         @Actor
         public void kernelCompleter() {
             long addr = cqeSegment.address();
-            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0L, 999L);
-            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 8L, 4096);
-            cqeSegment.set(java.lang.foreign.ValueLayout.JAVA_INT, 12L, 0);
+            cqeSegment.set(ValueLayout.JAVA_LONG, 0L, 999L);
+            cqeSegment.set(ValueLayout.JAVA_INT, 8L, 4096);
+            cqeSegment.set(ValueLayout.JAVA_INT, 12L, 0);
             VH_CQ_TAIL.setRelease(this, 1);
         }
 
