@@ -75,6 +75,7 @@ final class IoUringDispatcher implements AutoCloseable {
     private final Arena arena;
     private final IovecBlockPool iovecBlockPool;
     private final MemorySegment callState;
+    private final MemorySegment cqePtr;
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
     private long[] registeredBufferAddresses;
@@ -119,6 +120,7 @@ final class IoUringDispatcher implements AutoCloseable {
         this.arena = arena;
         this.iovecBlockPool = iovecBlockPool;
         this.callState = callState;
+        this.cqePtr = arena.allocate(JAVA_LONG);
     }
 
     public Arena arena() {
@@ -545,13 +547,15 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
-    long waitCqe() {
+    int waitCqe(MemorySegment cqePtr) {
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             if (head != tail) {
                 int index = head & cqRingMask;
-                return cqCqesAddr + ((long) index << cqeShift);
+                long cqeAddr = cqCqesAddr + ((long) index << cqeShift);
+                cqePtr.setAtIndex(JAVA_LONG, 0, cqeAddr);
+                return 0;
             }
 
             long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
@@ -1179,10 +1183,12 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     Result waitForResult(Result target) {
-        long cqeAddress = waitCqe();
-        if (cqeAddress < 0) {
-            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror((int) -cqeAddress));
+        int ret = waitCqe(cqePtr);
+        if (ret < 0) {
+            throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(-ret));
         }
+
+        long cqeAddress = cqePtr.getAtIndex(JAVA_LONG, 0);
 
         long userData = Cqe.getUserData(cqeAddress);
         int res = Cqe.getRes(cqeAddress);

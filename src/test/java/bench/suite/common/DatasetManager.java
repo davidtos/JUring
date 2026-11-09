@@ -282,6 +282,10 @@ public class DatasetManager {
         return uniquePaths;
     }
 
+    public Path getBaseDir() {
+        return baseDir;
+    }
+
     public long[] getFileSizes() {
         return fileSizes;
     }
