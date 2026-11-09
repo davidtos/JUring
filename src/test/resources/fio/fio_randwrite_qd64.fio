@@ -5,32 +5,22 @@ ioengine=io_uring
 direct=1
 bs=4k
 size=10G
-directory=/mnt/TestData/write_files
 filename=single_file_bench.bin
 rw=randwrite
 iodepth=64
 fixedbufs=1
 registerfiles=1
 time_based=1
+runtime=30s
+ramp_time=5s
 norandommap=1
 randrepeat=0
 lat_percentiles=1
 
-# Option 3 Dual-Mode Configurations:
-# 1. Burst Mode (match JUring --burst: peak pseudo-SLC cache performance on rested drive)
-[fio_randwrite_burst_qd64]
-runtime=5s
-ramp_time=0s
-
-# 2. Sustained Mode (match JUring --sustained: steady-state TLC folding limits)
-[fio_randwrite_sustained_qd64]
-runtime=30s
-ramp_time=10s
-
-# 3. Legacy Default Baseline Profile
 [fio_randwrite_default]
-runtime=30s
-ramp_time=5s
+# Default fio submission / reap behavior
+
+# To reproduce batched submission (B=16), uncomment:
 # iodepth_batch_submit=16
 # iodepth_batch_complete_min=1
 # iodepth_batch_complete_max=64

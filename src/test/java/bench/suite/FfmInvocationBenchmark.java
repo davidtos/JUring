@@ -56,7 +56,6 @@ public class FfmInvocationBenchmark {
         MemorySegment symbol = LINKER.defaultLookup().findOrThrow("abs");
         mhInstance = LINKER.downcallHandle(symbol, DESC);
 
-        // Pattern used in LibCDispatcher.java:
         proxyStandard = MethodHandleProxies.asInterfaceInstance(NativeAbs.class, MH_STATIC_STANDARD);
         proxyCritical = MethodHandleProxies.asInterfaceInstance(NativeAbs.class, MH_STATIC_CRITICAL);
 

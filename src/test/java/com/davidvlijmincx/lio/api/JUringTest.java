@@ -829,7 +829,6 @@ class JUringTest {
                     ring.prepareWriteFixed(fd, data, 0, 0)
             );
 
-            // Verify registered buffer byte 0 is still 0xAA (not overwritten)
             assertEquals((byte) 0xAA, bufs[0].get(JAVA_BYTE, 0L));
 
             int reaped = ring.submitAndWaitForBatchResult(2, 2, res -> {

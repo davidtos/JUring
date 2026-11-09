@@ -1,4 +1,4 @@
-# Exact fio job profile used for 4KB Random Direct Read benchmarks in README.md / BENCHMARK.md
+# profile used for 4KB Random Direct Read benchmarks in README.md / BENCHMARK.md
 # Run command: fio src/test/resources/fio/fio_randread_qd64.fio
 [global]
 ioengine=io_uring
