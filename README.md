@@ -82,7 +82,7 @@ public class DirectReadExample {
                 IORING_SETUP_SINGLE_ISSUER,
                 IORING_SETUP_COOP_TASKRUN,
                 IORING_SETUP_DEFER_TASKRUN);
-             FileDescriptor fd = new FileDescriptor(Path.of("/mnt/TestData/large_dataset.bin"), LinuxOpenOptions.READ_DIRECT)) {
+             FileDescriptor fd = new FileDescriptor(Path.of("FILE_YOU_WANT_TO_READ_AT_LEAST_PAGESIZE"), LinuxOpenOptions.READ_DIRECT)) {
 
             // Pre-register file descriptor
             ring.registerFiles(fd);
