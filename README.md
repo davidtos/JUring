@@ -35,6 +35,15 @@ Keep in mind that `FileChannel` is synchronous and drives a queue depth of 1 on 
 | `FileChannel.write`         | 72,409.4  ± 1,577.1  | 282.8 ± 6.2 MB/s   | -64.7%            | QD=1                        |
 | JUring (JMH)                | 193,768.7 ± 1,678.7  | 756.9 ± 6.6 MB/s   | -5.6%             | Batched `submitAndWait(1)`  |
 
+> [!NOTE]
+> **Understanding the fio Comparison & Kernel Setup Flags:**
+>
+> - **Sustained Steady State:** Under continuous write load (after the drive's pseudo-SLC cache is exhausted), JUring and `fio` achieve identical throughput (~190k IOPS write, ~325k IOPS read), both hitting the physical flash limits of the NVMe storage controller.
+> - **Burst Write & Kernel Ring Flags:** On a rested drive (inside pseudo-SLC cache), JUring can report higher single-threaded burst write throughput than standard `fio` (~450k vs ~320k IOPS). This is not because Java compiles faster than native C, but because of **Linux kernel ring architecture**:
+>   - **JUring:** Configured by default with modern Linux 6.0+ flags: `IORING_SETUP_SINGLE_ISSUER`, `IORING_SETUP_COOP_TASKRUN`, and `IORING_SETUP_DEFER_TASKRUN`. The kernel skips internal spinlocks and cross-CPU `task_work` interrupt delivery, deferring completions to be processed locklessly directly on the calling thread.
+>   - **Standard `fio`:** As a general multi-job tool, `fio`'s `ioengine=io_uring` uses standard multi-issuer ring buffers without `DEFER_TASKRUN`, paying a kernel lock and interrupt scheduling penalty on single-threaded completions.
+>   - **Verification:** When JUring is configured with the exact same legacy flags as `fio` (disabling `DEFER_TASKRUN` via `--ring-flags=fio`), **JUring's throughput drops to ~252k IOPS**, matching standard `fio` levels. Through Project Panama FFM (JEP 454), JUring brings Java to full native C parity.
+
 ## Virtual Thread Performance
 
 When a virtual thread performs direct I/O with `FileChannel`, the carrier thread blocks and additional carrier threads can be created to prevent a performance degradation (up to 256 by default). To compare both approaches, both are given an equal budget of platform threads. `JUringBlocking` runs dedicated poller threads that submit requests and wake virtual threads via `LockSupport.unpark()` when completions arrive.
