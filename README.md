@@ -9,7 +9,9 @@ File I/O operations are synchronous and blocking. When using Virtual Threads, fi
 - Virtual thread support using LockSupport with JUringBlocking (wrapper for JUring).
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
-> The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start.
+> [!NOTE]
+> - The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start.
+> - I tried my best to recreate `fio`'s workload in `JMH`. I think it gives a good indication of the performance. `JUring` and `FileChannel` do run the exact same workload.
 
 ## Benchmark Results
 
