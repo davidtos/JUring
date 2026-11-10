@@ -1,17 +1,18 @@
-# JUring: Java io_uring via Project Panama
+# JUring: io_uring for Java using the FFM API
 
-An `io_uring` implementation in Java built on Project Panama's Foreign Function and Memory API (JEP 454).
+JUring lets Java submit file I/O to Linux `io_uring` directly, using the Foreign Function & Memory API (JEP 454). There is no JNI, no C glue code and no `liburing`. The rings are mapped into memory and driven from Java.
 
-File I/O operations are synchronous and blocking. When using Virtual Threads, file operations prevent unmounting from carrier threads. JUring talks directly to `io_uring` from Java without JNI, C wrappers, or `liburing.so`.
+Java's file APIs are synchronous. A thread issues one request and waits for it. To keep storage busy you need many requests in flight, meaning lots of platform threads are needed. Virtual threads don't change this for file I/O. A virtual thread blocked in a file read stays mounted on its carrier thread, and the scheduler makes up for it by temporarily adding carrier threads (up to 256 by default). From a single thread, JUring can keep many requests in flight by submitting and collecting completions in batches.
 
 - Only Java FFM downcalls and VarHandles.
 - Zero heap alloc on the hot path after setup.
-- Virtual thread support using LockSupport with JUringBlocking (wrapper for JUring).
+- Virtual thread support with JUringBlocking.
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
 > [!NOTE]
 > - The focus of this project for now is random direct I/O on Linux (x86_64). This seemed a fun and challenging place to start.
 > - I tried my best to recreate `fio`'s workload in `JMH`. I think it gives a good indication of the performance. `JUring` and `FileChannel` do run the exact same workload.
+> - It's still very much in development.
 
 ## Benchmark Results
 
