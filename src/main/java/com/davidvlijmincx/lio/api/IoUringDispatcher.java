@@ -17,6 +17,7 @@ final class IoUringDispatcher implements AutoCloseable {
     static final byte IORING_OP_NOP = 0;
     static final byte IORING_OP_READV = 1;
     static final byte IORING_OP_WRITEV = 2;
+    static final byte IORING_OP_FSYNC = 3;
     static final byte IORING_OP_READ_FIXED = 4;
     static final byte IORING_OP_WRITE_FIXED = 5;
     static final byte IORING_OP_ASYNC_CANCEL = 14;
@@ -379,6 +380,15 @@ final class IoUringDispatcher implements AutoCloseable {
         Sqe.setOff(sqe, offset);
         Sqe.setAddr(sqe, iovecAddr);
         Sqe.setLen(sqe, nrVecs);
+    }
+
+    void prepareFsync(long sqe, int fd, int fsyncFlags) {
+        Sqe.setOpcode(sqe, IORING_OP_FSYNC);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, fsyncFlags);
     }
 
     void prepareCancel(long sqe, long userDataToCancel, int flags) {
@@ -1273,6 +1283,9 @@ final class IoUringDispatcher implements AutoCloseable {
             }
             case 13 /* WRITE_EXT */ -> {
                 target.set(userData, result, OperationType.WRITE_EXT, 0L, null, -1, null, cqeFlags);
+            }
+            case 15 /* FSYNC */ -> {
+                target.set(userData, result, OperationType.FSYNC, 0L, null, -1, null, cqeFlags);
             }
         }
     }

@@ -14,6 +14,8 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  */
 public class JUring implements AutoCloseable {
 
+    public static final int IORING_FSYNC_DATASYNC = 1;
+
     private final IoUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
 
@@ -247,6 +249,15 @@ public class JUring implements AutoCloseable {
 
     public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareWriteFixed(FileDescriptor fd, long bufferAddress, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
+        long sqe = getSqe(SqeOptions.combineOptions(sqeOptions), false);
+        long opId = opSeq++;
+        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+        ioUring.prepareWriteFixed(sqe, fd.getFd(), bufferAddress, writeSize, offset, bufferIndex);
+        ioUring.setUserData(sqe, userData);
+        return userData;
     }
 
     public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
@@ -691,6 +702,35 @@ public class JUring implements AutoCloseable {
         ioUring.prepareClose(sqe, fdOrIndex);
         ioUring.setUserData(sqe, userData);
 
+        return userData;
+    }
+
+    public long prepareFsync(FileDescriptor fd) {
+        return prepareFsync(fd, 0);
+    }
+
+    public long prepareFsync(FileDescriptor fd, int fsyncFlags) {
+        return prepareFsyncInternal(fd.getFd(), fsyncFlags, (byte) 0, false);
+    }
+
+    public long prepareFsync(FileDescriptor fd, int fsyncFlags, SqeOptions... sqeOptions) {
+        return prepareFsyncInternal(fd.getFd(), fsyncFlags, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    public long prepareFsync(int indexFD, int fsyncFlags) {
+        return prepareFsyncInternal(indexFD, fsyncFlags, (byte) 0, true);
+    }
+
+    public long prepareFsync(int indexFD, int fsyncFlags, SqeOptions... sqeOptions) {
+        return prepareFsyncInternal(indexFD, fsyncFlags, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    private long prepareFsyncInternal(int fdOrIndex, int fsyncFlags, byte flags, boolean fixedFile) {
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.FSYNC, opId);
+        ioUring.prepareFsync(sqe, fdOrIndex, fsyncFlags);
+        ioUring.setUserData(sqe, userData);
         return userData;
     }
 

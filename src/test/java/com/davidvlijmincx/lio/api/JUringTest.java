@@ -837,4 +837,29 @@ class JUringTest {
             assertEquals(2, reaped);
         }
     }
+
+    @Test
+    void testFsyncAndDatasync() throws IOException {
+        Path tempFile = Files.createTempFile("fsync_test", ".tmp");
+        try {
+            try (FileDescriptor fd = new FileDescriptor(tempFile, 0644, LinuxOpenOptions.RDWR, LinuxOpenOptions.CREATE)) {
+                byte[] data = "Testing fsync and datasync in JUring!".getBytes();
+                long writeId = jUring.prepareWrite(fd, data, 0);
+                long fsyncId = jUring.prepareFsync(fd, JUring.IORING_FSYNC_DATASYNC);
+
+                jUring.submit();
+
+                Result writeResult = jUring.waitForResult();
+                assertEquals(writeId, writeResult.id());
+                assertEquals(data.length, writeResult.result());
+
+                Result fsyncResult = jUring.waitForResult();
+                assertEquals(fsyncId, fsyncResult.id());
+                assertEquals(OperationType.FSYNC, fsyncResult.type());
+                assertEquals(0, fsyncResult.result());
+            }
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
 }

@@ -18,7 +18,8 @@ public enum OperationType {
     READ_POOLED(11),
     NOP(12),
     WRITE_EXT(13),
-    READ_EXT(14);
+    READ_EXT(14),
+    FSYNC(15);
 
     private static final OperationType[] VALUES = values();
 
