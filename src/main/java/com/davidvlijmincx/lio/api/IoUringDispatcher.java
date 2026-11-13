@@ -20,11 +20,15 @@ final class IoUringDispatcher implements AutoCloseable {
     static final byte IORING_OP_FSYNC = 3;
     static final byte IORING_OP_READ_FIXED = 4;
     static final byte IORING_OP_WRITE_FIXED = 5;
+    static final byte IORING_OP_TIMEOUT = 11;
     static final byte IORING_OP_ASYNC_CANCEL = 14;
+    static final byte IORING_OP_FALLOCATE = 17;
     static final byte IORING_OP_OPENAT = 18;
     static final byte IORING_OP_CLOSE = 19;
+    static final byte IORING_OP_STATX = 21;
     static final byte IORING_OP_READ = 22;
     static final byte IORING_OP_WRITE = 23;
+    static final byte IORING_OP_FTRUNCATE = 55;
 
     // Enter flags
     private static final int IORING_ENTER_GETEVENTS = 1;
@@ -47,8 +51,11 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final long IORING_OFF_SQES = 0x10000000L;
 
     private static final int IORING_REGISTER_BUFFERS = 0;
+    private static final int IORING_UNREGISTER_BUFFERS = 1;
     private static final int IORING_REGISTER_FILES = 2;
+    private static final int IORING_UNREGISTER_FILES = 3;
     private static final int IORING_REGISTER_FILES_UPDATE = 6;
+    private static final int IORING_REGISTER_BUFFERS_UPDATE = 16;
     private static final int IORING_REGISTER_IOWQ_MAX_WORKERS = 19;
 
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
@@ -80,6 +87,11 @@ final class IoUringDispatcher implements AutoCloseable {
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
     private long[] registeredBufferAddresses;
+
+    // Optional-opcode support cache, a 256-bit set filled by probeSupportedOpcodes().
+    private final long[] opcodeSupport = new long[4];
+    // Lazily allocated single NUL byte in the ring arena, used as the statx AT_EMPTY_PATH pathname.
+    private long emptyPathAddress;
 
     // Cached Ring Fields
     private int ringFd = -1;
@@ -164,11 +176,15 @@ final class IoUringDispatcher implements AutoCloseable {
             case IORING_OP_WRITEV -> "IORING_OP_WRITEV";
             case IORING_OP_READ_FIXED -> "IORING_OP_READ_FIXED";
             case IORING_OP_WRITE_FIXED -> "IORING_OP_WRITE_FIXED";
+            case IORING_OP_TIMEOUT -> "IORING_OP_TIMEOUT";
             case IORING_OP_ASYNC_CANCEL -> "IORING_OP_ASYNC_CANCEL";
+            case IORING_OP_FALLOCATE -> "IORING_OP_FALLOCATE";
             case IORING_OP_OPENAT -> "IORING_OP_OPENAT";
             case IORING_OP_CLOSE -> "IORING_OP_CLOSE";
+            case IORING_OP_STATX -> "IORING_OP_STATX";
             case IORING_OP_READ -> "IORING_OP_READ";
             case IORING_OP_WRITE -> "IORING_OP_WRITE";
+            case IORING_OP_FTRUNCATE -> "IORING_OP_FTRUNCATE";
             default -> "OP_" + Byte.toUnsignedInt(op);
         };
     }
@@ -184,6 +200,17 @@ final class IoUringDispatcher implements AutoCloseable {
                 throw new UnsupportedOperationException("Kernel does not support IORING_REGISTER_PROBE (Linux 5.6+ required): errno=" + err + " - " + libCDispatcher.strerror(err));
             }
             int opsLen = Byte.toUnsignedInt(probeBuf.get(JAVA_BYTE, 1L));
+            opcodeSupport[0] = 0L;
+            opcodeSupport[1] = 0L;
+            opcodeSupport[2] = 0L;
+            opcodeSupport[3] = 0L;
+            for (int opIndex = 0; opIndex < opsLen; opIndex++) {
+                long opOffset = 16L + (long) opIndex * 8L;
+                short flags = probeBuf.get(JAVA_SHORT, opOffset + 2L);
+                if ((flags & IO_URING_OP_SUPPORTED) != 0) {
+                    opcodeSupport[opIndex >>> 6] |= 1L << (opIndex & 63);
+                }
+            }
             for (byte op : REQUIRED_OPCODES) {
                 int opIndex = Byte.toUnsignedInt(op);
                 if (opIndex >= opsLen) {
@@ -198,6 +225,16 @@ final class IoUringDispatcher implements AutoCloseable {
         } finally {
             libCDispatcher.free(probeBuf);
         }
+    }
+
+    /**
+     * Reports whether the kernel advertised support for an opcode in the probe performed at ring
+     * creation. Only the optional opcodes outside {@link #REQUIRED_OPCODES} should be queried;
+     * required opcodes already caused ring creation to fail when unsupported.
+     */
+    boolean isOpcodeSupported(byte op) {
+        int index = Byte.toUnsignedInt(op);
+        return (opcodeSupport[index >>> 6] & (1L << (index & 63))) != 0L;
     }
 
     static IoUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
@@ -403,6 +440,76 @@ final class IoUringDispatcher implements AutoCloseable {
     void prepareNop(long sqe) {
         Sqe.setOpcode(sqe, IORING_OP_NOP);
         Sqe.setFd(sqe, -1);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_FALLOCATE} SQE. Field mapping follows liburing:
+     * {@code off=offset}, {@code len=mode}, {@code addr=length}.
+     */
+    void prepareFallocate(long sqe, int fd, int mode, long offset, long length) {
+        Sqe.setOpcode(sqe, IORING_OP_FALLOCATE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setLen(sqe, mode);
+        Sqe.setAddr(sqe, length);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_FTRUNCATE} SQE. The new length travels in {@code off}.
+     */
+    void prepareFtruncate(long sqe, int fd, long length) {
+        Sqe.setOpcode(sqe, IORING_OP_FTRUNCATE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, length);
+        Sqe.setLen(sqe, 0);
+        Sqe.setAddr(sqe, 0L);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_STATX} SQE. Field mapping follows liburing:
+     * {@code addr=pathname}, {@code len=mask}, {@code off=statxBuffer}, {@code rw_flags=flags}.
+     */
+    void prepareStatx(long sqe, int fd, long pathnameAddr, int flags, int mask, long statxBufAddr) {
+        Sqe.setOpcode(sqe, IORING_OP_STATX);
+        Sqe.setFd(sqe, fd);
+        Sqe.setAddr(sqe, pathnameAddr);
+        Sqe.setLen(sqe, mask);
+        Sqe.setOff(sqe, statxBufAddr);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} SQE. Field mapping follows liburing:
+     * {@code fd=-1}, {@code addr=timespec}, {@code len=1}, {@code off=count}, {@code rw_flags=flags}.
+     */
+    void prepareTimeout(long sqe, long timespecAddr, long count, int flags) {
+        Sqe.setOpcode(sqe, IORING_OP_TIMEOUT);
+        Sqe.setFd(sqe, -1);
+        Sqe.setAddr(sqe, timespecAddr);
+        Sqe.setLen(sqe, 1);
+        Sqe.setOff(sqe, count);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Allocates a single NUL byte in the ring arena and returns its address. Used as the
+     * {@code AT_EMPTY_PATH} pathname for statx. Allocated once per ring; valid until the ring closes.
+     */
+    long emptyPathAddress() {
+        if (emptyPathAddress == 0L) {
+            MemorySegment path = arena.allocate(1L, 8L);
+            path.set(JAVA_BYTE, 0L, (byte) 0);
+            emptyPathAddress = path.address();
+        }
+        return emptyPathAddress;
+    }
+
+    /**
+     * Reads {@code stx_size} (a {@code __u64} at offset 40) out of a completed 256+ byte statx buffer.
+     * The {@code struct statx} layout is architecture-stable.
+     */
+    long staticxSize(MemorySegment statxBuffer) {
+        return statxBuffer.get(JAVA_LONG, 40L);
     }
 
     void submit() {
@@ -860,6 +967,71 @@ final class IoUringDispatcher implements AutoCloseable {
         return allocateAndRegisterBuffers(bufferSize, nrIovecs).buffers();
     }
 
+    /**
+     * Unregisters all registered buffers. Returns 0 on success or {@code -errno}.
+     * Clears the dispatcher's mirror of the registered buffer table on success.
+     */
+    int unregisterBuffers() {
+        long res = register(this.callState, this.ringFd, IORING_UNREGISTER_BUFFERS, MemorySegment.NULL, 0L);
+        if (res < 0) {
+            return -LibCDispatcher.errno(this.callState);
+        }
+        setRegisteredBuffers(null);
+        return 0;
+    }
+
+    /**
+     * Best-effort update of registered buffers through {@code IORING_REGISTER_BUFFERS_UPDATE}.
+     * The kernel takes a {@code struct io_uring_rsrc_update2} (32 bytes) whose {@code nr_args}
+     * size is {@code sizeof(struct io_uring_rsrc_update2)}, not the number of buffers.
+     * Returns 0 on success or {@code -errno} (never throws for kernel rejection).
+     */
+    int registerBuffersUpdate(int offset, MemorySegment[] buffers) {
+        int count = buffers.length;
+        if (count == 0) {
+            return 0;
+        }
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment iovecArray = Iovec.allocateArray(count, tempArena);
+            for (int i = 0; i < count; i++) {
+                MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
+                Iovec.iov_base(nthIovec, buffers[i]);
+                Iovec.iov_len(nthIovec, buffers[i].byteSize());
+            }
+            MemorySegment up = tempArena.allocate(32L, 8L);
+            up.set(JAVA_INT, 0L, offset);
+            up.set(JAVA_INT, 4L, 0);
+            up.set(JAVA_LONG, 8L, iovecArray.address());
+            up.set(JAVA_LONG, 16L, 0L);
+            up.set(JAVA_INT, 24L, count);
+            up.set(JAVA_INT, 28L, 0);
+            long res = register(this.callState, this.ringFd, IORING_REGISTER_BUFFERS_UPDATE, up, 32L);
+            if (res < 0) {
+                return -LibCDispatcher.errno(this.callState);
+            }
+            return (int) res;
+        }
+    }
+
+    /**
+     * Unregisters the whole registered file table. Returns 0 on success or {@code -errno}.
+     */
+    int unregisterFiles() {
+        long res = register(this.callState, this.ringFd, IORING_UNREGISTER_FILES, MemorySegment.NULL, 0L);
+        if (res < 0) {
+            return -LibCDispatcher.errno(this.callState);
+        }
+        return 0;
+    }
+
+    /**
+     * Number of SQEs prepared but not yet completed (the counter also decremented when completions
+     * are reaped). Used by {@code JuringFile}'s ownership guard.
+     */
+    int inFlightCount() {
+        return inFlightCount;
+    }
+
     int registerFiles(MemorySegment fdArray, int count) {
         int fd = this.ringFd;
         long res = register(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
@@ -1286,6 +1458,18 @@ final class IoUringDispatcher implements AutoCloseable {
             }
             case 15 /* FSYNC */ -> {
                 target.set(userData, result, OperationType.FSYNC, 0L, null, -1, null, cqeFlags);
+            }
+            case 16 /* TIMEOUT */ -> {
+                target.set(userData, result, OperationType.TIMEOUT, 0L, null, -1, null, cqeFlags);
+            }
+            case 17 /* FALLOCATE */ -> {
+                target.set(userData, result, OperationType.FALLOCATE, 0L, null, -1, null, cqeFlags);
+            }
+            case 18 /* FTRUNCATE */ -> {
+                target.set(userData, result, OperationType.FTRUNCATE, 0L, null, -1, null, cqeFlags);
+            }
+            case 19 /* STATX */ -> {
+                target.set(userData, result, OperationType.STATX, 0L, null, -1, null, cqeFlags);
             }
         }
     }

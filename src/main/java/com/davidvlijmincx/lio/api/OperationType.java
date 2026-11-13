@@ -19,7 +19,11 @@ public enum OperationType {
     NOP(12),
     WRITE_EXT(13),
     READ_EXT(14),
-    FSYNC(15);
+    FSYNC(15),
+    TIMEOUT(16),
+    FALLOCATE(17),
+    FTRUNCATE(18),
+    STATX(19);
 
     private static final OperationType[] VALUES = values();
 

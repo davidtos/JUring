@@ -12,6 +12,7 @@ target/
 ### Benchmark Outputs ###
 results/
 bench-data/
+scratch/
 
 ### Eclipse ###
 .apt_generated

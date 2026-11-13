@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Objects;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Java API for Linux {@code io_uring}.
@@ -15,6 +16,15 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 public class JUring implements AutoCloseable {
 
     public static final int IORING_FSYNC_DATASYNC = 1;
+
+    /** Default capacity of the lazily initialised sparse registered-file table. */
+    static final int DEFAULT_FILE_TABLE_CAPACITY = 64;
+
+    /** {@code AT_EMPTY_PATH}: operate on the file referred to by the dirfd argument itself. */
+    static final int AT_EMPTY_PATH = 0x1000;
+
+    /** {@code STATX_BASIC_STATS}: the basic statx field set, including {@code stx_size}. */
+    static final int STATX_BASIC_STATS = 0x7ff;
 
     private final IoUringDispatcher ioUring;
     private final List<MemorySegment> registeredBuffers;
@@ -28,7 +38,11 @@ public class JUring implements AutoCloseable {
     private int freeBufferTop;
     private ReadBufferPool readBufferPool;
 
+    // Sparse registered-file table tracking: fd per slot (-1 = empty slot).
+    private int[] registeredFileTable = new int[0];
+
     private long opSeq = 1;
+    private boolean closed;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         this(queueDepth, 0, ioUringFlags);
@@ -745,6 +759,235 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    // ------------------------------------------------------------------
+    // Optional metadata ops: fallocate, ftruncate, statx, timeout
+    // ------------------------------------------------------------------
+
+    private static final int EOPNOTSUPP = 95;
+    private static final long NANOS_PER_SECOND = 1_000_000_000L;
+
+    /**
+     * Prepares an async {@code fallocate(2)} (opcode {@code IORING_OP_FALLOCATE}) on a plain fd.
+     * Requires kernel support for {@code IORING_OP_FALLOCATE}; otherwise throws
+     * {@link UnsupportedOperationException} before touching the submission queue.
+     *
+     * @param mode   fallocate mode flags (0 for plain allocation, or {@code FALLOC_FL_*} bits)
+     * @param offset file offset in bytes
+     * @param length byte length to allocate
+     * @return the operation handle to pass to {@code waitForResult}/{@code await}
+     */
+    public long prepareFallocate(FileDescriptor fd, int mode, long offset, long length) {
+        return prepareFallocateInternal(fd.getFd(), mode, offset, length, (byte) 0, false);
+    }
+
+    public long prepareFallocate(FileDescriptor fd, int mode, long offset, long length, SqeOptions... sqeOptions) {
+        return prepareFallocateInternal(fd.getFd(), mode, offset, length, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    /**
+     * Prepares an async {@code fallocate(2)} on a slot of the registered-file table.
+     *
+     * @param indexFD slot index in the registered-file table (submitted with {@code IOSQE_FIXED_FILE})
+     */
+    public long prepareFallocate(int indexFD, int mode, long offset, long length) {
+        return prepareFallocateInternal(indexFD, mode, offset, length, (byte) 0, true);
+    }
+
+    public long prepareFallocate(int indexFD, int mode, long offset, long length, SqeOptions... sqeOptions) {
+        return prepareFallocateInternal(indexFD, mode, offset, length, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    private long prepareFallocateInternal(int fdOrIndex, int mode, long offset, long length, byte flags, boolean fixedFile) {
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_FALLOCATE, "IORING_OP_FALLOCATE");
+        if (mode < 0) {
+            throw new IllegalArgumentException("Invalid fallocate mode: " + mode);
+        }
+        if (offset < 0) {
+            throw new IllegalArgumentException("Invalid fallocate offset: " + offset);
+        }
+        if (length < 0) {
+            throw new IllegalArgumentException("Invalid fallocate length: " + length);
+        }
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.FALLOCATE, opId);
+        ioUring.prepareFallocate(sqe, fdOrIndex, mode, offset, length);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    /**
+     * Prepares an async {@code ftruncate(2)} (opcode {@code IORING_OP_FTRUNCATE}) on a plain fd.
+     * Requires kernel support for {@code IORING_OP_FTRUNCATE}.
+     */
+    public long prepareFtruncate(FileDescriptor fd, long newLength) {
+        return prepareFtruncateInternal(fd.getFd(), newLength, (byte) 0, false);
+    }
+
+    public long prepareFtruncate(FileDescriptor fd, long newLength, SqeOptions... sqeOptions) {
+        return prepareFtruncateInternal(fd.getFd(), newLength, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    /** Prepares an async {@code ftruncate(2)} on a slot of the registered-file table. */
+    public long prepareFtruncate(int indexFD, long newLength) {
+        return prepareFtruncateInternal(indexFD, newLength, (byte) 0, true);
+    }
+
+    public long prepareFtruncate(int indexFD, long newLength, SqeOptions... sqeOptions) {
+        return prepareFtruncateInternal(indexFD, newLength, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    private long prepareFtruncateInternal(int fdOrIndex, long newLength, byte flags, boolean fixedFile) {
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_FTRUNCATE, "IORING_OP_FTRUNCATE");
+        if (newLength < 0) {
+            throw new IllegalArgumentException("Invalid truncate length: " + newLength);
+        }
+        long sqe = getSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.FTRUNCATE, opId);
+        ioUring.prepareFtruncate(sqe, fdOrIndex, newLength);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    /**
+     * Prepares an async {@code statx(2)} with {@code AT_EMPTY_PATH} and {@code STATX_BASIC_STATS}
+     * against a plain fd, writing the result into {@code statxBuffer}.
+     * <p>
+     * {@code statxBuffer} must be a live native segment of at least 256 bytes (the
+     * {@code struct statx} size); the buffer must stay valid until the operation completes.
+     * Requires kernel support for {@code IORING_OP_STATX}.
+     *
+     * @return the operation handle; the completion result is 0 on success
+     */
+    public long prepareStatx(FileDescriptor fd, MemorySegment statxBuffer) {
+        return prepareStatxInternal(fd.getFd(), statxBuffer, (byte) 0, false);
+    }
+
+    public long prepareStatx(FileDescriptor fd, MemorySegment statxBuffer, SqeOptions... sqeOptions) {
+        return prepareStatxInternal(fd.getFd(), statxBuffer, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    /**
+     * Prepares an async {@code statx(2)} with {@code AT_EMPTY_PATH} against a slot of the
+     * registered-file table.
+     * <p>
+     * Kernel note: {@code IORING_OP_STATX} does not accept {@code IOSQE_FIXED_FILE} (the kernel's
+     * statx prep returns {@code -EBADF} for fixed files). This method therefore resolves the slot
+     * to the file descriptor tracked for it and submits a plain {@code AT_EMPTY_PATH} statx against
+     * that descriptor; the observable result is the same. If the slot is empty/untracked, the
+     * operation is submitted as a fixed-file statx and completes with {@code -EBADF}, matching the
+     * other fixed-file operations.
+     */
+    public long prepareStatx(int indexFD, MemorySegment statxBuffer) {
+        return prepareStatxInternal(indexFD, statxBuffer, (byte) 0, true);
+    }
+
+    public long prepareStatx(int indexFD, MemorySegment statxBuffer, SqeOptions... sqeOptions) {
+        return prepareStatxInternal(indexFD, statxBuffer, SqeOptions.combineOptions(sqeOptions), true);
+    }
+
+    private long prepareStatxInternal(int fdOrIndex, MemorySegment statxBuffer, byte flags, boolean fixedFile) {
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_STATX, "IORING_OP_STATX");
+        Objects.requireNonNull(statxBuffer, "statxBuffer");
+        if (!statxBuffer.isNative()) {
+            throw new IllegalArgumentException("statxBuffer must be native memory");
+        }
+        if (statxBuffer.byteSize() < 256L) {
+            throw new IllegalArgumentException("statxBuffer must be at least 256 bytes (struct statx size), got " + statxBuffer.byteSize());
+        }
+        if (!statxBuffer.scope().isAlive()) {
+            throw new IllegalStateException("statxBuffer scope is already closed");
+        }
+        if (!statxBuffer.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("statxBuffer is confined to another thread");
+        }
+        int dfd = fdOrIndex;
+        boolean useFixedFile = fixedFile;
+        if (fixedFile) {
+            int registeredFd = registeredFileFd(fdOrIndex);
+            if (registeredFd >= 0) {
+                // IORING_OP_STATX rejects IOSQE_FIXED_FILE with -EBADF, so resolve the slot to the
+                // tracked descriptor and issue a plain AT_EMPTY_PATH statx on the same file.
+                dfd = registeredFd;
+                useFixedFile = false;
+            }
+        }
+        long sqe = getSqe(flags, useFixedFile);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.STATX, opId);
+        ioUring.prepareStatx(sqe, dfd, ioUring.emptyPathAddress(), AT_EMPTY_PATH, STATX_BASIC_STATS, statxBuffer.address());
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    /** Returns the file descriptor tracked for a registered-file slot, or -1 when empty/unknown. */
+    private int registeredFileFd(int slot) {
+        if (slot < 0 || slot >= registeredFileTable.length) {
+            return -1;
+        }
+        return registeredFileTable[slot];
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} for {@code timeoutNanos} nanoseconds with
+     * {@code count=1} and {@code flags=0}. The completion result is {@code -ETIME} when the
+     * timeout fires, or 0 when {@code count} completions arrive first.
+     * <p>
+     * Control-path API: allocates a 16-byte {@code __kernel_timespec} in the ring arena on every
+     * call (ring-lifetime memory, not reclaimed until the ring is closed). Do not use in hot loops.
+     *
+     * @param timeoutNanos relative timeout in nanoseconds, {@code >= 0}
+     * @return the operation handle
+     */
+    public long prepareTimeout(long timeoutNanos) {
+        return prepareTimeoutInternal(timeoutNanos, 1, 0, (byte) 0);
+    }
+
+    public long prepareTimeout(long timeoutNanos, SqeOptions... sqeOptions) {
+        return prepareTimeoutInternal(timeoutNanos, 1, 0, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} with an explicit completion {@code count} and
+     * {@code IORING_TIMEOUT_*} flags.
+     *
+     * @param count number of completions that complete the timeout early (0 = a plain timeout)
+     * @param flags {@code IORING_TIMEOUT_*} flags ({@code ABS}, {@code BOOTTIME}, {@code ETIME})
+     */
+    public long prepareTimeout(long timeoutNanos, int count, int flags) {
+        return prepareTimeoutInternal(timeoutNanos, count, flags, (byte) 0);
+    }
+
+    public long prepareTimeout(long timeoutNanos, int count, int flags, SqeOptions... sqeOptions) {
+        return prepareTimeoutInternal(timeoutNanos, count, flags, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    private long prepareTimeoutInternal(long timeoutNanos, int count, int flags, byte sqeFlags) {
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_TIMEOUT, "IORING_OP_TIMEOUT");
+        if (timeoutNanos < 0) {
+            throw new IllegalArgumentException("Invalid timeoutNanos: " + timeoutNanos);
+        }
+        if (count < 0) {
+            throw new IllegalArgumentException("Invalid timeout count: " + count);
+        }
+        long sqe = getSqe(sqeFlags, false);
+        MemorySegment timespec = ioUring.arena().allocate(16L, 8L);
+        timespec.set(JAVA_LONG, 0L, timeoutNanos / NANOS_PER_SECOND);
+        timespec.set(JAVA_LONG, 8L, timeoutNanos % NANOS_PER_SECOND);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.TIMEOUT, opId);
+        ioUring.prepareTimeout(sqe, timespec.address(), count, flags);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    private void requireOpcodeSupported(byte opcode, String name) {
+        if (!ioUring.isOpcodeSupported(opcode)) {
+            throw new UnsupportedOperationException("kernel does not support " + name + " (errno " + EOPNOTSUPP + ": " + NativeDispatcher.C.strerror(EOPNOTSUPP) + ")");
+        }
+    }
+
     private long getSqe(byte flags, boolean fixedFile) {
         long sqe = ioUring.getSqe();
         if (sqe == 0L) {
@@ -906,11 +1149,206 @@ public class JUring implements AutoCloseable {
         for (int i = 0; i < fileDescriptors.length; i++) {
             fds[i] = fileDescriptors[i].getFd();
         }
-        return ioUring.registerFiles(fds);
+        int ret = ioUring.registerFiles(fds);
+        registeredFileTable = fds.clone();
+        return ret;
     }
 
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
-        return ioUring.registerFilesUpdate(offset, fileDescriptors);
+        int ret = ioUring.registerFilesUpdate(offset, fileDescriptors);
+        if (registeredFileTable.length >= offset + fileDescriptors.length) {
+            System.arraycopy(fileDescriptors, 0, registeredFileTable, offset, fileDescriptors.length);
+        }
+        return ret;
+    }
+
+    // ------------------------------------------------------------------
+    // Registration lifecycle: sparse fixed-file table + buffers
+    // ------------------------------------------------------------------
+
+    /**
+     * Lazily registers a sparse fixed-file table of {@code capacity} empty ({@code -1}) slots.
+     * Called automatically by {@link #registerFileAdd(FileDescriptor)} with
+     * {@link #DEFAULT_FILE_TABLE_CAPACITY} slots.
+     *
+     * @throws IllegalArgumentException  if {@code capacity <= 0}
+     * @throws IllegalStateException     if a file table is already registered on this ring
+     */
+    void initFileTable(int capacity) {
+        if (capacity <= 0) {
+            throw new IllegalArgumentException("Invalid file table capacity: " + capacity);
+        }
+        if (registeredFileTable.length > 0) {
+            throw new IllegalStateException("A registered-file table is already initialised (capacity " + registeredFileTable.length + ")");
+        }
+        int[] fds = new int[capacity];
+        Arrays.fill(fds, -1);
+        ioUring.registerFiles(fds);
+        registeredFileTable = fds;
+    }
+
+    /**
+     * Adds a file to the sparse registered-file table, lazily initialising the table with
+     * {@link #DEFAULT_FILE_TABLE_CAPACITY} slots on first use. The first free slot is filled with
+     * {@code IORING_REGISTER_FILES_UPDATE}.
+     *
+     * @return the slot index, usable as {@code indexFD} with the {@code prepare*}/{@code *Fixed}
+     * methods and with {@code IOSQE_FIXED_FILE}
+     * @throws IllegalStateException if the table is full
+     */
+    public int registerFileAdd(FileDescriptor fd) {
+        Objects.requireNonNull(fd, "fd");
+        if (registeredFileTable.length == 0) {
+            initFileTable(DEFAULT_FILE_TABLE_CAPACITY);
+        }
+        int slot = -1;
+        for (int i = 0; i < registeredFileTable.length; i++) {
+            if (registeredFileTable[i] == -1) {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0) {
+            throw new IllegalStateException("Registered-file table is full (capacity " + registeredFileTable.length + "); unregister a slot first");
+        }
+        ioUring.registerFilesUpdate(slot, new int[]{fd.getFd()});
+        registeredFileTable[slot] = fd.getFd();
+        return slot;
+    }
+
+    /**
+     * Frees a slot of the sparse registered-file table by updating it with {@code -1}
+     * ({@code IORING_REGISTER_FILES_UPDATE}). The slot is immediately reusable.
+     */
+    public void unregisterFileSlot(int slot) {
+        if (slot < 0 || slot >= registeredFileTable.length) {
+            throw new IllegalArgumentException("File slot out of range: " + slot + " (table capacity " + registeredFileTable.length + ")");
+        }
+        if (registeredFileTable[slot] == -1) {
+            throw new IllegalStateException("File slot " + slot + " is not registered");
+        }
+        ioUring.registerFilesUpdate(slot, new int[]{-1});
+        registeredFileTable[slot] = -1;
+    }
+
+    /**
+     * Unregisters the whole registered-file set ({@code IORING_UNREGISTER_FILES}) and resets the
+     * slot tracking so a later {@link #registerFileAdd(FileDescriptor)} re-initialises the table.
+     * No-op when no file table is registered.
+     */
+    public void unregisterFiles() {
+        if (registeredFileTable.length == 0) {
+            return;
+        }
+        int ret = ioUring.unregisterFiles();
+        if (ret < 0) {
+            throw new IllegalStateException("Failed to unregister files: " + NativeDispatcher.C.strerror(-ret) + " (errno " + (-ret) + ")");
+        }
+        registeredFileTable = new int[0];
+    }
+
+    /**
+     * Unregisters all registered buffers ({@code IORING_UNREGISTER_BUFFERS}) and resets the
+     * buffer tracking/check-out state so a later {@link #registerBuffers(int, int)} succeeds again.
+     * No-op when no buffers are registered.
+     */
+    public void unregisterBuffers() {
+        if (registeredBuffersArray.length == 0) {
+            return;
+        }
+        int ret = ioUring.unregisterBuffers();
+        if (ret < 0) {
+            throw new IllegalStateException("Failed to unregister buffers: " + NativeDispatcher.C.strerror(-ret) + " (errno " + (-ret) + ")");
+        }
+        registeredBuffers.clear();
+        registeredBuffersArray = new MemorySegment[0];
+        registeredBufferAddresses = new long[0];
+        registeredBufferSizes = new long[0];
+        bufferInUse = null;
+        freeBufferStack = new int[0];
+        freeBufferTop = 0;
+    }
+
+    /**
+     * Best-effort runtime update of registered buffers through {@code IORING_REGISTER_BUFFERS_UPDATE}
+     * (kernel dependent; available since Linux 5.13 when the kernel implements the opcode).
+     * On success the tracking arrays are updated so subsequent fixed-buffer operations use the new
+     * memory. The replacement segments must stay valid until the buffers are re-registered or the
+     * ring is closed.
+     *
+     * @throws IllegalStateException         if no buffers are registered
+     * @throws IllegalArgumentException      if the range or a segment is invalid
+     * @throws UnsupportedOperationException if the kernel rejects {@code IORING_REGISTER_BUFFERS_UPDATE}
+     *                                       (the message carries the errno)
+     */
+    public void updateRegisteredBuffers(int offset, MemorySegment... buffers) {
+        Objects.requireNonNull(buffers, "buffers");
+        if (registeredBuffersArray.length == 0) {
+            throw new IllegalStateException("No registered buffers to update; call registerBuffers() first");
+        }
+        if (buffers.length == 0) {
+            return;
+        }
+        if (offset < 0 || (long) offset + buffers.length > registeredBuffersArray.length) {
+            throw new IllegalArgumentException("Update range out of bounds: offset=" + offset + ", count=" + buffers.length
+                    + ", registered=" + registeredBuffersArray.length);
+        }
+        for (int i = 0; i < buffers.length; i++) {
+            MemorySegment buffer = Objects.requireNonNull(buffers[i], "buffers[" + i + "]");
+            if (!buffer.isNative()) {
+                throw new IllegalArgumentException("Buffers must be native memory (index " + i + ")");
+            }
+            if (!buffer.scope().isAlive()) {
+                throw new IllegalStateException("Segment scope is already closed (index " + i + ")");
+            }
+            if (!buffer.isAccessibleBy(Thread.currentThread())) {
+                throw new WrongThreadException("Segment is confined to another thread (index " + i + ")");
+            }
+        }
+        int ret = ioUring.registerBuffersUpdate(offset, buffers);
+        if (ret < 0) {
+            throw new UnsupportedOperationException("kernel does not support IORING_REGISTER_BUFFERS_UPDATE for this configuration (errno "
+                    + (-ret) + ": " + NativeDispatcher.C.strerror(-ret) + ")");
+        }
+        for (int i = 0; i < buffers.length; i++) {
+            int index = offset + i;
+            registeredBuffersArray[index] = buffers[i];
+            registeredBufferAddresses[index] = buffers[i].address();
+            registeredBufferSizes[index] = buffers[i].byteSize();
+            registeredBuffers.set(index, buffers[i]);
+        }
+        ioUring.setRegisteredBuffers(registeredBuffersArray);
+    }
+
+    /** Number of queued-but-not-yet-completed operations on the underlying ring. */
+    int inFlightCount() {
+        return ioUring.inFlightCount();
+    }
+
+    /** Reads {@code stx_size} from a completed statx buffer (package-private helper for JuringFile). */
+    long staticxSize(MemorySegment statxBuffer) {
+        return ioUring.staticxSize(statxBuffer);
+    }
+
+    /** Whether the ring accepted a close. */
+    public boolean isClosed() {
+        return closed;
+    }
+
+    boolean supportsFallocate() {
+        return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_FALLOCATE);
+    }
+
+    boolean supportsFtruncate() {
+        return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_FTRUNCATE);
+    }
+
+    boolean supportsStatx() {
+        return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_STATX);
+    }
+
+    boolean supportsTimeout() {
+        return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_TIMEOUT);
     }
 
     /**
@@ -922,6 +1360,7 @@ public class JUring implements AutoCloseable {
      */
     @Override
     public void close() {
+        closed = true;
         ioUring.close();
         if (readBufferPool != null) {
             readBufferPool.close();

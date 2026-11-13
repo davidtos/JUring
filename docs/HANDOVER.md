@@ -1,8 +1,41 @@
-# Handover — JUring vs seastar comparison (session of 2026-11-13, second session)
+# Handover — JUring vs seastar comparison (session of 2026-11-13; M1 + B1)
 
-For the next agent/session. Read this first, then **`docs/m1-report.md`** (the
-deliverable of this session), `SEASTAR-PLAN.md` (v1.1), `docs/benchmark-methodology.md`
-(the measurement contract), and `bench/README.md` + `bench/write/README.md`.
+For the next agent/session. Read this first, then **`docs/b1-report.md`** (B1
+deliverable, most recent), **`docs/m1-report.md`** (M1 deliverable),
+**`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.1),
+`docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
+`bench/write/README.md`.
+
+## 0. B1 status — third session addendum (2026-11-13 evening)
+
+**B1 `JuringFile` is DONE, tested and committed** in this session (commit
+`feat(api): add JuringFile async file handle abstraction (B1)`, branch `kafka-engine`).
+The detailed evidence is in [`docs/b1-report.md`](b1-report.md); the frozen API/semantics
+contract is [`docs/b1-design.md`](b1-design.md).
+
+- New public API: `JuringFile` (open with `LinuxOpenOptions`, offset `prepare*`
+  read/write plain + registered-file/fixed-buffer fast path, `await`/`drain`, `length`,
+  `truncate`, `allocate`, `discard`, `fsync`/`fdatasync`, bounded `close`,
+  `register`/`unregister`, counters), `JuringException` (typed positive `errno`), and
+  `IoPolicy` (short-IO / `EAGAIN` policy).
+- Engine additions (additive only; hot paths untouched): optional-opcode probe cache and
+  `IORING_OP_FALLOCATE(17)`, `IORING_OP_STATX(21)`, `IORING_OP_FTRUNCATE(55)`,
+  `IORING_OP_TIMEOUT(11)`; registration lifecycle (`unregisterFiles`/`unregisterBuffers`,
+  sparse fixed-file `registerFileAdd`/`unregisterFileSlot`, `updateRegisteredBuffers`).
+- Verified this session: `mvn -o test` = **142 tests, 0 failures, 1 skipped** (baseline
+  before B1: 90); **exactly 0 heap bytes** over 100k measured `prepareReadFixed+await` and
+  100k `prepareWriteFixed+await` ops; L0 W1/W3 pre/post with the unchanged M1 harness
+  inside the B1 non-regression band (report §3.3). Kernel 7.0.12 supports all four new
+  opcodes; `IORING_REGISTER_BUFFERS_UPDATE` was exercised end-to-end.
+- Known deviations/limitations: `IORING_OP_STATX` cannot use `IOSQE_FIXED_FILE` (the
+  engine resolves the slot to the tracked real fd; `length()` works for registered files);
+  blocking `JuringFile` helpers refuse to drain a ring carrying foreign in-flight work
+  (ring-level completion dispatcher is B3); `prepareTimeout` allocates a ring-lifetime
+  timespec per call (control path).
+- **Next: B2** (buffered stream layer: `Input`/`Output`, readahead, write-behind, flush;
+  then M2/W21-W22 vs seastar `fstream`). The write matrix (Step A above) is still pending
+  and remains an independent M1 gap.
+
 
 ## 1. TL;DR of where we are
 
@@ -36,7 +69,9 @@ deliverable of this session), `SEASTAR-PLAN.md` (v1.1), `docs/benchmark-methodol
 ```
 SEASTAR-PLAN.md                 plan v1.1 (read §0, §4, §5; M1 row updated)
 docs/
-  m1-report.md                  ** THE DELIVERABLE ** M1 read path PASS + W7 write block
+  b1-report.md                  ** B1 DELIVERABLE ** JuringFile + engine ops + L0 evidence
+  b1-design.md                  B1 frozen API/semantics contract (JuringFile, engine ops)
+  m1-report.md                  M1 read path PASS + W7 write block
   benchmark-methodology.md      measurement contract (F0-F15, D1-D8, §7 gates)
   handover (this file)
   baseline-2026-11-13.md        first-pass baseline (§9 seastar addendum; superseded for citations)
@@ -275,15 +310,16 @@ within 1–3 % in a separate run.
   perf gate for W1/W3** (fail on >10 % regression), and retire the legacy JMH numbers
   from the docs. Accept: one command reproduces the tables from raw JSON; a stored
   baseline is compared per commit.
-- **B1 (`JuringFile`, the first real library work — start next session):** open with
-  flags/options, offset read/write, length/truncate/allocate/discard/fsync,
-  close-with-drain, typed `-errno` errors, short-IO/EAGAIN policy, registration
-  lifecycle (unregister, add/remove at runtime); keep the fixed-buffer fast path.
-  Accept: conformance tests (seq/rand, EOF, short IO, close-with-inflight) green,
-  **L0 numbers unchanged** (re-run W1/W3 with the M1 harness and compare CIs),
-  zero-allocation hot path preserved.
-- **B2 (streams)** after B1: readahead/write-behind/flush, bounded memory; accept W21/W22
-  ≥85 % of seastar `fstream` (plan-M2).
+- **B1 (`JuringFile`) — DONE 2026-11-13** (third session; see §0 and
+  `docs/b1-report.md`): open with flags/options, offset read/write (plain + fixed-buffer
+  fast path), length/truncate/allocate/discard/fsync/fdatasync, close-with-drain
+  (bounded, never hangs), typed `-errno` errors, short-IO/EAGAIN policy, registration
+  lifecycle (unregister, add/remove at runtime). Evidence: 142 tests green
+  (conformance seq/rand/EOF/short-IO/close-with-inflight), **L0 W1/W3 unchanged** (pre/post
+  M1 harness inside the §7 band), zero-allocation hot path strict 0 bytes. Deviations:
+  statx cannot use `IOSQE_FIXED_FILE`; ring-sharing guard instead of a dispatcher (B3).
+- **B2 (streams)** next: `Input`/`Output` readahead/write-behind/flush, bounded memory;
+  accept W21/W22 ≥85 % of seastar `fstream` (plan-M2).
 
 ### Step C — multi-shard / L2 (W17-W20)
 - Extend `seastar_file_bench` with `--smp N` (it currently refuses >1) and add a
