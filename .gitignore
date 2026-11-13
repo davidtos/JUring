@@ -40,3 +40,13 @@ build/
 
 ### JCStress ###
 jcstress-results*
+
+### Local sandbox build plumbing (seastar reference build) ###
+.tools/
+.sysroot/
+
+### Seastar reference checkout (own git; pinned in SEASTAR-PLAN.md) ###
+SeaStarRef/
+
+### Writable NVMe benchmark dir (bind-mounted from /mnt/TestData, local only) ###
+nvme-data/

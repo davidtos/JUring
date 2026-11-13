@@ -1,0 +1,19 @@
+# seastar io_tester config: 1 MiB sequential write, queue depth 8 per shard.
+#
+# There is no `seqwrite` in io_tester: sequential overwrite is request_type
+# `overwrite` (writes from position 0 forward, wrapping to 0 on EOF).  This is
+# the direct analogue of the JUring seqwrite workload.
+#
+# Maps to JUring (needs a WRITABLE file):
+#   bench/juring/run-juring.sh --workload seqwrite --file <writable-file> \
+#       --size 10g --bs 1m --qd 8 --threads 1 --seconds 10 --warmup-sec 1 \
+#       --label seqwrite_1m_qd8
+- name: seqwrite_1m_qd8
+  type: overwrite
+  shards: all
+  data_size: 10GB
+  shard_info:
+    parallelism: 8
+    reqsize: 1MB
+    shares: 10
+    think_time: 0

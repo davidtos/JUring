@@ -1,0 +1,42 @@
+# seastar io_tester config: two concurrent classes (mixed workload).
+#
+# io_tester runs all classes concurrently, one job instance per shard, each with
+# its own file (data_size is per class: total disk use = 10GB + 4GB here).
+# This cannot be reproduced exactly with the JUring harness (one workload per
+# process); approximate it with two concurrent JUring processes, or treat it as
+# a seastar-only QoS/scaling probe.
+#
+# Approximate JUring equivalent (two shells, same file split by --size is NOT
+# supported - use two files):
+#   bench/juring/run-juring.sh --workload randread --file <fileA> --bs 4k \
+#       --qd 64 --threads 1 --seconds 20 --warmup-sec 1 --readonly \
+#       --label mixed_randread_4k_qd64 &
+#   bench/juring/run-juring.sh --workload seqread --file <fileB> --bs 1m \
+#       --qd 8 --threads 1 --seconds 20 --warmup-sec 1 --readonly \
+#       --label mixed_seqread_1m_qd8 &
+#   wait
+#
+# Run with:
+#   build/release/apps/io_tester/io_tester --storage <writable-dir> \
+#       --conf bench/seastar/conf/multi_job_mixed.yaml --duration 20 \
+#       --smp 4 --reactor-backend io_uring
+- name: mixed_randread_4k_qd64
+  type: randread
+  shards: all
+  data_size: 10GB
+  shard_info:
+    parallelism: 64
+    reqsize: 4kB
+    # scheduling-group weights 70 vs 30 (relative shares under contention)
+    shares: 70
+    think_time: 0
+
+- name: mixed_seqread_1m_qd8
+  type: seqread
+  shards: all
+  data_size: 4GB
+  shard_info:
+    parallelism: 8
+    reqsize: 1MB
+    shares: 30
+    think_time: 0
