@@ -1,10 +1,47 @@
-# Handover — JUring vs seastar comparison (session of 2026-11-13; M1 + B1)
+# Handover — JUring vs seastar comparison (session of 2026-11-13; M1 + B1 + B2)
 
-For the next agent/session. Read this first, then **`docs/b1-report.md`** (B1
-deliverable, most recent), **`docs/m1-report.md`** (M1 deliverable),
+For the next agent/session. Read this first, then **`docs/b2-report.md`** (B2
+deliverable, most recent), **`docs/b1-report.md`** (B1 deliverable),
+**`docs/m1-report.md`** (M1 deliverable),
 **`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.1),
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
+
+## 0.1 B2 status — fourth session addendum (2026-11-13 evening) — **latest**
+
+**B2 buffered stream layer is DONE, tested and verified** (working tree; commit follows this
+handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contract:
+[`docs/b2-design.md`](b2-design.md).
+
+- New public API in `com.davidvlijmincx.lio.api`: `JuringInputStream` (prefetching,
+  zero-copy `readChunk()`, complete-until-done `read`, `skip`, adaptive readahead,
+  bounded memory), `JuringOutputStream` (write-behind, complete-until-done writes,
+  flush/pad+truncate, preallocation hint, `syncOnClose`), `InputStreamOptions`,
+  `OutputStreamOptions`. Streams wrap `JuringFile`; they never close it. **No engine
+  changes** (`JuringFile`/`JUring`/`IoUringDispatcher`/`OperationType` untouched).
+- Bench harness: `bench/juring/JUringStreamBench.java` + `run-juring-stream.sh`,
+  `bench/seastar/seastar_stream_bench.cc` + `build-stream-bench.sh`, and the W21/W22
+  driver/aggregator under `bench/stream/` (frozen CLI/JSON in b2-design §3).
+- Evidence: **mvn -o test = 184 tests, 0 failures, 1 skipped** (B1: 142; +42 stream tests);
+  independent reviewer + Lead adversarial fuzzing found 5 real bugs before release
+  (input prefetch FIFO indexing, `write(byte[])` lifecycle check, adaptive buffer bound,
+  memory-accounting after close, partial-read carry), all fixed; bounded memory verified
+  (200 MiB transfers, `bufferMemoryBytes()` within §2 bounds, 0 after close); **L0 W1/W3
+  unchanged** (fast-state W3 327,996 vs stored M1 327,371 = +0.19 %, all reps pass the
+  p99<600 µs gate; slow reps are the documented host signature); **W21/W22 preliminary
+  session** `bench/results/b2-2026-11-13` (36/36 cells ok, 0 errors): point-estimate
+  JUring/seastar stream ratio 0.940 (W22-128k), 0.905 (W22-1M), 1.098 (W21-1M) and
+  state-matched 1.055/0.998 in the state-transition-contaminated W21-128k; strict 95 % LB
+  not established at R=3 → **M2 itself remains open** (needs separated read/write
+  sessions, 300 s rests, DS-M, 60 s cells, R=5; the harness is ready).
+- Known limits (full list b2-report §5): streams are single-threaded/ring-owned (B3),
+  input needs ring entries and `JuringFile.withInFlightCapacity` ≥ `readAhead+2`, output
+  semantics are "write from offset 0" with pad+truncate at flush/close, adaptive readahead
+  is per-stream/simplified, durability is `fdatasync`-on-close only (B6), not a
+  zero-allocation API by contract (the B1 `prepare*`+`await` path remains the
+  zero-allocation interface).
+- **Next: M2** (full W21/W22 campaign + report), then the write matrix (Step A, still
+  pending) and B3/B6.
 
 ## 0. B1 status — third session addendum (2026-11-13 evening)
 
@@ -69,15 +106,18 @@ contract is [`docs/b1-design.md`](b1-design.md).
 - **No JUring source files were changed.** Repo diff is additive: `SEASTAR-PLAN.md`,
   `docs/`, `bench/`, `.gitignore`. `SeaStarRef/`, `.tools/`, `.sysroot/` are gitignored.
   No commits were made.
-- **Next real milestone:** finish the write matrix, then start the library work
-  (B0 close-out → **B1 `JuringFile`**; see §7).
+- **Milestone order:** B0 harness **done**, **B1 `JuringFile` done**, **B2 streams done**;
+  next is the full **M2** W21/W22 campaign, and the M1 write matrix (Step A) is still open.
+  See §0.1 and §7.
 
 ## 2. Repo map (what exists now)
 
 ```
 SEASTAR-PLAN.md                 plan v1.1 (read §0, §4, §5; M1 row updated)
 docs/
-  b1-report.md                  ** B1 DELIVERABLE ** JuringFile + engine ops + L0 evidence
+  b2-report.md                  ** B2 DELIVERABLE (latest) ** stream layer + tests + W21/W22 preliminary
+  b2-design.md                  B2 frozen stream API/semantics + benchmark contract
+  b1-report.md                  B1 DELIVERABLE JuringFile + engine ops + L0 evidence
   b1-design.md                  B1 frozen API/semantics contract (JuringFile, engine ops)
   m1-report.md                  M1 read path PASS + W7 write block
   benchmark-methodology.md      measurement contract (F0-F15, D1-D8, §7 gates)
@@ -106,6 +146,11 @@ bench/
   seastar/seastar_file_bench.cc seastar runner (latency reservoir FIXED this session)
   seastar/build-file-bench.sh   rebuild it
   juring/JUringFileBench.java   JUring runner (io_tester-compatible workloads)
+  juring/JUringStreamBench.java + run-juring-stream.sh   B2 stream runner (W21/W22)
+  seastar/seastar_stream_bench.cc + build-stream-bench.sh  B2 seastar fstream runner
+  stream/                       W21/W22 driver (run-stream-matrix.sh), analyzer, README
+  results/b2-2026-11-13/        ** B2 W21/W22 preliminary session ** (gitignored)
+  results/b2-l0-check/          B2 L0 W1/W3 control (gitignored)
   results/m1-2026-11-13/        ** read session ** cells/ perf/ iotester/ aggregate/
                                 cell-meta.tsv perf-cells.tsv iotester-check.tsv
                                 manifest.txt notes.md logs/
@@ -328,8 +373,15 @@ within 1–3 % in a separate run.
   open decisions: see §0 above and `docs/b1-report.md` §4 (statx tracking workaround;
   non-throwing `close()` vs guarded `await`; caller-managed timeout timespec; buffer
   replace-or-unregister scope; mixed error taxonomy; ring-wide registration).
-- **B2 (streams)** next: `Input`/`Output` readahead/write-behind/flush, bounded memory;
-  accept W21/W22 ≥85 % of seastar `fstream` (plan-M2).
+- **B2 (streams) — DONE 2026-11-13** (see §0.1 and `docs/b2-report.md`): `JuringInputStream`
+  /`JuringOutputStream` with readahead/write-behind/flush, bounded memory, 42 new tests,
+  L0 unchanged, preliminary W21/W22 (36/36 cells ok) with point-estimate stream ratios
+  0.940/0.905/1.098 and state-matched 1.055/0.998; strict M2 bound needs the full campaign.
+- **M2 (full W21/W22 campaign)** next: separate read and write sessions (methodology
+  phase separation), 60 s measured cells, 300 s rests, DS-M multi-file W22, R=5, D1 write
+  preconditioning; run `bench/stream/run-stream-matrix.sh` with `--session/--cells/
+  --seconds/--warmup/--rest/--reps`, aggregate with `analyze_stream.py`, then write the
+  M2 stream report (the B2 report §4 is the readiness measurement, not M2).
 
 ### Step C — multi-shard / L2 (W17-W20)
 - Extend `seastar_file_bench` with `--smp N` (it currently refuses >1) and add a

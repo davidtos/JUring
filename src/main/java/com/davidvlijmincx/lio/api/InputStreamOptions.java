@@ -1,0 +1,154 @@
+package com.davidvlijmincx.lio.api;
+
+import java.util.Objects;
+
+/**
+ * Immutable options for {@link JuringInputStream}, modelled on seastar's
+ * {@code file_input_stream_options} (see {@code SEASTAR-PLAN.md} §4 B2 and
+ * {@code docs/b2-design.md} §1.1).
+ *
+ * <p>Defaults mirror seastar: an 8 KiB buffer, no extra readahead (one read in flight),
+ * adaptive adjustments disabled and 4096-byte alignment (safe on this host's ext4 data
+ * NVMe and on tmpfs test files).
+ *
+ * <p>Example:
+ * <pre>{@code
+ * try (JuringInputStream in = JuringInputStream.open(file,
+ *         InputStreamOptions.defaults().withBufferSize(128 * 1024).withReadAhead(7))) {
+ *     MemorySegment chunk;
+ *     while ((chunk = in.readChunk()).byteSize() > 0) { ... }
+ * }
+ * }</pre>
+ */
+public final class InputStreamOptions {
+
+    /** Default chunk/buffer size in bytes ({@code 8192}, seastar default). */
+    public static final int DEFAULT_BUFFER_SIZE = 8192;
+
+    /** Default buffer/read alignment in bytes ({@code 4096}). */
+    public static final int DEFAULT_ALIGNMENT = 4096;
+
+    private static final InputStreamOptions DEFAULTS =
+            new InputStreamOptions(DEFAULT_BUFFER_SIZE, 0, DEFAULT_ALIGNMENT, false);
+
+    private final int bufferSize;
+    private final int readAhead;
+    private final int alignment;
+    private final boolean dynamicAdjustments;
+
+    private InputStreamOptions(int bufferSize, int readAhead, int alignment, boolean dynamicAdjustments) {
+        if (bufferSize < 1) {
+            throw new IllegalArgumentException("bufferSize must be >= 1: " + bufferSize);
+        }
+        if (readAhead < 0 || readAhead > 1024) {
+            throw new IllegalArgumentException("readAhead must be in [0, 1024]: " + readAhead);
+        }
+        if (alignment < 1 || Integer.bitCount(alignment) != 1 || alignment > (1 << 20)) {
+            throw new IllegalArgumentException("alignment must be a power of two in [1, 1 MiB]: " + alignment);
+        }
+        this.bufferSize = bufferSize;
+        this.readAhead = readAhead;
+        this.alignment = alignment;
+        this.dynamicAdjustments = dynamicAdjustments;
+    }
+
+    /**
+     * Returns the shared default options (buffer 8192, readahead 0, alignment 4096,
+     * adaptive adjustments off).
+     *
+     * @return the shared default options
+     */
+    public static InputStreamOptions defaults() {
+        return DEFAULTS;
+    }
+
+    /** @return the configured maximum chunk/buffer size in bytes */
+    public int bufferSize() {
+        return bufferSize;
+    }
+
+    /**
+     * @return the maximum number of <em>extra</em> prefetch buffers; the maximum number of
+     *         reads in flight is {@code readAhead() + 1}
+     */
+    public int readAhead() {
+        return readAhead;
+    }
+
+    /** @return buffer and read alignment in bytes (power of two) */
+    public int alignment() {
+        return alignment;
+    }
+
+    /** @return {@code true} when seastar-style adaptive buffer-size/readahead is enabled */
+    public boolean dynamicAdjustments() {
+        return dynamicAdjustments;
+    }
+
+    /**
+     * Returns a copy with a different maximum buffer size.
+     *
+     * @param bufferSize bytes, {@code >= 1}
+     * @return a new options object
+     */
+    public InputStreamOptions withBufferSize(int bufferSize) {
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+    }
+
+    /**
+     * Returns a copy with a different maximum readahead depth.
+     *
+     * @param readAhead extra prefetch buffers, {@code 0..1024}
+     * @return a new options object
+     */
+    public InputStreamOptions withReadAhead(int readAhead) {
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+    }
+
+    /**
+     * Returns a copy with a different alignment.
+     *
+     * @param alignment power of two in {@code [1, 1 MiB]}
+     * @return a new options object
+     */
+    public InputStreamOptions withAlignment(int alignment) {
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+    }
+
+    /**
+     * Returns a copy with adaptive adjustments enabled or disabled.
+     *
+     * @param enabled {@code true} for seastar-style slow-start/dynamic readahead
+     * @return a new options object
+     */
+    public InputStreamOptions withDynamicAdjustments(boolean enabled) {
+        return new InputStreamOptions(bufferSize, readAhead, alignment, enabled);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof InputStreamOptions other)) {
+            return false;
+        }
+        return bufferSize == other.bufferSize
+                && readAhead == other.readAhead
+                && alignment == other.alignment
+                && dynamicAdjustments == other.dynamicAdjustments;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(bufferSize, readAhead, alignment, dynamicAdjustments);
+    }
+
+    @Override
+    public String toString() {
+        return "InputStreamOptions{bufferSize=" + bufferSize
+                + ", readAhead=" + readAhead
+                + ", alignment=" + alignment
+                + ", dynamicAdjustments=" + dynamicAdjustments + '}';
+    }
+}

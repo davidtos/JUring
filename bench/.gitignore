@@ -3,3 +3,4 @@ __pycache__/
 bench-results/
 bench-data-seastar/
 seastar/seastar_file_bench
+seastar/seastar_stream_bench
