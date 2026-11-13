@@ -39,7 +39,9 @@ convenience layer on top.
 - **Bounded close.** `close()` first drains with a non-blocking peek loop under a deadline,
   then cancels remaining own ops (`IORING_OP_CANCEL`) and grants a grace window, then counts
   abandoned ops and force-closes — it can never block forever, and it never throws because
-  an operation failed. It unregisters the fixed-file slot and closes the fd. Idempotent.
+  an operation failed. If the ring carries foreign in-flight work it does not reap it
+  (that would steal completions); it cancels only its own ops, counts them as abandoned and
+  force-closes. It unregisters the fixed-file slot and closes the fd. Idempotent.
 - **`truncate(-1)`** is rejected client-side as typed `EINVAL` (same errno the kernel would
   return); `read`/`write` retry `-EAGAIN` per `IoPolicy` and never retry the async path.
 
@@ -159,27 +161,62 @@ recorded. The equivalence statement is bounded by host state, which is why the p
 includes confirmation blocks. Full raw tables and the per-block analysis:
 `bench/results/b1-l0-check/comparison.md` (gitignored).
 
-## 4. Deviations and limitations
+## 4. Deviations, decisions and limitations
+
+All items below are deliberate and documented; none of them changes the B1 acceptance
+evidence (tests, zero-allocation, L0).
 
 1. **`IORING_OP_STATX` cannot use `IOSQE_FIXED_FILE`.** The kernel's `io_statx_prep` returns
    `-EBADF` for fixed-file requests (verified live: plain `AT_EMPTY_PATH` statx res=0,
-   fixed-file slot res=-9). The frozen `prepareStatx(int slot, …)` signature is kept but the
-   engine resolves the slot to JUring's tracked real fd and submits a plain `AT_EMPTY_PATH`
-   statx on the same file, so `JuringFile.length()` works for registered files. Design doc
-   §4.1 corrected.
-2. **Ring sharing** with foreign in-flight operations is guarded, not solved — B3 owns the
-   completion dispatcher/cancellation guarantees. `close()` uses a bounded peek loop rather
-   than `IORING_OP_TIMEOUT` (a stray timeout completion cannot corrupt the ledger, and
-   cancelling an internal timeout would leave extra CQEs behind); the timeout opcode is
-   implemented and tested for B3 use.
-3. **`prepareTimeout`** allocates a 16-byte `__kernel_timespec` of ring-lifetime memory per
-   call — control-path API, documented, not for hot loops.
-4. **Buffer add/remove**: runtime replacement via `IORING_REGISTER_BUFFERS_UPDATE` works on
-   kernel 7.0.12; single-buffer *removal* remains full-unregister (liburing offers no
-   per-slot removal), documented.
-5. `JuringFile` is single-threaded (same contract as `JUring`); no multishot/pbuf support.
-6. No changes to `bench/juring/JUringFileBench.java`, the M1 harness, or the published
-   numbers: the L0 workload uses the unchanged raw-SQE path, verified below.
+   fixed-file slot res=-9). **Decision: keep the tracking-assisted behaviour.** The frozen
+   `prepareStatx(int slot, …)` signature is kept, but the engine resolves the slot via
+   JUring's tracked real fd and submits a plain `AT_EMPTY_PATH` statx on the same file, so
+   `JuringFile.length()` works for registered files. Consequence: the tracked descriptor
+   must stay open — closing the original fd after `registerFiles` (legal for the other
+   fixed-file ops, which keep their own kernel reference) makes statx on the slot fail
+   `EBADF`. Empty/untracked slots still submit a fixed-file statx and complete `-EBADF`.
+   Design doc §4.1 corrected.
+2. **Ring sharing and `close()` semantics.** Blocking helpers are guarded against foreign
+   in-flight work, but the two paths differ deliberately:
+   `await`/`drain`/`read`/`write`/`length` throw `IllegalStateException` when
+   `ring.inFlightCount() != ownUnreapedCount` (foreign work, or completions reaped outside
+   the handle); **`close()` never throws for in-flight operations** — if the ring carries
+   foreign work it does not reap (that would steal another owner's completions), it cancels
+   its own pending ops, counts them in `abandonedOperations()` and force-closes. Abandoned
+   results are lost from the handle's perspective and their completions (including
+   cancellation results) can still arrive through the CQ, so the ring should be drained
+   before being reused for something else. **Decision: keep the non-throwing close
+   contract**; B3's ring-level completion dispatcher removes the ambiguity.
+3. **`close()` uses a bounded peek/park loop, not `IORING_OP_TIMEOUT`** (design §4 step 2
+   was updated accordingly). This keeps a stray timeout completion from touching the
+   ledger and avoids extra CQEs from cancelling an internal timer; the timeout opcode is
+   implemented and tested for B3 use. Drain passes are ~50–100 µs poll slices, bounded by
+   the close deadline and a grace window.
+4. **`prepareTimeout` takes a caller-managed `__kernel_timespec`** (native 16-byte segment:
+   `tv_sec` i64 @0, `tv_nsec` i64 @8), validated for native/alive/thread-confined/≥16 bytes
+   and `count >= 0`. The ring-arena allocation of the earlier nanos-convenience overloads
+   was removed before release because repeated calls grew ring-lifetime memory without
+   bound. The timeout opcode is not used by `JuringFile.close()`; it is B3 groundwork.
+5. **Buffer lifecycle is replace-or-full-unregister, files have per-slot add/remove.**
+   `updateRegisteredBuffers(offset, …)` replaces slots (best effort; kernel-dependent, and
+   rejection surfaces as `UnsupportedOperationException` with the errno);
+   `unregisterBuffers()` removes all buffers; liburing exposes no per-slot buffer removal.
+   `registerFileAdd`/`unregisterFileSlot` give files runtime add/remove. **Decision:
+   accept this split for B1**; per-slot buffer removal is deferred to B6/B7 scope.
+6. **Error taxonomy is mixed by design:** kernel I/O failures are checked
+   `JuringException` with a positive `errno`; caller-argument errors are
+   `IllegalArgumentException`; lifecycle misuse is `IllegalStateException`; a kernel
+   without an optional opcode throws `UnsupportedOperationException` at prepare time; a
+   negative truncate length is validated client-side as `JuringException(EINVAL)`.
+7. **Registration is ring-wide.** An external `unregisterFiles`/`registerFilesUpdate` can
+   invalidate or re-point a `JuringFile`'s fixed-file slot while the handle still uses it
+   (reads/writes would then target the replacement file, and statx resolves through the
+   updated tracking). Do not mix external registration changes with a live `JuringFile`.
+   `registerFilesUpdate` now fails loudly (`IllegalStateException`) if its range exceeds
+   the tracked table instead of silently leaving stale tracking.
+8. `JuringFile` is single-threaded (same contract as `JUring`); no multishot/pbuf support.
+9. No changes to `bench/juring/JUringFileBench.java`, the M1 harness, or the published
+   numbers: the L0 workload uses the unchanged raw-SQE path, verified in §3.3.
 
 ## 5. How to reproduce
 

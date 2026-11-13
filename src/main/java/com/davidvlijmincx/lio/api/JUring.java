@@ -8,7 +8,6 @@ import java.util.List;
 import java.util.Objects;
 
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Java API for Linux {@code io_uring}.
@@ -764,7 +763,6 @@ public class JUring implements AutoCloseable {
     // ------------------------------------------------------------------
 
     private static final int EOPNOTSUPP = 95;
-    private static final long NANOS_PER_SECOND = 1_000_000_000L;
 
     /**
      * Prepares an async {@code fallocate(2)} (opcode {@code IORING_OP_FALLOCATE}) on a plain fd.
@@ -875,9 +873,11 @@ public class JUring implements AutoCloseable {
      * Kernel note: {@code IORING_OP_STATX} does not accept {@code IOSQE_FIXED_FILE} (the kernel's
      * statx prep returns {@code -EBADF} for fixed files). This method therefore resolves the slot
      * to the file descriptor tracked for it and submits a plain {@code AT_EMPTY_PATH} statx against
-     * that descriptor; the observable result is the same. If the slot is empty/untracked, the
-     * operation is submitted as a fixed-file statx and completes with {@code -EBADF}, matching the
-     * other fixed-file operations.
+     * that descriptor; the observable result is the same. This means the tracked descriptor must
+     * still be open: if you closed the original fd after {@code registerFiles} (which is legal for
+     * the other fixed-file operations, because the kernel keeps its own reference), statx on the
+     * slot fails with {@code -EBADF}. If the slot is empty/untracked, the operation is submitted as
+     * a fixed-file statx and completes with {@code -EBADF}, matching the other fixed-file operations.
      */
     public long prepareStatx(int indexFD, MemorySegment statxBuffer) {
         return prepareStatxInternal(indexFD, statxBuffer, (byte) 0, true);
@@ -929,52 +929,80 @@ public class JUring implements AutoCloseable {
         return registeredFileTable[slot];
     }
 
+    /** Size of a {@code struct __kernel_timespec}: two little-endian i64 fields (tv_sec, tv_nsec). */
+    public static final long TIMESPEC_BYTES = 16L;
+
     /**
-     * Prepares an {@code IORING_OP_TIMEOUT} for {@code timeoutNanos} nanoseconds with
-     * {@code count=1} and {@code flags=0}. The completion result is {@code -ETIME} when the
-     * timeout fires, or 0 when {@code count} completions arrive first.
+     * Prepares an {@code IORING_OP_TIMEOUT} (opcode 11) with {@code count=1} and {@code flags=0}.
+     * The completion result is {@code -ETIME} when the timeout fires, or 0 when {@code count}
+     * completions arrive first.
      * <p>
-     * Control-path API: allocates a 16-byte {@code __kernel_timespec} in the ring arena on every
-     * call (ring-lifetime memory, not reclaimed until the ring is closed). Do not use in hot loops.
+     * <b>Caller-managed timespec:</b> {@code timespec} must be a native segment of at least
+     * {@link #TIMESPEC_BYTES} bytes holding a {@code struct __kernel_timespec}: {@code tv_sec} as
+     * an i64 at offset 0 and {@code tv_nsec} as an i64 at offset 8. The segment must stay valid
+     * until the timeout is submitted (and until it completes for absolute timeouts or if you
+     * re-arm the timer). JUring does <b>not</b> allocate the timespec: the previous
+     * nanos-convenience overloads allocated ring-lifetime arena memory per call and were removed
+     * because repeated calls leaked without bound.
+     * <pre>{@code
+     * try (Arena arena = Arena.ofConfined()) {
+     *     MemorySegment ts = arena.allocate(16, 8);
+     *     ts.set(JAVA_LONG, 0, 0);           // tv_sec
+     *     ts.set(JAVA_LONG, 8, 20_000_000);  // tv_nsec = 20 ms
+     *     long timeout = ring.prepareTimeout(ts);
+     *     ring.submit();
+     * }
+     * }</pre>
      *
-     * @param timeoutNanos relative timeout in nanoseconds, {@code >= 0}
+     * @param timespec native 16-byte {@code __kernel_timespec}, caller-managed
      * @return the operation handle
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      */
-    public long prepareTimeout(long timeoutNanos) {
-        return prepareTimeoutInternal(timeoutNanos, 1, 0, (byte) 0);
+    public long prepareTimeout(MemorySegment timespec) {
+        return prepareTimeoutInternal(timespec, 1, 0, (byte) 0);
     }
 
-    public long prepareTimeout(long timeoutNanos, SqeOptions... sqeOptions) {
-        return prepareTimeoutInternal(timeoutNanos, 1, 0, SqeOptions.combineOptions(sqeOptions));
+    public long prepareTimeout(MemorySegment timespec, SqeOptions... sqeOptions) {
+        return prepareTimeoutInternal(timespec, 1, 0, SqeOptions.combineOptions(sqeOptions));
     }
 
     /**
      * Prepares an {@code IORING_OP_TIMEOUT} with an explicit completion {@code count} and
-     * {@code IORING_TIMEOUT_*} flags.
+     * {@code IORING_TIMEOUT_*} flags. The timespec is caller-managed; see
+     * {@link #prepareTimeout(MemorySegment)}.
      *
-     * @param count number of completions that complete the timeout early (0 = a plain timeout)
-     * @param flags {@code IORING_TIMEOUT_*} flags ({@code ABS}, {@code BOOTTIME}, {@code ETIME})
+     * @param timespec native 16-byte {@code __kernel_timespec}, caller-managed
+     * @param count    number of completions that complete the timeout early (0 = a plain timeout)
+     * @param flags    {@code IORING_TIMEOUT_*} flags ({@code ABS}, {@code BOOTTIME}, {@code ETIME})
      */
-    public long prepareTimeout(long timeoutNanos, int count, int flags) {
-        return prepareTimeoutInternal(timeoutNanos, count, flags, (byte) 0);
+    public long prepareTimeout(MemorySegment timespec, int count, int flags) {
+        return prepareTimeoutInternal(timespec, count, flags, (byte) 0);
     }
 
-    public long prepareTimeout(long timeoutNanos, int count, int flags, SqeOptions... sqeOptions) {
-        return prepareTimeoutInternal(timeoutNanos, count, flags, SqeOptions.combineOptions(sqeOptions));
+    public long prepareTimeout(MemorySegment timespec, int count, int flags, SqeOptions... sqeOptions) {
+        return prepareTimeoutInternal(timespec, count, flags, SqeOptions.combineOptions(sqeOptions));
     }
 
-    private long prepareTimeoutInternal(long timeoutNanos, int count, int flags, byte sqeFlags) {
+    private long prepareTimeoutInternal(MemorySegment timespec, int count, int flags, byte sqeFlags) {
         requireOpcodeSupported(IoUringDispatcher.IORING_OP_TIMEOUT, "IORING_OP_TIMEOUT");
-        if (timeoutNanos < 0) {
-            throw new IllegalArgumentException("Invalid timeoutNanos: " + timeoutNanos);
+        Objects.requireNonNull(timespec, "timespec");
+        if (!timespec.isNative()) {
+            throw new IllegalArgumentException("timespec must be native memory, not a heap segment");
+        }
+        if (timespec.byteSize() < TIMESPEC_BYTES) {
+            throw new IllegalArgumentException("timespec must be at least " + TIMESPEC_BYTES
+                    + " bytes (struct __kernel_timespec: tv_sec + tv_nsec), got " + timespec.byteSize());
+        }
+        if (!timespec.scope().isAlive()) {
+            throw new IllegalStateException("timespec scope is already closed");
+        }
+        if (!timespec.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("timespec is confined to another thread");
         }
         if (count < 0) {
             throw new IllegalArgumentException("Invalid timeout count: " + count);
         }
         long sqe = getSqe(sqeFlags, false);
-        MemorySegment timespec = ioUring.arena().allocate(16L, 8L);
-        timespec.set(JAVA_LONG, 0L, timeoutNanos / NANOS_PER_SECOND);
-        timespec.set(JAVA_LONG, 8L, timeoutNanos % NANOS_PER_SECOND);
         long opId = opSeq++;
         long userData = UserData.encode(OperationType.TIMEOUT, opId);
         ioUring.prepareTimeout(sqe, timespec.address(), count, flags);
@@ -1155,10 +1183,17 @@ public class JUring implements AutoCloseable {
     }
 
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
-        int ret = ioUring.registerFilesUpdate(offset, fileDescriptors);
-        if (registeredFileTable.length >= offset + fileDescriptors.length) {
-            System.arraycopy(fileDescriptors, 0, registeredFileTable, offset, fileDescriptors.length);
+        int end = offset + fileDescriptors.length;
+        if (offset < 0 || registeredFileTable.length < end) {
+            // The kernel-side table and the JUring tracking table are created together and have the
+            // same capacity, so this can only trigger on a broken invariant. Fail loudly instead of
+            // silently leaving tracked fds stale (statx slot resolution reads this table).
+            throw new IllegalStateException("Registered-file tracking out of sync: update range ["
+                    + offset + ", " + end + ") exceeds tracked table capacity " + registeredFileTable.length
+                    + "; register files through JUring.registerFiles/registerFileAdd first");
         }
+        int ret = ioUring.registerFilesUpdate(offset, fileDescriptors);
+        System.arraycopy(fileDescriptors, 0, registeredFileTable, offset, fileDescriptors.length);
         return ret;
     }
 

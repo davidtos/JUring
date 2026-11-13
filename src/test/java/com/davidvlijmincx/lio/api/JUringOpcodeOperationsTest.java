@@ -254,39 +254,44 @@ class JUringOpcodeOperationsTest {
     @Test
     void timeoutFiresWithEtime() {
         Assumptions.assumeTrue(ring.supportsTimeout());
-        long timeoutNanos = 20_000_000L; // 20 ms
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment timespec = relativeTimespec(arena, 20_000_000L); // 20 ms
 
-        long start = System.nanoTime();
-        long handle = ring.prepareTimeout(timeoutNanos);
-        ring.submit();
-        Result result = ring.waitForResult();
-        long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+            long start = System.nanoTime();
+            long handle = ring.prepareTimeout(timespec);
+            ring.submit();
+            Result result = ring.waitForResult();
+            long elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
 
-        assertEquals(handle, result.id());
-        assertEquals(OperationType.TIMEOUT, result.type());
-        assertEquals(-ETIME, result.result(), "an expired IORING_OP_TIMEOUT completes with -ETIME");
-        assertTrue(elapsedMillis >= 15L, "timeout fired too early: " + elapsedMillis + " ms");
+            assertEquals(handle, result.id());
+            assertEquals(OperationType.TIMEOUT, result.type());
+            assertEquals(-ETIME, result.result(), "an expired IORING_OP_TIMEOUT completes with -ETIME");
+            assertTrue(elapsedMillis >= 15L, "timeout fired too early: " + elapsedMillis + " ms");
+        }
     }
 
     @Test
     void timeoutCompletesEarlyWhenCountIsReached() {
         Assumptions.assumeTrue(ring.supportsTimeout());
 
-        long timeoutHandle = ring.prepareTimeout(10_000_000_000L, 1, 0); // 10 s safety margin
-        long nopHandle = ring.prepareNop();
-        ring.submit();
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment timespec = relativeTimespec(arena, 10_000_000_000L); // 10 s safety margin
+            long timeoutHandle = ring.prepareTimeout(timespec, 1, 0);
+            long nopHandle = ring.prepareNop();
+            ring.submit();
 
-        Result first = ring.waitForResult();
-        Result second = ring.waitForResult();
+            Result first = ring.waitForResult();
+            Result second = ring.waitForResult();
 
-        Result nop = first.type() == OperationType.NOP ? first : second;
-        Result timeout = first.type() == OperationType.TIMEOUT ? first : second;
+            Result nop = first.type() == OperationType.NOP ? first : second;
+            Result timeout = first.type() == OperationType.TIMEOUT ? first : second;
 
-        assertEquals(nopHandle, nop.id());
-        assertTrue(nop.isSuccess());
-        assertEquals(timeoutHandle, timeout.id());
-        assertEquals(OperationType.TIMEOUT, timeout.type());
-        assertTrue(timeout.isSuccess(), "timeout reached its completion count and must complete with 0, got " + timeout.result());
+            assertEquals(nopHandle, nop.id());
+            assertTrue(nop.isSuccess());
+            assertEquals(timeoutHandle, timeout.id());
+            assertEquals(OperationType.TIMEOUT, timeout.type());
+            assertTrue(timeout.isSuccess(), "timeout reached its completion count and must complete with 0, got " + timeout.result());
+        }
     }
 
     @Test
@@ -300,8 +305,11 @@ class JUringOpcodeOperationsTest {
                 () -> ring.prepareFtruncate(0, -1L, SqeOptions.IOSQE_IO_DRAIN));
         assertThrows(IllegalArgumentException.class,
                 () -> ring.prepareStatx(0, MemorySegment.NULL, SqeOptions.IOSQE_IO_DRAIN));
-        assertThrows(IllegalArgumentException.class,
-                () -> ring.prepareTimeout(-1L, 1, 0, SqeOptions.IOSQE_IO_DRAIN));
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment timespec = relativeTimespec(arena, 10_000_000L);
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareTimeout(timespec, -1, 0, SqeOptions.IOSQE_IO_DRAIN));
+        }
         assertEquals(0, ring.inFlightCount(), "rejected prepares must not consume SQEs");
     }
 
@@ -326,11 +334,27 @@ class JUringOpcodeOperationsTest {
     }
 
     @Test
-    void prepareTimeoutValidatesArguments() {
+    void prepareTimeoutValidatesCallerManagedTimespec() {
         Assumptions.assumeTrue(ring.supportsTimeout());
-        assertThrows(IllegalArgumentException.class, () -> ring.prepareTimeout(-1L));
-        assertThrows(IllegalArgumentException.class, () -> ring.prepareTimeout(0L, -1, 0));
-        assertEquals(0, ring.inFlightCount());
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment timespec = relativeTimespec(arena, 1_000_000L);
+            assertThrows(NullPointerException.class, () -> ring.prepareTimeout(null));
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareTimeout(MemorySegment.ofArray(new byte[16])),
+                    "heap segments are not native and must be rejected");
+            assertThrows(IllegalArgumentException.class, () -> ring.prepareTimeout(arena.allocate(8L)),
+                    "a 16-byte __kernel_timespec is required");
+            assertThrows(IllegalArgumentException.class, () -> ring.prepareTimeout(timespec, -1, 0));
+        }
+        assertEquals(0, ring.inFlightCount(), "rejected prepares must not consume SQEs");
+    }
+
+    /** Writes a relative {@code struct __kernel_timespec} (tv_sec, tv_nsec) into caller-owned memory. */
+    private static MemorySegment relativeTimespec(Arena arena, long timeoutNanos) {
+        MemorySegment timespec = arena.allocate(JUring.TIMESPEC_BYTES, 8);
+        timespec.set(JAVA_LONG, 0L, timeoutNanos / 1_000_000_000L);
+        timespec.set(JAVA_LONG, 8L, timeoutNanos % 1_000_000_000L);
+        return timespec;
     }
 
     @Test

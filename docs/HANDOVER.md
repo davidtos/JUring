@@ -27,11 +27,19 @@ contract is [`docs/b1-design.md`](b1-design.md).
   100k `prepareWriteFixed+await` ops; L0 W1/W3 pre/post with the unchanged M1 harness
   inside the B1 non-regression band (report §3.3). Kernel 7.0.12 supports all four new
   opcodes; `IORING_REGISTER_BUFFERS_UPDATE` was exercised end-to-end.
-- Known deviations/limitations: `IORING_OP_STATX` cannot use `IOSQE_FIXED_FILE` (the
-  engine resolves the slot to the tracked real fd; `length()` works for registered files);
-  blocking `JuringFile` helpers refuse to drain a ring carrying foreign in-flight work
-  (ring-level completion dispatcher is B3); `prepareTimeout` allocates a ring-lifetime
-  timespec per call (control path).
+- Known deviations/decisions (full list in `docs/b1-report.md` §4): `IORING_OP_STATX`
+  cannot use `IOSQE_FIXED_FILE` — the engine resolves the slot to the tracked real fd, so
+  `length()` works for registered files **while the original fd stays open** (kept by
+  decision); `await`/`drain`/convenience ops throw `IllegalStateException` if the ring
+  carries foreign in-flight work, while **`close()` never throws** — it cancels its own
+  ops, counts them as abandoned and force-closes (their results are lost and completions
+  may still arrive via the CQ); `prepareTimeout` requires a caller-managed 16-byte
+  `__kernel_timespec` (no ring-arena leak; it is B3 groundwork, unused by `close()`, which
+  uses a bounded peek/park drain instead); buffer lifecycle is replace-or-full-unregister
+  (files also have per-slot add/remove); the error taxonomy is mixed by design (typed
+  `JuringException` for kernel I/O, unchecked exceptions for misuse/unsupported); ring
+  registration is ring-wide — do not re-point a live `JuringFile`'s slot externally. The
+  ring-level completion dispatcher remains B3.
 - **Next: B2** (buffered stream layer: `Input`/`Output`, readahead, write-behind, flush;
   then M2/W21-W22 vs seastar `fstream`). The write matrix (Step A above) is still pending
   and remains an independent M1 gap.
@@ -316,8 +324,10 @@ within 1–3 % in a separate run.
   (bounded, never hangs), typed `-errno` errors, short-IO/EAGAIN policy, registration
   lifecycle (unregister, add/remove at runtime). Evidence: 142 tests green
   (conformance seq/rand/EOF/short-IO/close-with-inflight), **L0 W1/W3 unchanged** (pre/post
-  M1 harness inside the §7 band), zero-allocation hot path strict 0 bytes. Deviations:
-  statx cannot use `IOSQE_FIXED_FILE`; ring-sharing guard instead of a dispatcher (B3).
+  M1 harness inside the §7 band), zero-allocation hot path strict 0 bytes. Deviations and
+  open decisions: see §0 above and `docs/b1-report.md` §4 (statx tracking workaround;
+  non-throwing `close()` vs guarded `await`; caller-managed timeout timespec; buffer
+  replace-or-unregister scope; mixed error taxonomy; ring-wide registration).
 - **B2 (streams)** next: `Input`/`Output` readahead/write-behind/flush, bounded memory;
   accept W21/W22 ≥85 % of seastar `fstream` (plan-M2).
 
