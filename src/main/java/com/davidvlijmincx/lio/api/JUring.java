@@ -71,6 +71,8 @@ public class JUring implements AutoCloseable {
     private boolean closed;
     private long cancelledAtClose;
     private int abandonedAtClose;
+    /** B5: final frozen ring-metrics snapshot captured on close (design §2.1 after-close rule). */
+    private volatile RingMetrics frozenRingMetrics;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         this(queueDepth, 0, ioUringFlags);
@@ -1681,6 +1683,26 @@ public class JUring implements AutoCloseable {
         return closed;
     }
 
+    /**
+     * Immutable snapshot of this ring's counters and occupancy (B5).
+     *
+     * <p>Readable from any thread, before/while the ring is open and after
+     * {@link #close()}; unlike the native-touching B1 paths it does not call
+     * {@code ensureOpen()} and never throws for a closed ring. While open, the snapshot is a
+     * best-effort telemetry view (design §5). After close it returns the final frozen
+     * snapshot: counters keep their final values, {@code sqQueued}/{@code cqReady} are
+     * {@code 0} and the effective ring depths are retained.
+     *
+     * <p>Each {@link #getSharedWorkerRing(int, IoUringOptions...)} ring reports the counters
+     * of its own underlying ring object.
+     *
+     * @return this ring's current (or final, once closed) immutable metrics snapshot
+     */
+    public RingMetrics ringMetrics() {
+        RingMetrics frozen = this.frozenRingMetrics;
+        return frozen != null ? frozen : ioUring.ringMetrics();
+    }
+
     boolean supportsFallocate() {
         return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_FALLOCATE);
     }
@@ -1736,6 +1758,8 @@ public class JUring implements AutoCloseable {
             ioUring.closeBounded(timeoutMillis);
             this.abandonedAtClose = ioUring.abandonedAtClose();
             this.cancelledAtClose = ioUring.cancelledAtClose();
+            // Cache the dispatcher's frozen final snapshot for the JUring-level accessor.
+            this.frozenRingMetrics = ioUring.ringMetrics();
         } finally {
             if (readBufferPool != null) {
                 readBufferPool.close();

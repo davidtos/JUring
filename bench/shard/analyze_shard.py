@@ -30,6 +30,15 @@ Acceptance bars (preliminary application of plan M3 / design §13):
   p99_group(8) <= 1.15 * p99_group(1)
 No confidence interval is claimed at R=3; means are reported with stdev/range.
 
+B5 schema 1.1 (docs/b5-design.md §7/A2.2, additive): when the raw JSON carries
+the B5 fields, this analyzer also emits per-ring QUEUE DEPTH and P99 tables into
+aggregate/shard.md and aggregate/shard.json -- the M3-report data source. The p99
+column comes from `dispatch_latency_us.p99`, labelled **runtime completion
+latency (registration->dispatch)**: it includes kernel/device completion time and
+the runtime's post-completion dispatch, and it is NOT comparable to fio `clat` or
+to the external harness `latency_us` (which starts before SQE preparation). Old
+(schema 1.0 / pre-B5) sessions still analyze; every B5 column renders `n/a`.
+
 Usage:
   bench/shard/analyze_shard.py --session b4-2026-11-14
   bench/shard/analyze_shard.py --results-dir /path/to/results/<session>   (fixtures)
@@ -47,6 +56,14 @@ DEFAULT_RESULTS_ROOT = os.path.join(REPO_ROOT, "bench", "results")
 CELL_RE = re.compile(r"^N(\d+)__(juring-group|juring-manual|fio)__r(\d+)\.json$")
 ENGINES = ("juring-group", "juring-manual", "fio")
 QW = 4 * 1024  # 4K randread cell
+
+B5_SCHEMA = "1.1"
+# 4K randread fast-state p99 discriminators (benchmark-methodology §5 / M1 calibration);
+# an invocation at or above the threshold is a slow-state READ, not a runtime regression.
+FAST_P99_US_QD64 = 600.0
+FAST_P99_US_QD128 = 1200.0
+IOPS_ANOMALY_FACTOR = 0.92
+
 
 PRELIMINARY_NOTE = (
     "PRELIMINARY (R=3, one session, one shared 10 GiB file for all shards, no 1 s "
@@ -102,6 +119,69 @@ def fmt(value, digits=1, dash="n/a"):
 # ---------------------------------------------------------------------------
 # record extraction
 # ---------------------------------------------------------------------------
+def _as_dict(value):
+    return value if isinstance(value, dict) else None
+
+
+def _num_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _series_depth(series):
+    """Per-ring queue depth from one worker's ring_series (measured-phase 1 Hz samples)."""
+    points = [p for p in (series or []) if isinstance(p, dict)]
+    if not points:
+        return None
+    n = len(points)
+    in_flight = [float(p.get("in_flight") or 0.0) for p in points]
+    sq = [float(p.get("sq_queued") or 0.0) for p in points]
+    cq = [float(p.get("cq_ready") or 0.0) for p in points]
+    return {
+        "series_points": n,
+        "mean_in_flight": sum(in_flight) / n,
+        "max_in_flight": max(in_flight),
+        "mean_sq_queued": sum(sq) / n,
+        "mean_cq_ready": sum(cq) / n,
+    }
+
+
+def _worker_ring(entry):
+    """B5 schema-1.1 per-worker ring data, tolerating every field being absent (old JSON)."""
+    rm = _as_dict(entry.get("ring_metrics"))
+    dispatch = _as_dict(entry.get("dispatch_latency_us"))
+    depth = _series_depth(entry.get("ring_series"))
+    out = {
+        "ring_metrics": rm,
+        "dispatch_latency_us": dispatch,
+        "dispatch_p99_us": _num_or_none(dispatch.get("p99")) if dispatch else None,
+        "dispatch_mean_us": _num_or_none(dispatch.get("mean")) if dispatch else None,
+        "series_points": 0,
+        "mean_in_flight": None,
+        "max_in_flight": None,
+        "mean_sq_queued": None,
+        "mean_cq_ready": None,
+        "failed": None,
+        "cancelled": None,
+        "timed_out": None,
+        "in_flight": None,
+        "sq_queued": None,
+        "cq_ready": None,
+    }
+    if depth:
+        out.update(depth)
+    if rm:
+        out["failed"] = int(rm.get("failed") or 0)
+        out["cancelled"] = int(rm.get("cancelled") or 0)
+        out["timed_out"] = int(rm.get("timed_out") or 0)
+        out["in_flight"] = int(rm.get("in_flight") or 0)
+        out["sq_queued"] = int(rm.get("sq_queued") or 0)
+        out["cq_ready"] = int(rm.get("cq_ready") or 0)
+    return out
+
+
 def extract_juring(data, meta):
     runs = data.get("runs") or []
     run = runs[0] if runs else {}
@@ -111,25 +191,35 @@ def extract_juring(data, meta):
     shard_stats = []
     for entry in run.get("shards") or []:
         shard_lat = entry.get("latency_us") or {}
+        ring = _worker_ring(entry)
         per_shard.append({
             "id": int(entry.get("shard", len(per_shard))),
             "iops": float(entry.get("iops") or 0.0),
             "p50_us": float(shard_lat.get("p50") or 0.0),
             "p99_us": float(shard_lat.get("p99") or 0.0),
             "ops": int(entry.get("ops") or 0),
+            "errors": int(entry.get("errors") or 0),
+            **ring,
         })
         shard_stats.append(entry.get("shard_stats"))
     source = "shards" if per_shard else "threads"
     if not per_shard:
         for entry in run.get("threads") or []:
             shard_lat = entry.get("latency_us") or {}
+            ring = _worker_ring(entry)
             per_shard.append({
                 "id": int(entry.get("thread", len(per_shard))),
                 "iops": float(entry.get("iops") or 0.0),
                 "p50_us": float(shard_lat.get("p50") or 0.0),
                 "p99_us": float(shard_lat.get("p99") or 0.0),
                 "ops": int(entry.get("ops") or 0),
+                "errors": int(entry.get("errors") or 0),
+                **ring,
             })
+    run_rm = _as_dict(run.get("ring_metrics"))
+    run_depth = _as_dict(run.get("ring_queue_depth"))
+    run_dispatch = _as_dict(run.get("dispatch_latency_us"))
+    run_metrics = _as_dict(run.get("metrics"))
     return {
         "engine": meta["engine"],
         "n": meta["N"],
@@ -150,6 +240,12 @@ def extract_juring(data, meta):
         "per_shard_source": source,
         "shard_stats": shard_stats,
         "fio_jobs": None,
+        "ring_metrics": run_rm,
+        "ring_queue_depth": run_depth,
+        "dispatch_latency_us": run_dispatch,
+        "run_metrics": run_metrics,
+        "b5_available": bool(run_rm or run_depth or run_dispatch
+                             or any(p.get("ring_metrics") for p in per_shard)),
         "loadavg_start": meta.get("loadavg_start"),
         "loadavg_end": meta.get("loadavg_end"),
         "wall_s": meta.get("wall_s"),
@@ -202,6 +298,11 @@ def extract_fio(data, meta):
         "per_shard_source": "fio-jobs" if len(per_job) > 1 else "fio-aggregated",
         "shard_stats": [],
         "fio_jobs": len(jobs),
+        "ring_metrics": None,
+        "ring_queue_depth": None,
+        "dispatch_latency_us": None,
+        "run_metrics": None,
+        "b5_available": False,
         "loadavg_start": meta.get("loadavg_start"),
         "loadavg_end": meta.get("loadavg_end"),
         "wall_s": meta.get("wall_s"),
@@ -277,7 +378,10 @@ def load_session(results_dir):
             "threads": 0, "iops": 0.0, "ops": 0, "bytes": 0, "errors": 0,
             "p50_us": 0.0, "p99_us": 0.0, "p999_us": 0.0, "elapsed_sec": 0.0,
             "per_shard": [], "per_shard_source": "missing", "shard_stats": [],
-            "fio_jobs": None, "loadavg_start": row.get("loadavg_start"),
+            "fio_jobs": None,
+            "ring_metrics": None, "ring_queue_depth": None,
+            "dispatch_latency_us": None, "run_metrics": None, "b5_available": False,
+            "loadavg_start": row.get("loadavg_start"),
             "loadavg_end": row.get("loadavg_end"), "wall_s": row.get("wall_s"),
             "gate_start": row.get("gate_start"), "gate_end": row.get("gate_end"),
             "meta": row,
@@ -309,6 +413,68 @@ def group_by(records):
     return groups
 
 
+def _ring_summary(good):
+    """Aggregate the B5 per-ring queue-depth/p99/counter data over the valid reps.
+
+    One row per worker id (shard or thread). Values are means over reps (max for
+    max_in_flight); external p99 is the harness `latency_us` p99, library p99 is the
+    shard runtime's `dispatch_latency_us.p99` (schema 1.1, shard mode only).
+    """
+    rows = {}
+
+    def row_for(worker_id):
+        return rows.setdefault(worker_id, {
+            "ring": worker_id,
+            "reps": 0,
+            "mean_in_flight": [], "max_in_flight": [],
+            "mean_sq_queued": [], "mean_cq_ready": [],
+            "dispatch_p99_us": [], "dispatch_mean_us": [],
+            "external_p99_us": [],
+            "failed": 0, "cancelled": 0, "timed_out": 0, "errors": 0,
+            "ring_metrics_available": False,
+        })
+
+    for rec in good:
+        for worker in rec["per_shard"]:
+            if (worker.get("ring_metrics") is None
+                    and worker.get("mean_in_flight") is None
+                    and worker.get("dispatch_p99_us") is None):
+                continue
+            row = row_for(worker["id"])
+            row["reps"] += 1
+            if worker.get("ring_metrics") is not None:
+                row["ring_metrics_available"] = True
+            for key in ("mean_in_flight", "max_in_flight", "mean_sq_queued",
+                        "mean_cq_ready", "dispatch_p99_us", "dispatch_mean_us"):
+                value = worker.get(key)
+                if value is not None:
+                    row[key].append(float(value))
+            if worker.get("p99_us"):
+                row["external_p99_us"].append(float(worker["p99_us"]))
+            for key in ("failed", "cancelled", "timed_out", "errors"):
+                value = worker.get(key)
+                if value is not None:
+                    row[key] += int(value)
+    out = []
+    for ring in sorted(rows):
+        row = rows[ring]
+        entry = {
+            "ring": ring,
+            "reps": row["reps"],
+            "ring_metrics_available": row["ring_metrics_available"],
+            "failed": row["failed"],
+            "cancelled": row["cancelled"],
+            "timed_out": row["timed_out"],
+            "errors": row["errors"],
+        }
+        for key in ("mean_in_flight", "mean_sq_queued", "mean_cq_ready",
+                    "dispatch_p99_us", "dispatch_mean_us", "external_p99_us"):
+            entry[key] = r3(mean(row[key])) if row[key] else None
+        entry["max_in_flight"] = max(row["max_in_flight"]) if row["max_in_flight"] else None
+        out.append(entry)
+    return out
+
+
 def summarize_engine_n(recs):
     good = [r for r in recs if r["status"] in ("ok", "gate") and r["iops"] > 0]
     bad = [r for r in recs if r not in good]
@@ -322,6 +488,29 @@ def summarize_engine_n(recs):
         if sp is not None:
             spreads.append(sp[0])
             spread_counts.append(sp[1])
+    depths = {}
+    for key in ("mean_in_flight", "max_in_flight", "mean_sq_queued", "mean_cq_ready"):
+        values = []
+        for r in good:
+            depth = r.get("ring_queue_depth")
+            if depth and depth.get(key) is not None:
+                values.append(float(depth[key]))
+        depths[key] = stats_block(values)
+    dispatch_p99 = []
+    dispatch_mean = []
+    ring_failed = ring_cancelled = ring_timed_out = 0
+    for r in good:
+        dispatch = r.get("dispatch_latency_us")
+        if dispatch and dispatch.get("p99") is not None:
+            dispatch_p99.append(float(dispatch["p99"]))
+        if dispatch and dispatch.get("avg") is not None:
+            dispatch_mean.append(float(dispatch["avg"]))
+        rm = r.get("ring_metrics")
+        if rm:
+            ring_failed += int(rm.get("failed") or 0)
+            ring_cancelled += int(rm.get("cancelled") or 0)
+            ring_timed_out += int(rm.get("timed_out") or 0)
+    per_ring = _ring_summary(good)
     return {
         "reps_reported": len(recs),
         "reps_valid": len(good),
@@ -335,6 +524,18 @@ def summarize_engine_n(recs):
         "per_shard_spread": stats_block(spreads),
         "per_shard_counts": sorted(set(spread_counts)),
         "per_shard_sources": sorted({r["per_shard_source"] for r in good}),
+        "ring_queue_depth": depths,
+        "dispatch_p99_us": stats_block(dispatch_p99),
+        "dispatch_mean_us": stats_block(dispatch_mean),
+        "ring_errors": {
+            "failed": ring_failed,
+            "cancelled": ring_cancelled,
+            "timed_out": ring_timed_out,
+            "external_errors": sum(int(r["errors"] or 0) for r in good),
+        },
+        "per_ring": per_ring,
+        "b5_available": any(r.get("b5_available") for r in good),
+        "b5_reps": sum(1 for r in good if r.get("b5_available")),
     }
 
 
@@ -376,6 +577,9 @@ def analyze(records, results_dir):
         "scaling_efficiency": {engine: {} for engine in ENGINES},
         "p99_ratio_vs_n1": {engine: {} for engine in ENGINES},
         "per_shard_spread": {engine: {} for engine in ENGINES},
+        "ring_queue_depth": {engine: {} for engine in ENGINES},
+        "dispatch_p99_us": {engine: {} for engine in ENGINES},
+        "ring_errors": {engine: {} for engine in ENGINES},
     }
     for n in all_n:
         for engine in ("juring-group", "juring-manual"):
@@ -400,6 +604,17 @@ def analyze(records, results_dir):
                     "min": r3(s["per_shard_spread"]["min"]),
                     "max": r3(s["per_shard_spread"]["max"]),
                 }
+            if s is not None:
+                qd = {}
+                for key in ("mean_in_flight", "max_in_flight",
+                            "mean_sq_queued", "mean_cq_ready"):
+                    block = s["ring_queue_depth"].get(key) or {}
+                    qd[key] = r3(block.get("mean")) if block.get("n") else None
+                headline["ring_queue_depth"][engine][str(n)] = qd
+                dblock = s["dispatch_p99_us"]
+                headline["dispatch_p99_us"][engine][str(n)] = (
+                    r3(dblock["mean"]) if dblock.get("n") else None)
+                headline["ring_errors"][engine][str(n)] = s["ring_errors"]
 
     # ---- acceptance bars (preliminary application of plan M3) -------------
     bars = []
@@ -592,6 +807,40 @@ def analyze(records, results_dir):
         "problems": [],
     }
 
+    # ---- B5 schema 1.1 (per-ring queue depth / p99; tolerant of old sessions) ----
+    b5_per_ring = {}
+    b5_available = False
+    b5_series_points = 0
+    for engine in ENGINES:
+        for n in all_n:
+            s = summary.get((engine, n))
+            if not s:
+                continue
+            if s["per_ring"]:
+                b5_available = True
+            if s.get("b5_available"):
+                b5_available = True
+            series_points = sum(
+                int(w.get("series_points") or 0)
+                for r in groups.get((engine, n), [])
+                for w in r["per_shard"])
+            b5_series_points += series_points
+            b5_per_ring["%s_N%s" % (engine, n)] = s["per_ring"]
+    b5 = {
+        "available": b5_available,
+        "schema_1_1_fields_present": b5_available,
+        "per_ring_rows": sum(len(v) for v in b5_per_ring.values()),
+        "ring_series_points": b5_series_points,
+        "dispatch_latency_available": any(
+            s["dispatch_p99_us"].get("n") for s in summary.values()),
+        "note": ("schema 1.1 B5 fields are present; per-ring queue depth/p99 are the "
+                 "M3-report data source (library dispatch p99 is the shard runtime "
+                 "registration->dispatch window, distinct from external latency_us)")
+        if b5_available else
+        ("no B5 schema-1.1 fields in this session (predates B5 / `--metrics off`); "
+         "every B5 column is n/a and the 1.0 analysis is unchanged"),
+    }
+
     return {
         "headline": headline,
         "summary": {"%s_N%s" % (k[0], k[1]): v for k, v in sorted(summary.items())},
@@ -599,6 +848,8 @@ def analyze(records, results_dir):
         "bar_interpretation": bar_interpretation,
         "verdict": verdict,
         "quality": quality,
+        "b5": b5,
+        "b5_per_ring": b5_per_ring,
     }
 
 
@@ -636,6 +887,28 @@ def _spread_ratios(groups, engine, n):
 # ---------------------------------------------------------------------------
 # rendering
 # ---------------------------------------------------------------------------
+def _fmt_depth(rec):
+    depth = rec.get("ring_queue_depth") or {}
+    if depth.get("mean_in_flight") is None:
+        return "n/a"
+    return "%s/%s" % (fmt(depth.get("mean_in_flight"), 1),
+                      fmt(depth.get("max_in_flight"), 1))
+
+
+def _fmt_dispatch_p99(rec):
+    dispatch = rec.get("dispatch_latency_us") or {}
+    if dispatch.get("p99") is None:
+        return "n/a"
+    return fmt(float(dispatch["p99"]), 1)
+
+
+def _fmt_errors_cancels(rec):
+    rm = rec.get("ring_metrics") or {}
+    if not rm:
+        return "n/a"
+    return "%d/%d" % (int(rm.get("failed") or 0), int(rm.get("cancelled") or 0))
+
+
 def render_markdown(session, results_dir, analysis, records, problems):
     h = analysis["headline"]
     lines = []
@@ -703,13 +976,14 @@ def render_markdown(session, results_dir, analysis, records, problems):
     add("")
     add("## 2. All reps (raw, never trimmed)")
     add("")
-    add("| engine | N | rep | status | IOPS | p50 us | p99 us | per-shard min/mean | shard source | wall s | loadavg | gate |")
-    add("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    add("| engine | N | rep | status | IOPS | p50 us | p99 us | lib dispatch p99 us | in-flight mean/max | failed/cancelled | per-shard min/mean | shard source | wall s | loadavg | gate |")
+    add("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for rec in sorted(records, key=lambda r: (r["engine"], r["n"], r["rep"])):
         sp = shard_spread(rec)
-        add("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
+        add("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
             % (rec["engine"], rec["n"], rec["rep"], rec["status"],
                fmt(rec["iops"], 0), fmt(rec["p50_us"], 1), fmt(rec["p99_us"], 1),
+               _fmt_dispatch_p99(rec), _fmt_depth(rec), _fmt_errors_cancels(rec),
                fmt(sp[0], 3) if sp else "n/a", rec["per_shard_source"],
                fmt(_num(rec.get("wall_s")), 1),
                str(rec.get("loadavg_start") or "n/a"),
@@ -730,7 +1004,57 @@ def render_markdown(session, results_dir, analysis, records, problems):
                fmt(s["p50_us"].get("mean"), 1), fmt(s["p99_us"].get("mean"), 1),
                fmt(s["per_shard_spread"].get("mean"), 3)))
     add("")
-    add("## 4. Data quality / run-state classification")
+    add("## 4. B5 per-ring queue depth and p99 (schema 1.1; M3-report data source)")
+    add("")
+    b5 = analysis.get("b5") or {}
+    add("%s" % b5.get("note", "n/a"))
+    add("")
+    if not b5.get("available"):
+        add("No schema-1.1 B5 data in this session: every per-ring column is `n/a`.")
+    else:
+        add("### 4.1 Per-cell queue depth / library dispatch p99 (run means over reps)")
+        add("")
+        add("| engine | N | mean in-flight | max in-flight | mean sq_queued | mean cq_ready | runtime completion p99 us | external p99 us | failed/cancelled/timed_out |")
+        add("|---|---|---|---|---|---|---|---|---|")
+        for engine in ENGINES:
+            for n in h["n_values"]:
+                qd = h["ring_queue_depth"].get(engine, {}).get(str(n))
+                if not qd:
+                    continue
+                errs = h["ring_errors"].get(engine, {}).get(str(n)) or {}
+                add("| %s | %s | %s | %s | %s | %s | %s | %s | %s/%s/%s |"
+                    % (engine, n,
+                       fmt(qd.get("mean_in_flight"), 2), fmt(qd.get("max_in_flight"), 2),
+                       fmt(qd.get("mean_sq_queued"), 2), fmt(qd.get("mean_cq_ready"), 2),
+                       fmt(h["dispatch_p99_us"].get(engine, {}).get(str(n)), 1),
+                       fmt(h["p99_us"].get(engine, {}).get(str(n)), 1),
+                       errs.get("failed", 0), errs.get("cancelled", 0),
+                       errs.get("timed_out", 0)))
+        add("")
+        add("### 4.2 Per-ring rows (one per worker; means over valid reps, max in-flight = max)")
+        add("")
+        add("| engine | N | ring | mean in-flight | max in-flight | mean sq_queued | mean cq_ready | runtime completion p99 us | mean external p99 us | failed | cancelled | timed_out |")
+        add("|---|---|---|---|---|---|---|---|---|---|---|---|")
+        for key in sorted(analysis.get("b5_per_ring", {})):
+            engine, n = key.split("_N")
+            for row in analysis["b5_per_ring"][key]:
+                add("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
+                    % (engine, n, row.get("ring"),
+                       fmt(row.get("mean_in_flight"), 2), fmt(row.get("max_in_flight"), 2),
+                       fmt(row.get("mean_sq_queued"), 2), fmt(row.get("mean_cq_ready"), 2),
+                       fmt(row.get("dispatch_p99_us"), 1), fmt(row.get("external_p99_us"), 1),
+                       row.get("failed", 0), row.get("cancelled", 0),
+                       row.get("timed_out", 0)))
+        add("")
+        add("Queue depth comes from `ring_series` (1 Hz samples, measured phase only). "
+            "`runtime completion p99` is `dispatch_latency_us.p99`: the runtime-boundary "
+            "completion latency from `ShardContext.onCompletion` registration to handler "
+            "dispatch (includes kernel/device completion; excludes SQE preparation and the "
+            "handler body). It is NOT a pure dispatch-overhead metric and must not be "
+            "compared with fio `clat` or the external `latency_us` p99 column. `n/a` means "
+            "the field is absent (threads runtime, `--metrics off`, or a pre-B5 session).")
+    add("")
+    add("## 5. Data quality / run-state classification")
     add("")
     add("State gate (HANDOVER §3): a cell is flagged *unstable/bimodal* when any rep is "
         "< 0.92 x the cell's own max IOPS (the M1 anomaly rule) or CV > 5-10%; nothing is "
@@ -768,7 +1092,7 @@ def render_markdown(session, results_dir, analysis, records, problems):
         for p in problems:
             add("  - %s" % p)
     add("")
-    add("## 5. Limitations (honest disclosure)")
+    add("## 6. Limitations (honest disclosure)")
     add("")
     add("1. **%s**" % PRELIMINARY_NOTE)
     add("2. One shared 10 GiB file for all shards/engines; W18-W20's DS-M "
@@ -787,8 +1111,17 @@ def render_markdown(session, results_dir, analysis, records, problems):
         "no seastar multi-shard (seastar `--smp N` runner still missing).")
     add("7. Reported means carry no confidence interval at R=3; a mean difference is "
         "not a statistical claim. M3 must re-run with R=5 and state gating.")
+    if analysis.get("b5", {}).get("available"):
+        add("8. B5 schema-1.1 notes: `ring_metrics` counters include runtime-internal "
+            "ops (wakeup READ / shutdown cancel), so ring-level and shard-level counters "
+            "must not be summed as if both were user ops; snapshots are best effort and "
+            "may lag one loop pass; `dispatch_latency_us` is the runtime-boundary "
+            "completion latency (registration->dispatch, includes kernel/device "
+            "completion; NOT a pure dispatch overhead and NOT comparable to fio clat or "
+            "the external latency_us); its percentiles are bucket upper bounds "
+            "(<= 6.25 % over-estimate for >= 16 ns).")
     add("")
-    add("## 6. Artifacts")
+    add("## 7. Artifacts")
     add("")
     add("- raw JSON per process: `cells/`")
     add("- logs + loadavg/ps snapshots: `logs/`")
@@ -838,6 +1171,8 @@ def main(argv):
         "dataset": "one shared 10 GiB aged read-only file (DS-S), not DS-M",
         "preliminary": True,
         "m3_signed_off": False,
+        "b5_schema_1_1": analysis["b5"]["available"],
+        "b5_per_ring_queue_depth_p99": analysis["b5"]["available"],
     }
 
     os.makedirs(out_dir, exist_ok=True)
@@ -864,6 +1199,10 @@ def main(argv):
                  fmt(analysis["headline"]["scaling_efficiency"]["juring-group"].get(str(n)), 3),
                  fmt(analysis["headline"]["scaling_efficiency"]["juring-manual"].get(str(n)), 3),
                  fmt(analysis["headline"]["scaling_efficiency"]["fio"].get(str(n)), 3)))
+    print("  b5: available=%s per_ring_rows=%s ring_series_points=%s dispatch_latency=%s"
+          % (analysis["b5"]["available"], analysis["b5"]["per_ring_rows"],
+             analysis["b5"]["ring_series_points"],
+             analysis["b5"]["dispatch_latency_available"]))
     print("wrote %s" % json_path)
     print("wrote %s" % md_path)
     return 0

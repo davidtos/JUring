@@ -24,6 +24,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the group's lifetime. Per-producer FIFO ordering holds within one shard's inbound queue;
  * cross-producer total order is unspecified.
  *
+ * <p>B5 observability: {@link #metrics()} returns per-shard {@link ShardMetrics} snapshots in
+ * shard-id order and {@link #aggregateMetrics()} returns their frozen aggregation
+ * ({@code docs/b5-design.md} §2.6); both are safe from any thread at any life stage.
+ *
  * <p>See {@code docs/b4-design.md} §2.4/§8.
  */
 public final class RingGroup implements AutoCloseable {
@@ -155,6 +159,65 @@ public final class RingGroup implements AutoCloseable {
             snapshot[i] = shards[i].stats();
         }
         return List.of(snapshot);
+    }
+
+    /**
+     * Per-shard B5 metrics in shard-id order (unstarted and closed shards included). Safe
+     * from any thread; never throws.
+     */
+    public List<ShardMetrics> metrics() {
+        ShardMetrics[] snapshot = new ShardMetrics[shards.length];
+        for (int i = 0; i < shards.length; i++) {
+            snapshot[i] = shards[i].metrics();
+        }
+        return List.of(snapshot);
+    }
+
+    /**
+     * Aggregate of the group's shard metrics: summed ring counters/occupancy and the
+     * bucket-wise merged dispatch-latency histogram ({@code docs/b5-design.md} §2.6). Safe
+     * from any thread; never throws. A group of unstarted shards aggregates to zeroes and
+     * {@link LatencySnapshot#empty()}.
+     */
+    public GroupMetrics aggregateMetrics() {
+        long submitted = 0L;
+        long reaped = 0L;
+        long completed = 0L;
+        long failed = 0L;
+        long cancelled = 0L;
+        long timedOut = 0L;
+        long inFlight = 0L;
+        long sqQueued = 0L;
+        long cqReady = 0L;
+        LatencyHistogram mergedLatency = new LatencyHistogram();
+        for (IoShard shard : shards) {
+            ShardMetrics metrics;
+            try {
+                metrics = shard.metrics();
+            } catch (Throwable ignored) {
+                // Snapshots are total by contract; keep the aggregate total defensively.
+                continue;
+            }
+            RingMetrics ring = metrics.ring();
+            submitted += ring.submitted();
+            reaped += ring.reaped();
+            completed += ring.completed();
+            failed += ring.failed();
+            cancelled += ring.cancelled();
+            timedOut += ring.timedOut();
+            inFlight += ring.inFlight();
+            sqQueued += ring.sqQueued();
+            cqReady += ring.cqReady();
+            shard.mergeDispatchLatencyInto(mergedLatency);
+        }
+        LatencySnapshot dispatchLatency;
+        try {
+            dispatchLatency = mergedLatency.snapshot();
+        } catch (Throwable ignored) {
+            dispatchLatency = LatencySnapshot.empty();
+        }
+        return new GroupMetrics(shards.length, submitted, reaped, completed, failed, cancelled,
+                timedOut, inFlight, sqQueued, cqReady, dispatchLatency);
     }
 
     /** Non-blocking stop request for every shard. */

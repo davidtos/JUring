@@ -3,4 +3,5 @@ module JUring {
     exports com.davidvlijmincx.lio.blackpanda;
 
     requires static jdk.management;
+    requires java.management;
 }

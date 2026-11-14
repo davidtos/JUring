@@ -2,6 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,6 +53,10 @@ final class IoUringDispatcher implements AutoCloseable {
 
     private static final int EBADF = 9;
     private static final int EINTR = 4;
+    /** Kernel {@code ETIME}: a fired {@code IORING_OP_TIMEOUT}/{@code LINK_TIMEOUT} completion (B5 A1.1). */
+    private static final int ETIME = 62;
+    /** libc {@code ETIMEDOUT}; counted defensively by B5 ring metrics (A1.1). */
+    private static final int ETIMEDOUT = 110;
     private static final int ECANCELED = 125;
 
     private static final int IORING_FEAT_SINGLE_MMAP = 1;
@@ -84,6 +89,70 @@ final class IoUringDispatcher implements AutoCloseable {
             return (long) MH_IO_URING_REGISTER.invokeExact(callState, fd, opcode, arg, nrArgs);
         } catch (Throwable e) {
             throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * B5 ring counters (design §2.1/§3, amendment A1.1): twelve monotone {@code long}
+     * counters plus the CQE classification rule. All updates happen on the ring owner
+     * thread as opaque (atomic, non-tearing) array-element writes; snapshots read the
+     * elements with acquire semantics, so the frozen "cross-thread snapshots never tear"
+     * contract holds by the JMM. The classification is a package-private static rule so it
+     * can be unit-tested deterministically (a live raw ring cannot produce every errno,
+     * e.g. {@code -ETIMEDOUT}).
+     */
+    static final class RingCounters {
+
+        static final int SQES_PREPARED = 0;
+        static final int SUBMITTED = 1;
+        static final int REAPED = 2;
+        static final int COMPLETED = 3;
+        static final int FAILED = 4;
+        static final int CANCELLED = 5;
+        static final int TIMED_OUT = 6;
+        static final int ENTERS = 7;
+        static final int SUBMIT_BATCHES = 8;
+        static final int SUBMIT_ERRORS = 9;
+        static final int SUBMIT_RETRIES = 10;
+        static final int SQ_FULL_EVENTS = 11;
+        static final int COUNT = 12;
+
+        private static final VarHandle VH = MethodHandles.arrayElementVarHandle(long[].class);
+
+        private final long[] values = new long[COUNT];
+
+        long get(int index) {
+            return (long) VH.getAcquire(values, index);
+        }
+
+        void inc(int index) {
+            // Opaque (atomic, non-reordering) write: the frozen "cross-thread snapshots never
+            // tear" contract then holds by the JMM, not just on x86 (the owner is the single
+            // writer, so no CAS is needed). Acquire reads pair with opaque/atomic writes.
+            VH.setOpaque(values, index, values[index] + 1L);
+        }
+
+        void add(int index, long delta) {
+            VH.setOpaque(values, index, values[index] + delta);
+        }
+
+        /**
+         * Classifies one consumed CQE: every CQE is {@code reaped}; a non-negative result is
+         * {@code completed}, a negative one is {@code failed} plus {@code cancelled}
+         * ({@code -ECANCELED}) or {@code timedOut} ({@code -ETIME}/{@code -ETIMEDOUT}).
+         */
+        void classifyCqe(int res) {
+            inc(REAPED);
+            if (res >= 0) {
+                inc(COMPLETED);
+                return;
+            }
+            inc(FAILED);
+            if (res == -ECANCELED) {
+                inc(CANCELLED);
+            } else if (res == -ETIME || res == -ETIMEDOUT) {
+                inc(TIMED_OUT);
+            }
         }
     }
 
@@ -131,8 +200,24 @@ final class IoUringDispatcher implements AutoCloseable {
     private long cqKheadAddr;
     private long cqKtailAddr;
     private long cqCqesAddr;
+    private long cqOverflowAddr;
     private int cqRingMask;
     private int cqRingEntries;
+
+    // ------------------------------------------------------------------
+    // B5 ring metrics (design §§2.1, 3, 5)
+    // ------------------------------------------------------------------
+
+    /** All ring counters; owner-thread writes, acquire reads from snapshots. */
+    private final RingCounters counters = new RingCounters();
+    /** Thread that created/owns the ring; used to take owner-thread SQ-head observations. */
+    private Thread ownerThread;
+    /** Last kernel SQ {@code khead} observed on the owner thread, in the ring's u32 space. */
+    private int observedSqHead;
+    /** Guards the live-read / freeze transition so a snapshot can never read unmapped ring memory. */
+    private final Object metricsLock = new Object();
+    /** Final snapshot captured before the ring mapping is torn down (after-close contract). */
+    private RingMetrics frozenMetrics;
 
     public static final int AT_FDCWD = -100;
 
@@ -324,6 +409,7 @@ final class IoUringDispatcher implements AutoCloseable {
         int tail = sqeTail;
 
         if (tail - head >= sqRingEntries) {
+            counters.inc(RingCounters.SQ_FULL_EVENTS);
             return 0L;
         }
 
@@ -332,6 +418,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         sqeTail = tail + 1;
         inFlightCount++;
+        counters.inc(RingCounters.SQES_PREPARED);
 
         Sqe.zero(sqe_addr);
         if (sqeShift > 6) {
@@ -592,6 +679,35 @@ final class IoUringDispatcher implements AutoCloseable {
         return statxBuffer.get(JAVA_LONG, 40L);
     }
 
+    /**
+     * B5-instrumented {@code io_uring_enter}: counts the enter call and, after the syscall,
+     * accounts for kernel SQ {@code khead} progress (submitted SQEs). Never allocates.
+     */
+    private long enterObserved(long fd, long toSubmit, long minComplete, long flags) {
+        counters.inc(RingCounters.ENTERS);
+        long res = enter(this.callState, fd, toSubmit, minComplete, flags, MemorySegment.NULL, 0L);
+        observeSqHead();
+        return res;
+    }
+
+    /**
+     * Accounts for SQ {@code khead} progress since the last owner-thread observation, i.e.
+     * the number of SQEs the kernel has consumed. Owner-thread only; the snapshot is only
+     * a best-effort observation and may lag the kernel by one loop pass.
+     */
+    private void observeSqHead() {
+        long address = sqKheadAddr;
+        if (address == 0L) {
+            return;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, address);
+        int consumed = head - observedSqHead;
+        if (consumed > 0) {
+            observedSqHead = head;
+            counters.add(RingCounters.SUBMITTED, consumed);
+        }
+    }
+
     void submit() {
         int tail = sqeTail;
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -601,8 +717,10 @@ final class IoUringDispatcher implements AutoCloseable {
 
         int toSubmit = tail - head;
         if (toSubmit <= 0) {
+            observeSqHead();
             return;
         }
+        counters.inc(RingCounters.SUBMIT_BATCHES);
 
         boolean sqpoll = this.isSqPoll;
         int enterFlags = this.enterFlagsBase;
@@ -623,7 +741,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         if (needEnter) {
             while (true) {
-                long res = enter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                long res = enterObserved(enterRingFd, toSubmit, 0, enterFlags);
                 if (res >= 0) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -634,9 +752,11 @@ final class IoUringDispatcher implements AutoCloseable {
                 }
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     if (toSubmit == 0 && !sqpoll) {
@@ -645,6 +765,7 @@ final class IoUringDispatcher implements AutoCloseable {
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -653,9 +774,12 @@ final class IoUringDispatcher implements AutoCloseable {
                     }
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(err));
             }
         }
+        // SQPOLL ring without a needed wakeup: the kernel consumes SQEs asynchronously.
+        observeSqHead();
     }
 
     boolean isDeferTaskrun() {
@@ -663,7 +787,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void flushDeferredTaskrun() {
-        enter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        enterObserved(enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase);
     }
 
     int submitAndWait(int waitNr) {
@@ -673,12 +797,16 @@ final class IoUringDispatcher implements AutoCloseable {
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
             sqeHead = tail;
+            counters.inc(RingCounters.SUBMIT_BATCHES);
         } else {
             toSubmit = 0;
         }
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
+            if (sqpoll) {
+                observeSqHead();
+            }
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
@@ -709,10 +837,11 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
-            long res = enter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
                     cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                     cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
                     int avail = cqTail - cqHead;
@@ -722,16 +851,19 @@ final class IoUringDispatcher implements AutoCloseable {
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed in submitAndWait: " + libCDispatcher.strerror(err));
             }
             head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -755,12 +887,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 return -err;
             }
         }
@@ -782,12 +916,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = enter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 return -err;
             }
         }
@@ -891,6 +1027,7 @@ final class IoUringDispatcher implements AutoCloseable {
         long cq_ktail = cq_ring_ptr + io_cqring_offsets.tail(cq_off);
         long cq_kring_mask = cq_ring_ptr + io_cqring_offsets.ring_mask(cq_off);
         long cq_kring_entries = cq_ring_ptr + io_cqring_offsets.ring_entries(cq_off);
+        long cq_overflow = cq_ring_ptr + io_cqring_offsets.overflow(cq_off);
         long cq_cqes_addr = cq_ring_ptr + io_cqring_offsets.cqes(cq_off);
 
         int cq_mask = (int) VH_INT.get(GLOBAL_MEMORY, cq_kring_mask);
@@ -921,8 +1058,14 @@ final class IoUringDispatcher implements AutoCloseable {
         this.cqKheadAddr = cq_khead;
         this.cqKtailAddr = cq_ktail;
         this.cqCqesAddr = cq_cqes_addr;
+        this.cqOverflowAddr = cq_overflow;
         this.cqRingMask = cq_mask;
         this.cqRingEntries = cq_ents;
+
+        // B5 ring metrics: the ring is owned by the creating thread; the initial kernel
+        // heads are the baseline for the "submitted" (SQ khead progress) counter.
+        this.ownerThread = Thread.currentThread();
+        this.observedSqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sq_khead);
 
         if (this.isSingleIssuer) {
             registerRingFd();
@@ -1215,6 +1358,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
                 populateResultFromCqe(reusableResult, userData, res, flags);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 consumer.accept(reusableResult);
             }
         } finally {
@@ -1276,6 +1420,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 int res = Cqe.getRes(address);
                 int flags = Cqe.getFlags(address);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 consumer.accept(userData, res, flags);
             }
         } finally {
@@ -1310,6 +1455,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 r.setRegisteredBuffers(this.registeredBuffers);
                 populateResultFromCqe(r, userData, res, flags);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 ret.add(r);
             }
         } finally {
@@ -1346,12 +1492,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            long res = enter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(err));
             }
         }
@@ -1364,12 +1512,16 @@ final class IoUringDispatcher implements AutoCloseable {
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
             sqeHead = tail;
+            counters.inc(RingCounters.SUBMIT_BATCHES);
         } else {
             toSubmit = 0;
         }
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
+            if (sqpoll) {
+                observeSqHead();
+            }
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
@@ -1409,10 +1561,11 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
-            long res = enter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
                     cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                     cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
                     int avail = cqTail - cqHead;
@@ -1427,16 +1580,19 @@ final class IoUringDispatcher implements AutoCloseable {
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed in submitAndWaitForBatchResult: " + libCDispatcher.strerror(err));
             }
             head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -1467,6 +1623,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         target.setRegisteredBuffers(this.registeredBuffers);
         populateResultFromCqe(target, userData, res, flags);
+        counters.classifyCqe(res);
         cqAdvance(1);
         return target;
     }
@@ -1579,6 +1736,100 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
+    // B5 ring metrics (design §§2.1, 2.3, 3, 5)
+    // ------------------------------------------------------------------
+
+    /**
+     * Immutable snapshot of this ring's counters and occupancy for {@code JUring.ringMetrics()}.
+     * Safe from any thread before/while the ring is open and (returning the frozen final
+     * snapshot) after close; never throws and never blocks on the ring owner. Snapshots are a
+     * best-effort telemetry view, not linearizable (design §5).
+     */
+    RingMetrics ringMetrics() {
+        synchronized (metricsLock) {
+            RingMetrics frozen = frozenMetrics;
+            return frozen != null ? frozen : snapshotLive();
+        }
+    }
+
+    /**
+     * Captures the final snapshot before the ring memory is unmapped. Runs under
+     * {@link #metricsLock}: once it returns, no reader can still be inside
+     * {@link #snapshotLive()} (every later snapshot sees {@link #frozenMetrics}), so the
+     * subsequent munmap can never race a snapshot read.
+     */
+    private void freezeMetrics() {
+        synchronized (metricsLock) {
+            if (frozenMetrics != null) {
+                return;
+            }
+            RingMetrics live = snapshotLive();
+            frozenMetrics = new RingMetrics(
+                    live.sqesPrepared(), live.submitted(), live.reaped(), live.completed(),
+                    live.failed(), live.cancelled(), live.timedOut(), live.inFlight(),
+                    live.enters(), live.submitBatches(), live.submitErrors(), live.submitRetries(),
+                    live.sqFullEvents(),
+                    0L, live.sqEntries(), 0L, live.cqEntries(), live.cqOverflowEvents());
+        }
+    }
+
+    /** Builds the current snapshot; caller holds {@link #metricsLock}. */
+    private RingMetrics snapshotLive() {
+        if (Thread.currentThread() == ownerThread) {
+            // Owner-thread snapshot: fold in any SQ-head progress observed since the last
+            // flush (also covers SQPOLL rings that consume SQEs without an enter call).
+            observeSqHead();
+        }
+        int sqEntries = this.sqRingEntries;
+        int cqEntries = this.cqRingEntries;
+        long sqQueued = 0L;
+        long cqReady = 0L;
+        long cqOverflowEvents = 0L;
+        if (sqKheadAddr != 0L) {
+            int sqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            long queued = (long) sqeTail - sqHead;
+            if (queued < 0L) {
+                queued = 0L;
+            }
+            sqQueued = Math.min(queued, Math.max(0, sqEntries));
+            if (cqKheadAddr != 0L) {
+                int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                cqReady = Math.max(0L, (long) cqTail - cqHead);
+            }
+            if (cqOverflowAddr != 0L) {
+                cqOverflowEvents = Integer.toUnsignedLong(
+                        (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqOverflowAddr));
+            }
+        }
+        long submitted = counters.get(RingCounters.SUBMITTED);
+        long reaped = counters.get(RingCounters.REAPED);
+        long inFlight = submitted - reaped;
+        if (inFlight < 0L) {
+            inFlight = 0L;
+        }
+        return new RingMetrics(
+                counters.get(RingCounters.SQES_PREPARED),
+                submitted,
+                reaped,
+                counters.get(RingCounters.COMPLETED),
+                counters.get(RingCounters.FAILED),
+                counters.get(RingCounters.CANCELLED),
+                counters.get(RingCounters.TIMED_OUT),
+                inFlight,
+                counters.get(RingCounters.ENTERS),
+                counters.get(RingCounters.SUBMIT_BATCHES),
+                counters.get(RingCounters.SUBMIT_ERRORS),
+                counters.get(RingCounters.SUBMIT_RETRIES),
+                counters.get(RingCounters.SQ_FULL_EVENTS),
+                sqQueued,
+                sqEntries,
+                cqReady,
+                cqEntries,
+                cqOverflowEvents);
+    }
+
+    // ------------------------------------------------------------------
     // Bounded shutdown (B3)
     // ------------------------------------------------------------------
 
@@ -1614,8 +1865,9 @@ final class IoUringDispatcher implements AutoCloseable {
             return 0;
         }
         try {
-            enter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase,
-                    MemorySegment.NULL, 0L);
+            if (enterObserved(enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase) < 0L) {
+                counters.inc(RingCounters.SUBMIT_ERRORS);
+            }
         } catch (Throwable ignored) {
             // A disabled/broken ring is force-closed by the caller; polling is best effort.
         }
@@ -1741,6 +1993,10 @@ final class IoUringDispatcher implements AutoCloseable {
                 abandonedAtClose = Math.max(0, inFlightCount);
             }
         } finally {
+            // B5: capture the final metrics snapshot while the ring memory is still mapped;
+            // freezeMetrics() also serialises with concurrent snapshots, so the munmap below
+            // can never race a foreign-thread ringMetrics() read.
+            freezeMetrics();
             closed = true;
             closeRing();
             iovecBlockPool.close();

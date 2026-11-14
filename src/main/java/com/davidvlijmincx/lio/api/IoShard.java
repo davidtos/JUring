@@ -46,6 +46,12 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * §11.9/F1 class of limitation; see {@link ShardContext}). A task that starts from an idle
  * shard is safe because the wakeup read is consumed to deliver it.
  *
+ * <p>B5 observability: {@link #metrics()} returns a {@link ShardMetrics} snapshot
+ * ({@link ShardStats} + ring {@link RingMetrics} + dispatch {@link LatencySnapshot}) from any
+ * thread at any life stage; dispatch latency is sampled deterministically every Nth successful
+ * completion registration when {@link ShardOptions#withLatencySampleEvery(int)} is enabled
+ * (disabled by default). See {@code docs/b5-design.md} §2.5/§4/§5.
+ *
  * <p>Instances are created with {@link #create(int, ShardOptions)}; {@link #execute} and
  * {@link #handoff} lazily start the shard. See {@link RingGroup} for a fixed pool with
  * round-robin/hash distribution.
@@ -66,6 +72,16 @@ public final class IoShard implements AutoCloseable {
     private static final long BACKPRESSURE_PARK_NANOS = 50_000L;
     private static final int HANDOFF_FALLBACK_SPINS = 1024;
     private static final int MAX_CPU_ID = 1024;
+
+    /**
+     * All-zero {@link RingMetrics} used before the shard has created its ring (or if the ring
+     * snapshot is unavailable). Frozen shape of B5 design §2.1: zero counters, zero occupancy,
+     * zero effective entries.
+     */
+    private static final RingMetrics ZERO_RING_METRICS = new RingMetrics(
+            0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,   // sqesPrepared .. inFlight
+            0L, 0L, 0L, 0L, 0L, 0L,           // enters .. sqQueued
+            0, 0L, 0, 0L);                    // sqEntries, cqReady, cqEntries, cqOverflowEvents
 
     private static final int EFD_CLOEXEC = LibCDispatcher.EFD_CLOEXEC;
     private static final int EFD_NONBLOCK = LibCDispatcher.EFD_NONBLOCK;
@@ -110,6 +126,14 @@ public final class IoShard implements AutoCloseable {
     private volatile long cancelledAtClose;
     private volatile long abandonedAtClose;
 
+    // B5 dispatch-latency sampling state: the histogram is allocated only when sampling is
+    // enabled (>= 1), recorded on the shard thread only, and snapshotted from any thread as a
+    // best-effort telemetry read (design §4/§5).
+    private final int latencySampleEvery;
+    private final LatencyHistogram dispatchLatencyHistogram;
+    /** Last ring snapshot captured before the ring reference is dropped on teardown. */
+    private volatile RingMetrics frozenRingMetrics;
+
     // Managed on the shard thread (read from foreign threads only through volatile snapshots).
     // taskFailures is an AtomicLong because the inline handoff fallback can throw and count
     // from arbitrary foreign threads concurrently; everything else has one writer but is
@@ -140,6 +164,8 @@ public final class IoShard implements AutoCloseable {
         this.loopContext = new ShardLoopContext(this);
         this.completionConsumer = this::dispatchCompletion;
         this.requestedCpu = options.cpuAffinity();
+        this.latencySampleEvery = options.latencySampleEvery();
+        this.dispatchLatencyHistogram = latencySampleEvery > 0 ? new LatencyHistogram() : null;
     }
 
     /**
@@ -639,6 +665,62 @@ public final class IoShard implements AutoCloseable {
                 cancelledAtClose, abandonedAtClose, closeTimedOut);
     }
 
+    /**
+     * Snapshot of the shard's B4 lifecycle/counters, B5 ring metrics and B5 dispatch latency.
+     * Safe from any thread, before start, while running and after close; never throws.
+     *
+     * <p>The three components are three separate best-effort snapshots, not an atomic view
+     * (design §2.5/§5). {@code dispatchLatency} is {@link LatencySnapshot#empty()} when
+     * sampling is disabled, for body-hosted shards, and until a sampled registration has been
+     * dispatched. Ring metrics stay readable after close (the final ring snapshot is cached
+     * before the ring reference is released).
+     */
+    public ShardMetrics metrics() {
+        return new ShardMetrics(stats(), snapshotRingMetrics(), snapshotDispatchLatency());
+    }
+
+    private RingMetrics snapshotRingMetrics() {
+        JUring localRing = ring;
+        if (localRing != null) {
+            try {
+                return localRing.ringMetrics();
+            } catch (Throwable ignored) {
+                // JUring.ringMetrics() is total; keep the cached/zero snapshot defensively.
+            }
+        }
+        RingMetrics frozen = frozenRingMetrics;
+        return frozen != null ? frozen : ZERO_RING_METRICS;
+    }
+
+    private LatencySnapshot snapshotDispatchLatency() {
+        LatencyHistogram histogram = dispatchLatencyHistogram;
+        if (histogram == null || body != null) {
+            return LatencySnapshot.empty();
+        }
+        try {
+            return histogram.snapshot();
+        } catch (Throwable ignored) {
+            return LatencySnapshot.empty();
+        }
+    }
+
+    /**
+     * Package-private: merges this shard's dispatch-latency histogram into {@code target}
+     * (bucket-wise) for {@link RingGroup#aggregateMetrics()}. Best effort: disabled sampling
+     * and body-hosted shards contribute nothing.
+     */
+    void mergeDispatchLatencyInto(LatencyHistogram target) {
+        LatencyHistogram histogram = dispatchLatencyHistogram;
+        if (histogram == null) {
+            return;
+        }
+        try {
+            target.merge(histogram);
+        } catch (Throwable ignored) {
+            // Telemetry aggregation is best effort; never propagate.
+        }
+    }
+
     // ------------------------------------------------------------------
     // Shard thread
     // ------------------------------------------------------------------
@@ -865,6 +947,16 @@ public final class IoShard implements AutoCloseable {
         }
         completionsDispatched++;
         try {
+            LatencyHistogram histogram = dispatchLatencyHistogram;
+            if (histogram != null) {
+                long registeredAtNanos = completions.lastRemovedTimestamp();
+                if (registeredAtNanos != 0L) {
+                    // B5 dispatch-latency window: registration -> immediately before the
+                    // handler body runs. Recorded on the shard thread; Handler exceptions are
+                    // recorded too (the record happens before invoking the handler).
+                    histogram.record(System.nanoTime() - registeredAtNanos);
+                }
+            }
             handler.completed(result);
         } catch (Throwable t) {
             completionFailures++;
@@ -967,6 +1059,15 @@ public final class IoShard implements AutoCloseable {
                 abandonedAtClose = Math.max(0L, ringAbandoned - internalInFlight);
             }
         } finally {
+            JUring lastRing = ring;
+            if (lastRing != null) {
+                try {
+                    // B5: keep ring metrics readable after close (frozen final snapshot).
+                    frozenRingMetrics = lastRing.ringMetrics();
+                } catch (Throwable ignored) {
+                    // Best effort; metrics() falls back to the zero snapshot.
+                }
+            }
             lastInFlight = 0L;
             ring = null;
             completions.clear();
@@ -1166,8 +1267,16 @@ public final class IoShard implements AutoCloseable {
             if (stopping || closed) {
                 throw new IllegalStateException("IoShard " + shardId + " is stopping; cannot register completions");
             }
-            completions.put(userData, handler);
-            completionsRegistered++;
+            int sampleEvery = latencySampleEvery;
+            long registrationIndex = completionsRegistered + 1L;
+            long registeredAtNanos = 0L;
+            if (sampleEvery > 0 && registrationIndex % sampleEvery == 0L) {
+                // B5: only every Nth successful registration pays System.nanoTime(); the
+                // timestamp is stored with the registration itself (no extra table).
+                registeredAtNanos = System.nanoTime();
+            }
+            completions.put(userData, handler, registeredAtNanos);
+            completionsRegistered = registrationIndex;
         }
 
         @Override

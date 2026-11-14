@@ -20,6 +20,7 @@ p50/p99/p99.9/max latency), one CSV.
 | `results/` | owned by the baseline task; **not** written by this harness (driver defaults to `./bench-results`) |
 | `m1/` | M1 read-path session harness: `lib.sh` + `run-read-session.sh` and its phase scripts (W1-W4, W9-W11, W15/W16, fio brackets, perf cells, io_tester cross-check) + `analyze_m1.py` |
 | `write/` | Step-2 write-path harness: write-file creation, D1 preconditioning, W5-W8/W12-W14 driver, 1 s device time-series sampler |
+| `shard/` | W17-W20 shard-scaling drivers/analyzer (`run-shard-scaling.sh`, `analyze_shard.py`) **plus the B5 overhead A/B** (`run-b5-overhead.sh`, `analyze_b5_overhead.py`) — see [`shard/README.md`](shard/README.md) |
 
 ## What runs where
 
@@ -90,6 +91,34 @@ path opt-in via `--allow-seastar-write`), `sample-device-iops.sh` (1 s
 
 `nvme-data/` must exist as a writable bind mount of the data NVMe
 (`/dev/nvme1n1p1`); `/mnt/TestData` stays read-only and is never written.
+
+## B5 metrics / observability overhead A/B (`bench/shard/`)
+
+B5 added per-ring metrics to the harness JSON (schema 1.1 above) and an official
+overhead A/B protocol (`docs/b5-design.md` §7/§7.1) that proves the metrics cost
+< 1 % throughput:
+
+```bash
+# 0) build the B4 baseline arm ONCE, before the session (git archive 6cc1a75 +
+#    offline maven + its own javac; the workspace is never edited)
+bench/shard/run-b5-overhead.sh --prep-baseline
+# 1) plan only (preflight + exact commands + estimated wall time, no I/O)
+bench/shard/run-b5-overhead.sh --dry-run
+# 2) the official session (~40 min; run ALONE on the machine)
+bench/shard/run-b5-overhead.sh --session b5-overhead-2026-11-14
+# 3) analyze (also invoked by the driver)
+python3 bench/shard/analyze_b5_overhead.py --session b5-overhead-2026-11-14
+```
+
+Cells: shard N=1, shard N=8, threads N=1 — 4K randread QD64/worker, CPUs 1..N,
+10 s warmup + 30 s measured, R=5, 30 s rests, arms interleaved with alternating
+order, fresh JVM per invocation, every rep kept. Metric: paired per-rep ratio
+B5/B4; PASS = mean ratio >= 0.99 in every cell and no individual rep < 0.95
+unless state-gated and disclosed. Session artifacts land in the gitignored
+`bench/results/b5-overhead-<date>/` (raw cells/logs/meta/manifest +
+`aggregate/overhead.{json,md}`). The shard-scaling analyzer gained per-ring
+queue-depth/p99 columns in `aggregate/shard.{json,md}` — see
+[`shard/README.md`](shard/README.md).
 
 ## Prerequisites
 
@@ -181,6 +210,10 @@ Caveats when reading the table:
 --label TEXT       case label (default e.g. randread_4k_qd64)
 --latency-samples N  per-thread latency reservoir (default 1,000,000)
 --seed N           base PRNG seed (hex ok)
+--metrics on|off   B5 per-ring metrics in the JSON (default on; off emits no B5
+                   field and disables shard dispatch-latency sampling)
+--metrics-interval SEC  ring_series sampling interval during the measured phase
+                   (default 1.0; 0 disables the series; shard mode)
 --engine juring    accepted for symmetry; JUring only
 --verbose          per-thread setup diagnostics on stderr
 --help
@@ -213,7 +246,14 @@ Implementation details that matter for interpreting results:
   (qd/IOPS) by >25 %, which is the signature of mis-attributed timestamps.
 * `nop` uses `IORING_OP_NOP` and reports IOPS/latency only (`MiB/s` = 0).
 
-## JSON output schema (`schema_version` 1.0)
+## JSON output schema (`schema_version` 1.1; every 1.0 field is unchanged)
+
+Schema 1.1 (B5) is **additive**: all 1.0 fields keep their names/units. With
+`--metrics on` (the default) both runtimes add per-worker ring metrics and a
+measured-phase ring series; shard mode also adds the library dispatch-latency
+snapshot. `--metrics off` emits no B5 fields at all (and disables shard latency
+sampling). The B5 fields are documented under "B5 metrics fields (schema 1.1)"
+below; `bench/shard/README.md` documents the analyzer columns and the overhead A/B.
 
 Exactly one JSON object on stdout (all diagnostics on stderr), e.g.:
 
@@ -272,6 +312,48 @@ The manifest additionally records `loadavg_at_start` / `loadavg_at_end` and
 `io_buffer_mode`: `registered-fixed` (fast path), `arena-unregistered` (memlock
 fallback, still O_DIRECT + 4096-aligned buffers) or `none` (nop).
 `status: "error"` documents a failed run (`error` field, `aggregate` may be null).
+
+### B5 metrics fields (schema 1.1, `--metrics on` default)
+
+For **both** runtimes (`runs[].threads[]`, and `runs[].shards[]` in shard mode)
+each worker entry gains:
+
+- `ring_metrics`: every frozen `RingMetrics` field, snake_case — `sqes_prepared`,
+  `submitted`, `reaped`, `completed`, `failed`, `cancelled`, `timed_out`,
+  `in_flight`, `enters`, `submit_batches`, `submit_errors`, `submit_retries`,
+  `sq_full_events`, `sq_queued`, `sq_entries`, `cq_ready`, `cq_entries`,
+  `cq_overflow_events` (counters are kernel-ring-wide, including runtime
+  internal ops; see `docs/b5-design.md` §2.1/§3);
+- `ring_series`: measured-phase samples at `--metrics-interval` (default 1 Hz),
+  one object per tick: `{t_sec, in_flight, sq_queued, cq_ready}` plus
+  `dispatch_p99_us` in shard mode. Produced by a single sampler thread reading
+  the cross-thread snapshot API (`JUring.ringMetrics()` / `IoShard.metrics()`);
+  sampling starts at measured-phase start and stops at its end. Absent when
+  `--metrics-interval 0`.
+- shard mode only: `dispatch_latency_us` — the library `LatencySnapshot` in µs
+  `{samples, mean, min, max, p50, p90, p99, p999}`. This is the **runtime
+  completion latency (registration→dispatch)**: the window starts at
+  `ShardContext.onCompletion` registration (before the shard loop submits the
+  SQE), so it includes kernel/device completion time plus the runtime's
+  post-completion dispatch; it excludes SQE preparation and the handler body. It
+  is the M3 "per-ring p99", NOT a pure dispatch-overhead metric, and NOT
+  comparable to fio `clat` or to the external `latency_us` reservoir (which
+  starts before SQE preparation) — the two are never conflated. Percentiles are
+  bucket upper bounds (<=6.25 % over-estimate for >=16 ns). Shard mode is run
+  with `withLatencySampleEvery(1)` (sampling every successful registration;
+  drained `R` registrations => `floor(R/N)` samples for `N`, design A2.1).
+
+`runs[]` entries add `metrics: {enabled, interval_sec, ring_series_points}`,
+plus (when metrics are on) a per-run `ring_metrics` worker sum,
+`ring_queue_depth {mean_in_flight, max_in_flight, mean_sq_queued, mean_cq_ready}`
+(from the series) and (shard mode) a per-run `dispatch_latency_us`.
+
+`aggregate` adds `ring_metrics` (summed per-run counters, then mean over runs),
+`ring_queue_depth` (per-run means; `max_in_flight` = max over all series points)
+and `dispatch_latency_us` (mean of per-run percentiles, same style as
+`latency_us`). `config.metrics_enabled` / `config.metrics_interval_sec` record the
+flags. The B5 overhead A/B driver/analyzer lives in
+`bench/shard/run-b5-overhead.sh` / `bench/shard/analyze_b5_overhead.py`.
 
 ## parse_results.py
 

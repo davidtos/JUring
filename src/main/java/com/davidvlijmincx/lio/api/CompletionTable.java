@@ -6,7 +6,8 @@ import java.util.Objects;
 /**
  * Shard-thread-local open-addressing {@code long -> CompletionHandler} map.
  *
- * <p>Backed by two flat arrays (no boxing, no per-operation allocation). Insertion uses
+ * <p>Backed by flat parallel arrays (keys, handlers, B5 registration timestamps; no boxing,
+ * no per-operation allocation). Insertion uses
  * linear probing; removal uses <b>backward-shift deletion</b> (Knuth TAOCP vol. 3, Algorithm
  * R): after clearing a slot, later entries of the probe cluster are shifted back into the
  * hole while their probe path from their home slot still passes through it. There are no
@@ -26,13 +27,26 @@ final class CompletionTable {
 
     private final long[] keys;
     private final CompletionHandler[] values;
+    /**
+     * B5 dispatch-latency registration timestamps, parallel to {@link #keys}/{@link #values}:
+     * {@link System#nanoTime()} of a sampled registration, or {@code 0} for an unsampled one.
+     * Carried through backward-shift deletion so a registration keeps its timestamp.
+     */
+    private final long[] timestamps;
     private final int mask;
     private int size;
+    /**
+     * Timestamp of the most recent {@link #remove(long)}; {@code 0} when the key was absent or
+     * the registration was unsampled. Only meaningful immediately after {@code remove} on the
+     * owning shard thread (no locking, no allocation).
+     */
+    private long lastRemovedTimestamp;
 
     CompletionTable(int requestedCapacity) {
         int capacity = nextPowerOfTwo(Math.max(8L, requestedCapacity));
         this.keys = new long[capacity];
         this.values = new CompletionHandler[capacity];
+        this.timestamps = new long[capacity];
         this.mask = capacity - 1;
     }
 
@@ -60,11 +74,23 @@ final class CompletionTable {
     }
 
     /**
-     * Registers {@code handler} for {@code key}.
+     * Registers {@code handler} for {@code key} with no dispatch-latency timestamp.
      *
      * @throws IllegalStateException when the key is already registered or the table is full
      */
     void put(long key, CompletionHandler handler) {
+        put(key, handler, 0L);
+    }
+
+    /**
+     * Registers {@code handler} for {@code key}, storing {@code timestampNanos} alongside the
+     * registration (B5 dispatch-latency window start; {@code 0} = unsampled). The timestamp is
+     * stored atomically with the registration: a failed {@code put} (duplicate key or full
+     * table) neither mutates the table nor leaves a timestamp behind.
+     *
+     * @throws IllegalStateException when the key is already registered or the table is full
+     */
+    void put(long key, CompletionHandler handler, long timestampNanos) {
         Objects.requireNonNull(handler, "handler");
         if (key == EMPTY) {
             throw new IllegalArgumentException("user_data 0 cannot be registered (reserved as the empty-slot marker)");
@@ -79,6 +105,7 @@ final class CompletionTable {
             if (existing == EMPTY) {
                 keys[index] = key;
                 values[index] = handler;
+                timestamps[index] = timestampNanos;
                 size++;
                 return;
             }
@@ -98,6 +125,7 @@ final class CompletionTable {
      * is registered (bounded probe; terminates even on a full table).
      */
     CompletionHandler remove(long key) {
+        lastRemovedTimestamp = 0L;
         int capacity = keys.length;
         int index = hash(key) & mask;
         boolean found = false;
@@ -118,8 +146,10 @@ final class CompletionTable {
             return null;
         }
         CompletionHandler handler = values[index];
+        lastRemovedTimestamp = timestamps[index];
         keys[index] = EMPTY;
         values[index] = null;
+        timestamps[index] = 0L;
         size--;
 
         // Backward-shift deletion: walk forward from the hole and move the next cluster
@@ -139,12 +169,42 @@ final class CompletionTable {
             if (distanceToHole < distanceToNext) {
                 keys[hole] = nextKey;
                 values[hole] = values[next];
+                timestamps[hole] = timestamps[next];
                 keys[next] = EMPTY;
                 values[next] = null;
+                timestamps[next] = 0L;
                 hole = next;
             }
         }
         return handler;
+    }
+
+    /**
+     * @return the registration timestamp stored for {@code key}, or {@code 0} when the key is
+     * absent or the registration was unsampled (bounded probe; shard-thread confined)
+     */
+    long timestampOf(long key) {
+        int capacity = keys.length;
+        int index = hash(key) & mask;
+        for (int probe = 0; probe < capacity; probe++) {
+            long existing = keys[index];
+            if (existing == EMPTY) {
+                return 0L;
+            }
+            if (existing == key) {
+                return timestamps[index];
+            }
+            index = (index + 1) & mask;
+        }
+        return 0L;
+    }
+
+    /**
+     * @return the timestamp of the registration removed by the most recent {@link #remove(long)}
+     * ({@code 0} when absent or unsampled); must be read before the next remove
+     */
+    long lastRemovedTimestamp() {
+        return lastRemovedTimestamp;
     }
 
     /** Clears the table (used only on teardown to drop un-dispatched handlers). */
@@ -154,6 +214,8 @@ final class CompletionTable {
         }
         Arrays.fill(keys, EMPTY);
         Arrays.fill(values, null);
+        Arrays.fill(timestamps, 0L);
+        lastRemovedTimestamp = 0L;
         size = 0;
     }
 

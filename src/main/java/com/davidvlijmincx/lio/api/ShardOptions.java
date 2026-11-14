@@ -33,6 +33,8 @@ public final class ShardOptions {
     public static final long DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 2000L;
     /** Sentinel for "no CPU affinity". */
     public static final int NO_CPU_AFFINITY = -1;
+    /** Default dispatch-latency sampling interval: {@code 0} = disabled (B5 design §2.4). */
+    public static final int DEFAULT_LATENCY_SAMPLE_EVERY = 0;
 
     private static final IoUringOptions[] DEFAULT_RING_OPTIONS = {
             IORING_SETUP_SINGLE_ISSUER,
@@ -49,7 +51,8 @@ public final class ShardOptions {
             DEFAULT_CQE_BATCH,
             DEFAULT_SPIN_ITERATIONS,
             DEFAULT_INBOUND_CAPACITY,
-            DEFAULT_SHUTDOWN_TIMEOUT_MILLIS);
+            DEFAULT_SHUTDOWN_TIMEOUT_MILLIS,
+            DEFAULT_LATENCY_SAMPLE_EVERY);
 
     private final String name;
     private final int ringEntries;
@@ -60,6 +63,7 @@ public final class ShardOptions {
     private final int spinIterations;
     private final int inboundCapacity;
     private final long shutdownTimeoutMillis;
+    private final int latencySampleEvery;
 
     private ShardOptions(String name,
                          int ringEntries,
@@ -69,7 +73,8 @@ public final class ShardOptions {
                          int cqeBatch,
                          int spinIterations,
                          int inboundCapacity,
-                         long shutdownTimeoutMillis) {
+                         long shutdownTimeoutMillis,
+                         int latencySampleEvery) {
         this.name = name;
         this.ringEntries = ringEntries;
         this.ringOptions = ringOptions;
@@ -79,6 +84,7 @@ public final class ShardOptions {
         this.spinIterations = spinIterations;
         this.inboundCapacity = inboundCapacity;
         this.shutdownTimeoutMillis = shutdownTimeoutMillis;
+        this.latencySampleEvery = latencySampleEvery;
     }
 
     /** Default shard configuration: 256-entry ring, the proven three ring flags, no affinity. */
@@ -131,6 +137,16 @@ public final class ShardOptions {
         return shutdownTimeoutMillis;
     }
 
+    /**
+     * Dispatch-latency sampling interval: {@code 0} = disabled; {@code 1} = measure every
+     * registered completion; {@code N >= 2} = measure every Nth successful
+     * {@link ShardContext#onCompletion(long, CompletionHandler)} registration (deterministic,
+     * 1-based, per shard). See {@code docs/b5-design.md} §2.4/§4.
+     */
+    public int latencySampleEvery() {
+        return latencySampleEvery;
+    }
+
     /** @return a copy with a new shard name (thread name component) */
     public ShardOptions withName(String name) {
         Objects.requireNonNull(name, "name");
@@ -138,7 +154,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("name must not be empty");
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new requested ring depth ({@code >= 8}) */
@@ -147,7 +163,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("ringEntries must be >= 8: " + ringEntries);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /**
@@ -161,7 +177,7 @@ public final class ShardOptions {
             Objects.requireNonNull(copy[i], "ringOptions[" + i + "]");
         }
         return new ShardOptions(name, ringEntries, copy, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /**
@@ -174,7 +190,7 @@ public final class ShardOptions {
                     + " (none) or a logical CPU id: " + cpuAffinity);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new inbound task batch size ({@code >= 1}) */
@@ -183,7 +199,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("taskBatch must be >= 1: " + taskBatch);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new completion batch size ({@code >= 1}) */
@@ -192,7 +208,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("cqeBatch must be >= 1: " + cqeBatch);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new idle spin count ({@code >= 0}) */
@@ -201,7 +217,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("spinIterations must be >= 0: " + spinIterations);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new inbound MPSC capacity (power of two, {@code >= 2}) */
@@ -210,7 +226,7 @@ public final class ShardOptions {
             throw new IllegalArgumentException("inboundCapacity must be a power of two >= 2: " + inboundCapacity);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     /** @return a copy with a new graceful-shutdown budget ({@code >= 0} ms) */
@@ -219,7 +235,20 @@ public final class ShardOptions {
             throw new IllegalArgumentException("shutdownTimeoutMillis must be >= 0: " + shutdownTimeoutMillis);
         }
         return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
-                spinIterations, inboundCapacity, shutdownTimeoutMillis);
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
+    }
+
+    /**
+     * @return a copy with a new dispatch-latency sampling interval ({@code 0} = disabled,
+     * {@code >= 1} = every Nth successful registration)
+     * @throws IllegalArgumentException when {@code latencySampleEvery < 0}
+     */
+    public ShardOptions withLatencySampleEvery(int latencySampleEvery) {
+        if (latencySampleEvery < 0) {
+            throw new IllegalArgumentException("latencySampleEvery must be >= 0: " + latencySampleEvery);
+        }
+        return new ShardOptions(name, ringEntries, ringOptions, cpuAffinity, taskBatch, cqeBatch,
+                spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
     @Override
@@ -233,6 +262,7 @@ public final class ShardOptions {
                 + ", spinIterations=" + spinIterations
                 + ", inboundCapacity=" + inboundCapacity
                 + ", shutdownTimeoutMillis=" + shutdownTimeoutMillis
+                + ", latencySampleEvery=" + latencySampleEvery
                 + '}';
     }
 }

@@ -43,7 +43,8 @@
  * Two worker runtimes (--runtime, default = threads = historical behaviour):
  *   threads : every worker is a plain platform thread that owns its own JUring
  *             ring and runs the self-driving fill/reap loop described above.
- *             This is exactly the pre-B4 harness; its JSON is unchanged.
+ *             This is exactly the pre-B4 harness; its 1.0 JSON fields are unchanged
+ *             (schema 1.1 adds the B5 metrics fields additively; --metrics off omits them).
  *   shard   : the workers are the IoShards of one RingGroup (one ring per
  *             shard, best-effort CPU pinning to CPUs first-cpu..first-cpu+N-1).
  *             Each shard's QD-64 pipeline is driven by ctx.onCompletion
@@ -51,10 +52,29 @@
  *             real B4 runtime path: tasks/handlers run on the shard thread,
  *             the loop batches submits and reaps completions. Per-shard
  *             IOPS/latency plus the IoShard/ShardStats counters are added to
- *             the JSON (extra fields only; the historical schema is kept).
+ *             the JSON (extra fields only; the historical 1.0 schema is kept and
+ *             schema 1.1 adds the B5 metrics fields).
  *             A shard never opens a second ring and never runs its own
  *             submit/reap loop (that would both bypass the runtime and race
  *             the shard's internal wakeup read).
+ *
+ * B5 observability (json schema 1.1, docs/b5-design.md §7): --metrics on|off
+ * (default on) adds, for BOTH runtimes, a per-worker "ring_metrics" object (every
+ * RingMetrics field, snake_case), a per-worker "ring_series" sampled by ONE
+ * sampler thread at --metrics-interval (default 1.0 s; 0 disables) only during the
+ * measured phase via the cross-thread snapshot API (JUring.ringMetrics() or
+ * IoShard.metrics()), and (shard runtime only) per-worker "dispatch_latency_us"
+ * from the library LatencySnapshot -- labelled in the reports as the runtime
+ * completion latency (registration->dispatch): it includes kernel/device
+ * completion, excludes SQE prep + handler body, and is NOT comparable to fio
+ * clat or the external latency_us. Shard mode runs with
+ * ShardOptions.withLatencySampleEvery(1) (design A2.1: every successful
+ * registration; drained R => floor(R/N) samples for N).
+ * runs[] gains a "metrics" object; the aggregate gains summed ring_metrics (mean
+ * over runs) + ring_queue_depth {mean/max_in_flight, mean_sq_queued,
+ * mean_cq_ready} + dispatch_latency_us (mean of per-run percentiles). --metrics
+ * off emits no B5 field and disables the shard latency sampling. Every schema 1.0
+ * field is unchanged; stdout stays exactly one JSON object.
  *
  * File I/O always uses O_DIRECT and a *registered* file + registered
  * (fixed) buffers, i.e. IORING_OP_READ_FIXED / IORING_OP_WRITE_FIXED with
@@ -79,11 +99,14 @@ import com.davidvlijmincx.lio.api.FileDescriptor;
 import com.davidvlijmincx.lio.api.IoShard;
 import com.davidvlijmincx.lio.api.IoUringOptions;
 import com.davidvlijmincx.lio.api.JUring;
+import com.davidvlijmincx.lio.api.LatencySnapshot;
 import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.ResultConsumer;
 import com.davidvlijmincx.lio.api.RingGroup;
+import com.davidvlijmincx.lio.api.RingMetrics;
 import com.davidvlijmincx.lio.api.ShardContext;
+import com.davidvlijmincx.lio.api.ShardMetrics;
 import com.davidvlijmincx.lio.api.ShardOptions;
 import com.davidvlijmincx.lio.api.ShardStats;
 import com.davidvlijmincx.lio.api.ShardTask;
@@ -110,8 +133,8 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSU
 
 public final class JUringFileBench {
 
-    /** Bumped only on incompatible JSON changes. */
-    static final String SCHEMA_VERSION = "1.0";
+    /** Bumped only on incompatible JSON changes (1.1 = additive B5 metrics fields). */
+    static final String SCHEMA_VERSION = "1.1";
     static final String ENGINE = "juring";
 
     /** io_uring setup flags used for every ring (same as the JUring JMH suite). */
@@ -283,6 +306,12 @@ public final class JUringFileBench {
         long seed = 0L;                 // 0 => derive from System.nanoTime()
         boolean verbose = false;
 
+        // B5 schema 1.1 metrics (docs/b5-design.md §7): ring_metrics for both runtimes,
+        // a 1 Hz ring_series sampled during the measured phase, and (shard runtime only)
+        // the library dispatch-latency snapshot with ShardOptions.withLatencySampleEvery(1).
+        boolean metrics = true;         // --metrics on|off (default on)
+        double metricsInterval = 1.0;   // --metrics-interval SEC (default 1.0; 0 = no series)
+
         // Resolved at runtime (memlock-aware buffer strategy, mirrored in the JSON).
         boolean fixedBuffers = true;
         String resolvedBufferMode = null;   // registered-fixed | arena-unregistered | none
@@ -379,6 +408,14 @@ public final class JUringFileBench {
                         c.seed = longArg(value(argv, i, key, inline));
                         if (inline == null) i++;
                         break;
+                    case "--metrics":
+                        c.metrics = onOffArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--metrics-interval":
+                        c.metricsInterval = doubleArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
                     case "--engine":
                         String engine = value(argv, i, key, inline);
                         if (!"juring".equalsIgnoreCase(engine)) {
@@ -436,6 +473,17 @@ public final class JUringFileBench {
             }
         }
 
+        static boolean onOffArg(String s) throws UsageException {
+            String t = s.trim();
+            if (t.equalsIgnoreCase("on") || t.equalsIgnoreCase("true") || t.equals("1")) {
+                return true;
+            }
+            if (t.equalsIgnoreCase("off") || t.equalsIgnoreCase("false") || t.equals("0")) {
+                return false;
+            }
+            throw new UsageException("expected on|off, got '" + s + "'");
+        }
+
         static long sizeArg(String s) throws UsageException {
             String t = s.trim().toLowerCase(Locale.ROOT);
             long mult = 1L;
@@ -490,6 +538,15 @@ public final class JUringFileBench {
             }
             if (latencySamples < 100) {
                 throw new UsageException("--latency-samples must be >= 100");
+            }
+            if (!Double.isFinite(metricsInterval) || metricsInterval < 0) {
+                throw new UsageException("--metrics-interval must be >= 0 seconds (0 disables the ring series)");
+            }
+            if (metricsInterval > 0 && metricsInterval < 0.01) {
+                throw new UsageException("--metrics-interval must be >= 0.01 seconds (or 0 to disable the series)");
+            }
+            if (metricsInterval > 0 && seconds / metricsInterval > 100_000) {
+                throw new UsageException("--metrics-interval too small for --seconds (more than 100000 series points)");
             }
             if (mode.isWrite() && readonly) {
                 throw new UsageException("--readonly cannot be combined with a write workload (" + mode.cliName + ")");
@@ -587,6 +644,10 @@ public final class JUringFileBench {
                 "  --label TEXT            case label for reports (default derived)",
                 "  --latency-samples N     per-thread latency reservoir size (default 1000000)",
                 "  --seed N                base PRNG seed (default: time based)",
+                "  --metrics on|off        per-ring metrics + dispatch latency in the JSON (default on);",
+                "                          off removes every B5 metrics field and disables shard latency sampling",
+                "  --metrics-interval SEC  ring_series sampling interval during the measured phase",
+                "                          (default 1.0; 0 disables the series; shard mode)",
                 "  --engine juring         accepted for symmetry; JUring only",
                 "  --verbose               extra setup diagnostics on stderr",
                 "  --help                  this text",
@@ -741,6 +802,10 @@ public final class JUringFileBench {
                     Arrays.toString(RING_FLAG_NAMES),
                     cfg.fixedBuffers ? "registered-fixed" : "arena-unregistered", cfg.qd, cfg.bs);
         }
+        System.err.printf("[juring] metrics=%s interval=%.3fs%s (schema %s)%n",
+                cfg.metrics ? "on" : "off", cfg.metricsInterval,
+                cfg.metrics && cfg.metricsInterval > 0 ? " ring_series=measured-phase" : " ring_series=off",
+                SCHEMA_VERSION);
     }
 
     // ------------------------------------------------------------------
@@ -772,11 +837,18 @@ public final class JUringFileBench {
         for (Job j : jobs) {
             j.start();
         }
+        SeriesSampler sampler = null;
         try {
             sync.ready.await();
             sync.start.countDown();
             sync.warmupDone.await();
+            long measuredStartNanos = System.nanoTime();
             sync.measureStart.countDown();
+            // Schema 1.1: one sampler thread, measured phase only, cross-thread snapshot API.
+            if (cfg.metrics && cfg.metricsInterval > 0) {
+                sampler = newSamplerThreads(cfg, jobs, measuredStartNanos);
+                sampler.start();
+            }
             for (Job j : jobs) {
                 j.join();
             }
@@ -786,6 +858,10 @@ public final class JUringFileBench {
                 j.interrupt();
             }
             throw new BenchException("interrupted while waiting for workers");
+        } finally {
+            if (sampler != null) {
+                sampler.stopAndJoin();
+            }
         }
         for (Job j : jobs) {
             if (j.failure != null) {
@@ -794,14 +870,20 @@ public final class JUringFileBench {
         }
 
         ThreadStat[] tstats = new ThreadStat[n];
+        RingMetrics[] workerMetrics = new RingMetrics[n];
+        @SuppressWarnings("unchecked")
+        List<SeriesPoint>[] workerSeries = new List[n];
         double maxElapsed = 0;
         long ops = 0, bytes = 0, errors = 0, overflows = 0;
         long sumLatNs = 0;
         long recordedLat = 0;
-        int totalSamples = 0;
         for (int i = 0; i < n; i++) {
             Job j = jobs[i];
-            ThreadStat t = j.toStat();
+            RingMetrics rm = cfg.metrics ? j.ringMetricsSnapshot() : null;
+            List<SeriesPoint> series = sampler == null ? null : sampler.seriesFor(i);
+            ThreadStat t = j.toStat(rm, series);
+            workerMetrics[i] = rm;
+            workerSeries[i] = series;
             tstats[i] = t;
             maxElapsed = Math.max(maxElapsed, t.elapsedSec);
             ops += t.ops;
@@ -810,7 +892,6 @@ public final class JUringFileBench {
             overflows += t.seqOverflows;
             sumLatNs += t.sumLatNs;
             recordedLat += t.recordedLat;
-            totalSamples += t.lat.samples;
         }
         if (maxElapsed <= 0) {
             throw new BenchException("no elapsed time recorded (workers did not run)");
@@ -818,7 +899,12 @@ public final class JUringFileBench {
         LatencyStats lat = mergeLatency(jobs, cfg.latencySamples, sumLatNs, recordedLat);
         double iops = ops / maxElapsed;
         double mibs = (bytes / (1024.0 * 1024.0)) / maxElapsed;
-        RunStat st = new RunStat(runIndex, maxElapsed, ops, bytes, errors, overflows, iops, mibs, lat, tstats);
+        RunStat st = new RunStat(runIndex, maxElapsed, ops, bytes, errors, overflows, iops, mibs, lat,
+                tstats, null,
+                cfg.metrics ? RingMetricsAgg.sum(workerMetrics) : null,
+                sampler == null ? null : RingQueueDepth.of(workerSeries),
+                null,
+                metricsInfo(cfg, workerSeries));
         System.err.printf(Locale.ROOT,
                 "[juring] run %d/%d: %.2f s, %,d ops, %.1f MiB/s, %.1f IOPS, p50=%.1f us p99=%.1f us p999=%.1f us max=%.1f us, errors=%d, seqOverflows=%d%n",
                 runIndex + 1, cfg.runs, maxElapsed, ops, mibs, iops,
@@ -880,6 +966,421 @@ public final class JUringFileBench {
     }
 
     // ------------------------------------------------------------------
+    // B5 metrics (schema 1.1; docs/b5-design.md §7/§7.1)
+    // ------------------------------------------------------------------
+
+    /** One sample of a worker's ring snapshot during the measured phase. */
+    static final class SeriesPoint {
+        final double tSec;
+        final long inFlight;
+        final long sqQueued;
+        final long cqReady;
+        final boolean hasDispatch;
+        final long dispatchP99Nanos;
+
+        SeriesPoint(double tSec, long inFlight, long sqQueued, long cqReady,
+                    boolean hasDispatch, long dispatchP99Nanos) {
+            this.tSec = tSec;
+            this.inFlight = inFlight;
+            this.sqQueued = sqQueued;
+            this.cqReady = cqReady;
+            this.hasDispatch = hasDispatch;
+            this.dispatchP99Nanos = dispatchP99Nanos;
+        }
+    }
+
+    /** {@code runs[].metrics}: what the B5 metrics plumbing did in this run. */
+    static final class MetricsInfo {
+        final boolean enabled;
+        final double intervalSec;
+        final int ringSeriesPoints;
+
+        MetricsInfo(boolean enabled, double intervalSec, int ringSeriesPoints) {
+            this.enabled = enabled;
+            this.intervalSec = intervalSec;
+            this.ringSeriesPoints = ringSeriesPoints;
+        }
+
+        static MetricsInfo off(double intervalSec) {
+            return new MetricsInfo(false, intervalSec, 0);
+        }
+    }
+
+    /** One worker's cross-thread snapshot pair (ring + optional library dispatch latency). */
+    static final class WorkerSample {
+        final RingMetrics ring;
+        final LatencySnapshot dispatch;
+
+        WorkerSample(RingMetrics ring, LatencySnapshot dispatch) {
+            this.ring = ring;
+            this.dispatch = dispatch;
+        }
+    }
+
+    /** Cross-thread metric source for the sampler: one per worker. */
+    interface WorkerMetricSource {
+        /** Best-effort snapshot; may be null when the runtime is unavailable. */
+        WorkerSample sample();
+    }
+
+    /**
+     * The single sampler thread required by design §7: it reads the cross-thread snapshot
+     * API of every worker once per interval, only between measured-phase start and end.
+     * Sampling is 1 Hz by default and never touches the workers' threads.
+     */
+    static final class SeriesSampler implements Runnable {
+        final Config cfg;
+        final WorkerMetricSource[] sources;
+        final List<SeriesPoint>[] series;
+        final long intervalNanos;
+        final long measuredStartNanos;
+        volatile boolean stop;
+        Thread thread;
+
+        @SuppressWarnings("unchecked")
+        SeriesSampler(Config cfg, WorkerMetricSource[] sources, long measuredStartNanos) {
+            this.cfg = cfg;
+            this.sources = sources;
+            this.measuredStartNanos = measuredStartNanos;
+            this.intervalNanos = (long) (cfg.metricsInterval * 1_000_000_000L);
+            this.series = new List[sources.length];
+            int maxPoints = (int) Math.min(1_000_000L,
+                    (long) Math.ceil(cfg.seconds / cfg.metricsInterval) + 3);
+            for (int i = 0; i < sources.length; i++) {
+                series[i] = new ArrayList<>(maxPoints);
+            }
+        }
+
+        void start() {
+            thread = new Thread(this, "juring-metrics-sampler");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        void stopAndJoin() {
+            stop = true;
+            Thread t = thread;
+            if (t == null) {
+                return;
+            }
+            t.interrupt();
+            try {
+                t.join(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        @Override
+        public void run() {
+            long sleepMs = Math.max(1L, intervalNanos / 1_000_000L);
+            int sleepNs = (int) Math.max(0L, intervalNanos % 1_000_000L);
+            while (!stop) {
+                try {
+                    Thread.sleep(sleepMs, sleepNs);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (stop) {
+                    return;
+                }
+                long now = System.nanoTime();
+                int n = sources.length;
+                WorkerSample[] samples = new WorkerSample[n];
+                for (int i = 0; i < n; i++) {
+                    try {
+                        samples[i] = sources[i].sample();
+                    } catch (Throwable t) {
+                        // Best-effort telemetry: a failed snapshot never fails a benchmark run.
+                    }
+                }
+                double tSec = Math.round((now - measuredStartNanos) / 1_000_000_000.0 * 1000.0) / 1000.0;
+                for (int i = 0; i < n; i++) {
+                    WorkerSample sample = samples[i];
+                    if (sample == null || sample.ring == null) {
+                        continue;
+                    }
+                    RingMetrics r = sample.ring;
+                    LatencySnapshot d = sample.dispatch;
+                    List<SeriesPoint> points = series[i];
+                    if (points.size() < 1_000_000) {
+                        points.add(new SeriesPoint(tSec, r.inFlight(), r.sqQueued(), r.cqReady(),
+                                d != null, d == null ? 0L : d.p99Nanos()));
+                    }
+                }
+            }
+        }
+
+        List<SeriesPoint> seriesFor(int worker) {
+            return series[worker];
+        }
+    }
+
+    /** Sampler sources for the historical threads runtime: JUring.ringMetrics() per worker. */
+    static SeriesSampler newSamplerThreads(Config cfg, Job[] jobs, long measuredStartNanos) {
+        WorkerMetricSource[] sources = new WorkerMetricSource[jobs.length];
+        for (int i = 0; i < jobs.length; i++) {
+            final Job job = jobs[i];
+            sources[i] = () -> new WorkerSample(job.ringMetricsSnapshot(), null);
+        }
+        return new SeriesSampler(cfg, sources, measuredStartNanos);
+    }
+
+    /** Sampler sources for the shard runtime: IoShard.metrics() per shard (latest snapshot). */
+    static SeriesSampler newSamplerShards(Config cfg, RingGroup group, int shards, long measuredStartNanos) {
+        WorkerMetricSource[] sources = new WorkerMetricSource[shards];
+        for (int i = 0; i < shards; i++) {
+            final IoShard shard = group.shard(i);
+            sources[i] = () -> {
+                ShardMetrics m = shard.metrics();
+                if (m == null) {
+                    return null;
+                }
+                return new WorkerSample(m.ring(), m.dispatchLatency());
+            };
+        }
+        return new SeriesSampler(cfg, sources, measuredStartNanos);
+    }
+
+    static MetricsInfo metricsInfo(Config cfg, List<SeriesPoint>[] workerSeries) {
+        if (!cfg.metrics) {
+            return MetricsInfo.off(cfg.metricsInterval);
+        }
+        int points = 0;
+        if (workerSeries != null) {
+            for (List<SeriesPoint> list : workerSeries) {
+                if (list != null && list.size() > points) {
+                    points = list.size();
+                }
+            }
+        }
+        return new MetricsInfo(true, cfg.metricsInterval, points);
+    }
+
+    /** Sum of every {@link RingMetrics} counter/occupancy field over a run's workers. */
+    static final class RingMetricsAgg {
+        final long sqesPrepared, submitted, reaped, completed, failed, cancelled, timedOut, inFlight;
+        final long enters, submitBatches, submitErrors, submitRetries, sqFullEvents;
+        final long sqQueued, sqEntries, cqReady, cqEntries, cqOverflowEvents;
+        final int workers;
+
+        RingMetricsAgg(long sqesPrepared, long submitted, long reaped, long completed, long failed,
+                       long cancelled, long timedOut, long inFlight, long enters, long submitBatches,
+                       long submitErrors, long submitRetries, long sqFullEvents, long sqQueued,
+                       long sqEntries, long cqReady, long cqEntries, long cqOverflowEvents,
+                       int workers) {
+            this.sqesPrepared = sqesPrepared;
+            this.submitted = submitted;
+            this.reaped = reaped;
+            this.completed = completed;
+            this.failed = failed;
+            this.cancelled = cancelled;
+            this.timedOut = timedOut;
+            this.inFlight = inFlight;
+            this.enters = enters;
+            this.submitBatches = submitBatches;
+            this.submitErrors = submitErrors;
+            this.submitRetries = submitRetries;
+            this.sqFullEvents = sqFullEvents;
+            this.sqQueued = sqQueued;
+            this.sqEntries = sqEntries;
+            this.cqReady = cqReady;
+            this.cqEntries = cqEntries;
+            this.cqOverflowEvents = cqOverflowEvents;
+            this.workers = workers;
+        }
+
+        static RingMetricsAgg sum(RingMetrics[] metrics) {
+            int workers = 0;
+            long sqesPrepared = 0, submitted = 0, reaped = 0, completed = 0, failed = 0, cancelled = 0;
+            long timedOut = 0, inFlight = 0, enters = 0, submitBatches = 0, submitErrors = 0;
+            long submitRetries = 0, sqFullEvents = 0, sqQueued = 0, sqEntries = 0, cqReady = 0;
+            long cqEntries = 0, cqOverflowEvents = 0;
+            if (metrics != null) {
+                for (RingMetrics m : metrics) {
+                    if (m == null) {
+                        continue;
+                    }
+                    workers++;
+                    sqesPrepared += m.sqesPrepared();
+                    submitted += m.submitted();
+                    reaped += m.reaped();
+                    completed += m.completed();
+                    failed += m.failed();
+                    cancelled += m.cancelled();
+                    timedOut += m.timedOut();
+                    inFlight += m.inFlight();
+                    enters += m.enters();
+                    submitBatches += m.submitBatches();
+                    submitErrors += m.submitErrors();
+                    submitRetries += m.submitRetries();
+                    sqFullEvents += m.sqFullEvents();
+                    sqQueued += m.sqQueued();
+                    sqEntries += m.sqEntries();
+                    cqReady += m.cqReady();
+                    cqEntries += m.cqEntries();
+                    cqOverflowEvents += m.cqOverflowEvents();
+                }
+            }
+            if (workers == 0) {
+                return null;
+            }
+            return new RingMetricsAgg(sqesPrepared, submitted, reaped, completed, failed, cancelled,
+                    timedOut, inFlight, enters, submitBatches, submitErrors, submitRetries,
+                    sqFullEvents, sqQueued, sqEntries, cqReady, cqEntries, cqOverflowEvents, workers);
+        }
+    }
+
+    /** Aggregate ring queue depth over one run's ring_series (all workers, measured phase). */
+    static final class RingQueueDepth {
+        final double meanInFlight;
+        final long maxInFlight;
+        final double meanSqQueued;
+        final double meanCqReady;
+
+        RingQueueDepth(double meanInFlight, long maxInFlight, double meanSqQueued, double meanCqReady) {
+            this.meanInFlight = meanInFlight;
+            this.maxInFlight = maxInFlight;
+            this.meanSqQueued = meanSqQueued;
+            this.meanCqReady = meanCqReady;
+        }
+
+        static RingQueueDepth of(List<SeriesPoint>[] series) {
+            long count = 0, sumInFlight = 0, sumSqQueued = 0, sumCqReady = 0, maxInFlight = 0;
+            if (series == null) {
+                return null;
+            }
+            for (List<SeriesPoint> points : series) {
+                if (points == null) {
+                    continue;
+                }
+                for (SeriesPoint p : points) {
+                    count++;
+                    sumInFlight += p.inFlight;
+                    if (p.inFlight > maxInFlight) {
+                        maxInFlight = p.inFlight;
+                    }
+                    sumSqQueued += p.sqQueued;
+                    sumCqReady += p.cqReady;
+                }
+            }
+            if (count == 0) {
+                return null;
+            }
+            return new RingQueueDepth(sumInFlight / (double) count, maxInFlight,
+                    sumSqQueued / (double) count, sumCqReady / (double) count);
+        }
+    }
+
+    /**
+     * Run-level aggregation of the shard runtime's library dispatch/completion latency
+     * (design A2.2: runtime completion latency, registration -> handler dispatch; includes
+     * kernel/device completion; not fio clat / external latency_us). Per-worker snapshots
+     * cannot be merged exactly (only the buckets are mergeable), so a run's percentiles are
+     * the mean of its workers' percentile values and its mean is total/samples — the same
+     * "mean of percentiles" convention as {@code latency_us}.
+     */
+    static final class DispatchLatencyAgg {
+        final long samples;
+        final long totalNanos;
+        final long minNanos;
+        final long maxNanos;
+        final double meanNanos;
+        final double p50Nanos, p90Nanos, p99Nanos, p999Nanos;
+
+        DispatchLatencyAgg(long samples, long totalNanos, long minNanos, long maxNanos,
+                           double meanNanos, double p50Nanos, double p90Nanos,
+                           double p99Nanos, double p999Nanos) {
+            this.samples = samples;
+            this.totalNanos = totalNanos;
+            this.minNanos = minNanos;
+            this.maxNanos = maxNanos;
+            this.meanNanos = meanNanos;
+            this.p50Nanos = p50Nanos;
+            this.p90Nanos = p90Nanos;
+            this.p99Nanos = p99Nanos;
+            this.p999Nanos = p999Nanos;
+        }
+
+        static DispatchLatencyAgg of(LatencySnapshot s) {
+            if (s == null || s.samples() <= 0) {
+                return null;
+            }
+            return new DispatchLatencyAgg(s.samples(), s.totalNanos(), s.minNanos(), s.maxNanos(),
+                    s.meanNanos(), s.p50Nanos(), s.p90Nanos(), s.p99Nanos(), s.p999Nanos());
+        }
+
+        /** Aggregate per-worker snapshots into one run-level (or worker-level) view. */
+        static DispatchLatencyAgg merge(LatencySnapshot[] snapshots) {
+            if (snapshots == null) {
+                return null;
+            }
+            long samples = 0, total = 0, min = Long.MAX_VALUE, max = 0;
+            double p50 = 0, p90 = 0, p99 = 0, p999 = 0;
+            int n = 0;
+            for (LatencySnapshot s : snapshots) {
+                if (s == null || s.samples() <= 0) {
+                    continue;
+                }
+                n++;
+                samples += s.samples();
+                total += s.totalNanos();
+                min = Math.min(min, s.minNanos());
+                max = Math.max(max, s.maxNanos());
+                p50 += s.p50Nanos();
+                p90 += s.p90Nanos();
+                p99 += s.p99Nanos();
+                p999 += s.p999Nanos();
+            }
+            if (n == 0) {
+                return null;
+            }
+            return new DispatchLatencyAgg(samples, total, min, max,
+                    samples == 0 ? 0.0 : (double) total / samples,
+                    p50 / n, p90 / n, p99 / n, p999 / n);
+        }
+
+        // ---- rendering helpers (all JSON latencies are microseconds) ----
+
+        double meanUs() {
+            return us(meanNanos);
+        }
+
+        double minUs() {
+            return us(minNanos);
+        }
+
+        double maxUs() {
+            return us(maxNanos);
+        }
+
+        double p50Us() {
+            return us(p50Nanos);
+        }
+
+        double p90Us() {
+            return us(p90Nanos);
+        }
+
+        double p99Us() {
+            return us(p99Nanos);
+        }
+
+        double p999Us() {
+            return us(p999Nanos);
+        }
+
+        static double us(double nanos) {
+            return Math.round(nanos / 1000.0 * 1000.0) / 1000.0;
+        }
+    }
+
+    // render helpers shared by the JSON writer
+    static double meanUs(double nanos) {
+        return DispatchLatencyAgg.us(nanos);
+    }
+
+    // ------------------------------------------------------------------
     // Worker
     // ------------------------------------------------------------------
 
@@ -894,7 +1395,8 @@ public final class JUringFileBench {
         final Mode mode;
 
         // setup
-        JUring ring;
+        volatile JUring ring;   // volatile: read cross-thread by the metrics sampler
+        volatile RingMetrics finalRingMetrics;   // frozen snapshot captured at teardown
         FileDescriptor fd;
         int slotCount;
         int slotMask;
@@ -1088,8 +1590,17 @@ public final class JUringFileBench {
 
         void teardown() {
             try {
-                if (ring != null) {
-                    ring.close();
+                JUring r = ring;
+                if (r != null) {
+                    r.close();
+                    // Design §2.1: after close the snapshot is frozen; capture the final
+                    // counters (shutdown cancels included) before dropping the ring reference.
+                    if (cfg.metrics) {
+                        try {
+                            finalRingMetrics = r.ringMetrics();
+                        } catch (Throwable ignored) {
+                        }
+                    }
                 }
             } catch (Throwable t) {
                 if (failure == null) {
@@ -1272,7 +1783,7 @@ public final class JUringFileBench {
             sampleSeen++;
         }
 
-        ThreadStat toStat() {
+        ThreadStat toStat(RingMetrics ringMetrics, List<SeriesPoint> ringSeries) {
             LatencyStats lat;
             if (sampleCount == 0) {
                 lat = LatencyStats.empty();
@@ -1303,7 +1814,7 @@ public final class JUringFileBench {
                 }
             }
             return new ThreadStat(index, timedOps, timedBytes, timedErrors, seqOverflows, elapsed, iops, mibs,
-                    sumLatNs, recordedLat, lat);
+                    sumLatNs, recordedLat, lat, ringMetrics, null, ringSeries);
         }
 
         @Override
@@ -1314,6 +1825,23 @@ public final class JUringFileBench {
         @Override
         public long[] latBuf() {
             return samples;
+        }
+
+        /** Cross-thread snapshot used by the sampler and the final JSON (never throws). */
+        RingMetrics ringMetricsSnapshot() {
+            RingMetrics m = finalRingMetrics;
+            if (m != null) {
+                return m;
+            }
+            JUring r = ring;
+            if (r == null) {
+                return null;
+            }
+            try {
+                return r.ringMetrics();
+            } catch (Throwable t) {
+                return null;
+            }
         }
 
         double measuredElapsedSec;
@@ -1739,7 +2267,8 @@ public final class JUringFileBench {
             }
         }
 
-        ThreadStat toStat() {
+        ThreadStat toStat(RingMetrics ringMetrics, DispatchLatencyAgg dispatchLat,
+                          List<SeriesPoint> ringSeries) {
             LatencyStats lat;
             if (sampleCount == 0) {
                 lat = LatencyStats.empty();
@@ -1767,7 +2296,8 @@ public final class JUringFileBench {
                 }
             }
             return new ThreadStat(index, timedOps, timedBytes, timedErrors, seqOverflows,
-                    measuredElapsedSec, iops, mibs, sumLatNs, recordedLat, lat);
+                    measuredElapsedSec, iops, mibs, sumLatNs, recordedLat, lat,
+                    ringMetrics, dispatchLat, ringSeries);
         }
 
         @Override
@@ -1792,11 +2322,15 @@ public final class JUringFileBench {
         ShardOptions options = ShardOptions.defaults()
                 .withName("bench")
                 .withRingOptions(RING_FLAGS)
-                .withRingEntries(Math.max(256, cfg.qd * 2));
+                .withRingEntries(Math.max(256, cfg.qd * 2))
+                // Design §7: shard runtime enables library dispatch-latency sampling with
+                // metrics on (every registration). Metrics off keeps the B4 default (0).
+                .withLatencySampleEvery(cfg.metrics ? 1 : 0);
         long seedBase = cfg.seed != 0L ? cfg.seed
                 : (System.nanoTime() ^ ((long) (runIndex + 1) * 0x9E3779B97F4A7C15L));
         ShardRunner[] runners = new ShardRunner[n];
         RingGroup group = null;
+        SeriesSampler sampler = null;
         try {
             group = RingGroup.create(n, options, cfg.firstCpu);
             group.start();
@@ -1825,9 +2359,20 @@ public final class JUringFileBench {
                 group.shard(i).execute(runners[i]::startMeasured);
             }
             long measuredWaitSec = (long) Math.max(60L, Math.ceil(cfg.seconds) + 60L);
-            if (!sync.measuredDone.await(measuredWaitSec, TimeUnit.SECONDS)) {
-                throw new BenchException("timed out waiting for the measured phase ("
-                        + measuredWaitSec + " s)");
+            long measuredStartNanos = System.nanoTime();
+            if (cfg.metrics && cfg.metricsInterval > 0) {
+                sampler = newSamplerShards(cfg, group, n, measuredStartNanos);
+                sampler.start();
+            }
+            try {
+                if (!sync.measuredDone.await(measuredWaitSec, TimeUnit.SECONDS)) {
+                    throw new BenchException("timed out waiting for the measured phase ("
+                            + measuredWaitSec + " s)");
+                }
+            } finally {
+                if (sampler != null) {
+                    sampler.stopAndJoin();
+                }
             }
             throwIfShardFailed(runners, "measured phase");
 
@@ -1856,14 +2401,41 @@ public final class JUringFileBench {
             }
         }
 
+        // Design §2.5/§2.6: after close the snapshots are frozen (shutdown cancels included).
+        // RingGroup.metrics() is total (never throws) and includes closed/unstarted shards.
+        java.util.List<ShardMetrics> finalMetrics = null;
+        if (group != null) {
+            try {
+                finalMetrics = group.metrics();
+            } catch (Throwable ignored) {
+            }
+        }
+
         ThreadStat[] tstats = new ThreadStat[n];
         ShardInfo[] shardInfos = new ShardInfo[n];
+        RingMetrics[] workerMetrics = new RingMetrics[n];
+        LatencySnapshot[] workerDispatch = new LatencySnapshot[n];
+        @SuppressWarnings("unchecked")
+        List<SeriesPoint>[] workerSeries = new List[n];
         double maxElapsed = 0;
         long ops = 0, bytes = 0, errors = 0, overflows = 0;
         long sumLatNs = 0;
         long recordedLat = 0;
         for (int i = 0; i < n; i++) {
-            ThreadStat t = runners[i].toStat();
+            RingMetrics rm = null;
+            LatencySnapshot dispatchSnapshot = null;
+            if (cfg.metrics && finalMetrics != null && i < finalMetrics.size()) {
+                ShardMetrics sm = finalMetrics.get(i);
+                if (sm != null) {
+                    rm = sm.ring();
+                    dispatchSnapshot = sm.dispatchLatency();
+                }
+            }
+            List<SeriesPoint> series = sampler == null ? null : sampler.seriesFor(i);
+            ThreadStat t = runners[i].toStat(rm, DispatchLatencyAgg.of(dispatchSnapshot), series);
+            workerMetrics[i] = rm;
+            workerDispatch[i] = dispatchSnapshot;
+            workerSeries[i] = series;
             tstats[i] = t;
             shardInfos[i] = new ShardInfo(t, runners[i].statsSnapshot);
             maxElapsed = Math.max(maxElapsed, t.elapsedSec);
@@ -1887,7 +2459,11 @@ public final class JUringFileBench {
         double iops = ops / maxElapsed;
         double mibs = (bytes / (1024.0 * 1024.0)) / maxElapsed;
         RunStat st = new RunStat(runIndex, maxElapsed, ops, bytes, errors, overflows, iops, mibs,
-                lat, tstats, shardInfos);
+                lat, tstats, shardInfos,
+                cfg.metrics ? RingMetricsAgg.sum(workerMetrics) : null,
+                sampler == null ? null : RingQueueDepth.of(workerSeries),
+                cfg.metrics ? DispatchLatencyAgg.merge(workerDispatch) : null,
+                metricsInfo(cfg, workerSeries));
         System.err.printf(Locale.ROOT,
                 "[juring] run %d/%d (runtime=shard shards=%d): %.2f s, %,d ops, %.1f MiB/s, %.1f IOPS, "
                         + "p50=%.1f us p99=%.1f us p999=%.1f us max=%.1f us, errors=%d, seqOverflows=%d%n",
@@ -1984,9 +2560,14 @@ public final class JUringFileBench {
         final long sumLatNs;
         final long recordedLat;
         final LatencyStats lat;
+        // B5 schema 1.1 (null when --metrics off / unavailable)
+        final RingMetrics ringMetrics;
+        final DispatchLatencyAgg dispatchLat;   // shard runtime only
+        final List<SeriesPoint> ringSeries;     // measured phase only
 
         ThreadStat(int thread, long ops, long bytes, long errors, long seqOverflows, double elapsedSec,
-                   double iops, double mibs, long sumLatNs, long recordedLat, LatencyStats lat) {
+                   double iops, double mibs, long sumLatNs, long recordedLat, LatencyStats lat,
+                   RingMetrics ringMetrics, DispatchLatencyAgg dispatchLat, List<SeriesPoint> ringSeries) {
             this.thread = thread;
             this.ops = ops;
             this.bytes = bytes;
@@ -1998,6 +2579,9 @@ public final class JUringFileBench {
             this.sumLatNs = sumLatNs;
             this.recordedLat = recordedLat;
             this.lat = lat;
+            this.ringMetrics = ringMetrics;
+            this.dispatchLat = dispatchLat;
+            this.ringSeries = ringSeries;
         }
     }
 
@@ -2013,14 +2597,16 @@ public final class JUringFileBench {
         final LatencyStats lat;
         final ThreadStat[] threads;
         final ShardInfo[] shards;   // non-null only for --runtime=shard
+        // B5 schema 1.1 (null/off when --metrics off or no series)
+        final RingMetricsAgg ringMetrics;   // summed per-worker counters for this run
+        final RingQueueDepth ringQueueDepth; // from ring_series, all workers
+        final DispatchLatencyAgg dispatchLat; // shard runtime only
+        final MetricsInfo metrics;
 
         RunStat(int run, double elapsedSec, long ops, long bytes, long errors, long seqOverflows,
-                double iops, double mibs, LatencyStats lat, ThreadStat[] threads) {
-            this(run, elapsedSec, ops, bytes, errors, seqOverflows, iops, mibs, lat, threads, null);
-        }
-
-        RunStat(int run, double elapsedSec, long ops, long bytes, long errors, long seqOverflows,
-                double iops, double mibs, LatencyStats lat, ThreadStat[] threads, ShardInfo[] shards) {
+                double iops, double mibs, LatencyStats lat, ThreadStat[] threads, ShardInfo[] shards,
+                RingMetricsAgg ringMetrics, RingQueueDepth ringQueueDepth,
+                DispatchLatencyAgg dispatchLat, MetricsInfo metrics) {
             this.run = run;
             this.elapsedSec = elapsedSec;
             this.ops = ops;
@@ -2032,6 +2618,10 @@ public final class JUringFileBench {
             this.lat = lat;
             this.threads = threads;
             this.shards = shards;
+            this.ringMetrics = ringMetrics;
+            this.ringQueueDepth = ringQueueDepth;
+            this.dispatchLat = dispatchLat;
+            this.metrics = metrics;
         }
     }
 
@@ -2402,6 +2992,8 @@ public final class JUringFileBench {
             w.name("registered_buffers").num(c.resolvedRegisteredBuffers);
             w.name("latency_samples_cap").num(c.latencySamples);
             w.name("seed").num(c.seed);
+            w.name("metrics_enabled").bool(c.metrics);
+            w.name("metrics_interval_sec").num(c.metricsInterval);
             w.name("label_source").str("cli-or-derived");
         }
 
@@ -2421,6 +3013,18 @@ public final class JUringFileBench {
             w.endObj();
         }
 
+        static void renderMetricsInfo(Jw w, MetricsInfo m) {
+            if (m == null) {
+                w.nul();
+                return;
+            }
+            w.obj();
+            w.name("enabled").bool(m.enabled);
+            w.name("interval_sec").num(m.intervalSec);
+            w.name("ring_series_points").num(m.ringSeriesPoints);
+            w.endObj();
+        }
+
         static void renderRun(Jw w, RunStat r) {
             w.obj();
             w.name("run").num(r.run);
@@ -2431,22 +3035,25 @@ public final class JUringFileBench {
             w.name("mibs").num(r.mibs);
             w.name("errors").num(r.errors);
             w.name("seq_overflows").num(r.seqOverflows);
+            w.name("metrics");
+            renderMetricsInfo(w, r.metrics);
             w.name("latency_us");
             renderLatency(w, r.lat);
+            if (r.ringMetrics != null) {
+                w.name("ring_metrics");
+                renderRingMetricsSum(w, r.ringMetrics);
+            }
+            if (r.ringQueueDepth != null) {
+                w.name("ring_queue_depth");
+                renderRingQueueDepth(w, r.ringQueueDepth);
+            }
+            if (r.dispatchLat != null) {
+                w.name("dispatch_latency_us");
+                renderDispatchLatency(w, r.dispatchLat);
+            }
             w.name("threads").arr();
             for (ThreadStat t : r.threads) {
-                w.obj();
-                w.name("thread").num(t.thread);
-                w.name("elapsed_sec").num(t.elapsedSec);
-                w.name("ops").num(t.ops);
-                w.name("bytes").num(t.bytes);
-                w.name("errors").num(t.errors);
-                w.name("seq_overflows").num(t.seqOverflows);
-                w.name("iops").num(t.iops);
-                w.name("mibs").num(t.mibs);
-                w.name("latency_us");
-                renderLatency(w, t.lat);
-                w.endObj();
+                renderThread(w, t);
             }
             w.endArr();
             if (r.shards != null) {
@@ -2455,6 +3062,34 @@ public final class JUringFileBench {
                     renderShard(w, s);
                 }
                 w.endArr();
+            }
+            w.endObj();
+        }
+
+        /** threads[] entry: 1.0 shape + B5 per-worker ring metrics/series/dispatch latency. */
+        static void renderThread(Jw w, ThreadStat t) {
+            w.obj();
+            w.name("thread").num(t.thread);
+            w.name("elapsed_sec").num(t.elapsedSec);
+            w.name("ops").num(t.ops);
+            w.name("bytes").num(t.bytes);
+            w.name("errors").num(t.errors);
+            w.name("seq_overflows").num(t.seqOverflows);
+            w.name("iops").num(t.iops);
+            w.name("mibs").num(t.mibs);
+            w.name("latency_us");
+            renderLatency(w, t.lat);
+            if (t.ringMetrics != null) {
+                w.name("ring_metrics");
+                renderRingMetrics(w, t.ringMetrics);
+            }
+            if (t.ringSeries != null) {
+                w.name("ring_series");
+                renderRingSeries(w, t.ringSeries);
+            }
+            if (t.dispatchLat != null) {
+                w.name("dispatch_latency_us");
+                renderDispatchLatency(w, t.dispatchLat);
             }
             w.endObj();
         }
@@ -2472,8 +3107,115 @@ public final class JUringFileBench {
             w.name("mibs").num(t.mibs);
             w.name("latency_us");
             renderLatency(w, t.lat);
+            if (t.ringMetrics != null) {
+                w.name("ring_metrics");
+                renderRingMetrics(w, t.ringMetrics);
+            }
+            if (t.ringSeries != null) {
+                w.name("ring_series");
+                renderRingSeries(w, t.ringSeries);
+            }
+            if (t.dispatchLat != null) {
+                w.name("dispatch_latency_us");
+                renderDispatchLatency(w, t.dispatchLat);
+            }
             w.name("shard_stats");
             renderShardStats(w, s.stats);
+            w.endObj();
+        }
+
+        /** All frozen RingMetrics fields, snake_case (docs/b5-design.md §7). */
+        static void renderRingMetrics(Jw w, RingMetrics m) {
+            if (m == null) {
+                w.nul();
+                return;
+            }
+            w.obj();
+            w.name("sqes_prepared").num(m.sqesPrepared());
+            w.name("submitted").num(m.submitted());
+            w.name("reaped").num(m.reaped());
+            w.name("completed").num(m.completed());
+            w.name("failed").num(m.failed());
+            w.name("cancelled").num(m.cancelled());
+            w.name("timed_out").num(m.timedOut());
+            w.name("in_flight").num(m.inFlight());
+            w.name("enters").num(m.enters());
+            w.name("submit_batches").num(m.submitBatches());
+            w.name("submit_errors").num(m.submitErrors());
+            w.name("submit_retries").num(m.submitRetries());
+            w.name("sq_full_events").num(m.sqFullEvents());
+            w.name("sq_queued").num(m.sqQueued());
+            w.name("sq_entries").num(m.sqEntries());
+            w.name("cq_ready").num(m.cqReady());
+            w.name("cq_entries").num(m.cqEntries());
+            w.name("cq_overflow_events").num(m.cqOverflowEvents());
+            w.endObj();
+        }
+
+        /** Run-level sum of every field over the run's workers (same snake_case names). */
+        static void renderRingMetricsSum(Jw w, RingMetricsAgg m) {
+            w.obj();
+            w.name("sqes_prepared").num(m.sqesPrepared);
+            w.name("submitted").num(m.submitted);
+            w.name("reaped").num(m.reaped);
+            w.name("completed").num(m.completed);
+            w.name("failed").num(m.failed);
+            w.name("cancelled").num(m.cancelled);
+            w.name("timed_out").num(m.timedOut);
+            w.name("in_flight").num(m.inFlight);
+            w.name("enters").num(m.enters);
+            w.name("submit_batches").num(m.submitBatches);
+            w.name("submit_errors").num(m.submitErrors);
+            w.name("submit_retries").num(m.submitRetries);
+            w.name("sq_full_events").num(m.sqFullEvents);
+            w.name("sq_queued").num(m.sqQueued);
+            w.name("sq_entries").num(m.sqEntries);
+            w.name("cq_ready").num(m.cqReady);
+            w.name("cq_entries").num(m.cqEntries);
+            w.name("cq_overflow_events").num(m.cqOverflowEvents);
+            w.name("workers").num(m.workers);
+            w.endObj();
+        }
+
+        /** measured-phase 1 Hz series: {t_sec,in_flight,sq_queued,cq_ready[,dispatch_p99_us]}. */
+        static void renderRingSeries(Jw w, List<SeriesPoint> points) {
+            w.arr();
+            for (SeriesPoint p : points) {
+                w.obj();
+                w.name("t_sec").num(p.tSec);
+                w.name("in_flight").num(p.inFlight);
+                w.name("sq_queued").num(p.sqQueued);
+                w.name("cq_ready").num(p.cqReady);
+                if (p.hasDispatch) {
+                    w.name("dispatch_p99_us").num(DispatchLatencyAgg.us(p.dispatchP99Nanos));
+                }
+                w.endObj();
+            }
+            w.endArr();
+        }
+
+        /** Library dispatch/completion-latency snapshot in microseconds.
+         *  Shard runtime only; runtime completion latency (registration->dispatch,
+         *  includes kernel/device completion) -- distinct from external latency_us. */
+        static void renderDispatchLatency(Jw w, DispatchLatencyAgg d) {
+            w.obj();
+            w.name("samples").num(d.samples);
+            w.name("mean").num(d.meanUs());
+            w.name("min").num(d.minUs());
+            w.name("max").num(d.maxUs());
+            w.name("p50").num(d.p50Us());
+            w.name("p90").num(d.p90Us());
+            w.name("p99").num(d.p99Us());
+            w.name("p999").num(d.p999Us());
+            w.endObj();
+        }
+
+        static void renderRingQueueDepth(Jw w, RingQueueDepth q) {
+            w.obj();
+            w.name("mean_in_flight").num(q.meanInFlight);
+            w.name("max_in_flight").num(q.maxInFlight);
+            w.name("mean_sq_queued").num(q.meanSqQueued);
+            w.name("mean_cq_ready").num(q.meanCqReady);
             w.endObj();
         }
 
@@ -2566,6 +3308,106 @@ public final class JUringFileBench {
             w.name("min").num(minOf(min));
             w.name("max").num(maxOf(max));
             w.endObj();
+
+            // ---- B5 schema 1.1 aggregate metrics (docs/b5-design.md §7) ----
+            // "summed ring counters per run mean": each field is the mean over runs of the
+            // per-run sum over workers.
+            boolean anyRing = false;
+            for (RunStat r : runs) {
+                if (r.ringMetrics != null) {
+                    anyRing = true;
+                    break;
+                }
+            }
+            if (anyRing) {
+                w.name("ring_metrics").obj();
+                w.name("method").str("mean over runs of the per-run sum over workers");
+                renderRingFieldMean(w, runs, "sqes_prepared", a -> a.sqesPrepared);
+                renderRingFieldMean(w, runs, "submitted", a -> a.submitted);
+                renderRingFieldMean(w, runs, "reaped", a -> a.reaped);
+                renderRingFieldMean(w, runs, "completed", a -> a.completed);
+                renderRingFieldMean(w, runs, "failed", a -> a.failed);
+                renderRingFieldMean(w, runs, "cancelled", a -> a.cancelled);
+                renderRingFieldMean(w, runs, "timed_out", a -> a.timedOut);
+                renderRingFieldMean(w, runs, "in_flight", a -> a.inFlight);
+                renderRingFieldMean(w, runs, "enters", a -> a.enters);
+                renderRingFieldMean(w, runs, "submit_batches", a -> a.submitBatches);
+                renderRingFieldMean(w, runs, "submit_errors", a -> a.submitErrors);
+                renderRingFieldMean(w, runs, "submit_retries", a -> a.submitRetries);
+                renderRingFieldMean(w, runs, "sq_full_events", a -> a.sqFullEvents);
+                renderRingFieldMean(w, runs, "sq_queued", a -> a.sqQueued);
+                renderRingFieldMean(w, runs, "sq_entries", a -> a.sqEntries);
+                renderRingFieldMean(w, runs, "cq_ready", a -> a.cqReady);
+                renderRingFieldMean(w, runs, "cq_entries", a -> a.cqEntries);
+                renderRingFieldMean(w, runs, "cq_overflow_events", a -> a.cqOverflowEvents);
+                w.endObj();
+            }
+            int queueRuns = 0;
+            double qMeanInFlight = 0, qMeanSq = 0, qMeanCq = 0;
+            long qMaxInFlight = 0;
+            for (RunStat r : runs) {
+                if (r.ringQueueDepth == null) {
+                    continue;
+                }
+                queueRuns++;
+                qMeanInFlight += r.ringQueueDepth.meanInFlight;
+                qMeanSq += r.ringQueueDepth.meanSqQueued;
+                qMeanCq += r.ringQueueDepth.meanCqReady;
+                qMaxInFlight = Math.max(qMaxInFlight, r.ringQueueDepth.maxInFlight);
+            }
+            if (queueRuns > 0) {
+                w.name("ring_queue_depth").obj();
+                w.name("method").str("series means over workers; max over all series points");
+                w.name("mean_in_flight").num(qMeanInFlight / queueRuns);
+                w.name("max_in_flight").num(qMaxInFlight);
+                w.name("mean_sq_queued").num(qMeanSq / queueRuns);
+                w.name("mean_cq_ready").num(qMeanCq / queueRuns);
+                w.endObj();
+            }
+            int dispatchRuns = 0;
+            double dSamples = 0, dAvg = 0, dP50 = 0, dP90 = 0, dP99 = 0, dP999 = 0;
+            double dMin = Double.POSITIVE_INFINITY, dMax = 0;
+            for (RunStat r : runs) {
+                if (r.dispatchLat == null) {
+                    continue;
+                }
+                dispatchRuns++;
+                dSamples += r.dispatchLat.samples;
+                dAvg += r.dispatchLat.meanUs();
+                dP50 += r.dispatchLat.p50Us();
+                dP90 += r.dispatchLat.p90Us();
+                dP99 += r.dispatchLat.p99Us();
+                dP999 += r.dispatchLat.p999Us();
+                dMin = Math.min(dMin, r.dispatchLat.minUs());
+                dMax = Math.max(dMax, r.dispatchLat.maxUs());
+            }
+            if (dispatchRuns > 0) {
+                w.name("dispatch_latency_us").obj();
+                w.name("method").str("mean of per-run percentiles (max/min across runs)");
+                w.name("samples").num(dSamples / dispatchRuns);
+                w.name("avg").num(dAvg / dispatchRuns);
+                w.name("p50").num(dP50 / dispatchRuns);
+                w.name("p90").num(dP90 / dispatchRuns);
+                w.name("p99").num(dP99 / dispatchRuns);
+                w.name("p999").num(dP999 / dispatchRuns);
+                w.name("min").num(dMin);
+                w.name("max").num(dMax);
+                w.endObj();
+            }
+        }
+
+        static void renderRingFieldMean(Jw w, RunStat[] runs, String name,
+                                        java.util.function.ToLongFunction<RingMetricsAgg> field) {
+            int n = 0;
+            double sum = 0;
+            for (RunStat r : runs) {
+                if (r.ringMetrics == null) {
+                    continue;
+                }
+                sum += field.applyAsLong(r.ringMetrics);
+                n++;
+            }
+            w.name(name).num(n == 0 ? 0.0 : sum / n);
         }
 
         static double mean(double[] v) {
