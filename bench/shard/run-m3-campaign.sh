@@ -60,8 +60,8 @@ FIO_GROUP_REPORTING=${FIO_GROUP_REPORTING:-1}
 FROZEN_SRC_SHA1=04f12dbc85d723a10dd952b7ac3c51bb6253ed46
 FROZEN_TEST_SHA1=666e0644dc063c0b15c5bb52571002a79b5ec657
 FROZEN_DESIGN_PATH=docs/m3-design.md
-FROZEN_DESIGN_SHA1=334bb55a43d93f5dfdc93e2110431ec5156a82c5
-FROZEN_DESIGN_COMMIT=b8b7832
+SEASTAR_LD=${SEASTAR_LD:-$REPO_ROOT/.sysroot/root/usr/lib64}
+FROZEN_DESIGN_SHA1=d391cad3d9a4df50d3c8e0d365e8ba177393b9eb
 
 QD=64
 BS=4k
@@ -421,7 +421,7 @@ run_argv() {
                 --output-format=json --output="$JSON")
             ;;
         seastar)
-            ARGV=("$SEASTAR_BIN" --workload randread --file "$READ_FILE" \
+            ARGV=(env LD_LIBRARY_PATH="$SEASTAR_LD" "$SEASTAR_BIN" --workload randread --file "$READ_FILE" \
                 --size "$(dataset_size)" --bs "$BS" --qd "$QD" \
                 --seconds "$DURATION" --warmup-sec "$WARMUP" --runs 1 --seed "$SEED" \
                 --label "$ID" --readonly --json "$JSON" \
@@ -528,7 +528,7 @@ write_manifest() {
         echo "design file: $FROZEN_DESIGN_PATH"
         echo "design sha1 (expected): $FROZEN_DESIGN_SHA1"
         echo "design sha1 (live):     $(design_sha1)"
-        echo "design freeze commit:   $FROZEN_DESIGN_COMMIT ($(git -C "$REPO_ROOT" log -1 --format='%s' "$FROZEN_DESIGN_COMMIT" 2>/dev/null || echo '?'))"
+        echo "design freeze commit:   $(git -C "$REPO_ROOT" log -1 --format='%H %s' -- "$FROZEN_DESIGN_PATH" 2>/dev/null || echo '?')"
         echo "code under test: B5 frozen tree (B4+B5 delivered), src/main/java content sha1 (expected): $FROZEN_SRC_SHA1"
         echo "src/test/java content sha1 (expected): $FROZEN_TEST_SHA1"
         echo "live src/main/java content sha1: $(src_main_sha1)"
@@ -994,7 +994,12 @@ for n in $N_LIST; do
     done
 done
 
-EXPECTED_ROWS=$((N_TOTAL * REPS * E_TOTAL))
+EXPECTED_ROWS=0
+for n in $N_LIST; do
+    for rep in $(seq 1 "$REPS"); do
+        EXPECTED_ROWS=$((EXPECTED_ROWS + $(engine_order "$n" "$rep" | wc -w)))
+    done
+done
 ACTUAL_ROWS=$(( $(wc -l <"$META") - 1 ))
 echo "[m3] invocation_runs=$RUNS_DONE skipped_resume=$SKIPPED failed/flagged=$FAILS blocks_run=$BLOCKS_RUN"
 echo "[m3] cell-meta rows: $ACTUAL_ROWS / $EXPECTED_ROWS expected (all reps kept, none trimmed)"

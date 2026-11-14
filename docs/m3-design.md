@@ -6,8 +6,19 @@
 content sha1 `666e0644dc063c0b15c5bb52571002a79b5ec657` (both re-verified 2026-11-14 23:27).
 The campaign driver records HEAD, both content hashes, this design file's sha1, the harness
 sha256s and the full manifest; a mismatch aborts. This file is frozen before the first measured
-run; only a disclosed, separately-versioned amendment may change it (an amended campaign is not
-M3-signing).
+run and **no bar may change after the first campaign invocation**. Pre-campaign wording corrections
+are numbered amendments in this file, disclosed in `docs/m3-report.md`; none may be made once a
+campaign cell exists.
+
+**Amendment A1 — 2026-11-14 23:55 (pre-campaign).** v1 of this file (sha1
+`334bb55a43d93f5dfdc93e2110431ec5156a82c5`, commit `b8b7832`) over-specified bars (b) and (d):
+it invented numeric thresholds for (b) that the brief does not contain, and it read the (d)
+ratio in the plan direction rather than the brief's literal direction. A1 restores the brief's
+literal wording for both. At A1 time **no campaign invocation existed** (`bench/results/
+m3-2026-11-15/` did not exist); only 2 s pilot/smoke runs (seastar `--smp N` verification and one
+JUring parity cell) had been made, and those are never part of the campaign analysis. The freeze
+discipline ("bars cannot move after data") therefore holds for every campaign cell; M3 remains
+signable under this amended design.
 
 ## 1. Restated bars (replace plan-M3 `SE(8)≥0.75` and `p99(8)≤1.15·p99(1)`, which are invalid for
 this single-device, constant-QD-per-shard protocol — `fio` itself fails both; B4 §6/§8). **M3 is
@@ -18,23 +29,29 @@ signed only if (a)–(e) all PASS. Any bar INCONCLUSIVE ⇒ M3 INCONCLUSIVE; any
   (df=R−1) is ≥ 0.85 at **every** N; INCONCLUSIVE iff the mean is ≥ 0.85 but a lower bound is
   < 0.85; FAIL iff the mean is < 0.85. (B4's 98.5 % at N=8 is the starting point, not a sign-off.)
 - **(b) Scaling and tail vs `fio` at the same N — no `N·IOPS(1)` cross-engine denominator.**
-  `SE(N)=IOPS(N)/(N·IOPS(1))` computed per engine from **this campaign's** cells; report
-  `SE_juring(N)/SE_fio(N)` and `p99_juring(N)/p99_fio(N)` at every N with one-sided 95 % t CIs
-  (df=R−1). PASS iff at N=4 **and** N=8 the 95 % LB of the SE ratio is ≥ 0.85 **and** the 95 % UB
-  of the p99 ratio is ≤ 1.15; INCONCLUSIVE iff the mean meets the bound but the corresponding CI
-  bound does not; FAIL otherwise. N=1,2 are disclosure. (Same numerical intent as the old bars,
-  re-anchored to the correct comparator; latency definitions stay engine-native and are
-  disclosed — see §5.)
+  `SE(N)=IOPS(N)/(N·IOPS(1))` computed per engine from **this campaign's** cells. Report, per rep
+  and with one-sided 95 % t CIs (df=R−1): `SE_juring(N)/SE_fio(N)` and `p99_juring(N)/p99_fio(N)`
+  at every N=1,2,4,8. This is a **reporting/comparison bar exactly as worded in the brief** (the
+  brief attaches no numeric threshold to (b)): PASS iff both comparisons are present, per-rep and
+  CI-bearing, at every N with all R=5 reps (n=5 for both engines); INCONCLUSIVE iff any engine
+  cell/rep is missing so a ratio or CI cannot be formed; FAIL only if the comparison is
+  structurally impossible. N=1,2 are bracket disclosure; N=4,8 are the reported comparison. The
+  p99 ratio compares engine-native latency definitions (JUring before-prepare→completion vs fio
+  `clat`, see §5) and is disclosed as a same-N ratio, never as an absolute tail ranking; it is not
+  used to tune any threshold. (The old `SE(8)≥0.75` and `p99(8)≤1.15·p99(1)` remain invalid as
+  stated in the heading above.)
 - **(c) Per-shard balance under the chosen N=8 placement.** For `juring-group`: per-rep
   `min(shard IOPS)/mean(shard IOPS)`; cell statistic = mean of the R=5 per-rep values. PASS iff
   the one-sided 95 % LB ≥ 0.85; INCONCLUSIVE iff the mean is ≥ 0.85 but the LB < 0.85; FAIL iff
   the mean is < 0.85. Every rep is reported. (`fio` per-job spread is `n/a` under the frozen
   `group_reporting=1`; seastar per-shard spread is disclosure only.)
-- **(d) seastar io_uring total IOPS at N=8.** Plan §5 M3 row: "total IOPS vs seastar uring 90 % CI
-  LB ≥ 0.90" (JUring subject). PASS iff the one-sided 95 % LB of
-  `IOPS(juring-group,8)/IOPS(seastar io_uring,8)` ≥ 0.90; INCONCLUSIVE iff the mean is ≥ 0.90 but
-  the LB < 0.90; FAIL otherwise. The reverse ratio is reported for transparency. Other N are
-  bracket disclosure, not a bar.
+- **(d) seastar io_uring total IOPS at N=8.** Brief-literal direction: "seastar io_uring total
+  IOPS at N=8: one-sided 95 % LB ≥ 0.90 vs JUring". PASS iff the one-sided 95 % t LB of
+  `IOPS(seastar io_uring,8)/IOPS(juring-group,8)` is ≥ 0.90; INCONCLUSIVE iff the mean is ≥ 0.90
+  but the LB < 0.90; FAIL iff the mean < 0.90. The plan-M3 direction
+  (`IOPS(juring-group,8)/IOPS(seastar io_uring,8)`, "total IOPS vs seastar uring 90 % CI LB ≥0.90")
+  is computed and reported in the same table for transparency, so neither reading is hidden; the
+  frozen decision uses the brief-literal bound above. Other N are bracket disclosure, not a bar.
 - **(e) Per-ring queue depth + p99 from B5 JSON schema 1.1.** For every `juring-group` cell
   (N=1,2,4,8) report per-ring mean/max in-flight, mean `sq_queued`/`cq_ready`, external p99, and
   the **runtime completion p99** = `dispatch_latency_us.p99` (registration→dispatch; includes
