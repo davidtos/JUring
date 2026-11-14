@@ -1239,6 +1239,15 @@ final class IoUringDispatcher implements AutoCloseable {
         return sqRingEntries;
     }
 
+    /** Number of SQEs prepared but not yet submitted to the kernel. */
+    int pendingSqes() {
+        if (sqKheadAddr == 0L) {
+            return 0;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+        return sqeTail - head;
+    }
+
     long[] registeredBufferAddresses() {
         return registeredBufferAddresses;
     }

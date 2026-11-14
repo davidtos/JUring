@@ -862,6 +862,61 @@ public class JUring implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
+    // B4 shard-runtime helpers (package-private; reserved internal user_data)
+    // ------------------------------------------------------------------
+
+    /**
+     * Prepares an {@code IORING_OP_READ} of 8 bytes from a raw file descriptor into
+     * {@code buffer}, using a caller-supplied (reserved) {@code user_data}. Used by the B4
+     * shard loop to keep an eventfd wakeup read armed on its own ring.
+     *
+     * <p>The completion is reported by {@code Result.id() == userData}; the reserved
+     * {@code 0xFF} type byte keeps {@code populateResultFromCqe} on its buffer-less default
+     * branch, so no buffer ownership is fabricated.
+     *
+     * @return {@code userData}
+     */
+    long prepareWakeupRead(int fd, MemorySegment buffer, long userData) {
+        ensureOpen();
+        Objects.requireNonNull(buffer, "buffer");
+        validateNativeSegment(buffer, true);
+        if (buffer.byteSize() < 8L) {
+            throw new IllegalArgumentException("wakeup read buffer must be at least 8 bytes: " + buffer.byteSize());
+        }
+        long sqe = getSqe((byte) 0, false);
+        ioUring.prepareRead(sqe, fd, buffer.address(), 8L, 0L);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    /**
+     * Prepares the ring-wide {@code IORING_OP_ASYNC_CANCEL} ({@code ALL | ANY}) with a
+     * caller-supplied (reserved) {@code user_data}, so the shard loop can consume its own
+     * completion internally instead of counting it as unattributed user work.
+     *
+     * @return {@code userData}
+     */
+    long prepareCancelAnyInternal(long userData) {
+        ensureOpen();
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_ASYNC_CANCEL, "IORING_OP_ASYNC_CANCEL");
+        long sqe = getSqe((byte) 0, false);
+        ioUring.prepareCancelAny(sqe);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    /** Number of SQEs prepared but not yet handed to the kernel ({@code sqeTail - sqHead}). */
+    int pendingSqes() {
+        ensureOpen();
+        return ioUring.pendingSqes();
+    }
+
+    /** The underlying dispatcher (B4 loop-body seam; shard-thread confined). */
+    IoUringDispatcher dispatcher() {
+        return ioUring;
+    }
+
+    // ------------------------------------------------------------------
     // Optional metadata ops: fallocate, ftruncate, statx, timeout
     // ------------------------------------------------------------------
 

@@ -40,6 +40,22 @@
  * submitAndWaitForBatchResult(1, qd, consumer) and the pipeline is topped up.
  * That is exactly the "parallelism" model of io_tester shard_info.parallelism.
  *
+ * Two worker runtimes (--runtime, default = threads = historical behaviour):
+ *   threads : every worker is a plain platform thread that owns its own JUring
+ *             ring and runs the self-driving fill/reap loop described above.
+ *             This is exactly the pre-B4 harness; its JSON is unchanged.
+ *   shard   : the workers are the IoShards of one RingGroup (one ring per
+ *             shard, best-effort CPU pinning to CPUs first-cpu..first-cpu+N-1).
+ *             Each shard's QD-64 pipeline is driven by ctx.onCompletion
+ *             handlers that the shard's batched poll loop dispatches, i.e. the
+ *             real B4 runtime path: tasks/handlers run on the shard thread,
+ *             the loop batches submits and reaps completions. Per-shard
+ *             IOPS/latency plus the IoShard/ShardStats counters are added to
+ *             the JSON (extra fields only; the historical schema is kept).
+ *             A shard never opens a second ring and never runs its own
+ *             submit/reap loop (that would both bypass the runtime and race
+ *             the shard's internal wakeup read).
+ *
  * File I/O always uses O_DIRECT and a *registered* file + registered
  * (fixed) buffers, i.e. IORING_OP_READ_FIXED / IORING_OP_WRITE_FIXED with
  * IOSQE_FIXED_FILE, the fastest JUring path.
@@ -58,12 +74,19 @@
 
 package bench.juring;
 
+import com.davidvlijmincx.lio.api.CompletionHandler;
 import com.davidvlijmincx.lio.api.FileDescriptor;
+import com.davidvlijmincx.lio.api.IoShard;
 import com.davidvlijmincx.lio.api.IoUringOptions;
 import com.davidvlijmincx.lio.api.JUring;
 import com.davidvlijmincx.lio.api.LinuxOpenOptions;
 import com.davidvlijmincx.lio.api.Result;
 import com.davidvlijmincx.lio.api.ResultConsumer;
+import com.davidvlijmincx.lio.api.RingGroup;
+import com.davidvlijmincx.lio.api.ShardContext;
+import com.davidvlijmincx.lio.api.ShardOptions;
+import com.davidvlijmincx.lio.api.ShardStats;
+import com.davidvlijmincx.lio.api.ShardTask;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
@@ -124,7 +147,7 @@ public final class JUringFileBench {
 
             List<RunStat> done = new ArrayList<>();
             for (int r = 0; r < cfg.runs; r++) {
-                done.add(runOnce(cfg, ds, r));
+                done.add(cfg.runtime == WorkerRuntime.SHARD ? runOnceShard(cfg, ds, r) : runOnce(cfg, ds, r));
             }
             runs = done.toArray(new RunStat[0]);
         } catch (UsageException e) {
@@ -207,6 +230,30 @@ public final class JUringFileBench {
         }
     }
 
+    /**
+     * Worker runtime: plain platform threads (historical behaviour) or the B4
+     * shard runtime (one ring per IoShard of a RingGroup).
+     */
+    enum WorkerRuntime {
+        THREADS("threads"),
+        SHARD("shard");
+
+        final String cliName;
+
+        WorkerRuntime(String cliName) {
+            this.cliName = cliName;
+        }
+
+        static WorkerRuntime from(String s) throws UsageException {
+            for (WorkerRuntime r : values()) {
+                if (r.cliName.equalsIgnoreCase(s)) {
+                    return r;
+                }
+            }
+            throw new UsageException("unknown --runtime '" + s + "' (expected threads|shard)");
+        }
+    }
+
     static final class UsageException extends Exception {
         UsageException(String message) {
             super(message);
@@ -222,6 +269,10 @@ public final class JUringFileBench {
         int bs = 4096;
         int qd = 64;
         int threads = 1;
+        boolean threadsExplicit = false;
+        WorkerRuntime runtime = WorkerRuntime.THREADS;
+        int shards = 0;                 // 0/unset => --threads (only with --runtime=shard)
+        int firstCpu = 1;               // RingGroup base CPU; -1 = no affinity
         double seconds = 10.0;
         double warmupSec = 1.0;
         int runs = 1;
@@ -279,6 +330,19 @@ public final class JUringFileBench {
                         break;
                     case "--threads":
                         c.threads = intArg(value(argv, i, key, inline));
+                        c.threadsExplicit = true;
+                        if (inline == null) i++;
+                        break;
+                    case "--runtime":
+                        c.runtime = WorkerRuntime.from(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--shards":
+                        c.shards = intArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--first-cpu":
+                        c.firstCpu = intArg(value(argv, i, key, inline));
                         if (inline == null) i++;
                         break;
                     case "--seconds":
@@ -436,6 +500,32 @@ public final class JUringFileBench {
             if (size > 0 && size < bs) {
                 throw new UsageException("--size must be >= --bs");
             }
+            if (runtime == WorkerRuntime.SHARD) {
+                if (mode.isNop()) {
+                    throw new UsageException("--runtime=shard does not support --workload nop (no file/buffer path)");
+                }
+                if (shards == 0) {
+                    shards = threads; // convenient default: one shard per requested thread
+                }
+                if (shards < 1 || shards > 64) {
+                    throw new UsageException("--shards must be in [1, 64] for --runtime=shard");
+                }
+                if (threadsExplicit && threads != shards) {
+                    throw new UsageException("--runtime=shard runs --shards N workers; "
+                            + "do not combine it with a conflicting --threads " + threads);
+                }
+                threads = shards; // JSON "threads" = total workers (total-QD parity with fio numjobs=N)
+                if (firstCpu < -1) {
+                    throw new UsageException("--first-cpu must be >= -1 (-1 = no affinity), got " + firstCpu);
+                }
+            } else {
+                if (shards != 0) {
+                    throw new UsageException("--shards requires --runtime=shard");
+                }
+                if (firstCpu != 1) {
+                    throw new UsageException("--first-cpu requires --runtime=shard");
+                }
+            }
             if (label == null || label.isBlank()) {
                 label = defaultLabel();
             }
@@ -444,7 +534,9 @@ public final class JUringFileBench {
         String defaultLabel() {
             StringBuilder sb = new StringBuilder();
             sb.append(mode.cliName).append('_').append(humanSize(bs)).append("_qd").append(qd);
-            if (threads > 1) {
+            if (runtime == WorkerRuntime.SHARD) {
+                sb.append("_group").append(shards);
+            } else if (threads > 1) {
                 sb.append("_t").append(threads);
             }
             return sb.toString();
@@ -479,8 +571,14 @@ public final class JUringFileBench {
                 "                          Reads: must be <= file size.",
                 "                          Writes: extends the file with truncate() if larger.",
                 "  --bs SIZE               block size, multiple of 512 (default 4096); 4k/1M ok",
-                "  --qd N                  per-thread queue depth (default 64)",
+                "  --qd N                  per-thread/per-shard queue depth (default 64)",
                 "  --threads N             worker threads, each with its own ring (default 1)",
+                "  --runtime threads|shard worker runtime (default threads = historical behaviour);",
+                "                          shard = one B4 IoShard/ring per worker via RingGroup",
+                "  --shards N              shard count for --runtime=shard, one ring per IoShard",
+                "                          (default: --threads; invalid with --runtime=threads)",
+                "  --first-cpu N           base CPU for shard affinity: shard i -> first-cpu+i",
+                "                          (default 1; -1 = no affinity; --runtime=shard only)",
                 "  --seconds S             measured duration per run (default 10)",
                 "  --warmup-sec S          warmup before each measured phase (default 1)",
                 "  --runs N                repetitions (default 1)",
@@ -497,6 +595,9 @@ public final class JUringFileBench {
                 "Example:",
                 "  bench/juring/run-juring.sh --workload randread --file /mnt/TestData/read_files/single_file_bench.bin \\",
                 "      --bs 4k --qd 64 --threads 1 --seconds 5 --warmup-sec 1 --readonly --label randread_4k_qd64",
+                "  bench/juring/run-juring.sh --workload randread --file /mnt/TestData/read_files/single_file_bench.bin \\",
+                "      --bs 4k --qd 64 --runtime=shard --shards 8 --first-cpu 1 --seconds 30 --warmup-sec 10 \\",
+                "      --readonly --label randread_4k_qd64_group8",
                 "");
     }
 
@@ -626,6 +727,12 @@ public final class JUringFileBench {
         }
         System.err.printf(" bs=%d qd=%d threads=%d runs=%d seconds=%.2f warmup=%.2f%n",
                 cfg.bs, cfg.qd, cfg.threads, cfg.runs, cfg.seconds, cfg.warmupSec);
+        if (cfg.runtime == WorkerRuntime.SHARD) {
+            System.err.printf("[juring] runtime=shard shards=%d firstCpu=%d "
+                            + "(one ring per IoShard of one RingGroup; QD %d read-fixed pipeline per shard, "
+                            + "handler-driven through the shard poll loop)%n",
+                    cfg.shards, cfg.firstCpu, cfg.qd);
+        }
         if (cfg.mode.isNop()) {
             System.err.printf("[juring] ring flags=%s entries=max(256,2*qd) buffers=none (nop)%n",
                     Arrays.toString(RING_FLAG_NAMES));
@@ -722,30 +829,31 @@ public final class JUringFileBench {
         return st;
     }
 
-    static LatencyStats mergeLatency(Job[] jobs, int cap, long sumLatNs, long recordedLat) {
+    static LatencyStats mergeLatency(LatencySource[] sources, int cap, long sumLatNs, long recordedLat) {
         long totalSamples = 0;
-        for (Job j : jobs) {
-            totalSamples += j.sampleCount;
+        for (LatencySource j : sources) {
+            totalSamples += j.latCount();
         }
         if (totalSamples == 0) {
             return LatencyStats.empty();
         }
         int take = (int) Math.min(cap, totalSamples);
-        long[] merged = new long[take + jobs.length];
+        long[] merged = new long[take + sources.length];
         int pos = 0;
         boolean sampled = false;
-        for (Job j : jobs) {
-            int ni = j.sampleCount;
+        for (LatencySource j : sources) {
+            int ni = j.latCount();
             if (ni == 0) {
                 continue;
             }
+            long[] src = j.latBuf();
             int slot = (int) Math.max(1L, Math.round((double) take * ni / totalSamples));
             int stride = Math.max(1, ni / slot);
             if (stride > 1) {
                 sampled = true;
             }
             for (int k = 0; k < ni && pos < take; k += stride) {
-                merged[pos++] = j.samples[k];
+                merged[pos++] = src[k];
             }
         }
         // Trim to the number of samples actually copied (guards against rounding and
@@ -753,6 +861,16 @@ public final class JUringFileBench {
         merged = Arrays.copyOf(merged, pos);
         Arrays.sort(merged);
         return LatencyStats.fromSorted(merged, sumLatNs, recordedLat, sampled);
+    }
+
+    /**
+     * A source of uniform-reservoir latency samples, so the threads-mode Job and
+     * the shard-mode ShardRunner are merged with exactly the same algorithm.
+     */
+    interface LatencySource {
+        int latCount();
+
+        long[] latBuf();
     }
 
     static final class BenchException extends Exception {
@@ -765,7 +883,7 @@ public final class JUringFileBench {
     // Worker
     // ------------------------------------------------------------------
 
-    static final class Job extends Thread {
+    static final class Job extends Thread implements LatencySource {
         final Config cfg;
         final Dataset ds;
         final int index;
@@ -1188,7 +1306,620 @@ public final class JUringFileBench {
                     sumLatNs, recordedLat, lat);
         }
 
+        @Override
+        public int latCount() {
+            return sampleCount;
+        }
+
+        @Override
+        public long[] latBuf() {
+            return samples;
+        }
+
         double measuredElapsedSec;
+    }
+
+    // ------------------------------------------------------------------
+    // Shard runtime mode (--runtime=shard): one IoShard / one ring per worker
+    // ------------------------------------------------------------------
+
+    /** Latches for one shard-mode run; every phase transition is event-driven. */
+    static final class ShardRunSync {
+        final CountDownLatch ready;
+        final CountDownLatch warmupDone;
+        final CountDownLatch measuredDone;
+        final CountDownLatch cleanupDone;
+
+        ShardRunSync(int shards) {
+            ready = new CountDownLatch(shards);
+            warmupDone = new CountDownLatch(shards);
+            measuredDone = new CountDownLatch(shards);
+            cleanupDone = new CountDownLatch(shards);
+        }
+    }
+
+    /** Per-shard JSON payload: the threads-mode stat plus the IoShard/ShardStats snapshot. */
+    static final class ShardInfo {
+        final ThreadStat stat;
+        final ShardStats stats;
+
+        ShardInfo(ThreadStat stat, ShardStats stats) {
+            this.stat = stat;
+            this.stats = stats;
+        }
+    }
+
+    /**
+     * One self-driving QD-64 read/write pipeline hosted by one IoShard.
+     *
+     * The initial ShardTask opens the file and registers it plus the fixed buffers on
+     * the shard's own ring (ctx.ring()), then the pipeline is driven purely by
+     * {@link CompletionHandler}s dispatched by the shard's batched poll loop: each
+     * completion records its latency and, before the phase deadline, prepares and
+     * registers exactly one replacement request. This is the frozen B4 completion
+     * path (design §4-§5): tasks/handlers run on the shard thread and the shard loop
+     * batches the submits and reaps the completions. The shard's internal wakeup
+     * READ is a sentinel consumed by IoShard itself, so it never reaches this
+     * handler; a completion that reaches us with no attribution is a harness bug
+     * (runOnceShard fails the cell on a non-zero completionsUnattributed).
+     */
+    static final class ShardRunner implements ShardTask, LatencySource {
+        final Config cfg;
+        final Dataset ds;
+        final IoShard shard;
+        final int index;
+        final int shardCount;
+        final int runIndex;
+        final long seed;
+        final ShardRunSync sync;
+        final Mode mode;
+
+        // setup (shard-thread confined)
+        ShardContext ctx;
+        JUring ring;
+        FileDescriptor fd;
+        int slotCount;
+        int slotMask;
+        boolean fixedOps;      // registered file + fixed buffers (fast path)
+        long expectedResult;
+        long[] submitNanos;
+        long[] udOfBuf;
+        MemorySegment[] arenaBuffers;
+        int[] freeBufs;
+        int freeTop;
+        java.lang.foreign.Arena arena;
+
+        // per-phase state (single writer/reader = this shard thread)
+        volatile boolean collecting;   // measured phase active: ops/latency are recorded
+        long deadlineNanos;
+        long phaseStartNanos;
+        boolean phaseEnded;
+        int inFlight;
+        long timedOps;
+        long timedBytes;
+        long timedErrors;
+        long seqOverflows;
+        long sumLatNs;
+        long recordedLat;
+
+        // geometry
+        long regionStart;
+        long regionEnd;
+        long randBlocks;
+        long seqPos;
+
+        // latency reservoir (same uniform Algorithm-R sampling as Job)
+        final long[] samples;
+        int sampleCount;
+        long sampleSeen;
+        long rng;
+
+        final CompletionHandler handler = this::onCompletion;
+        Throwable failure;
+        ShardStats statsSnapshot;
+        double measuredElapsedSec;
+        boolean warmupSignalled;
+        boolean measuredSignalled;
+
+        ShardRunner(Config cfg, Dataset ds, IoShard shard, int index, int shardCount, int runIndex,
+                    long seed, ShardRunSync sync) {
+            this.cfg = cfg;
+            this.ds = ds;
+            this.shard = shard;
+            this.index = index;
+            this.shardCount = shardCount;
+            this.runIndex = runIndex;
+            this.seed = seed;
+            this.sync = sync;
+            this.mode = cfg.mode;
+            this.samples = new long[cfg.latencySamples];
+            this.rng = seed == 0L ? 0x9E3779B97F4A7C15L : seed;
+        }
+
+        @Override
+        public void run(ShardContext c) {
+            this.ctx = c;
+            try {
+                this.ring = c.ring();
+                setup();
+            } catch (Throwable t) {
+                fail(t);
+            } finally {
+                sync.ready.countDown();
+            }
+        }
+
+        /** Executed on the shard thread once every shard has set up. */
+        void beginWarmup(ShardContext ctxUnused) {
+            if (failure != null) {
+                return;
+            }
+            try {
+                beginPhase(false, (long) (cfg.warmupSec * 1_000_000_000L));
+                fill(cfg.qd);
+            } catch (Throwable t) {
+                fail(t);
+            }
+        }
+
+        /** Executed on the shard thread after every shard drained its warmup. */
+        void startMeasured(ShardContext ctxUnused) {
+            if (failure != null) {
+                return;
+            }
+            try {
+                beginPhase(true, (long) (cfg.seconds * 1_000_000_000L));
+                fill(cfg.qd);
+            } catch (Throwable t) {
+                fail(t);
+            }
+        }
+
+        /** Executed on the shard thread before the group is closed. */
+        void teardown(ShardContext ctxUnused) {
+            try {
+                if (arena != null) {
+                    arena.close();
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                arena = null;
+                arenaBuffers = null;
+                freeBufs = null;
+                udOfBuf = null;
+                try {
+                    if (fd != null) {
+                        fd.close();
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    fd = null;
+                    sync.cleanupDone.countDown();
+                }
+            }
+        }
+
+        void beginPhase(boolean measured, long durationNanos) {
+            this.collecting = measured;
+            this.phaseEnded = false;
+            this.phaseStartNanos = System.nanoTime();
+            this.deadlineNanos = phaseStartNanos + durationNanos;
+        }
+
+        void fill(int target) {
+            while (inFlight < target) {
+                fillOne();
+            }
+        }
+
+        void fillOne() {
+            long t0 = System.nanoTime();
+            long pos = nextPosition();
+            long ud;
+            int latIdx;
+            if (fixedOps) {
+                int buf = ring.checkOutBuffer();
+                ud = mode.isWrite() ? ring.prepareWriteFixed(0, cfg.bs, pos, buf)
+                        : ring.prepareReadFixed(0, cfg.bs, pos, buf);
+                latIdx = (int) (ud & slotMask);   // monotonic op id
+            } else {
+                int buf = freeBufs[--freeTop];
+                ud = mode.isWrite() ? ring.prepareWrite(fd, arenaBuffers[buf], pos)
+                        : ring.prepareRead(fd, arenaBuffers[buf], cfg.bs, pos);
+                udOfBuf[buf] = ud;                // address payload
+                latIdx = buf;
+            }
+            submitNanos[latIdx] = t0;
+            ctx.onCompletion(ud, handler);        // register BEFORE the loop's submit()
+            inFlight++;
+        }
+
+        void onCompletion(Result result) {
+            try {
+                long now = System.nanoTime();
+                long res = result.result();
+                long id = result.id();
+                int latIdx = -1;
+                if (fixedOps) {
+                    ring.checkInBuffer(result.bufferIdx());
+                    latIdx = (int) (id & slotMask);           // monotonic op id
+                } else if (udOfBuf != null) {
+                    int buf = -1;
+                    for (int i = 0; i < udOfBuf.length; i++) {
+                        if (udOfBuf[i] == id) {
+                            buf = i;
+                            break;
+                        }
+                    }
+                    if (buf >= 0) {
+                        freeBufs[freeTop++] = buf;
+                        latIdx = buf;
+                    }
+                } else {
+                    latIdx = (int) (id & slotMask);
+                }
+                if (latIdx < 0) {
+                    // Cannot attribute the completion; count it but do not hand a
+                    // possibly in-flight buffer back to the free list.
+                    timedErrors++;
+                } else if (res == expectedResult) {
+                    if (collecting && now < deadlineNanos) {
+                        timedOps++;
+                        timedBytes += res;
+                        recordLatency(now - submitNanos[latIdx]);
+                    }
+                } else {
+                    timedErrors++;
+                }
+                inFlight--;
+                if (inFlight < 0) {
+                    inFlight = 0;
+                }
+                if (now >= deadlineNanos) {
+                    phaseEnded = true;
+                }
+                if (phaseEnded) {
+                    if (inFlight == 0) {
+                        phaseComplete(now);
+                    }
+                } else {
+                    fillOne();
+                }
+            } catch (Throwable t) {
+                fail(t);
+            }
+        }
+
+        void phaseComplete(long now) {
+            if (!collecting) {
+                if (!warmupSignalled) {
+                    warmupSignalled = true;
+                    sync.warmupDone.countDown();
+                }
+            } else {
+                measuredElapsedSec = (now - phaseStartNanos) / 1_000_000_000.0;
+                if (!measuredSignalled) {
+                    measuredSignalled = true;
+                    try {
+                        statsSnapshot = shard.stats();
+                    } catch (Throwable ignored) {
+                    }
+                    sync.measuredDone.countDown();
+                }
+            }
+        }
+
+        void fail(Throwable t) {
+            if (failure == null) {
+                failure = t;
+            }
+            phaseEnded = true;
+            // Never leave the runOnceShard controller blocked on a latch.
+            if (!warmupSignalled) {
+                warmupSignalled = true;
+                sync.warmupDone.countDown();
+            }
+            if (inFlight == 0 && !measuredSignalled) {
+                measuredSignalled = true;
+                sync.measuredDone.countDown();
+            }
+        }
+
+        void recordLatency(long ns) {
+            sumLatNs += ns;
+            recordedLat++;
+            if (sampleCount < samples.length) {
+                samples[sampleCount++] = ns;
+            } else {
+                long r = rng;
+                r ^= r >>> 12;
+                r ^= r << 25;
+                r ^= r >>> 27;
+                rng = r;
+                long idx = Long.remainderUnsigned(r, sampleSeen + 1);
+                if (idx < sampleCount) {
+                    samples[(int) idx] = ns;
+                }
+            }
+            sampleSeen++;
+        }
+
+        long nextPosition() {
+            if (mode.isRandom()) {
+                long x = rng;
+                x ^= x >>> 12;
+                x ^= x << 25;
+                x ^= x >>> 27;
+                rng = x;
+                long val = (x * 0x2545F4914F6CDD1DL) >>> 1;
+                return (val % randBlocks) * (long) cfg.bs;
+            }
+            long pos = seqPos;
+            seqPos += cfg.bs;
+            if (seqPos + cfg.bs > regionEnd) {
+                seqOverflows++;
+                seqPos = regionStart;
+            }
+            return pos;
+        }
+
+        void setup() throws IOException {
+            slotCount = Integer.highestOneBit(Math.max(64, cfg.qd * 4) - 1) << 1;
+            if (slotCount < 64) {
+                slotCount = 64;
+            }
+            slotMask = slotCount - 1;
+            submitNanos = new long[slotCount];
+
+            fixedOps = cfg.fixedBuffers;
+            expectedResult = cfg.bs;
+            LinuxOpenOptions flags = mode.isWrite() ? LinuxOpenOptions.WRITE_DIRECT : LinuxOpenOptions.READ_DIRECT;
+            fd = new FileDescriptor(ds.file.toString(), flags, 0);
+            if (fixedOps) {
+                try {
+                    int regRet = ring.registerFiles(fd);
+                    if (regRet != 0) {
+                        throw new IOException("registerFiles failed: " + regRet);
+                    }
+                    MemorySegment[] buffers = ring.registerBuffers(cfg.bs, cfg.qd);
+                    if (mode.isWrite()) {
+                        for (MemorySegment buffer : buffers) {
+                            buffer.fill((byte) 0x5A);
+                        }
+                    }
+                } catch (RuntimeException | IOException e) {
+                    // Per-shard fallback: e.g. RLIMIT_MEMLOCK too small for shards*qd*bs.
+                    System.err.println("[juring] WARNING: fixed-buffer registration failed ("
+                            + e.getMessage() + "); shard " + index
+                            + " falls back to unregistered 4096-aligned arena buffers");
+                    fixedOps = false;
+                }
+            }
+            if (!fixedOps) {
+                arena = java.lang.foreign.Arena.ofConfined();
+                MemorySegment slab = arena.allocate((long) cfg.qd * cfg.bs, 4096);
+                arenaBuffers = new MemorySegment[cfg.qd];
+                for (int i = 0; i < cfg.qd; i++) {
+                    arenaBuffers[i] = slab.asSlice((long) i * cfg.bs, cfg.bs);
+                    if (mode.isWrite()) {
+                        arenaBuffers[i].fill((byte) 0x5A);
+                    }
+                }
+                freeBufs = new int[cfg.qd];
+                for (int i = 0; i < cfg.qd; i++) {
+                    freeBufs[i] = i;
+                }
+                freeTop = cfg.qd;
+                udOfBuf = new long[cfg.qd];
+            }
+            synchronized (cfg) {
+                if (cfg.resolvedBufferMode == null) {
+                    cfg.resolvedBufferMode = fixedOps ? "registered-fixed" : "arena-unregistered";
+                } else if (!fixedOps) {
+                    cfg.resolvedBufferMode = "arena-unregistered";
+                }
+                cfg.resolvedRegisteredBuffers = fixedOps ? cfg.qd : 0;
+                cfg.resolvedRegisteredFiles = fixedOps ? 1 : 0;
+            }
+
+            long ioSize = ds.ioSize;
+            if (mode.isRandom()) {
+                regionStart = 0;
+                regionEnd = ioSize;
+                randBlocks = ioSize / cfg.bs;
+            } else {
+                long chunk = (ioSize / shardCount / cfg.bs) * cfg.bs;
+                regionStart = (long) index * chunk;
+                regionEnd = (index == shardCount - 1) ? ioSize : regionStart + chunk;
+                seqPos = regionStart;
+            }
+            if (cfg.verbose) {
+                System.err.printf("[juring] shard %d: ringEntries=%d fixed=%s seed=0x%016x region=[%,d,%,d)%n",
+                        index, Math.max(256, cfg.qd * 2), fixedOps, seed, regionStart, regionEnd);
+            }
+        }
+
+        ThreadStat toStat() {
+            LatencyStats lat;
+            if (sampleCount == 0) {
+                lat = LatencyStats.empty();
+            } else {
+                long[] copy = Arrays.copyOf(samples, sampleCount);
+                Arrays.sort(copy);
+                lat = LatencyStats.fromSorted(copy, sumLatNs, recordedLat, sampleSeen > sampleCount);
+            }
+            double iops = measuredElapsedSec > 0 ? timedOps / measuredElapsedSec : 0;
+            double mibs = measuredElapsedSec > 0
+                    ? (timedBytes / (1024.0 * 1024.0)) / measuredElapsedSec : 0;
+            // Same Little's-law consistency check as the threads mode: a >25%
+            // mismatch means the per-op timestamps are mis-attributed.
+            if (collecting && recordedLat > 0 && iops > 0) {
+                double meanLatUs = sumLatNs / (double) recordedLat / 1000.0;
+                double littleUs = cfg.qd / iops * 1e6;
+                if (littleUs > 0 && meanLatUs > 0
+                        && Math.abs(meanLatUs - littleUs) / littleUs > 0.25) {
+                    System.err.println("[juring] WARNING: Little's law mismatch on shard "
+                            + index + ": measured mean latency "
+                            + String.format(Locale.ROOT, "%.1f", meanLatUs)
+                            + " us vs qd/IOPS " + String.format(Locale.ROOT, "%.1f", littleUs)
+                            + " us (ratio " + String.format(Locale.ROOT, "%.3f", meanLatUs / littleUs)
+                            + "); check timestamp attribution");
+                }
+            }
+            return new ThreadStat(index, timedOps, timedBytes, timedErrors, seqOverflows,
+                    measuredElapsedSec, iops, mibs, sumLatNs, recordedLat, lat);
+        }
+
+        @Override
+        public int latCount() {
+            return sampleCount;
+        }
+
+        @Override
+        public long[] latBuf() {
+            return samples;
+        }
+    }
+
+    /**
+     * One shard-mode run: build a RingGroup of N IoShards (CPUs firstCpu..firstCpu+N-1),
+     * run the same warmup/measured protocol as the threads mode, and aggregate the
+     * per-shard stats with the same formulas (ops/maxElapsed, merged reservoir).
+     */
+    static RunStat runOnceShard(Config cfg, Dataset ds, int runIndex) throws BenchException {
+        int n = cfg.shards;
+        ShardRunSync sync = new ShardRunSync(n);
+        ShardOptions options = ShardOptions.defaults()
+                .withName("bench")
+                .withRingOptions(RING_FLAGS)
+                .withRingEntries(Math.max(256, cfg.qd * 2));
+        long seedBase = cfg.seed != 0L ? cfg.seed
+                : (System.nanoTime() ^ ((long) (runIndex + 1) * 0x9E3779B97F4A7C15L));
+        ShardRunner[] runners = new ShardRunner[n];
+        RingGroup group = null;
+        try {
+            group = RingGroup.create(n, options, cfg.firstCpu);
+            group.start();
+            for (int i = 0; i < n; i++) {
+                runners[i] = new ShardRunner(cfg, ds, group.shard(i), i, n, runIndex,
+                        seedBase + i * 7919L, sync);
+            }
+            for (int i = 0; i < n; i++) {
+                group.shard(i).execute(runners[i]);
+            }
+            if (!sync.ready.await(120, TimeUnit.SECONDS)) {
+                throw new BenchException("timed out waiting for " + n + " shard(s) to set up");
+            }
+            throwIfShardFailed(runners, "setup");
+
+            for (int i = 0; i < n; i++) {
+                group.shard(i).execute(runners[i]::beginWarmup);
+            }
+            long warmupWaitSec = (long) Math.max(60L, Math.ceil(cfg.warmupSec) + 60L);
+            if (!sync.warmupDone.await(warmupWaitSec, TimeUnit.SECONDS)) {
+                throw new BenchException("timed out waiting for the warmup phase (" + warmupWaitSec + " s)");
+            }
+            throwIfShardFailed(runners, "warmup");
+
+            for (int i = 0; i < n; i++) {
+                group.shard(i).execute(runners[i]::startMeasured);
+            }
+            long measuredWaitSec = (long) Math.max(60L, Math.ceil(cfg.seconds) + 60L);
+            if (!sync.measuredDone.await(measuredWaitSec, TimeUnit.SECONDS)) {
+                throw new BenchException("timed out waiting for the measured phase ("
+                        + measuredWaitSec + " s)");
+            }
+            throwIfShardFailed(runners, "measured phase");
+
+            // User-owned resources (fd + arena) must be closed on the shard thread
+            // before the group (and its rings) is closed.
+            for (int i = 0; i < n; i++) {
+                try {
+                    group.shard(i).execute(runners[i]::teardown);
+                } catch (RuntimeException ignored) {
+                    // best effort; process exit / group close still releases the ring
+                }
+            }
+            if (!sync.cleanupDone.await(10, TimeUnit.SECONDS)) {
+                System.err.println("[juring] warning: shard cleanup did not complete within 10 s");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BenchException("interrupted while waiting for the shard runtime");
+        } finally {
+            if (group != null) {
+                try {
+                    group.requestStop();
+                } catch (Throwable ignored) {
+                }
+                group.close();
+            }
+        }
+
+        ThreadStat[] tstats = new ThreadStat[n];
+        ShardInfo[] shardInfos = new ShardInfo[n];
+        double maxElapsed = 0;
+        long ops = 0, bytes = 0, errors = 0, overflows = 0;
+        long sumLatNs = 0;
+        long recordedLat = 0;
+        for (int i = 0; i < n; i++) {
+            ThreadStat t = runners[i].toStat();
+            tstats[i] = t;
+            shardInfos[i] = new ShardInfo(t, runners[i].statsSnapshot);
+            maxElapsed = Math.max(maxElapsed, t.elapsedSec);
+            ops += t.ops;
+            bytes += t.bytes;
+            errors += t.errors;
+            overflows += t.seqOverflows;
+            sumLatNs += t.sumLatNs;
+            recordedLat += t.recordedLat;
+            ShardStats ss = runners[i].statsSnapshot;
+            if (ss != null && ss.completionsUnattributed() > 0) {
+                throw new BenchException("harness bug: shard " + i + " saw "
+                        + ss.completionsUnattributed() + " unattributed completion(s); the "
+                        + "shard-internal wakeup READ must never reach the benchmark pipeline");
+            }
+        }
+        if (maxElapsed <= 0) {
+            throw new BenchException("no elapsed time recorded (shards did not run)");
+        }
+        LatencyStats lat = mergeLatency(runners, cfg.latencySamples, sumLatNs, recordedLat);
+        double iops = ops / maxElapsed;
+        double mibs = (bytes / (1024.0 * 1024.0)) / maxElapsed;
+        RunStat st = new RunStat(runIndex, maxElapsed, ops, bytes, errors, overflows, iops, mibs,
+                lat, tstats, shardInfos);
+        System.err.printf(Locale.ROOT,
+                "[juring] run %d/%d (runtime=shard shards=%d): %.2f s, %,d ops, %.1f MiB/s, %.1f IOPS, "
+                        + "p50=%.1f us p99=%.1f us p999=%.1f us max=%.1f us, errors=%d, seqOverflows=%d%n",
+                runIndex + 1, cfg.runs, n, maxElapsed, ops, mibs, iops,
+                lat.p50, lat.p99, lat.p999, lat.max, errors, overflows);
+        if (errors > 0) {
+            System.err.println("[juring] WARNING: " + errors
+                    + " I/O errors/short completions recorded; results are not clean");
+        }
+        if (cfg.verbose) {
+            for (int i = 0; i < n; i++) {
+                ShardStats s = runners[i].statsSnapshot;
+                if (s != null) {
+                    System.err.printf(Locale.ROOT,
+                            "[juring] shard %d: cpu=%d (requested %d, applied=%s) completions registered=%d "
+                                    + "dispatched=%d unattributed=%d failures=%d inFlight=%d%n",
+                            s.shardId(), s.currentCpu(), s.requestedCpu(), s.affinityApplied(),
+                            s.completionsRegistered(), s.completionsDispatched(),
+                            s.completionsUnattributed(), s.completionFailures(), s.inFlightRequests());
+                }
+            }
+        }
+        return st;
+    }
+
+    static void throwIfShardFailed(ShardRunner[] runners, String phase) throws BenchException {
+        for (ShardRunner r : runners) {
+            if (r.failure != null) {
+                throw new BenchException("shard " + r.index + " failed during " + phase + ": "
+                        + describe(r.failure));
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1281,9 +2012,15 @@ public final class JUringFileBench {
         final double mibs;
         final LatencyStats lat;
         final ThreadStat[] threads;
+        final ShardInfo[] shards;   // non-null only for --runtime=shard
 
         RunStat(int run, double elapsedSec, long ops, long bytes, long errors, long seqOverflows,
                 double iops, double mibs, LatencyStats lat, ThreadStat[] threads) {
+            this(run, elapsedSec, ops, bytes, errors, seqOverflows, iops, mibs, lat, threads, null);
+        }
+
+        RunStat(int run, double elapsedSec, long ops, long bytes, long errors, long seqOverflows,
+                double iops, double mibs, LatencyStats lat, ThreadStat[] threads, ShardInfo[] shards) {
             this.run = run;
             this.elapsedSec = elapsedSec;
             this.ops = ops;
@@ -1294,6 +2031,7 @@ public final class JUringFileBench {
             this.mibs = mibs;
             this.lat = lat;
             this.threads = threads;
+            this.shards = shards;
         }
     }
 
@@ -1642,6 +2380,11 @@ public final class JUringFileBench {
             w.name("bs").num(c.bs);
             w.name("qd").num(c.qd);
             w.name("threads").num(c.threads);
+            if (c.runtime == WorkerRuntime.SHARD) {
+                w.name("runtime").str(c.runtime.cliName);
+                w.name("shards").num(c.shards);
+                w.name("first_cpu").num(c.firstCpu);
+            }
             w.name("seconds").num(c.seconds);
             w.name("warmup_sec").num(c.warmupSec);
             w.name("runs").num(c.runs);
@@ -1706,6 +2449,65 @@ public final class JUringFileBench {
                 w.endObj();
             }
             w.endArr();
+            if (r.shards != null) {
+                w.name("shards").arr();
+                for (ShardInfo s : r.shards) {
+                    renderShard(w, s);
+                }
+                w.endArr();
+            }
+            w.endObj();
+        }
+
+        static void renderShard(Jw w, ShardInfo s) {
+            ThreadStat t = s.stat;
+            w.obj();
+            w.name("shard").num(t.thread);
+            w.name("elapsed_sec").num(t.elapsedSec);
+            w.name("ops").num(t.ops);
+            w.name("bytes").num(t.bytes);
+            w.name("errors").num(t.errors);
+            w.name("seq_overflows").num(t.seqOverflows);
+            w.name("iops").num(t.iops);
+            w.name("mibs").num(t.mibs);
+            w.name("latency_us");
+            renderLatency(w, t.lat);
+            w.name("shard_stats");
+            renderShardStats(w, s.stats);
+            w.endObj();
+        }
+
+        static void renderShardStats(Jw w, ShardStats s) {
+            if (s == null) {
+                w.nul();
+                return;
+            }
+            w.obj();
+            w.name("shard_id").num(s.shardId());
+            w.name("thread_name").str(s.threadName());
+            w.name("requested_cpu").num(s.requestedCpu());
+            w.name("current_cpu").num(s.currentCpu());
+            w.name("affinity_applied").bool(s.affinityApplied());
+            w.name("started").bool(s.started());
+            w.name("stopping").bool(s.stopping());
+            w.name("closed").bool(s.closed());
+            w.name("tasks_submitted").num(s.tasksSubmitted());
+            w.name("tasks_executed").num(s.tasksExecuted());
+            w.name("task_failures").num(s.taskFailures());
+            w.name("tasks_rejected").num(s.tasksRejected());
+            w.name("completions_registered").num(s.completionsRegistered());
+            w.name("completions_dispatched").num(s.completionsDispatched());
+            w.name("completions_unattributed").num(s.completionsUnattributed());
+            w.name("completion_failures").num(s.completionFailures());
+            w.name("handoffs_sent").num(s.handoffsSent());
+            w.name("handoffs_inline_fallback").num(s.handoffsInlineFallback());
+            w.name("eventfd_writes").num(s.eventfdWrites());
+            w.name("ring_submits").num(s.ringSubmits());
+            w.name("in_flight_requests").num(s.inFlightRequests());
+            w.name("wakeup_armed").bool(s.wakeupArmed());
+            w.name("cancelled_at_close").num(s.cancelledAtClose());
+            w.name("abandoned_at_close").num(s.abandonedAtClose());
+            w.name("close_timed_out").bool(s.closeTimedOut());
             w.endObj();
         }
 

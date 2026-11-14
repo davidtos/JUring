@@ -5,6 +5,7 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.lang.ref.Reference;
 import java.nio.file.Path;
+import java.util.Objects;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.Callable;
@@ -55,6 +56,9 @@ public class JUringBlocking implements AutoCloseable {
     private final LibCDispatcher libc = NativeDispatcher.C;
     private final Worker[] workers;
     private final int workerMask;
+    private final RingGroup group;
+    private final Object closeLock = new Object();
+    private boolean closed;
 
     // Registered buffer state & lock-free MPMC buffer index pool
     private volatile MemorySegment[] registeredBuffers;
@@ -81,7 +85,7 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
-    private static final class Worker {
+    private static final class Worker implements ShardBody {
         private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
         private static final VarHandle VH_LONG = JAVA_LONG.varHandle();
         private static final VarHandle VH_WORKER_MPSC_TAIL;
@@ -140,13 +144,18 @@ public class JUringBlocking implements AutoCloseable {
         final int[] slotState;
         final Thread[] slotThread;
         final AtomicReference<ControlTask<?>> controlTask = new AtomicReference<>();
-        IoUringDispatcher ioUringDispatcher;
+        volatile IoUringDispatcher dispatcher;
         volatile boolean running = true;
-        final Thread pollerThread;
+        volatile long shutdownDeadlineNanos;
+        volatile Thread shardThread;
+        volatile Throwable startupError;
+        IoShard shard;
+        final CountDownLatch bodyStarted = new CountDownLatch(1);
+        boolean resourcesFreed;
         @SuppressWarnings("unused")
         volatile int pollerParked;
 
-        Worker(JUringBlocking parent, int workerId, int queueDepth, IoUringOptions... ioUringFlags) {
+        Worker(JUringBlocking parent, int workerId, int queueDepth) {
             this.parent = parent;
             this.workerId = workerId;
             int minCap = Math.max(256, queueDepth * 8);
@@ -196,43 +205,94 @@ public class JUringBlocking implements AutoCloseable {
             this.eventfdWriteBuf = parent.libc.mallocAddress(8L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdReadBuf, 0L);
             VH_LONG.set(GLOBAL_MEMORY, this.eventfdWriteBuf, 1L);
+        }
 
-            CountDownLatch initLatch = new CountDownLatch(1);
-            AtomicReference<Throwable> initError = new AtomicReference<>();
+        // ------------------------------------------------------------------
+        // ShardBody seam (B4 §9): the tuned worker loop runs on the IoShard thread.
+        // ------------------------------------------------------------------
 
-            this.pollerThread = Thread.ofPlatform()
-                    .name("JUringBlocking-Poller-" + workerId)
-                    .daemon(true)
-                    .start(() -> {
-                        try {
-                            this.ioUringDispatcher = IoUringDispatcher.create(queueDepth, ioUringFlags);
-                        } catch (Throwable t) {
-                            initError.set(t);
-                            initLatch.countDown();
-                            return;
-                        }
-                        initLatch.countDown();
-                        pollerLoop();
-                    });
-
+        /**
+         * Runs the existing poller loop on the shard platform thread. The ring, its native
+         * memory, the thread, CPU affinity and the bounded ring teardown all belong to
+         * {@link IoShard}; this body only borrows the shard-thread-confined dispatcher.
+         */
+        @Override
+        public void run(ShardLoopContext ctx) {
             try {
-                initLatch.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException("Interrupted while initializing JUringBlocking worker " + workerId, e);
+                this.dispatcher = ctx.dispatcher();
+                this.shardThread = Thread.currentThread();
+            } catch (Throwable t) {
+                this.startupError = t;
+                throw t;
+            } finally {
+                bodyStarted.countDown();
             }
-
-            Throwable err = initError.get();
-            if (err != null) {
-                if (err instanceof RuntimeException re) {
-                    throw re;
-                }
-                throw new RuntimeException("Failed to initialize JUringBlocking worker " + workerId, err);
+            try {
+                pollerLoop(ctx);
+            } finally {
+                // No caller may stay parked once the body stops: requests that never got a
+                // completion are abandoned and their callers observe IllegalStateException.
+                running = false;
+                failPendingControlTask();
+                unparkParkedSlots();
             }
         }
 
-        private void pollerLoop() {
-            final IoUringDispatcher dispatcher = this.ioUringDispatcher;
+        /** Foreign-thread wake hook used by {@code IoShard.requestStop()}/{@code close(...)}. */
+        @Override
+        public void wake() {
+            wakePoller();
+        }
+
+        void failPendingControlTask() {
+            ControlTask<?> task = controlTask.getAndSet(null);
+            if (task != null) {
+                if (!task.done) {
+                    task.error = new IllegalStateException("JUringBlocking is closed");
+                    task.done = true;
+                }
+                LockSupport.unpark(task.caller);
+            }
+        }
+
+        void unparkParkedSlots() {
+            for (int i = 0; i < slotCapacity; i++) {
+                if ((int) VH_INT_ARRAY.getAcquire(slotState, i) == STATE_PARKED) {
+                    Thread t = slotThread[i];
+                    if (t != null) {
+                        LockSupport.unpark(t);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Frees this worker's own eventfd and its two 8-byte wakeup buffers, but only once the
+         * shard thread has fully terminated (the armed wakeup READ may otherwise still write
+         * into the read buffer while the ring is being closed).
+         */
+        void freeEventfdResourcesIfTerminated() {
+            if (resourcesFreed) {
+                return;
+            }
+            IoShard s = shard;
+            if (s != null && !s.isTerminated()) {
+                return;
+            }
+            resourcesFreed = true;
+            if (eventFd >= 0) {
+                parent.libc.close(eventFd);
+            }
+            if (eventfdReadBuf != 0L) {
+                parent.libc.free(eventfdReadBuf);
+            }
+            if (eventfdWriteBuf != 0L) {
+                parent.libc.free(eventfdWriteBuf);
+            }
+        }
+
+        private void pollerLoop(ShardLoopContext ctx) {
+            final IoUringDispatcher dispatcher = this.dispatcher;
             final int sqEntries = dispatcher.sqRingEntries();
             final int[] inFlightHolder = new int[2]; // [0] = totalInFlight, [1] = expectedFromUnpark
 
@@ -266,7 +326,7 @@ public class JUringBlocking implements AutoCloseable {
 
             int unsubmitted = 0;
 
-            while (running) {
+            while (running && !ctx.stopRequested()) {
                 runPendingControlTask();
 
                 while (inFlightHolder[0] < (sqEntries - 1) && unsubmitted < (sqEntries - 1)) {
@@ -311,6 +371,7 @@ public class JUringBlocking implements AutoCloseable {
                 if (reaped > 0 || (canAcceptMore && hasPendingMpsc()) || controlTask.get() != null) {
                     if (unsubmitted >= (sqEntries >>> 1)) {
                         dispatcher.submit();
+                        ctx.countRingSubmit();
                         unsubmitted = 0;
                     }
                     continue;
@@ -322,7 +383,7 @@ public class JUringBlocking implements AutoCloseable {
                     int maxSpins = inFlightHolder[1] > 0 ? 2000 : 200;
                     boolean found = false;
                     for (int spin = 0; spin < maxSpins; spin++) {
-                        if (hasPendingMpsc() || !running || controlTask.get() != null) {
+                        if (hasPendingMpsc() || !running || ctx.stopRequested() || controlTask.get() != null) {
                             found = true;
                             break;
                         }
@@ -352,13 +413,18 @@ public class JUringBlocking implements AutoCloseable {
                         canAcceptMore = inFlightHolder[0] < (sqEntries - 1);
                         VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                         VarHandle.fullFence();
-                        if (!running || controlTask.get() != null || (canAcceptMore && hasPendingMpsc())) {
+                        if (!running || ctx.stopRequested() || controlTask.get() != null
+                                || (canAcceptMore && hasPendingMpsc())) {
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                             if (unsubmitted > 0) {
                                 dispatcher.submit();
+                                ctx.countRingSubmit();
                                 unsubmitted = 0;
                             }
                         } else {
+                            if (unsubmitted > 0) {
+                                ctx.countRingSubmit();
+                            }
                             unsubmitted = 0;
                             dispatcher.submitAndWait(1);
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
@@ -366,17 +432,20 @@ public class JUringBlocking implements AutoCloseable {
                         }
                     } else if (unsubmitted > 0) {
                         dispatcher.submit();
+                        ctx.countRingSubmit();
                         unsubmitted = 0;
                     }
                 } else {
                     if (unsubmitted > 0) {
                         dispatcher.submit();
+                        ctx.countRingSubmit();
                         unsubmitted = 0;
                     }
-                    if (controlTask.get() == null && running) {
+                    if (controlTask.get() == null && running && !ctx.stopRequested()) {
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
                         VarHandle.fullFence();
-                        if (!hasPendingMpsc() && controlTask.get() == null && running) {
+                        if (!hasPendingMpsc() && controlTask.get() == null && running
+                                && !ctx.stopRequested()) {
                             LockSupport.park(this);
                         }
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
@@ -386,20 +455,64 @@ public class JUringBlocking implements AutoCloseable {
 
             runPendingControlTask();
 
-            // Cancel and drain in-flight requests on poller thread
+            // Bounded shutdown drain (B4 §9.4): cancel every in-flight request and dispatch
+            // the resulting completions so parked callers unblock. Unlike the pre-B4 loop this
+            // never blocks indefinitely on a cancellation completion that never arrives: the
+            // drain is bounded by shutdownDeadlineNanos (set by JUringBlocking.close, or the
+            // shard's shutdown budget) and uses non-blocking enters + short parks only.
             if (inFlightHolder[0] > 0) {
-                long cancelSqe = dispatcher.getSqe();
-                if (cancelSqe != 0L) {
-                    Sqe.zero(cancelSqe);
-                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    Sqe.setFd(cancelSqe, -1);
-                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    Sqe.setUserData(cancelSqe, CANCEL_SENTINEL);
+                try {
                     dispatcher.submit();
+                    if (unsubmitted > 0) {
+                        ctx.countRingSubmit();
+                    }
+                } catch (Throwable ignored) {
+                    // best effort; the ring's own bounded close is the backstop
+                }
+                try {
+                    long cancelSqe = dispatcher.getSqe();
+                    if (cancelSqe == 0L) {
+                        dispatcher.submit();
+                        cancelSqe = dispatcher.getSqe();
+                    }
+                    if (cancelSqe != 0L) {
+                        Sqe.zero(cancelSqe);
+                        Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
+                        Sqe.setFd(cancelSqe, -1);
+                        Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
+                        Sqe.setUserData(cancelSqe, CANCEL_SENTINEL);
+                        dispatcher.submit();
+                    }
+                } catch (Throwable ignored) {
+                    // best effort; the ring's own bounded close is the backstop
+                }
+                long deadline = shutdownDeadlineNanos;
+                if (deadline == 0L) {
+                    deadline = System.nanoTime()
+                            + Math.max(0L, shard.options().shutdownTimeoutMillis()) * 1_000_000L;
                 }
                 while (inFlightHolder[0] > 0) {
-                    dispatcher.submitAndWait(1);
-                    dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                    int reaped = 0;
+                    try {
+                        reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
+                    } catch (Throwable ignored) {
+                        // fall through to the deadline check
+                    }
+                    if (reaped > 0) {
+                        continue;
+                    }
+                    try {
+                        if (dispatcher.pollCq() > 0) {
+                            continue;
+                        }
+                    } catch (Throwable ignored) {
+                        // fall through to the deadline check
+                    }
+                    long remaining = deadline - System.nanoTime();
+                    if (remaining <= 0L) {
+                        break;
+                    }
+                    LockSupport.parkNanos(Math.min(remaining, 100_000L));
                 }
             }
         }
@@ -430,7 +543,7 @@ public class JUringBlocking implements AutoCloseable {
         }
 
         private <T> T runOnPoller(Callable<T> action) {
-            if (Thread.currentThread() == pollerThread) {
+            if (Thread.currentThread() == shardThread) {
                 try {
                     return action.call();
                 } catch (RuntimeException re) {
@@ -480,8 +593,9 @@ public class JUringBlocking implements AutoCloseable {
                     parent.libc.write(eventFd, eventfdWriteBuf, 8L);
                 }
             }
-            if ((int) VH_WORKER_POLLER_PARKED.getVolatile(this) != 0) {
-                LockSupport.unpark(pollerThread);
+            Thread poller = this.shardThread;
+            if (poller != null && (int) VH_WORKER_POLLER_PARKED.getVolatile(this) != 0) {
+                LockSupport.unpark(poller);
             }
         }
 
@@ -610,36 +724,6 @@ public class JUringBlocking implements AutoCloseable {
                 }
             }
         }
-
-        void close() {
-            running = false;
-            wakePoller();
-            LockSupport.unpark(pollerThread);
-            try {
-                pollerThread.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
-            }
-            if (ioUringDispatcher != null) {
-                ioUringDispatcher.close();
-            }
-            if (eventFd >= 0) {
-                parent.libc.close(eventFd);
-            }
-            if (eventfdReadBuf != 0L) {
-                parent.libc.free(eventfdReadBuf);
-            }
-            if (eventfdWriteBuf != 0L) {
-                parent.libc.free(eventfdWriteBuf);
-            }
-            for (int i = 0; i < slotCapacity; i++) {
-                Thread t = slotThread[i];
-                if (t != null) {
-                    LockSupport.unpark(t);
-                }
-            }
-        }
     }
 
     private static int defaultWorkerCount(int queueDepth) {
@@ -663,11 +747,131 @@ public class JUringBlocking implements AutoCloseable {
 
     public JUringBlocking(int queueDepth, int numPollers, IoUringOptions... ioUringFlags) {
         int workerCount = Math.max(1, Integer.highestOneBit(Math.max(1, numPollers)));
-        this.workers = new Worker[workerCount];
-        this.workerMask = workerCount - 1;
-        for (int i = 0; i < workerCount; i++) {
-            this.workers[i] = new Worker(this, i, queueDepth, ioUringFlags);
+        int ringEntries = Math.max(8, queueDepth);
+        Worker[] newWorkers = new Worker[workerCount];
+        RingGroup newGroup = null;
+        try {
+            for (int i = 0; i < workerCount; i++) {
+                newWorkers[i] = new Worker(this, i, ringEntries);
+            }
+            newGroup = RingGroup.create(workerCount, ShardOptions.defaults()
+                    .withName("JUringBlocking-Poller")
+                    .withRingEntries(ringEntries)
+                    .withRingOptions(ioUringFlags));
+            for (int i = 0; i < workerCount; i++) {
+                newWorkers[i].shard = newGroup.shard(i);
+                newGroup.installBody(i, newWorkers[i]);
+            }
+            newGroup.start();
+            awaitBodies(newWorkers);
+            throwStartupErrors(newWorkers);
+        } catch (Throwable t) {
+            cleanupFailedStart(newGroup, newWorkers);
+            throw rethrow(t);
         }
+        this.workers = newWorkers;
+        this.workerMask = workerCount - 1;
+        this.group = newGroup;
+    }
+
+    /**
+     * Adopts a caller-supplied, <b>unstarted</b> {@link RingGroup} (B4 §9.1): its shards become
+     * the worker rings, {@code group.size()} is the worker/poller count and the group's CPU
+     * pinning is inherited. Ownership transfers to this instance: {@link #close()} closes the
+     * group.
+     *
+     * @throws NullPointerException      when {@code group} is {@code null}
+     * @throws IllegalStateException     when the group is started, stopping or closed
+     */
+    public JUringBlocking(RingGroup group) {
+        Objects.requireNonNull(group, "group");
+        if (group.isClosed()) {
+            throw new IllegalStateException("RingGroup is closed");
+        }
+        if (group.isStarted()) {
+            throw new IllegalStateException("RingGroup is already started; the group must be unstarted");
+        }
+        if (group.isStopping()) {
+            throw new IllegalStateException("RingGroup is stopping");
+        }
+        int workerCount = group.size();
+        int ringEntries = Math.max(8, group.shard(0).options().ringEntries());
+        Worker[] newWorkers = new Worker[workerCount];
+        try {
+            for (int i = 0; i < workerCount; i++) {
+                newWorkers[i] = new Worker(this, i, ringEntries);
+                newWorkers[i].shard = group.shard(i);
+            }
+            for (int i = 0; i < workerCount; i++) {
+                group.installBody(i, newWorkers[i]);
+            }
+            group.start();
+            awaitBodies(newWorkers);
+            throwStartupErrors(newWorkers);
+        } catch (Throwable t) {
+            cleanupFailedStart(group, newWorkers);
+            throw rethrow(t);
+        }
+        this.workers = newWorkers;
+        this.workerMask = workerCount - 1;
+        this.group = group;
+    }
+
+    private static void awaitBodies(Worker[] workers) {
+        boolean interrupted = false;
+        for (Worker w : workers) {
+            while (true) {
+                try {
+                    w.bodyStarted.await();
+                    break;
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void throwStartupErrors(Worker[] workers) {
+        for (Worker w : workers) {
+            Throwable t = w.startupError;
+            if (t != null) {
+                throw rethrow(t);
+            }
+        }
+    }
+
+    private static RuntimeException cleanupFailedStart(RingGroup group, Worker[] workers) {
+        if (group != null) {
+            try {
+                group.close(0L);
+            } catch (Throwable ignored) {
+                // best effort: propagate the original failure
+            }
+        }
+        for (Worker w : workers) {
+            if (w == null) {
+                continue;
+            }
+            if (w.shard != null) {
+                // bounded wait so a partially-started shard can release its ring first
+                w.shard.awaitTermination(3_000L);
+            }
+            w.freeEventfdResourcesIfTerminated();
+        }
+        return null;
+    }
+
+    private static RuntimeException rethrow(Throwable t) {
+        if (t instanceof RuntimeException re) {
+            throw re;
+        }
+        if (t instanceof Error e) {
+            throw e;
+        }
+        throw new RuntimeException("Failed to initialize JUringBlocking", t);
     }
 
     int workerCount() {
@@ -829,11 +1033,11 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
-        var iovecStructure = workers[0].runOnPoller(() -> workers[0].ioUringDispatcher.allocateAndRegisterBuffers(size, nrOfBuffers));
+        var iovecStructure = workers[0].runOnPoller(() -> workers[0].dispatcher.allocateAndRegisterBuffers(size, nrOfBuffers));
         for (int i = 1; i < workers.length; i++) {
             Worker w = workers[i];
             w.runOnPoller(() -> {
-                w.ioUringDispatcher.registerExistingIovecStructure(iovecStructure, nrOfBuffers);
+                w.dispatcher.registerExistingIovecStructure(iovecStructure, nrOfBuffers);
                 return null;
             });
         }
@@ -1033,7 +1237,7 @@ public class JUringBlocking implements AutoCloseable {
     public int registerFiles(FileDescriptor... fileDescriptors) {
         int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
         for (Worker w : workers) {
-            int ret = w.runOnPoller(() -> w.ioUringDispatcher.registerFiles(fds));
+            int ret = w.runOnPoller(() -> w.dispatcher.registerFiles(fds));
             if (ret != 0) {
                 return ret;
             }
@@ -1044,7 +1248,7 @@ public class JUringBlocking implements AutoCloseable {
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
         int ret = 0;
         for (Worker w : workers) {
-            ret = w.runOnPoller(() -> w.ioUringDispatcher.registerFilesUpdate(offset, fileDescriptors));
+            ret = w.runOnPoller(() -> w.dispatcher.registerFilesUpdate(offset, fileDescriptors));
             if (ret < 0) {
                 return ret;
             }
@@ -1169,8 +1373,55 @@ public class JUringBlocking implements AutoCloseable {
 
     @Override
     public void close() {
-        for (Worker w : workers) {
-            w.close();
+        close(JUring.DEFAULT_CLOSE_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * Bounded, idempotent close (B4 §9.4): stops accepting new operations, cancels in-flight
+     * requests and dispatches the cancellations so parked callers unblock, then closes the
+     * shard group against a shared deadline bounded by {@code timeoutMillis + 250 ms}. A
+     * cancellation completion that never arrives is abandoned and counted by the ring's
+     * bounded close instead of blocking forever (fixes the B3 §4.5 residual hazard).
+     *
+     * @param timeoutMillis graceful-shutdown budget in milliseconds ({@code >= 0})
+     * @throws IllegalArgumentException when {@code timeoutMillis < 0}
+     * @throws IllegalStateException    when called from one of this instance's shard threads
+     */
+    public void close(long timeoutMillis) {
+        if (timeoutMillis < 0) {
+            throw new IllegalArgumentException("close timeout must be >= 0: " + timeoutMillis);
+        }
+        synchronized (closeLock) {
+            if (closed) {
+                return;
+            }
+            for (Worker w : workers) {
+                IoShard s = w.shard;
+                if (s != null && s.inShardThread()) {
+                    throw new IllegalStateException("cannot close JUringBlocking from one of its shard threads");
+                }
+            }
+            closed = true;
+            long deadline = System.nanoTime() + timeoutMillis * 1_000_000L;
+            for (Worker w : workers) {
+                w.running = false;
+                w.shutdownDeadlineNanos = deadline;
+            }
+            for (Worker w : workers) {
+                w.wakePoller();
+            }
+            try {
+                group.close(timeoutMillis);
+            } catch (RuntimeException ignored) {
+                // bounded close is best effort by contract; cleanup below still runs
+            }
+            for (Worker w : workers) {
+                w.failPendingControlTask();
+                w.unparkParkedSlots();
+            }
+            for (Worker w : workers) {
+                w.freeEventfdResourcesIfTerminated();
+            }
         }
     }
 }
