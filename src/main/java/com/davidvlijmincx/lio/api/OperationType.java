@@ -23,7 +23,9 @@ public enum OperationType {
     TIMEOUT(16),
     FALLOCATE(17),
     FTRUNCATE(18),
-    STATX(19);
+    STATX(19),
+    /** B3: {@code IORING_OP_LINK_TIMEOUT} (opcode 15); appended, never renumber existing indices. */
+    LINK_TIMEOUT(20);
 
     private static final OperationType[] VALUES = values();
 

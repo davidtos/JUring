@@ -268,7 +268,7 @@ class JUringRegistrationLifecycleTest {
             dedicated.close();
         }
         assertTrue(dedicated.isClosed());
-        assertDoesNotThrow(dedicated::close, "close must be idempotent");
+        assertDoesNotThrow(() -> dedicated.close(), "close must be idempotent");
         assertTrue(dedicated.isClosed());
     }
 }

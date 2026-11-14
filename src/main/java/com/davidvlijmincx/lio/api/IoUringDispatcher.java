@@ -5,6 +5,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.LockSupport;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_ATTACH_WQ;
 import static java.lang.foreign.ValueLayout.*;
@@ -22,6 +23,7 @@ final class IoUringDispatcher implements AutoCloseable {
     static final byte IORING_OP_WRITE_FIXED = 5;
     static final byte IORING_OP_TIMEOUT = 11;
     static final byte IORING_OP_ASYNC_CANCEL = 14;
+    static final byte IORING_OP_LINK_TIMEOUT = 15;
     static final byte IORING_OP_FALLOCATE = 17;
     static final byte IORING_OP_OPENAT = 18;
     static final byte IORING_OP_CLOSE = 19;
@@ -42,8 +44,15 @@ final class IoUringDispatcher implements AutoCloseable {
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
 
+    // IORING_OP_ASYNC_CANCEL sqe->cancel_flags values (uapi/linux/io_uring.h).
+    static final int IORING_ASYNC_CANCEL_ALL = 1;
+    static final int IORING_ASYNC_CANCEL_FD = 1 << 1;
+    static final int IORING_ASYNC_CANCEL_ANY = 1 << 2;
+    static final int IORING_ASYNC_CANCEL_FD_FIXED = 1 << 3;
+
     private static final int EBADF = 9;
     private static final int EINTR = 4;
+    private static final int ECANCELED = 125;
 
     private static final int IORING_FEAT_SINGLE_MMAP = 1;
     private static final long IORING_OFF_SQ_RING = 0L;
@@ -178,6 +187,7 @@ final class IoUringDispatcher implements AutoCloseable {
             case IORING_OP_WRITE_FIXED -> "IORING_OP_WRITE_FIXED";
             case IORING_OP_TIMEOUT -> "IORING_OP_TIMEOUT";
             case IORING_OP_ASYNC_CANCEL -> "IORING_OP_ASYNC_CANCEL";
+            case IORING_OP_LINK_TIMEOUT -> "IORING_OP_LINK_TIMEOUT";
             case IORING_OP_FALLOCATE -> "IORING_OP_FALLOCATE";
             case IORING_OP_OPENAT -> "IORING_OP_OPENAT";
             case IORING_OP_CLOSE -> "IORING_OP_CLOSE";
@@ -428,13 +438,50 @@ final class IoUringDispatcher implements AutoCloseable {
         Sqe.setRwFlags(sqe, fsyncFlags);
     }
 
-    void prepareCancel(long sqe, long userDataToCancel, int flags) {
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that matches the target request by its
+     * {@code user_data} value. SQE field mapping follows liburing
+     * ({@code io_uring_prep_cancel}): {@code fd=-1}, {@code addr=target user_data},
+     * {@code off=len=0}, {@code rw_flags=cancel_flags}.
+     */
+    void prepareCancelByUserData(long sqe, long userDataToCancel) {
         Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
         Sqe.setFd(sqe, -1);
         Sqe.setOff(sqe, 0L);
         Sqe.setAddr(sqe, userDataToCancel);
         Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, 0);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that matches requests by the file they
+     * operate on ({@code io_uring_prep_cancel_fd}): {@code fd=fdOrSlot}, {@code addr=0} and
+     * {@code IORING_ASYNC_CANCEL_FD} (plus {@code IORING_ASYNC_CANCEL_FD_FIXED} for a
+     * registered-file slot) in {@code rw_flags}. The {@code extraFlags} must only contain
+     * {@code IORING_ASYNC_CANCEL_ALL}.
+     */
+    void prepareCancelFile(long sqe, int fdOrSlot, boolean fixedFile, int extraFlags) {
+        int flags = extraFlags | IORING_ASYNC_CANCEL_FD | (fixedFile ? IORING_ASYNC_CANCEL_FD_FIXED : 0);
+        Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+        Sqe.setFd(sqe, fdOrSlot);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
         Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} with {@code IORING_ASYNC_CANCEL_ALL |
+     * IORING_ASYNC_CANCEL_ANY}: cancel every request currently in flight on this ring.
+     * {@code fd=-1}, {@code addr=0}.
+     */
+    void prepareCancelAny(long sqe) {
+        Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+        Sqe.setFd(sqe, -1);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY);
     }
 
     void prepareNop(long sqe) {
@@ -489,6 +536,39 @@ final class IoUringDispatcher implements AutoCloseable {
         Sqe.setLen(sqe, 1);
         Sqe.setOff(sqe, count);
         Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_LINK_TIMEOUT} SQE. Field mapping follows liburing
+     * ({@code io_uring_prep_link_timeout}): {@code fd=-1}, {@code addr=timespec},
+     * {@code len=1}, {@code off=0}, {@code rw_flags=flags}. The SQE only has an effect when
+     * it immediately follows a submitted SQE that carries {@code IOSQE_IO_LINK}; the kernel
+     * validates that at submission time.
+     */
+    void prepareLinkTimeout(long sqe, long timespecAddr, int flags) {
+        Sqe.setOpcode(sqe, IORING_OP_LINK_TIMEOUT);
+        Sqe.setFd(sqe, -1);
+        Sqe.setAddr(sqe, timespecAddr);
+        Sqe.setLen(sqe, 1);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Returns the address of the most recently prepared but not yet submitted SQE, or
+     * {@code 0} when the current submission batch is empty. Used to validate that an
+     * {@code IORING_OP_LINK_TIMEOUT} immediately follows its target in the same batch.
+     */
+    long lastQueuedSqe() {
+        if (closed || sqKheadAddr == 0L) {
+            return 0L;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+        if (sqeTail <= head) {
+            return 0L;
+        }
+        int index = (sqeTail - 1) & sqRingMask;
+        return sqSqesAddr + ((long) index << sqeShift);
     }
 
     /**
@@ -1471,6 +1551,17 @@ final class IoUringDispatcher implements AutoCloseable {
             case 19 /* STATX */ -> {
                 target.set(userData, result, OperationType.STATX, 0L, null, -1, null, cqeFlags);
             }
+            case 20 /* LINK_TIMEOUT */ -> {
+                // A linked timeout completion owns no user buffer: it only reports the timer
+                // result (-ETIME when it fired, -ECANCELED when the target won the race).
+                target.set(userData, result, OperationType.LINK_TIMEOUT, 0L, null, -1, null, cqeFlags);
+            }
+            default -> {
+                // Unknown/unmatched user_data type (e.g. an internal sentinel): report it as a
+                // NOP-shaped completion with no buffer ownership instead of leaving the reusable
+                // Result populated with stale ownership fields.
+                target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
+            }
         }
     }
 
@@ -1478,52 +1569,179 @@ final class IoUringDispatcher implements AutoCloseable {
         queueExit();
     }
 
-    private void drainAndCancel() {
-        try {
-            int unsubmitted = sqeTail - sqeHead;
-            if (unsubmitted > 0) {
-                submit();
-            }
-            if (inFlightCount > 0) {
-                long cancelSqe = getSqe();
-                if (cancelSqe != 0L) {
-                    Sqe.zero(cancelSqe);
-                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    Sqe.setFd(cancelSqe, -1);
-                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    Sqe.setUserData(cancelSqe, Long.MIN_VALUE + 1);
-                    submit();
-                }
-                while (inFlightCount > 0) {
-                    long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
-                    if (res < 0) {
-                        int err = LibCDispatcher.errno(this.callState);
-                        if (err != 11 /* EAGAIN */ && err != 16 /* EBUSY */ && err != 4 /* EINTR */) {
-                            break;
-                        }
-                    }
-                    int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
-                    int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-                    int available = tail - head;
-                    if (available > 0) {
-                        reapAvailable(head, available, available, Result::close);
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-            // Disabled rings (IORING_SETUP_R_DISABLED) or invalid fds can fail submit; proceed to close
+    // ------------------------------------------------------------------
+    // Bounded shutdown (B3)
+    // ------------------------------------------------------------------
+
+    /** Default deadline for {@link #close()} before the ring is force-closed. */
+    static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 2000L;
+
+    /** Park slice used by the bounded drain loops (100 µs). */
+    private static final long CLOSE_POLL_SLICE_NANOS = 100_000L;
+
+    /** Completions with {@code -ECANCELED} reaped by the most recent bounded close. */
+    private long cancelledAtClose;
+    /** Requests still in flight when the most recent bounded close force-closed the ring. */
+    private int abandonedAtClose;
+
+    long cancelledAtClose() {
+        return cancelledAtClose;
+    }
+
+    int abandonedAtClose() {
+        return abandonedAtClose;
+    }
+
+    /**
+     * Non-blocking CQ poll. Asks the kernel to run deferred task work (needed for
+     * {@code IORING_SETUP_DEFER_TASKRUN} rings, whose completions are only posted while
+     * inside {@code io_uring_enter}) and returns the number of CQEs currently available.
+     * Never blocks: the enter uses {@code min_complete=0}.
+     *
+     * @return number of completions available to reap
+     */
+    int pollCq() {
+        if (closed || ringFd < 0 || cqKheadAddr == 0L) {
+            return 0;
         }
+        try {
+            enter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase,
+                    MemorySegment.NULL, 0L);
+        } catch (Throwable ignored) {
+            // A disabled/broken ring is force-closed by the caller; polling is best effort.
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        return tail - head;
+    }
+
+    private final ResultConsumer closeResultConsumer = result -> {
+        if ((int) result.result() == -ECANCELED) {
+            cancelledAtClose++;
+        }
+        result.close();
+    };
+
+    /** Reaps every completion currently in the CQ ring (non-blocking). */
+    private int reapAllAvailable() {
+        if (cqKheadAddr == 0L) {
+            return 0;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        return reapAvailable(head, tail - head, Integer.MAX_VALUE, closeResultConsumer);
+    }
+
+    /**
+     * Submits a best-effort {@code IORING_OP_ASYNC_CANCEL} with {@code ALL | ANY}: every
+     * request currently queued/in flight on the ring is cancelled. Idempotent and quiet;
+     * returns {@code true} when a cancel request was submitted.
+     */
+    private boolean submitCancelAllForClose() {
+        try {
+            int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            if (sqeTail - head >= sqRingEntries) {
+                submit();
+                head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            }
+            long sqe = getSqe();
+            if (sqe == 0L) {
+                submit();
+                sqe = getSqe();
+            }
+            if (sqe == 0L) {
+                return false;
+            }
+            Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+            Sqe.setFd(sqe, -1);
+            Sqe.setOff(sqe, 0L);
+            Sqe.setAddr(sqe, 0L);
+            Sqe.setLen(sqe, 0);
+            Sqe.setRwFlags(sqe, IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY);
+            // A well-formed user_data type keeps populateResultFromCqe's reusable Result clean.
+            Sqe.setUserData(sqe, UserData.encode(OperationType.CANCEL, 0L));
+            submit();
+            return true;
+        } catch (Throwable ignored) {
+            // Disabled rings or a full SQ at teardown: fall through to the bounded drain.
+            return false;
+        }
+    }
+
+    /**
+     * Drains the CQ ring until no request is in flight or the deadline expires. Never blocks
+     * longer than the deadline; uses non-blocking polls + {@code enter(min_complete=0)} (to
+     * flush deferred task work) + short parks.
+     *
+     * @return number of requests still in flight at return (0 on a clean drain)
+     */
+    private int drainToIdleBounded(long deadlineNanos) {
+        while (inFlightCount > 0) {
+            if (reapAllAvailable() > 0) {
+                continue;
+            }
+            if (pollCq() > 0) {
+                continue;
+            }
+            long remaining = deadlineNanos - System.nanoTime();
+            if (remaining <= 0) {
+                break;
+            }
+            LockSupport.parkNanos(Math.min(remaining, CLOSE_POLL_SLICE_NANOS));
+        }
+        return inFlightCount;
+    }
+
+    /**
+     * Bounded ring shutdown: submits queued SQEs, cancels every in-flight request
+     * ({@code ASYNC_CANCEL ALL|ANY}), reaps completions with a deadline enforced by
+     * non-blocking polls and short parks, then force-closes the ring. Never throws and never
+     * waits longer than {@code timeoutMillis} for completions (plus the final force-close
+     * which is syscall-bound and cannot block on I/O).
+     * <p>
+     * When the deadline expires, requests that never completed are counted in
+     * {@link #abandonedAtClose()} and their CQEs are dropped by the munmap; the kernel
+     * releases the requests with the ring fd. Completions with {@code -ECANCELED} reaped
+     * during the drain are counted in {@link #cancelledAtClose()}. Idempotent.
+     *
+     * @param timeoutMillis deadline in milliseconds, {@code >= 0} ({@code 0} = cancel and
+     *                      force-close immediately after one reap pass)
+     * @return number of abandoned requests
+     */
+    int closeBounded(long timeoutMillis) {
+        if (closed) {
+            return abandonedAtClose;
+        }
+        try {
+            if (ringFd >= 0 && sqKheadAddr != 0L) {
+                try {
+                    submit();
+                } catch (Throwable ignored) {
+                    // Best effort: force-close below.
+                }
+                if (inFlightCount > 0) {
+                    submitCancelAllForClose();
+                }
+                long deadline = System.nanoTime() + Math.max(0L, timeoutMillis) * 1_000_000L;
+                drainToIdleBounded(deadline);
+                if (inFlightCount > 0) {
+                    // Last chance: collect completions that are already posted before the
+                    // mmap is torn down, so they are not lost silently.
+                    reapAllAvailable();
+                }
+                abandonedAtClose = Math.max(0, inFlightCount);
+            }
+        } finally {
+            closed = true;
+            closeRing();
+            iovecBlockPool.close();
+            arena.close();
+        }
+        return abandonedAtClose;
     }
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
-        drainAndCancel();
-        closed = true;
-        closeRing();
-        iovecBlockPool.close();
-        arena.close();
+        closeBounded(DEFAULT_CLOSE_TIMEOUT_MILLIS);
     }
 }

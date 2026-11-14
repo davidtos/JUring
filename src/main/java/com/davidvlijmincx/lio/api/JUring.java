@@ -16,6 +16,33 @@ public class JUring implements AutoCloseable {
 
     public static final int IORING_FSYNC_DATASYNC = 1;
 
+    /** {@code IORING_TIMEOUT_ABS}: the {@code __kernel_timespec} is an absolute CLOCK_MONOTONIC time. */
+    public static final int IORING_TIMEOUT_ABS = 1;
+    /** {@code IORING_TIMEOUT_UPDATE}: update an existing timeout request instead of arming a new one. */
+    public static final int IORING_TIMEOUT_UPDATE = 1 << 1;
+    /** {@code IORING_TIMEOUT_BOOTTIME}: interpret the timeout against CLOCK_BOOTTIME. */
+    public static final int IORING_TIMEOUT_BOOTTIME = 1 << 2;
+    /** {@code IORING_TIMEOUT_REALTIME}: interpret the timeout against CLOCK_REALTIME. */
+    public static final int IORING_TIMEOUT_REALTIME = 1 << 3;
+    /** {@code IORING_LINK_TIMEOUT_UPDATE}: update the linked timeout from within the target. */
+    public static final int IORING_LINK_TIMEOUT_UPDATE = 1 << 4;
+    /** {@code IORING_TIMEOUT_ETIME_SUCCESS}: an expired timeout completes with {@code 0} instead of {@code -ETIME}. */
+    public static final int IORING_TIMEOUT_ETIME_SUCCESS = 1 << 5;
+    /** {@code IORING_TIMEOUT_MULTISHOT}: the timeout re-arms and can complete more than once. */
+    public static final int IORING_TIMEOUT_MULTISHOT = 1 << 6;
+
+    /** {@code IORING_ASYNC_CANCEL_ALL}: cancel every matching request, not just one. */
+    public static final int IORING_ASYNC_CANCEL_ALL = IoUringDispatcher.IORING_ASYNC_CANCEL_ALL;
+    /** {@code IORING_ASYNC_CANCEL_FD}: match the target by file instead of {@code user_data}. */
+    public static final int IORING_ASYNC_CANCEL_FD = IoUringDispatcher.IORING_ASYNC_CANCEL_FD;
+    /** {@code IORING_ASYNC_CANCEL_ANY}: match any in-flight request. */
+    public static final int IORING_ASYNC_CANCEL_ANY = IoUringDispatcher.IORING_ASYNC_CANCEL_ANY;
+    /** {@code IORING_ASYNC_CANCEL_FD_FIXED}: the cancel fd is a registered-file slot. */
+    public static final int IORING_ASYNC_CANCEL_FD_FIXED = IoUringDispatcher.IORING_ASYNC_CANCEL_FD_FIXED;
+
+    /** Default deadline used by {@link #close()} before the ring is force-closed. */
+    public static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 2000L;
+
     /** Default capacity of the lazily initialised sparse registered-file table. */
     static final int DEFAULT_FILE_TABLE_CAPACITY = 64;
 
@@ -42,6 +69,8 @@ public class JUring implements AutoCloseable {
 
     private long opSeq = 1;
     private boolean closed;
+    private long cancelledAtClose;
+    private int abandonedAtClose;
 
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         this(queueDepth, 0, ioUringFlags);
@@ -62,6 +91,7 @@ public class JUring implements AutoCloseable {
     }
 
     public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
+        ensureOpen();
         var ring = this.ioUring.getSharedWorkerRing(queueDepth, ioUringOptions);
         return new JUring(ring);
     }
@@ -282,6 +312,7 @@ public class JUring implements AutoCloseable {
     }
 
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
+        ensureOpen();
         if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
@@ -747,15 +778,87 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * @deprecated the argument is the target request's {@code user_data} value (the handle
+     *             returned by the {@code prepare*} methods), not a logical operation id; use
+     *             {@link #prepareCancelByUserData(long)} for explicit semantics.
+     */
+    @Deprecated
     public long prepareCancel(long targetOpId) {
+        return prepareCancelByUserData(targetOpId);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that cancels the request whose
+     * {@code user_data} equals {@code userData}. Every {@code prepare*} method returns that
+     * {@code user_data} as the operation handle, so pass the handle of the request to cancel.
+     *
+     * <p>Kernel semantics: the target request receives exactly one terminal completion; when
+     * the cancellation wins that completion is {@code -ECANCELED}, otherwise it is the
+     * request's real result. The cancel request itself also posts one completion whose
+     * result is {@code 0} (cancelled), {@code -ENOENT} (no matching in-flight request: it
+     * completed already or never existed) or another {@code -errno}. Exactly one completion
+     * is posted for the cancel request and one for the target; nothing is lost or duplicated.
+     *
+     * @param userData the target request's {@code user_data} / operation handle
+     * @return the cancel request's own operation handle
+     */
+    public long prepareCancelByUserData(long userData) {
         long sqe = getSqe((byte) 0, false);
         long opId = opSeq++;
-        long userData = UserData.encode(OperationType.CANCEL, opId);
+        long cancelUserData = UserData.encode(OperationType.CANCEL, opId);
 
-        ioUring.prepareCancel(sqe, targetOpId, 0);
-        ioUring.setUserData(sqe, userData);
+        ioUring.prepareCancelByUserData(sqe, userData);
+        ioUring.setUserData(sqe, cancelUserData);
 
-        return userData;
+        return cancelUserData;
+    }
+
+    /**
+     * Prepares a bulk {@code IORING_OP_ASYNC_CANCEL} that cancels every in-flight request
+     * operating on one file ({@code IORING_ASYNC_CANCEL_FD} plus {@code
+     * IORING_ASYNC_CANCEL_FD_FIXED} for registered slots, and {@code IORING_ASYNC_CANCEL_ALL}).
+     * <p>
+     * The match is by the kernel {@code struct file} behind the descriptor, so it cancels both
+     * plain-fd and fixed-file requests on the same file. The file must stay open until the
+     * cancel request is submitted and resolved (the kernel pins it at prep time).
+     *
+     * @param fdOrSlot  a plain file descriptor, or a registered-file slot when
+     *                  {@code fixedFile} is {@code true}
+     * @param fixedFile {@code true} to interpret {@code fdOrSlot} as a registered-file slot
+     * @return the cancel request's own operation handle; its completion result is the number
+     *         of cancelled requests ({@code 0} = none matched, negative = {@code -errno})
+     */
+    public long prepareCancelFile(int fdOrSlot, boolean fixedFile) {
+        long sqe = getSqe((byte) 0, false);
+        long opId = opSeq++;
+        long cancelUserData = UserData.encode(OperationType.CANCEL, opId);
+
+        ioUring.prepareCancelFile(sqe, fdOrSlot, fixedFile, IoUringDispatcher.IORING_ASYNC_CANCEL_ALL);
+        ioUring.setUserData(sqe, cancelUserData);
+
+        return cancelUserData;
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} with {@code IORING_ASYNC_CANCEL_ALL |
+     * IORING_ASYNC_CANCEL_ANY}: cancels every request in flight on this ring.
+     *
+     * <p><b>Dangerous:</b> this is a ring-wide operation, not scoped to a {@code JuringFile}.
+     * It is intended for shutdown paths where the caller owns every request on the ring.
+     * {@code JuringFile} exposes its own scoped cancellation.
+     *
+     * @return the cancel request's own operation handle
+     */
+    public long prepareCancelAny() {
+        long sqe = getSqe((byte) 0, false);
+        long opId = opSeq++;
+        long cancelUserData = UserData.encode(OperationType.CANCEL, opId);
+
+        ioUring.prepareCancelAny(sqe);
+        ioUring.setUserData(sqe, cancelUserData);
+
+        return cancelUserData;
     }
 
     // ------------------------------------------------------------------
@@ -1016,7 +1119,116 @@ public class JUring implements AutoCloseable {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Linked timeouts (B3)
+    // ------------------------------------------------------------------
+
+    /**
+     * Prepares an {@code IORING_OP_LINK_TIMEOUT} (opcode 15) that arms a timer for the
+     * immediately preceding request in the current submission batch. The target request must
+     * carry {@link SqeOptions#IOSQE_IO_LINK} and must be prepared immediately before this
+     * call; no other {@code prepare*} call may be queued in between. Both SQEs are submitted
+     * by the next {@code submit()/submitAndWait*()}.
+     *
+     * <p><b>Semantics (frozen, verified on the live kernel):</b>
+     * <ul>
+     *   <li>timeout fires first: the target completes with {@code -ECANCELED} and this
+     *       timeout request completes with {@code -ETIME} ({@code 0} with
+     *       {@link #IORING_TIMEOUT_ETIME_SUCCESS});</li>
+     *   <li>target completes first: this timeout request is disarmed and completes with
+     *       {@code -ECANCELED}; the target keeps its real result;</li>
+     *   <li>each request posts exactly one completion.</li>
+     * </ul>
+     *
+     * <p><b>Caller-managed timespec:</b> same rule as {@link #prepareTimeout(MemorySegment)}:
+     * a native, alive, thread-confined segment of at least 16 bytes holding
+     * {@code struct __kernel_timespec}; it must stay valid until the timeout request's
+     * completion has been reaped (conservative lifetime rule; the kernel copies the value at
+     * submission).
+     *
+     * @param timespec native 16-byte {@code __kernel_timespec}, caller-managed
+     * @param flags    {@code IORING_TIMEOUT_ABS | BOOTTIME | REALTIME | ETIME_SUCCESS}
+     *                 (update/multishot flags are rejected by the kernel for linked timeouts)
+     * @return the timeout request's operation handle
+     * @throws IllegalStateException         when the preceding SQE is not a linkable target in
+     *                                       the same unsubmitted batch
+     * @throws IllegalArgumentException      when {@code timespec}/{@code flags} are invalid
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_LINK_TIMEOUT}
+     */
+    public long prepareLinkTimeout(MemorySegment timespec, int flags) {
+        return prepareLinkTimeoutInternal(timespec, flags, (byte) 0);
+    }
+
+    public long prepareLinkTimeout(MemorySegment timespec, int flags, SqeOptions... sqeOptions) {
+        return prepareLinkTimeoutInternal(timespec, flags, SqeOptions.combineOptions(sqeOptions));
+    }
+
+    /** Linked-timeout variant with relative time and no {@code IORING_TIMEOUT_*} flags. */
+    public long prepareLinkTimeout(MemorySegment timespec) {
+        return prepareLinkTimeoutInternal(timespec, 0, (byte) 0);
+    }
+
+    /** Flags accepted by {@code IORING_OP_LINK_TIMEOUT} on this kernel. */
+    private static final int LINK_TIMEOUT_ALLOWED_FLAGS = IORING_TIMEOUT_ABS | IORING_TIMEOUT_BOOTTIME
+            | IORING_TIMEOUT_REALTIME | IORING_TIMEOUT_ETIME_SUCCESS;
+
+    private long prepareLinkTimeoutInternal(MemorySegment timespec, int flags, byte sqeFlags) {
+        ensureOpen();
+        requireOpcodeSupported(IoUringDispatcher.IORING_OP_LINK_TIMEOUT, "IORING_OP_LINK_TIMEOUT");
+        Objects.requireNonNull(timespec, "timespec");
+        if (!timespec.isNative()) {
+            throw new IllegalArgumentException("timespec must be native memory, not a heap segment");
+        }
+        if (timespec.byteSize() < TIMESPEC_BYTES) {
+            throw new IllegalArgumentException("timespec must be at least " + TIMESPEC_BYTES
+                    + " bytes (struct __kernel_timespec: tv_sec + tv_nsec), got " + timespec.byteSize());
+        }
+        if (!timespec.scope().isAlive()) {
+            throw new IllegalStateException("timespec scope is already closed");
+        }
+        if (!timespec.isAccessibleBy(Thread.currentThread())) {
+            throw new WrongThreadException("timespec is confined to another thread");
+        }
+        int invalidFlags = flags & ~LINK_TIMEOUT_ALLOWED_FLAGS;
+        if (invalidFlags != 0) {
+            throw new IllegalArgumentException("unsupported IORING_OP_LINK_TIMEOUT flags 0x"
+                    + Integer.toHexString(invalidFlags) + " (allowed: ABS, BOOTTIME, REALTIME, ETIME_SUCCESS)");
+        }
+        // The linked timeout only has meaning directly after a linkable SQE in the same batch.
+        long previous = ioUring.lastQueuedSqe();
+        if (previous == 0L) {
+            throw new IllegalStateException("prepareLinkTimeout requires the target SQE to be prepared first:"
+                    + " call prepare*(..., SqeOptions.IOSQE_IO_LINK) immediately before this method, in the same"
+                    + " unsubmitted submission batch");
+        }
+        if ((Sqe.getFlags(previous) & SqeOptions.IOSQE_IO_LINK.value) == 0) {
+            throw new IllegalStateException("prepareLinkTimeout: the immediately preceding SQE does not carry"
+                    + " IOSQE_IO_LINK; prepare the target with SqeOptions.IOSQE_IO_LINK");
+        }
+        if (Sqe.getOpcode(previous) == IoUringDispatcher.IORING_OP_LINK_TIMEOUT) {
+            throw new IllegalStateException("prepareLinkTimeout: a linked timeout cannot follow another"
+                    + " IORING_OP_LINK_TIMEOUT; the target must be an operation, not a timeout");
+        }
+        long sqe = getSqe(sqeFlags, false);
+        long opId = opSeq++;
+        long userData = UserData.encode(OperationType.LINK_TIMEOUT, opId);
+        ioUring.prepareLinkTimeout(sqe, timespec.address(), flags);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
+    boolean supportsLinkTimeout() {
+        return ioUring.isOpcodeSupported(IoUringDispatcher.IORING_OP_LINK_TIMEOUT);
+    }
+
+    private void ensureOpen() {
+        if (closed) {
+            throw new IllegalStateException("JUring is closed");
+        }
+    }
+
     private long getSqe(byte flags, boolean fixedFile) {
+        ensureOpen();
         long sqe = ioUring.getSqe();
         if (sqe == 0L) {
             throw new IllegalStateException("Submission queue ring is full; call submit() before preparing more operations");
@@ -1029,6 +1241,7 @@ public class JUring implements AutoCloseable {
     }
 
     public void submit() {
+        ensureOpen();
         ioUring.submit();
     }
 
@@ -1039,6 +1252,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions currently available in the CQ ring
      */
     public int submitAndWait(int minComplete) {
+        ensureOpen();
         return ioUring.submitAndWait(minComplete);
     }
 
@@ -1051,6 +1265,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int submitAndWaitForBatchResult(int minComplete, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.submitAndWaitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
     }
 
@@ -1064,22 +1279,46 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.submitAndWaitForBatchResult(minComplete, maxReap, consumer);
     }
 
     public int forEachBatchResult(int batchSize, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
     public int peekForBatchResult(int batchSize, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
     public List<Result> peekForBatchResult(int batchSize) {
+        ensureOpen();
         return ioUring.peekForBatchResult(batchSize);
     }
 
+    /**
+     * Non-blocking reap for lifecycle helpers: reaps currently available completions and,
+     * when none are visible and the ring uses {@code IORING_SETUP_DEFER_TASKRUN}, performs a
+     * non-blocking {@code io_uring_enter(GETEVENTS, min_complete=0)} to run deferred task
+     * work before peeking once more. Never blocks.
+     *
+     * @param batchSize maximum number of completions to reap
+     * @param consumer  zero-allocation completion callback
+     * @return number of completions reaped (0 when none are ready)
+     */
+    int pollForBatchResult(int batchSize, ResultConsumer consumer) {
+        ensureOpen();
+        int reaped = ioUring.peekForBatchResult(batchSize, consumer);
+        if (reaped == 0 && ioUring.pollCq() > 0) {
+            reaped = ioUring.peekForBatchResult(batchSize, consumer);
+        }
+        return reaped;
+    }
+
     public List<Result> waitForBatchResult(int batchSize) {
+        ensureOpen();
         return ioUring.waitForBatchResult(batchSize);
     }
 
@@ -1091,6 +1330,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.waitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
     }
 
@@ -1103,18 +1343,22 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        ensureOpen();
         return ioUring.waitForBatchResult(minComplete, maxReap, consumer);
     }
 
     public Result waitForResult() {
+        ensureOpen();
         return ioUring.waitForResult();
     }
 
     public Result waitForResult(Result target) {
+        ensureOpen();
         return ioUring.waitForResult(target);
     }
 
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
+        ensureOpen();
         if (this.registeredBuffersArray != null && this.registeredBuffersArray.length > 0) {
             throw new IllegalStateException("Buffers are already registered; cannot register twice");
         }
@@ -1139,6 +1383,7 @@ public class JUring implements AutoCloseable {
     }
 
     public int checkOutBuffer() {
+        ensureOpen();
         if (freeBufferTop == 0) {
             return -1;
         }
@@ -1150,6 +1395,7 @@ public class JUring implements AutoCloseable {
     }
 
     public void checkInBuffer(int bufferIndex) {
+        ensureOpen();
         if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
             throw new IllegalArgumentException("Invalid bufferIndex: " + bufferIndex);
         }
@@ -1173,6 +1419,7 @@ public class JUring implements AutoCloseable {
     }
 
     public int registerFiles(FileDescriptor... fileDescriptors) {
+        ensureOpen();
         int[] fds = new int[fileDescriptors.length];
         for (int i = 0; i < fileDescriptors.length; i++) {
             fds[i] = fileDescriptors[i].getFd();
@@ -1183,6 +1430,7 @@ public class JUring implements AutoCloseable {
     }
 
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
+        ensureOpen();
         int end = offset + fileDescriptors.length;
         if (offset < 0 || registeredFileTable.length < end) {
             // The kernel-side table and the JUring tracking table are created together and have the
@@ -1210,6 +1458,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException     if a file table is already registered on this ring
      */
     void initFileTable(int capacity) {
+        ensureOpen();
         if (capacity <= 0) {
             throw new IllegalArgumentException("Invalid file table capacity: " + capacity);
         }
@@ -1232,6 +1481,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException if the table is full
      */
     public int registerFileAdd(FileDescriptor fd) {
+        ensureOpen();
         Objects.requireNonNull(fd, "fd");
         if (registeredFileTable.length == 0) {
             initFileTable(DEFAULT_FILE_TABLE_CAPACITY);
@@ -1256,6 +1506,7 @@ public class JUring implements AutoCloseable {
      * ({@code IORING_REGISTER_FILES_UPDATE}). The slot is immediately reusable.
      */
     public void unregisterFileSlot(int slot) {
+        ensureOpen();
         if (slot < 0 || slot >= registeredFileTable.length) {
             throw new IllegalArgumentException("File slot out of range: " + slot + " (table capacity " + registeredFileTable.length + ")");
         }
@@ -1272,6 +1523,7 @@ public class JUring implements AutoCloseable {
      * No-op when no file table is registered.
      */
     public void unregisterFiles() {
+        ensureOpen();
         if (registeredFileTable.length == 0) {
             return;
         }
@@ -1288,6 +1540,7 @@ public class JUring implements AutoCloseable {
      * No-op when no buffers are registered.
      */
     public void unregisterBuffers() {
+        ensureOpen();
         if (registeredBuffersArray.length == 0) {
             return;
         }
@@ -1317,6 +1570,7 @@ public class JUring implements AutoCloseable {
      *                                       (the message carries the errno)
      */
     public void updateRegisteredBuffers(int offset, MemorySegment... buffers) {
+        ensureOpen();
         Objects.requireNonNull(buffers, "buffers");
         if (registeredBuffersArray.length == 0) {
             throw new IllegalStateException("No registered buffers to update; call registerBuffers() first");
@@ -1357,11 +1611,13 @@ public class JUring implements AutoCloseable {
 
     /** Number of queued-but-not-yet-completed operations on the underlying ring. */
     int inFlightCount() {
+        ensureOpen();
         return ioUring.inFlightCount();
     }
 
     /** Reads {@code stx_size} from a completed statx buffer (package-private helper for JuringFile). */
     long staticxSize(MemorySegment statxBuffer) {
+        ensureOpen();
         return ioUring.staticxSize(statxBuffer);
     }
 
@@ -1387,7 +1643,8 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Closes the ring and releases all associated off-heap resources.
+     * Closes the ring and releases all associated off-heap resources, using
+     * {@link #DEFAULT_CLOSE_TIMEOUT_MILLIS} as the deadline for in-flight requests.
      * <p>
      * For rings initialized with {@link IoUringOptions#IORING_SETUP_SINGLE_ISSUER}, {@code close()}
      * must be invoked on the owner (submitting) thread so that kernel-registered ring file descriptors
@@ -1395,11 +1652,50 @@ public class JUring implements AutoCloseable {
      */
     @Override
     public void close() {
-        closed = true;
-        ioUring.close();
-        if (readBufferPool != null) {
-            readBufferPool.close();
-            readBufferPool = null;
+        close(DEFAULT_CLOSE_TIMEOUT_MILLIS);
+    }
+
+    /**
+     * Bounded ring shutdown. Submits queued SQEs, cancels every in-flight request
+     * ({@code IORING_OP_ASYNC_CANCEL} with {@code ALL|ANY}), reaps completions until the
+     * deadline expires using non-blocking polls, then force-closes the ring. Never blocks
+     * longer than {@code timeoutMillis} waiting for completions and never throws because an
+     * operation failed; idempotent (a second call is a no-op).
+     *
+     * <p>Requests that are still in flight when the deadline expires are counted in
+     * {@link #abandonedAtClose()} and dropped with the ring mapping; the kernel releases
+     * them with the ring descriptor. Completions with {@code -ECANCELED} reaped during the
+     * drain are counted in {@link #cancelledAtClose()}.
+     *
+     * @param timeoutMillis deadline in milliseconds, {@code >= 0}
+     */
+    public void close(long timeoutMillis) {
+        if (closed) {
+            return;
         }
+        if (timeoutMillis < 0) {
+            throw new IllegalArgumentException("close timeout must be >= 0: " + timeoutMillis);
+        }
+        closed = true;
+        try {
+            ioUring.closeBounded(timeoutMillis);
+            this.abandonedAtClose = ioUring.abandonedAtClose();
+            this.cancelledAtClose = ioUring.cancelledAtClose();
+        } finally {
+            if (readBufferPool != null) {
+                readBufferPool.close();
+                readBufferPool = null;
+            }
+        }
+    }
+
+    /** @return {@code -ECANCELED} completions reaped during the most recent {@link #close()} */
+    public long cancelledAtClose() {
+        return cancelledAtClose;
+    }
+
+    /** @return requests still in flight when the most recent bounded {@link #close(long)} gave up */
+    public int abandonedAtClose() {
+        return abandonedAtClose;
     }
 }

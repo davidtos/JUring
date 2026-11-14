@@ -1,13 +1,107 @@
-# Handover — JUring vs seastar comparison (session of 2026-11-13; M1 + B1 + B2)
+# Handover — JUring vs seastar comparison (sessions through 2026-11-14; M1 + B1 + B2 + M2 + B3)
 
-For the next agent/session. Read this first, then **`docs/b2-report.md`** (B2
-deliverable, most recent), **`docs/b1-report.md`** (B1 deliverable),
+For the next agent/session. Read this first, then **`docs/m2-report.md`** (M2
+deliverable, most recent), **`docs/b3-design.md`** (B3 frozen API/semantics contract),
+**`docs/b2-report.md`** (B2 deliverable), **`docs/b1-report.md`** (B1 deliverable),
 **`docs/m1-report.md`** (M1 deliverable),
-**`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.1),
+**`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.2),
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
 
-## 0.1 B2 status — fourth session addendum (2026-11-13 evening) — **latest**
+## 0.1 M2 + B3 status — fifth session (2026-11-14) — **latest**
+
+**M2 (L1 stream parity) is SIGNED OFF: PASS.** Deliverable `docs/m2-report.md`; raw session
+`bench/results/m2-final/` (gitignored; 60/60 invocations `status=ok`, 0 errors; 4 cells ×
+{juring, seastar, juring-buffered} × R=5; 10 s warmup + 60 s measured; 300 s rests; CPU 2;
+commit `2198330`, clean).
+
+- **Verdict:** reads **98.2 % / 98.7 %** of seastar `fstream` (W22-128k / W22-1M; strict
+  one-sided-95 % LB 0.966 / 0.960 ≥ 0.85; ±5 % parity equivalence test passes). Writes
+  **139 % / 160 %** of seastar on point estimates (W21-128k / W21-1M), but the strict write
+  LB is **not established at n=5**: the drive alternates fast (first process after a 300 s
+  rest, ~0.6–0.85 GiB/s) / slow (second process, ~0.107–0.572 GiB/s; one fast→fast
+  exception, W21-128k r3) write state, so per-rep
+  paired ratios are position-confounded (0.16–7.6). Position-matched write ratios:
+  **1.23× / 1.27× fast, 0.98× / 1.38× slow**, pooled 1.25× / 1.14× — **no JUring deficit**.
+- **Read rep-1 artifact:** both read cells' rep 1 started immediately after the preceding
+  write cell under residual page-cache writeback (loadavg 1.93 / 2.19) and juring ran
+  first; juring 1M r1 was −10.9 % vs its r2–r5 while seastar's was −5.0 %. This explains
+  the residual ~1.6 % read gap; disclosed, no rep dropped.
+- **Non-throughput M2 criteria:** 184 tests green (0 failures/errors, 1 skipped), bounded
+  memory tests and L0 unchanged — all from B2 at the same commit (`2198330`), re-verified
+  by the Lead at M2 sign-off.
+- **Provenance cautions:** `aggregate/stream.md|.json` carry stale hard-coded
+  "preliminary" text and B2 default-protocol fields (`analyze_stream.py:404,491,599`); the
+  recorded protocol in `manifest.txt`/`cell-meta.tsv`/cell JSON is authoritative. Session
+  deviations vs methodology: one mixed read+write session (no phase separation), W22 = DS-S
+  single file (not DS-M), no D1 preconditioning / D2 1 s series, no thermal telemetry, the
+  exploratory buffered row runs last (never used for the verdict). A strict write claim
+  needs a separated, state-controlled rerun (see `docs/m2-report.md` §10).
+
+**B3 (request lifecycle hardening) — IMPLEMENTED 2026-11-14; design frozen, suite green,
+stress acceptance met, independent adversarial verification PASS.** Deliverables:
+[`docs/b3-design.md`](b3-design.md) (frozen contract, semantics live-probed not assumed),
+[`scratch/b3/STATUS.md`](../scratch/b3/STATUS.md) (author evidence), and
+[`scratch/b3-verify/VERDICT.md`](../scratch/b3-verify/VERDICT.md) (independent verdict).
+The independent verifier ran a 68-mode adversarial matrix (**68/68 clean,
+MATRIX_FAILURES=0**), independently reproduced **238 tests / 0 failures / 0 errors /
+1 skipped**, and confirmed all four phase-1 baseline defects are fixed; it found two
+medium documentation gaps (F1/F2, now recorded in design §11) and no acceptance
+violation. The Lead independently re-ran the full suite and the stress acceptance below.
+
+- **API delivered:** `IORING_OP_LINK_TIMEOUT` (15) + probe + same-batch/`IOSQE_IO_LINK`
+  validation (`JUring.prepareLinkTimeout`); `OperationType.LINK_TIMEOUT(20)` appended
+  (0–19 unchanged); `JuringFile` kernel-timed operations (`prepareTimeout(ms)`,
+  `prepareRead/Write(...,timeoutMillis)` linked pairs, `read/write(...,timeoutMillis)`)
+  with deterministic `ETIMEDOUT(110)` vs `ECANCELED(125)`; cancellation contract
+  (`CancelStatus{CANCELLED,ALREADY_COMPLETED,NOT_FOUND}`, `cancel(handle)` → status,
+  `cancelAll()`, `cancelledOperations()`, `controlOperations()`; raw
+  `prepareCancelByUserData` (real semantics; `prepareCancel` deprecated alias),
+  `prepareCancelFile(fdOrSlot, fixedFile)`, `prepareCancelAny()`); bounded shutdown
+  `JuringFile.close(timeout)` / `JUring.close(timeout)` (`cancelledAtClose`,
+  `abandonedAtClose`, `DEFAULT_CLOSE_TIMEOUT_MILLIS=2000`, hard bound timeout + 250 ms) with
+  cancel/reap/force-close and counted abandonment; **use-after-close hardening on every
+  native-touching public path** (fixes the verifier's baseline SIGSEGV); use-after-close
+  after `ring.close()` now throws `IllegalStateException` instead of crashing.
+- **Verified:** `mvn -o test` **238 tests, 0 failures, 0 errors, 1 skipped** (25 classes;
+  184 baseline + 54 new in 7 test classes: `JUringLinkTimeoutTest` 8,
+  `JUringCancellationTest` 9, `JuringFileTimeoutTest` 7, `JuringFileCancelTest` 7,
+  `JuringFileBoundedCloseTest` 9, `JuringLifecycleUseAfterCloseTest` 7,
+  `JuringResultSafetyTest` 7). One existing test was disambiguated for the new `close(long)`
+  overload (`assertDoesNotThrow(dedicated::close)` → explicit lambda; no assertion
+  weakened). Lead re-ran the full suite on the final tree.
+- **Stress acceptance (external `timeout`, exit 0; Lead re-ran too):** 50 % in-flight cancel
+  at QD64 (100 rounds / 6 400 ops / 3 189 cancelled) and QD256 (30 rounds / 7 680 ops /
+  3 828 cancelled) → every op exactly one terminal completion, ring in-flight 0; `JuringFile`
+  ledger variant deterministic. Close with 10 000 in flight: `JuringFile.close(2000)`
+  2019–2022 ms (bound 2 250 ms), issued=completed=10 000, abandoned=0, cancelledOps=10 000,
+  fds stable, RSS plateau; `JUring.close(2000)` with 10 000 in flight ≈8–12 ms,
+  cancelledAtClose=10 000, abandonedAtClose=0; use-after-close after stress throws
+  `IllegalStateException` on prepare/submit/wait (no SIGSEGV).
+- **Live-verified kernel semantics worth knowing:** link timeout fires first → target
+  `-ECANCELED`, link `-ETIME`; target wins → link `-ECANCELED` (not 0); a cancel request
+  completes `0` when it cancels and `-ENOENT` when the target already completed; a linked
+  timeout cannot be cancelled by its own user_data (kernel `-ENOENT` — cancel the target);
+  `IORING_TIMEOUT_ETIME_SUCCESS` is accepted but **not honoured by kernel 7.0.12**.
+- **Residual risks (design §11, STATUS §8, VERDICT.md R1–R10):** CQ overflow deliberately
+  not force-triggered (`IORING_FEAT_NODROP` kernel; contract documented,
+  `EBUSY`→`IllegalStateException`); `BOOTTIME/REALTIME` pass-through not separately
+  verified; `JUringBlocking` shutdown is still unbounded in the pathological
+  cancel-completion-never-arrives case (design §4.5); foreign ring work → abandon+count
+  (B4 dispatcher scope); `user_data` 2^56/2^48 opId wrap documented not defended; a timed
+  op counts as 2 ring requests in the counters. Verifier-added documentation items (design
+  §11.9–§11.12): **F1** concurrent non-fixed reads into the same `MemorySegment` share a
+  `user_data` handle and can wedge the file ledger (do not reuse a buffer for concurrent
+  `READ_EXT`; B4 may side-table the address), **F2** `cancel`/`cancelAll` need >=1 free
+  ledger slot (2 for timed pairs; default 1024 is ample; `close` is safe), **R3**
+  `IOSQE_CQE_SKIP_SUCCESS` phantoms make `JUring.close` burn the full (bounded) deadline
+  and count abandoned, and `supportsLinkTimeout()` is package-private (detect via
+  `UnsupportedOperationException`).
+- **Next:** finish the independent verifier pass if needed, then **B6** (buffered durability:
+  `posix_fadvise`, durability modes, group commit) and the optional state-controlled strict
+  write rerun / DS-M W22 for a stronger M2 write claim.
+
+## 0.2 B2 status — fourth session addendum (2026-11-13 evening)
 
 **B2 buffered stream layer is DONE, tested and verified** (working tree; commit follows this
 handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contract:
@@ -103,19 +197,33 @@ contract is [`docs/b1-design.md`](b1-design.md).
   absolute comparisons are invalid; the aged arm reproduced the matrix within 1–3 %.
   Consequently the `io_tester` cross-check is **NOT COMPARABLE** (no runner-accuracy
   conclusion drawn).
-- **No JUring source files were changed.** Repo diff is additive: `SEASTAR-PLAN.md`,
-  `docs/`, `bench/`, `.gitignore`. `SeaStarRef/`, `.tools/`, `.sysroot/` are gitignored.
-  No commits were made.
-- **Milestone order:** B0 harness **done**, **B1 `JuringFile` done**, **B2 streams done**;
-  next is the full **M2** W21/W22 campaign, and the M1 write matrix (Step A) is still open.
-  See §0.1 and §7.
+- **M2 — L1 stream parity: PASS 2026-11-14.** `docs/m2-report.md`; session
+  `bench/results/m2-final` (60/60 ok, 0 errors, R=5, 60 s cells, 300 s rests). Reads
+  98.2 %/98.7 % of seastar `fstream` (strict LB 0.966/0.960); writes 139 %/160 % point
+  estimate (strict write LB not established at n=5: drive burst→steady state;
+  position-matched 0.98–1.38×, no JUring deficit). Bounded memory, 184-test suite and
+  L0 unchanged from B2 at commit `2198330`.
+- **B3 — request lifecycle hardening: IMPLEMENTED 2026-11-14, suite green + acceptance
+  stress PASS** (frozen contract `docs/b3-design.md`; `IORING_OP_LINK_TIMEOUT` linked
+  timeouts, deterministic cancellation contract, bounded `close(timeout)` with no hang,
+  use-after-close hardening; 238 tests green, 50 %-cancel and 10k-in-flight stress PASS —
+  see §0.1 and `docs/b3-design.md`). Baseline defects found by the independent verifier
+  and fixed: use-after-close SIGSEGV, foreign-work close accounting, DEFER_TASKRUN
+  full-deadline close.
+- **Repo changes:** prior sessions were additive (`SEASTAR-PLAN.md`, `docs/`, `bench/`,
+  `.gitignore`); this session also changes `src/main/java/.../api/` (B3 only). No commits
+  were made in either session; `SeaStarRef/`, `.tools/`, `.sysroot/` are gitignored.
+- **Milestone order:** B0 harness, B1 `JuringFile`, B2 streams, **M2 stream parity** all
+  done; **B3 in progress**; M1 write matrix (Step A) and B6 remain. See §0.1/§0.2 and §7.
 
 ## 2. Repo map (what exists now)
 
 ```
 SEASTAR-PLAN.md                 plan v1.1 (read §0, §4, §5; M1 row updated)
 docs/
-  b2-report.md                  ** B2 DELIVERABLE (latest) ** stream layer + tests + W21/W22 preliminary
+  m2-report.md                  ** M2 DELIVERABLE (latest) ** W21/W22 campaign vs seastar fstream
+  b3-design.md                  B3 frozen contract (timeouts/cancel/bounded shutdown)
+  b2-report.md                  B2 stream layer + tests + W21/W22 preliminary
   b2-design.md                  B2 frozen stream API/semantics + benchmark contract
   b1-report.md                  B1 DELIVERABLE JuringFile + engine ops + L0 evidence
   b1-design.md                  B1 frozen API/semantics contract (JuringFile, engine ops)
@@ -377,11 +485,14 @@ within 1–3 % in a separate run.
   /`JuringOutputStream` with readahead/write-behind/flush, bounded memory, 42 new tests,
   L0 unchanged, preliminary W21/W22 (36/36 cells ok) with point-estimate stream ratios
   0.940/0.905/1.098 and state-matched 1.055/0.998; strict M2 bound needs the full campaign.
-- **M2 (full W21/W22 campaign)** next: separate read and write sessions (methodology
-  phase separation), 60 s measured cells, 300 s rests, DS-M multi-file W22, R=5, D1 write
-  preconditioning; run `bench/stream/run-stream-matrix.sh` with `--session/--cells/
-  --seconds/--warmup/--rest/--reps`, aggregate with `analyze_stream.py`, then write the
-  M2 stream report (the B2 report §4 is the readiness measurement, not M2).
+- **M2 (full W21/W22 campaign) — DONE 2026-11-14** (`docs/m2-report.md`, session
+  `bench/results/m2-final`): 60 s cells, R=5, 300 s rests, buffered exploratory row last;
+  reads strict-pass (98.2 %/98.7 %), writes point-estimate pass (139 %/160 %; strict LB not
+  established due to the drive's burst→steady write state, position-matched 0.98–1.38×).
+  Still open from the intended full protocol: separated read/write sessions, DS-M W22,
+  D1 preconditioning, D2 1 s series; a state-controlled strict write rerun is optional.
+  Next library items: **B3** (in progress this session), then **B6**. The M1 write matrix
+  (Step A) is still open.
 
 ### Step C — multi-shard / L2 (W17-W20)
 - Extend `seastar_file_bench` with `--smp N` (it currently refuses >1) and add a

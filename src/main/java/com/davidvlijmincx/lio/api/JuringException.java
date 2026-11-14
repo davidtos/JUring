@@ -35,8 +35,16 @@ public final class JuringException extends IOException {
     public static final int ENOSPC = 28;
     /** {@code ECANCELED} — operation cancelled. */
     public static final int ECANCELED = 125;
-    /** {@code ETIMEDOUT} — operation timed out. */
+    /** {@code ETIMEDOUT} — operation timed out (the JUring/file-level timeout errno). */
     public static final int ETIMEDOUT = 110;
+    /**
+     * {@code ETIME} — the kernel's io_uring timeout completion errno. {@code JuringFile}
+     * translates it to {@link #ETIMEDOUT} for its high-level timeout helpers; raw
+     * {@code JUring} completions report {@code -ETIME}.
+     */
+    public static final int ETIME = 62;
+    /** {@code EALREADY} — a cancellation target was already completing/completed. */
+    public static final int EALREADY = 114;
 
     private final int errno;
     private final String operation;
@@ -136,6 +144,11 @@ public final class JuringException extends IOException {
     /** @return {@code true} for {@code ETIMEDOUT} */
     public boolean isTimedOut() {
         return isErrno(ETIMEDOUT);
+    }
+
+    /** @return {@code true} for {@code ECANCELED} (the request was canceled) */
+    public boolean isCancelled() {
+        return isErrno(ECANCELED);
     }
 
     private static String formatMessage(int errno, String operation, String detail) {

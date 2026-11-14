@@ -1,6 +1,6 @@
 # JUring vs seastar: where we are, and how to catch up on the basics
 
-**Status:** v1.1 — 2026-11-13 (decisions locked; seastar checkout moved in-repo)
+**Status:** v1.2 — 2026-11-14 (**M2 signed off**, see `docs/m2-report.md`; B3 in progress). v1.1 2026-11-13: decisions locked; seastar checkout moved in-repo.
 **Subject:** JUring `4526338` (branch `kafka-engine`)
 **Opponent:** `SeaStarRef/` (in-repo checkout) at seastar `04b1c04d` (`seastar-25.05.0-1392-g04b1c04d`, 2026-11-11)
 **Hardware:** AMD Ryzen 9 3950X (16C/32T), 62 GiB RAM, Linux 7.0.12, GIGABYTE GP-ASM2NE6100TTTD 1 TB NVMe (`nvme1n1`, ext4, `/mnt/TestData`)
@@ -41,7 +41,7 @@ attack. The useful question is *at which layer are we behind, and by how much*.
 | Layer | What it measures | Status today | Next action |
 |---|---|---|---|
 | **L0 — io_uring engine** | Same kernel path, same workload, different driver code | **Measured.** 4K randread: seastar wins QD1/QD16 (**11.6k vs 11.1k**, **146.2k vs 143.7k**) and JUring wins QD64/QD128 (**324.2k vs 319.5k**, **420.8k vs ~399k fast-state**); 1M seqread parity (~4.77 GiB/s). **Engines are within ±5% everywhere**; fio is not a proxy (297.9k/303.3k at QD64/128). Caveats: one sandbox build, 3 reps, no hugepages, QD128 slow-state variance, fio not yet registration-matched. | **M1:** more reps + state gating, matched fio sweep, same-definition latency, cycles/op, `io_tester` cross-check. |
-| **L1 — async file API** | `file::dma_read` + `fstream` (readahead/write-behind) vs. raw SQEs | **Not comparable yet.** seastar has a complete file+stream layer. JUring has raw SQEs, registered files/buffers and a VT facade — no stream abstraction, no truncate/allocate/discard/stat, no cancellation guarantees, no timeout op. A buffered `io_tester`/`fstream_perf` comparison cannot be run against JUring today. | **B1+B2**, then **M2**. |
+| **L1 — async file API** | `file::dma_read` + `fstream` (readahead/write-behind) vs. raw SQEs | **Measured — M2 PASS 2026-11-14** (`docs/m2-report.md`). B1 `JuringFile` + B2 `JuringInputStream`/`JuringOutputStream` landed; W21/W22 campaign: 60/60 invocations ok, 0 errors, R=5, 10 s warmup + 60 s cells, 300 s rests. Seq **read 98.2 %/98.7 %** of seastar `fstream` (strict one-sided-95 % LB 0.966/0.960 ≥0.85; ±5 % parity equivalence test passes); seq **write 139 %/160 %** point estimate (strict write LB not established at n=5 — drive burst→steady write-state transition; position-matched 1.23×/0.98× and 1.27×/1.38×, pooled 1.25×/1.14×, no JUring deficit). Bounded memory, 184-test suite and L0 non-regression verified at commit `2198330`. | **B3** done 2026-11-14; next **B6** (buffered durability); DS-M W22 + a state-controlled strict write rerun later. |
 | **L2 — runtime** | Shard-per-core, scheduling, backpressure, I/O QoS, metrics | **Not comparable yet, mostly absent.** JUring gives one ring per thread and lets users build their own runtime. Legitimate library design — but it means multi-shard scaling and mixed workloads are *user code*, not library behaviour, so there is nothing to compare. | **B4+B5**, then **M3**. |
 | **L3 — application/framework** | the future flagship seastar-alternative built on JUring | **Out of scope for JUring.** JUring is library-first; the framework is a separate project. It will consume JUring's L1/L2 basics, so those are still worth building — but no L3 comparison belongs in this plan. | Revisit when the framework project starts. |
 
@@ -77,7 +77,8 @@ order, by leverage:
 buffered/durability → conditional QoS**. §4 has the details.
 
 **Milestones.** **M0 done 2026-11-13** (harness + seastar built + first L0 read matrix);
-M1 L0 parity report; M2 L1 stream parity; M3 L2 scaling + observability; M4 conditional
+**M1 done 2026-11-13** (read path PASS; write half pending); **M2 done 2026-11-14**
+(L1 stream parity, `docs/m2-report.md`); M3 L2 scaling + observability; M4 conditional
 QoS. Pass/fail in §5.
 
 ---
@@ -514,7 +515,7 @@ usability + comparability.
 **Accept:** W21/W22 run; seq 1M read/write ≥85% of seastar `fstream`; bounded memory
 (configurable max in-flight); correctness tests for partial writes/EOF. **Milestone M2.**
 
-### B3. Request lifecycle hardening — **M** (G4, G6)
+### B3. Request lifecycle hardening — **M** (G4, G6) — **DONE 2026-11-14**
 **Now:** `prepareCancel` only (untested); no timeout op; link flags pass-through only;
 `close()` drains+cancels via `ASYNC_CANCEL_ALL|ANY` but can block indefinitely if an op
 never completes; no completion-after-cancel contract; no bulk cancel API.
@@ -525,6 +526,26 @@ audit, error taxonomy. Note: seastar has cancellation but no per-op timeout eith
 timeouts are a JUring addition, not parity.
 **Accept:** stress test cancelling 50% of in-flight + closing with 10k in flight — no
 leaks, no hangs, deterministic completions; documented semantics.
+**Delivered (2026-11-14, session 5):** frozen contract `docs/b3-design.md` (semantics
+live-probed, not assumed); `IORING_OP_LINK_TIMEOUT` + probe + same-batch/`IOSQE_IO_LINK`
+validation; kernel-timed `JuringFile` read/write + `prepareTimeout(ms)`; deterministic
+cancel contract (`CancelStatus{CANCELLED,ALREADY_COMPLETED,NOT_FOUND}`, `cancel`,
+`cancelAll`, bulk cancel by user_data/fd/fixed/any, control accounting); bounded
+`JuringFile.close(timeout)` and `JUring.close(timeout)` (hard bound timeout+250 ms, counted
+abandonment, never hangs); use-after-close hardening on every native-touching public path
+(fixes a verifier-found SIGSEGV); queue-full/CQ-overflow contract, `user_data`/`Result`
+ownership audit and `ETIMEDOUT`/`ECANCELED` taxonomy.
+**Evidence:** `mvn -o test` **238 tests, 0 failures, 0 errors, 1 skipped** (184 baseline
++ 54 new; Lead and the independent verifier both re-ran it on the final tree);
+**independent adversarial verification PASS** (68/68 modes clean, 1000-race cancel
+determinism, 37/27-entry-point closed matrix, no hang/SIGSEGV; `scratch/b3-verify/VERDICT.md`);
+50 % in-flight cancel at QD64/256 → exactly one terminal completion per op, in-flight 0; close with 10 000 in flight → 2.02 s (bound
+2.25 s), issued=completed=10 000, abandoned=0, fds stable; `JUring.close(2000)` with 10k
+→ ~10 ms. Residual risks (design §11): CQ overflow not force-triggered (NODROP kernel),
+`ETIME_SUCCESS` not honoured by kernel 7.0.12, `JUringBlocking` shutdown still unbounded in
+the pathological never-completes case, foreign-ring-work = abandon+count (B4 scope),
+2^56/2^48 user_data opId wrap; timed ops count as 2 ring requests.
+Full handover detail: `docs/HANDOVER.md` §0.1 and `scratch/b3/STATUS.md`.
 
 ### B4. Multi-ring / shard runtime — **L** (G2)
 **Now:** users hand-roll one ring per thread; `JUringBlocking` covers the blocking/VT
@@ -600,7 +621,7 @@ stops at B9.
 |---|---|---|---|
 | **M0 — Measure** | week 0 — **done 2026-11-13** | harness + baseline + seastar built | one-command reproduction; seastar runs (`io_tester` + `seastar_file_bench`); manifest complete; first L0 read matrix collected |
 | **M1 — L0 parity** | weeks 1–2 — **read path PASS 2026-11-13** (`docs/m1-report.md`); write half pending | L0 report vs fio + seastar | read and write cells: ratio 90% CI inside `[0.90, 1.10]` and point estimate inside `[0.95, 1.05]` vs fio (matched batching + registration); p99 ≤1.10× fio, p999 ≤1.15× **measured with one common latency definition** (today's definitions differ); seastar reported as bracket with asymmetry table; every claim has a CI; QD64 reps classified by run state (§6) and all reps reported |
-| **M2 — L1 file/stream** | weeks 3–5 | B1+B2 + W21/W22 | seq 1M read/write ≥85% of seastar `fstream`; bounded memory; correctness suite green; L0 unchanged |
+| **M2 — L1 file/stream** | weeks 3–5 — **PASS 2026-11-14** (`docs/m2-report.md`) | B1+B2 + W21/W22 | seq 1M read/write ≥85% of seastar `fstream`; bounded memory; correctness suite green; L0 unchanged. **Evidence:** read 98.2 %/98.7 % (strict 1s95 LB 0.966/0.960 ≥ 0.85; ±5 % parity test passes); write 139 %/160 % point estimate (strict write LB not established at n=5 — drive burst→steady write-state transition; position-matched 0.98–1.38× (state-classified fast 1.27–1.29×; only 1/10 reps same-state), no JUring deficit); 184 tests green; bounded memory and L0 unchanged from B2 at commit `2198330` |
 | **M3 — L2 scaling + metrics** | weeks 6–9 | B4+B5 + W17–W20 | 8-thread ≥85% of `fio numjobs=8`; SE(8) ≥0.75; total IOPS vs seastar uring 90% CI LB ≥0.90; per-shard min/mean ≥0.85; p99 at 8 ≤1.15× 1-shard; metrics <1% overhead |
 | **M4 — mixed/QoS** | weeks 10–12 | B8 experiment + report | shares honoured ±10% with ≤5% overhead, no starvation — **or** a documented decision to keep QoS out of v1 |
 
