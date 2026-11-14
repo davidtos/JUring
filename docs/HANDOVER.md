@@ -1,16 +1,101 @@
-# Handover — JUring vs seastar comparison (sessions through 2026-11-14; M1 + B1 + B2 + M2 + B3 + B4)
+# Handover — JUring vs seastar comparison (sessions through 2026-11-14; M1 + B1 + B2 + M2 + B3 + B4 + B5)
 
-For the next agent/session. Read this first, then **`docs/b4-report.md`** (B4 deliverable,
-most recent), **`docs/b4-design.md`** (B4 frozen API/semantics contract),
+For the next agent/session. Read this first, then **`docs/b5-report.md`** (B5 deliverable,
+most recent), **`docs/b5-design.md`** (B5 frozen API/semantics contract + amendments
+A1/A2/A3), **`scratch/b5-verify/VERDICT.md`** (independent B5 verification),
+**`scratch/b5-lead/FREEZE.md`** (B5 freeze identity), then **`docs/b4-report.md`**
+(B4 deliverable), **`docs/b4-design.md`** (B4 frozen API/semantics contract),
 **`scratch/b4-verify/VERDICT.md`** (independent B4 verification), **`docs/m2-report.md`**
 (M2 deliverable), **`docs/b3-design.md`** (B3 frozen API/semantics contract),
 **`docs/b2-report.md`** (B2 deliverable), **`docs/b1-report.md`** (B1 deliverable),
 **`docs/m1-report.md`** (M1 deliverable),
-**`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.2),
+**`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.4),
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
 
-## 0.0 B4 status — sixth session (2026-11-14) — **latest**
+## 0.0 B5 status — seventh session (2026-11-14) — **latest**
+
+**B5 (observability, L2) is DELIVERED, tested and independently verified (PASS) — but M3 is
+still NOT signed off**: the full R=5 W17–W20 campaign (incl. a seastar `--smp N` runner and
+the restated M3 scaling bars) remains. Deliverables: [`docs/b5-design.md`](b5-design.md)
+(frozen contract incl. amendments A1/A2/A3, written before implementation),
+[`docs/b5-report.md`](b5-report.md) (deliverable), [`scratch/b5-core/STATUS.md`](../scratch/b5-core/STATUS.md)
+(engine metrics evidence), [`scratch/b5-runtime/STATUS.md`](../scratch/b5-runtime/STATUS.md)
+(shard/JMX evidence), [`scratch/b5-verify/VERDICT.md`](../scratch/b5-verify/VERDICT.md)
+(independent verdict FINAL PASS), [`scratch/b5-lead/FREEZE.md`](../scratch/b5-lead/FREEZE.md)
+(frozen identity).
+
+- **New public API (com.davidvlijmincx.lio.api):** `RingMetrics` (18-component per-ring
+  snapshot: prepared/submitted/reaped/completed/failed/cancelled/timedOut/inFlight,
+  SQ+CQ occupancy, enters/submitBatches/submitErrors/submitRetries/sqFullEvents,
+  cqOverflowEvents), `LatencySnapshot`, `LatencyHistogram` (512-slot log-linear,
+  allocation-free record, inclusive-bucket-max percentiles clamped to the recorded max),
+  `ShardMetrics`, `GroupMetrics`, `IoShardMetricsMXBean`, `RingGroupMetricsMXBean`,
+  `MetricsJmx` (+ nested `Handle`). Additive: `JUring.ringMetrics()`, `IoShard.metrics()`,
+  `RingGroup.metrics()`/`aggregateMetrics()`, `ShardOptions.DEFAULT_LATENCY_SAMPLE_EVERY`/
+  `latencySampleEvery()`/`withLatencySampleEvery(int)`. `ShardStats` unchanged (B4 compat).
+  **No new runtime dependency**; `module-info` gains `requires java.management;` for JMX;
+  `pom.xml` unchanged.
+- **Semantics:** ring counters are owner-thread opaque/atomic writes with acquire snapshots
+  (no tearing); CQEs are classified in every consumption path so `reaped == completed +
+  failed`; `timedOut` counts kernel `-ETIME(-62)` or `-ETIMEDOUT(-110)` (A1.1); snapshots are
+  best effort and frozen after close (`sqQueued/cqReady = 0`, effective ring depths retained,
+  never throw); ring counters include runtime-internal wakeup/cancel ops. Shard dispatch
+  latency = deterministic every-Nth `onCompletion` registration → handler invocation
+  (registration→dispatch; includes kernel/device completion; disabled by default; histogram
+  allocated only when enabled; empty for body-hosted `JUringBlocking` shards). JMX =
+  pull-based MXBeans on the platform `MBeanServer`, deterministic ObjectNames, duplicate
+  rejection, group rollback, idempotent handles, latency in µs, no exporter thread.
+  Micrometer deliberately not shipped (the snapshot API is the binding seam). Full contract:
+  design §2–§11 + A1/A2/A3.
+- **Tests:** `mvn -o test` **349 tests, 0 failures, 0 errors, 1 skipped**, BUILD SUCCESS
+  16.698 s on the frozen tree (309 B4 baseline byte-identical + **40 new** in 4 classes:
+  `B5RingMetricsTest` 14, `B5LatencyHistogramTest` 11, `B5ShardMetricsTest` 10,
+  `B5JmxTest` 5). Zero-allocation: metrics-on engine hot loop 0 B/op, histogram `record()`
+  0 B, shard registration path 0 B (a sporadic single-round JVM one-off is documented in
+  `scratch/b5-runtime/STATUS.md`).
+- **Overhead A/B (< 1 % bar) — PASS** on the frozen tree vs a `git archive 6cc1a75`
+  baseline build: mean paired throughput ratios `1.0190 / 1.0110 / 1.0070` for shard N=1 /
+  shard N=8 / threads N=1 (stdev 0.030/0.040/0.037; one-sided 95 % CI lower 0.991/0.973/
+  0.972; min rep 0.9543; no rep-floor violation under either state-gate labelling; no
+  fallback re-run needed). Final config: metrics on, 1 Hz series,
+  `withLatencySampleEvery(1)`. Session: `bench/results/b5-overhead-2026-11-14/`
+  (gitignored; `aggregate/overhead.{md,json}`, identity in `manifest.txt`).
+- **Benchmark JSON schema 1.1:** additive per-worker `ring_metrics` + measured-phase 1 Hz
+  `ring_series` (queue depth + p99) for both runtimes, shard-mode `dispatch_latency_us`
+  (runtime completion latency, A2.2), run-level `metrics`, aggregate `ring_queue_depth` +
+  `dispatch_latency_us`; `analyze_shard.py` emits per-ring queue-depth/p99 tables (tolerant
+  of old sessions). Example per-ring evidence (shard8, B5 arm): mean in-flight 64.1–64.9
+  (max 65), runtime-completion p99 2831–4116 µs reproducing the known CPU/hctx split, 0
+  failed/cancelled. **This is the M3 per-ring queue-depth/p99 data source.**
+- **Independent verification PASS:** 60/60 adversarial modes (own byte-identical src copy,
+  own classpath — never `target/classes`; fresh JVM + external timeout per mode), 2 355
+  assertions, its own full suite 349/0/0/1 and 21 365 independent bench-artifact assertions;
+  frozen hashes re-derived before/after every phase. One contract-wording finding (F1,
+  histogram percentile clamping) was resolved by amendment A3 (no source change); no open
+  defect. See `scratch/b5-verify/VERDICT.md` (R1–R11 residual risks).
+- **Residual risks:** design §10 + A1/A2/A3 — best-effort non-linearizable snapshots; ring
+  counters include internal ops; JMX is pull-based/local-only; histogram percentiles are
+  bucket maxima (over-estimate < 1/16 for ≥16 ns, clamped to the recorded max) and not for
+  single-request SLOs; dispatch latency is a runtime-boundary completion latency (not fio
+  `clat` / not the external `latency_us`); body-hosted shards have no latency histogram;
+  `cqOverflowEvents` is best effort; the overhead bar is established for the §7.1 protocol
+  only; no Micrometer dependency.
+- **Provenance:** base commit `6cc1a75` (B4 `159d60f`); **B5 delivered in commit
+  `309335b`** (`feat(api): add ring metrics, latency histogram, JMX and bench JSON (B5)`);
+  this HANDOVER + `docs/b5-report.md` + `SEASTAR-PLAN.md` v1.4 follow in a docs commit.
+  Frozen-tree identity: `src/main` content sha1 `04f12dbc85d723a10dd952b7ac3c51bb6253ed46`,
+  `src/test` content sha1 `666e0644dc063c0b15c5bb52571002a79b5ec657`, tracked
+  `git diff src/main/java` sha1 `2933a9064465f4e85968052fba2b2a8eabb20790`, design
+  (final, incl. A3) sha1 `ff60e870d0d4d08acbbd6bc9931b0a9d457f0698`.
+- **Next:** **M3 campaign** (full W17–W20 R=5, state gating, 300 s rests, seastar
+  `--smp N` runner, DS-M/per-shard-file decision, seastar 90 % LB; restate the scaling bars
+  vs `fio` at the same N or hold total QD fixed; topology-aware placement one shard per
+  NVMe hctx or unpinned). B5 completes the metrics half of M3; **M3 is still not signed**.
+  Earlier-session work still open: M1 write matrix (Step A), B6 buffered durability. The
+  optional B4 follow-up (VT-throughput re-benchmark) is unchanged.
+
+## 0.1 B4 status — sixth session (2026-11-14)
 
 **B4 (multi-ring / shard runtime, L2) is DELIVERED, tested and independently verified
 (PASS) — but M3 is NOT signed off**: B5 (observability) and the full W17–W20 campaign
@@ -99,7 +184,7 @@ most recent), **`docs/b4-design.md`** (B4 frozen API/semantics contract),
   move `JUringBlocking`'s slot protocol onto the generic task loop only if a VT-throughput
   re-benchmark justifies the dedup.
 
-## 0.1 M2 + B3 status — fifth session (2026-11-14)
+## 0.2 M2 + B3 status — fifth session (2026-11-14)
 
 **M2 (L1 stream parity) is SIGNED OFF: PASS.** Deliverable `docs/m2-report.md`; raw session
 `bench/results/m2-final/` (gitignored; 60/60 invocations `status=ok`, 0 errors; 4 cells ×
@@ -192,7 +277,7 @@ violation. The Lead independently re-ran the full suite and the stress acceptanc
   `posix_fadvise`, durability modes, group commit) and the optional state-controlled strict
   write rerun / DS-M W22 for a stronger M2 write claim.
 
-## 0.2 B2 status — fourth session addendum (2026-11-13 evening)
+## 0.3 B2 status — fourth session addendum (2026-11-13 evening)
 
 **B2 buffered stream layer is DONE, tested and verified** (working tree; commit follows this
 handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contract:
@@ -228,7 +313,7 @@ handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contra
 - **Next: M2** (full W21/W22 campaign + report), then the write matrix (Step A, still
   pending) and B3/B6.
 
-## 0. B1 status — third session addendum (2026-11-13 evening)
+## 0.4 B1 status — third session addendum (2026-11-13 evening)
 
 **B1 `JuringFile` is DONE, tested and committed** in this session (commit
 `feat(api): add JuringFile async file handle abstraction (B1)`, branch `kafka-engine`).
@@ -297,7 +382,7 @@ contract is [`docs/b1-design.md`](b1-design.md).
 - **B3 — request lifecycle hardening: DONE 2026-11-14, suite green + acceptance stress
   PASS** (frozen contract `docs/b3-design.md`; `IORING_OP_LINK_TIMEOUT` linked timeouts,
   deterministic cancellation contract, bounded `close(timeout)` with no hang, use-after-close
-  hardening; 238 tests green, 50 %-cancel and 10k-in-flight stress PASS — see §0.1).
+  hardening; 238 tests green, 50 %-cancel and 10k-in-flight stress PASS — see §0.2).
 - **B4 — multi-ring / shard runtime: DELIVERED + INDEPENDENTLY VERIFIED PASS 2026-11-14**
   (`docs/b4-report.md`, frozen contract `docs/b4-design.md`): `IoShard`/`RingGroup` with
   ring-per-thread affinity, RR/hash distribution, MPSC+eventfd cross-thread completion
@@ -305,21 +390,33 @@ contract is [`docs/b1-design.md`](b1-design.md).
   on shards (zero-GC kept) with `RingGroup` ctor + bounded close (B3 §4.5 fixed);
   309 tests green; verifier 105/105 modes PASS after fixing one verifier-found
   completion-table wedge (F1) before delivery; **M3 NOT signed** (B5 + full W17–W20
-  campaign remain) — see §0.0.
+  campaign remain) — see §0.1.
+- **B5 — observability: DELIVERED + INDEPENDENTLY VERIFIED PASS 2026-11-14**
+  (`docs/b5-report.md`, frozen contract `docs/b5-design.md` + A1/A2/A3): per-ring
+  `RingMetrics` (`JUring.ringMetrics()`), dependency-free `LatencyHistogram`/
+  `LatencySnapshot` + shard runtime-completion latency sampling, `ShardMetrics`/
+  `GroupMetrics`, JMX MXBeans (`MetricsJmx`), benchmark JSON schema 1.1 with measured-phase
+  ring series (queue depth + p99), official overhead A/B **PASS** (mean paired ratios
+  1.019/1.011/1.007; <1 % bar met); 349 tests green (309 B4 + 40 new); verifier 60/60 modes
+  PASS (one contract-wording finding resolved by A3); **M3 still NOT signed** (the full
+  R=5 W17–W20 campaign + restated scaling bars remain) — see §0.0.
 - **Repo changes:** prior sessions were additive (`SEASTAR-PLAN.md`, `docs/`, `bench/`,
   `.gitignore`); session 5 changed `src/main/java/.../api/` (B3) and session 6 adds the B4
   runtime (`IoShard`, `RingGroup`, shard support, `JUringBlocking` integration) plus
   `bench/shard/` and `bench/juring/JUringFileBench --runtime=shard`. B4 is committed in
   this session (`159d60f`); `SeaStarRef/`, `.tools/`, `.sysroot/` are gitignored.
-- **Milestone order:** B0 harness, B1 `JuringFile`, B2 streams, **M2 stream parity** all
-  done; **B3 in progress**; M1 write matrix (Step A) and B6 remain. See §0.1/§0.2 and §7.
+- **Milestone order:** B0 harness, B1 `JuringFile`, B2 streams, **M2 stream parity**, B3
+  lifecycle, B4 runtime and B5 observability all done; M1 write matrix (Step A) and B6
+  remain; M3 campaign is the next milestone. See §0.0/§0.2 and §7.
 
 ## 2. Repo map (what exists now)
 
 ```
-SEASTAR-PLAN.md                 plan v1.1 (read §0, §4, §5; M1 row updated)
+SEASTAR-PLAN.md                 plan v1.4 (read §0, §4, §5; B5/M3 rows updated)
 docs/
-  b4-report.md                  ** B4 DELIVERABLE (latest) ** shard runtime + verification + scaling
+  b5-report.md                  ** B5 DELIVERABLE (latest) ** observability + overhead + verification
+  b5-design.md                  B5 frozen contract (metrics/histogram/JMX/bench JSON) + A1/A2/A3
+  b4-report.md                  B4 DELIVERABLE: shard runtime + verification + scaling
   b4-design.md                  B4 frozen contract (IoShard/RingGroup, seam, shutdown, acceptance)
   m2-report.md                  M2 DELIVERABLE: W21/W22 campaign vs seastar fstream
   b3-design.md                  B3 frozen contract (timeouts/cancel/bounded shutdown)
@@ -574,17 +671,17 @@ within 1–3 % in a separate run.
   perf gate for W1/W3** (fail on >10 % regression), and retire the legacy JMH numbers
   from the docs. Accept: one command reproduces the tables from raw JSON; a stored
   baseline is compared per commit.
-- **B1 (`JuringFile`) — DONE 2026-11-13** (third session; see §0 and
+- **B1 (`JuringFile`) — DONE 2026-11-13** (third session; see §0.4 and
   `docs/b1-report.md`): open with flags/options, offset read/write (plain + fixed-buffer
   fast path), length/truncate/allocate/discard/fsync/fdatasync, close-with-drain
   (bounded, never hangs), typed `-errno` errors, short-IO/EAGAIN policy, registration
   lifecycle (unregister, add/remove at runtime). Evidence: 142 tests green
   (conformance seq/rand/EOF/short-IO/close-with-inflight), **L0 W1/W3 unchanged** (pre/post
   M1 harness inside the §7 band), zero-allocation hot path strict 0 bytes. Deviations and
-  open decisions: see §0 above and `docs/b1-report.md` §4 (statx tracking workaround;
+  open decisions: see §0.4 above and `docs/b1-report.md` §4 (statx tracking workaround;
   non-throwing `close()` vs guarded `await`; caller-managed timeout timespec; buffer
   replace-or-unregister scope; mixed error taxonomy; ring-wide registration).
-- **B2 (streams) — DONE 2026-11-13** (see §0.1 and `docs/b2-report.md`): `JuringInputStream`
+- **B2 (streams) — DONE 2026-11-13** (see §0.3 and `docs/b2-report.md`): `JuringInputStream`
   /`JuringOutputStream` with readahead/write-behind/flush, bounded memory, 42 new tests,
   L0 unchanged, preliminary W21/W22 (36/36 cells ok) with point-estimate stream ratios
   0.940/0.905/1.098 and state-matched 1.055/0.998; strict M2 bound needs the full campaign.
@@ -597,11 +694,12 @@ within 1–3 % in a separate run.
   Next library items: **B3** (in progress this session), then **B6**. The M1 write matrix
   (Step A) is still open.
 
-### Step C — B5 then the M3 campaign (B4 is done)
-- **B5 observability** (`SEASTAR-PLAN.md` §4 B5): per-ring submitted/completed/in-flight,
-  SQ/CQ occupancy, error counts, latency histogram off the hot path, JMX/Micrometer
-  binding, benchmark JSON integration. Accept: <1 % throughput cost; M3 report shows
-  per-ring queue depth and p99. Start from `ShardStats` (B4) and extend.
+### Step C — the M3 campaign (B4 + B5 are done)
+- **B5 observability — DONE 2026-11-14** (`SEASTAR-PLAN.md` §4 B5; `docs/b5-report.md`):
+  per-ring counters/occupancy, shard runtime-completion latency histogram, JMX MXBeans,
+  benchmark JSON 1.1 with per-ring queue depth + p99; overhead A/B PASS (<1 % bar, mean
+  paired ratios 1.019/1.011/1.007; session `bench/results/b5-overhead-2026-11-14/`).
+  Accept met; M3 now only needs the campaign.
 - **M3 campaign** (after B5): full W17-W20 R=5/state-gated/300 s-rest campaign, extend
   `seastar_file_bench` with `--smp N`, decide DS-M per-shard files, include the seastar
   90 % CI LB. B4's preliminary session (`docs/b4-report.md` §6) is the starting point, not
