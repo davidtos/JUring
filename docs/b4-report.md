@@ -304,8 +304,14 @@ data-NVMe hctx→CPU topology (see §6). No release blocker is open after the F1
 ## 9. Provenance
 
 - Branch `kafka-engine`; base commit `25c664b28956992a8f35244ee0100ad79883d5c7`; B4
-  working tree frozen at G3 with `src/main` content sha1
-  `1126e08d35788b0ff2dbb43ea2ddc73398a3e71a` (see `scratch/b4-lead/FREEZE.md`).
+  delivered in commit **`159d60f`** (`feat(api): add multi-ring shard runtime
+  IoShard/RingGroup (B4)` — code, tests, bench, `docs/b4-design.md`, this report).
+- Final frozen-tree (v2, post-F1-fix) identity: `src/main` content sha1
+  `93ce8a716c0f3b56e9ce76b8806db5eff99fc66f`, `src/test` content sha1
+  `74f9c344596a4a7c8353f915b9dcbdf0ebae2f37`; verification on that tree
+  (`scratch/b4-lead/FREEZE.md`, `scratch/b4-verify/VERDICT.md`). Lead final suite after
+  the bench session (same code tree): 309 tests / 0 failures / 0 errors / 1 skipped,
+  BUILD SUCCESS 16.034 s (`scratch/b4-lead/lead-final-full-suite.log`).
 - Commands: `mvn -o test` (G1 292 → G2 303 → Lead G3 303; all green), harness commands in
   `bench/shard/README.md`, verification commands in `scratch/b4-verify/README.md`.
 - Machine: AMD Ryzen 9 3950X (16C/32T), 62 GiB, Fedora 44, kernel 7.0.12, JDK 26.0.2,
