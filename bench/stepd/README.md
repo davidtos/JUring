@@ -34,3 +34,27 @@ missing hugepage pool/mount, or a hugetlbfs run that consumes no hugepages is fl
 
 Outputs: `bench/results/stepd-2026-11-16/{manifest-run*.txt,cell-meta.tsv,cells/,logs/,analysis/}` (gitignored).
 Cleanup after the session: `sudo bash scratch/stepd-host/stepd-preflight.sh --cleanup`.
+
+## Unattended full chain (one command, no interaction)
+
+```bash
+cd /home/david/projects/JUring
+sudo bash bench/stepd/run-unattended.sh
+```
+
+Runs **everything** in one window, self-gated and self-cleaning:
+1. host prep (dedicated hugetlbfs + hugepage pool, state snapshot, smart-log before)
+2. **Step D** (`docs/stepd-design.md`): seastar THP-vs-hugetlbfs bracket + memlock
+   best-config read cells, as user `david` under `prlimit --memlock=unlimited:unlimited`
+3. **write-state chain** (`docs/m1-write-state-design.md`): W0 control pilot, then
+   pre-registered W1-A/W1-B variants only if needed, then the 5-generation gate campaign
+   only if a variant yields valid generations
+4. analyses, smart-log after, hugepage pool restored and dedicated mount removed,
+   `RESULTS-SUMMARY.md` + `DONE` marker
+
+Artifacts: `bench/results/unattended-<date>/` (gitignored): `STATUS.txt` (phase log),
+`stepd/` (Step D raws + `analysis/stepd-summary.md`), `write-state/`
+(`WRITE-STATE-VERDICT.md`, `analysis/write-state-summary.md`, generations), `logs/`.
+Time guards keep it inside the window; if the drive cannot hold a single-state
+generation under any variant, the chain stops early with `UNRESOLVED` rather than
+inventing a ranking. `--dry-run` prints the plan; `--window-hours H` sets the guard.
