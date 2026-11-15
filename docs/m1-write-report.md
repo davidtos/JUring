@@ -21,7 +21,7 @@ The dominant cause is a **device write-state transition, not rep count**: **36 o
 130 completed measured runs show a 1 s-series write cliff** (within-run burst/steady
 ratios from 0.14x to 3.85x — the measured window samples both device states, e.g. W6
 fio/default r1 runs 195k IOPS in the burst then 59k in the steady phase), **21 of 34 write cells are unstable
-(CV > 10 %)** per methodology D7, and 1M/4K steady states differ between reps on the same
+(17 with CV > 10 %)** per methodology D7, and 1M/4K steady states differ between reps on the same
 cell. Per methodology D7 ("a write cell with CV > 10 % is reported as unstable, no ranking")
 the correct write-half verdict is **INCONCLUSIVE — no ranking**; the previous session's
 W7 INCONCLUSIVE at n=3 was therefore not merely a rep-count problem, and adding reps does
@@ -70,8 +70,8 @@ Source of truth: `docs/m1-write-design.md` §3–§6 (frozen pre-campaign) + Ame
 | pre-campaign commits | `9c87532` harness, `dc12e10` analyzer, `f747f49` frozen design |
 | Amendment A1 commit | `5e27e20` (regfile comparator for 1M cells, before its re-measurement) |
 | campaign tree | main campaign on commit `f747f49` (`dirty=false`); the six A1 `regfile` rows on commit `5e27e20` (`dirty=false`) |
-| campaign manifests | `manifest.txt` (block 1) + `manifest-run2.txt` (block 2) + `manifest-run3.txt` (block 3) + `manifest-run4.txt` (A1 rerun) — each records `juring_git_commit`/`dirty`, host/kernel, fio/JDK/GPU config, write-file stat, read-file stat, cell/reps plan; `state/invocations.tsv` is the per-invocation ledger |
-| raw artifacts | `cells/` (per-run JSON), `logs/`, `series/` (1 s TSV), `state/{order,runs,rests,resumed,precondition-results,invocations}.tsv`, `cell-meta.tsv`, `state/precondition-results.txt` |
+| campaign manifests | `manifest.txt` (block 1) + `manifest-run2.txt` (block 2) + `manifest-run3.txt` (block 3) + `manifest-run4.txt` (A1 rerun) — each records `juring_git_commit`/`dirty`, host/kernel, fio/JDK/python/cpu config, write-file stat, read-file stat, cell/reps plan; `state/invocations.tsv` is the per-invocation ledger |
+| raw artifacts | `cells/` (per-run JSON), `logs/`, `series/` (1 s TSV), `state/{order,runs,rests,resumed,invocations}.tsv`, `cell-meta.tsv`, `state/precondition-results.txt`, `state/write-generations.tsv` |
 | generated aggregate | `bench/results/m1-write-2026-11-15/aggregate/m1-write.{summary.md,cells.csv,reps.csv,ratios.csv,gates.csv,series.csv,comparators.csv,aggregate.json}` |
 | independent verification | `scratch/stepa-verify/VERDICT.md` (session-11 verifier; see §7) |
 
@@ -129,11 +129,12 @@ engine JSON in µs; `!`/unstable = CV > 10 % → "unstable, no ranking" per meth
 | W14 | seqwrite | 1,048,576 | 32 | fio-io_uring | regfile | 3 | 881 ± 369 | 881.8 | 16.9 ! | 33,598.1 | 145,752.1 | regfiles | unstable (CV>10%), no ranking |
 | W14 | seqwrite | 1,048,576 | 32 | seastar | std | 3 | 657 ± 687 | 656.7 | 42.1 ! | 49,075.7 | 150,273.5 | seastar-default-ring,aligned-unregistered | unstable (CV>10%), no ranking |
 
-**Reading the table.** Only the QD1 4K cell (W5) is fully stable across all four engines;
-every QD16/QD64/QD128 4K cell has at least one unstable engine cell, and most are
-unstable/unranked. The 1M seqwrite cells are much tighter at QD1/QD32 (juring and fio
-~965–975 MiB/s) but juring's QD8/QD32 1M cells (arena-unregistered buffers under the 8 MiB
-memlock limit) and seastar's QD32 cell show slow reps.
+**Reading the table.** W5 is the most stable cell (3 of its 4 engine rows are stable; fio
+`matched` is mixed-state, slow reps r2/r3); every QD16/QD64/QD128 4K cell has at least one
+unstable engine cell, and most are unstable/unranked. The 1M seqwrite cells are tighter at QD32 (juring and fio ≈964–965 MiB/s) and for fio at
+QD1/QD8 (≈965–971 MiB/s); juring's QD1/QD8 1M cells are unstable (W12 851 MiB/s, W13 840 —
+arena-unregistered buffers under the 8 MiB memlock limit) and seastar's QD32 cell shows
+slow reps.
 
 ## 4. Results — paired ratios
 
@@ -207,6 +208,11 @@ memlock limit) and seastar's QD32 cell show slow reps.
 | W7 | PASS | INCONCLUSIVE | INCONCLUSIVE |
 | W8 | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE |
 
+Note: in the gate table the cell-mean columns are the full-cell means; the ratio / CI / LB
+columns are the **fast-state subset** statistics (n pairs) — the fast subset is used only
+because the corresponding fio cell is flagged unstable (CV>10 %/mixed/spread), and the
+excluded fio rep ids are disclosed in §4.
+
 **Write-half rule-1 verdict: `INCONCLUSIVE` — W7 `INCONCLUSIVE`, W8 `INCONCLUSIVE`.**
 Frozen decision rule (design §6): PASS iff the one-sided 95 % LB ≥ 0.95 against **both**
 `matchedbatch` (primary) and `matched` (sensitivity) at **both** W7 and W8; FAIL iff either
@@ -234,8 +240,7 @@ write cliff**; 0 runs with `loadavg_start > 1.6`.
 
 The 1 s series (full table: `bench/results/m1-write-2026-11-15/aggregate/m1-write.series.csv`)
 shows the mechanism directly: many measured runs start in the SLC-burst state and collapse
-to a steady state *inside* the 60 s window. Representative rows of the 36
-cliff-flagged runs:
+to a steady state *inside* the 60 s window. All 36 cliff-flagged runs:
 
 | case | qd | engine/variant | rep | window IOPS | CV% | min | burst (first 10 s) | steady (rest) | burst/steady | max 1-step drop % | samples <70% mean |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -279,10 +284,10 @@ cliff-flagged runs:
 Consequences, frozen by methodology D2/D7 before measurement: burst and steady state are
 different device states and are never pooled in a claim; a cell with CV > 10 % is
 "unstable, no ranking"; a write-parity claim cannot be built from reps that randomly sample
-burst vs steady state. Write amplification (device write sectors ×512 / engine measured
-bytes, process window) is 2.99–3.29× on the main 120/60 s 4K cells (≈3× is the
-warmup+measured window ratio; values outside that band mark device-side write-back/GC) and
-≈2× on 60/60 s cells; it is reported per run in the CSV, not used as a ranking.
+burst vs steady state. Write amplification (device write sectors ×512 / engine measured bytes, process window;
+from `aggregate/m1-write.series.csv`) is ≈3.00× typical on the 120/60 s 4K cells (W6–W8, n=82: range 2.30–5.99×, median 3.00× — the 3:1 warmup+measured window ratio), ≈2.04× on the 4K 60/60 s cell W5 (n=12: 1.99–2.09×), and 1.70–6.82× on the 1M 60/60 s cells (n=36, median 2.11×); values away from the process/measured
+window ratio mark device-side write-back/GC. It is reported per run in the CSV, not used as
+a ranking.
 
 **Provenance warnings** (43 from the analyzer, disclosed, none invalidating):
 35 advisory process-window byte-gate WARNs (device write-sector delta vs
@@ -363,7 +368,7 @@ bench/write/run-write-cells.sh --cells W13,W14 --reps 3 --engines fio \
 |---|---|
 | run W5/W6/W7/W8 and W12/W13/W14 under the frozen methodology protocol, preconditioned blocks, D1–D8 controls | **met** — 130/130 planned runs executed (124 ok + 6 A1 failed-init disclosed and re-measured as regfile) in 3 blocks, 2 recorded between-block rests, per-cell D1 bursts, 1 s series, thermal/loadavg recorded, read dataset untouched |
 | include seastar and fio default+matched on W7/W8 | **met** (plus the W7 batching sweep and matchedbatch) |
-| write saturation cells: `IOPS_Juring ≥ IOPS_fio − 5 %` with one-sided 95 % LB ≥ 0.95; report CV and both states; no ranking if CV > 10 % | **not decidable** — gate INCONCLUSIVE at W7/W8; CV > 10 % on 21/34 cells; burst/steady both reported; no ranking published |
+| write saturation cells: `IOPS_Juring ≥ IOPS_fio − 5 %` with one-sided 95 % LB ≥ 0.95; report CV and both states; no ranking if CV > 10 % | **not decidable** — gate INCONCLUSIVE at W7/W8; CV > 10 % on 17/34 cells (unstable: 21/34); burst/steady both reported; no ranking published |
 | decide the previously INCONCLUSIVE W7 rule-1 at R=5 | **answered**: the n=3 INCONCLUSIVE was not only a rep-count issue; the drive's write-state transitions dominate and the gate stays INCONCLUSIVE at R=5 — a state-controlled protocol is needed |
 
 **M1 overall status after this session:** read path **PASS** (unchanged, `docs/m1-report.md`);

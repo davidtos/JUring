@@ -1,6 +1,6 @@
 # JUring vs seastar: where we are, and how to catch up on the basics
 
-**Status:** v1.8 — 2026-11-15 (**Step A complete**: the full M1 write matrix was measured under the frozen Step-A protocol (130 successful runs; W7/W8 at R=5) and write rule 1 is **INCONCLUSIVE — no ranking, no write-parity claim** because of device write-state cliffs inside the measured window (36/130 runs; CV>10 % on 21/34 cells → methodology D7); full deliverable [`docs/m1-write-report.md`](docs/m1-write-report.md), frozen [`docs/m1-write-design.md`](docs/m1-write-design.md) + A1. **Basics roadmap B0–B9 complete**: **B9 delivered** — API
+**Status:** v1.8 — 2026-11-15 (**Step A complete**: the full M1 write matrix was measured under the frozen Step-A protocol (130 successful runs; W7/W8 at R=5) and write rule 1 is **INCONCLUSIVE — no ranking, no write-parity claim** because of device write-state cliffs inside the measured window (36/130 runs; 21/34 cells unstable, 17 with CV>10 % → methodology D7); full deliverable [`docs/m1-write-report.md`](docs/m1-write-report.md), frozen [`docs/m1-write-design.md`](docs/m1-write-design.md) + A1. **Basics roadmap B0–B9 complete**: **B9 delivered** — API
 stability/compatibility policy, complete Javadoc with doclint enforcement (597 → 0 warnings),
 4 runnable seastar-mapped examples, upgrade notes; 405-test suite green; `docs/b9-report.md`,
 frozen `docs/b9-design.md` + A1–A3, independent verification `scratch/b9-verify/VERDICT.md`.
@@ -90,7 +90,7 @@ order, by leverage:
 buffered/durability → conditional QoS**. §4 has the details.
 
 **Milestones.** **M0 done 2026-11-13** (harness + seastar built + first L0 read matrix);
-**M1 done 2026-11-13** (read path PASS; write half pending); **M2 done 2026-11-14**
+**M1 done 2026-11-13** (read path PASS) and **write half measured 2026-11-15** (INCONCLUSIVE — no ranking; `docs/m1-write-report.md`); **M2 done 2026-11-14**
 (L1 stream parity, `docs/m2-report.md`); **B3 done 2026-11-14** (lifecycle hardening);
 **B4 delivered 2026-11-14** (`docs/b4-report.md`; L2 runtime in place); **B5 done
 2026-11-14** (observability: per-ring metrics + histogram + JMX + benchmark JSON 1.1;

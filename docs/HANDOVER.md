@@ -63,7 +63,7 @@ unchanged.
 (sensitivity 0.9591/LB 0.8937 → INCONCLUSIVE); W8 both comparators INCONCLUSIVE (LB 0.8441 /
 n=1). Root cause is a **device write-state transition, not rep count**: **36/130 runs show a
 1 s write cliff** (within-run burst/steady ratios 0.14–3.85×; e.g. W6 fio/default r1
-195k→59k, W7 fio/matched r2 194k→87k) and **21/34 cells are unstable (CV>10 %)** →
+195k→59k, W7 fio/matched r2 194k→87k) and **21/34 cells are unstable (17 with CV>10 %)** →
 methodology D7 "unstable, no ranking". The 2026-11-13 n=3 INCONCLUSIVE was therefore not
 merely a rep-count problem. Everything is in `docs/m1-write-report.md` (all tables generated
 from `bench/results/m1-write-2026-11-15/aggregate/m1-write.*`); read-path PASS is unchanged.
@@ -89,7 +89,7 @@ before measuring, or use a drive with verified steady state), not more reps. Opt
 follow-ups unchanged (§0.0b/§8): hosted CI, blackpanda prose, M3 N=2, VT-throughput, B0
 close-out.
 
-## 0.0 Session 10 status — 2026-11-15 — **latest** (B9 delivered; B7 deferred; M4 closed; **B0–B9 basics roadmap complete**)
+## 0.0a Session 10 status — 2026-11-15 (B9 delivered; B7 deferred; M4 closed; **B0–B9 basics roadmap complete**)
 
 Session 10 closed out the roadmap: the only remaining unconditional item (**B9**) was
 delivered, and the two conditional items were decided on the record — **B7 deferred by a
@@ -656,8 +656,8 @@ contract is [`docs/b1-design.md`](b1-design.md).
   registration is ring-wide — do not re-point a live `JuringFile`'s slot externally. The
   ring-level completion dispatcher remains B3.
 - **Next: B2** (buffered stream layer: `Input`/`Output`, readahead, write-behind, flush;
-  then M2/W21-W22 vs seastar `fstream`). The write matrix (Step A above) is still pending
-  and remains an independent M1 gap.
+  then M2/W21-W22 vs seastar `fstream`). The write matrix (Step A) was measured in session 11:
+  **write rule 1 INCONCLUSIVE — no ranking/no write-parity claim** (`docs/m1-write-report.md`).
 
 
 ## 1. TL;DR of where we are
@@ -670,11 +670,12 @@ contract is [`docs/b1-design.md`](b1-design.md).
   (`seastar_file_bench`, `file::dma_read`) vs fio on the same aged 10 GiB file, same
   pinning, same per-thread QD, with CIs and state gating. Verdict: rules 1, 2, 3, 5
   PASS; seastar reported as a bracket (rule 4); details in `docs/m1-report.md` §14.
-- **Step 2 started:** the first trimmed write block ran (W7 4K randwrite QD64, R=3,
-  juring/fio-default/fio-matched/seastar, D1 session-once preconditioning). seastar's
-  write path is now **validated** (it was untested before). Write rule 1 is
-  **INCONCLUSIVE at n=3** (paired ratio 0.9644, one-sided-95 LB 0.9490) — no write-parity
-  claim; W5/W6/W8/W12–W14 remain pending.
+- **Step 2 (write half) measured in session 11** (after the historical first trimmed block
+  described below): the full W5–W8/W12–W14 matrix ran under the frozen Step-A protocol
+  (130 successful runs, W7/W8 at R=5). Write rule 1 is **INCONCLUSIVE** (device write-state
+  cliffs; no ranking, no write-parity claim — `docs/m1-write-report.md`). seastar's write
+  path is validated (bracket only). The historical W7 n=3 block (0.9644 / LB 0.9490) is
+  kept in `docs/m1-report.md` §13 for provenance.
 - **Major validity finding:** read performance is dominated by dataset data state. A
   freshly written 10 GiB file reads **5.2–5.6× faster at QD1** and 1.1–1.7× at QD64 than
   the aged 10-day file (`§11b`; `bench/results/m1-2026-11-13-locality/`). Cross-dataset
@@ -997,7 +998,7 @@ state-controlled write protocol). Steps B/C are closed. Optional follow-ups are 
   and re-measured as `regfile` (A1).
 - **Outcome:** write rule 1 `INCONCLUSIVE` at W7/W8 (W7 primary comparator passes only on a
   2-pair fast-state subset, LB 0.9502; W7 sensitivity and all W8 rows INCONCLUSIVE). Cause:
-  device write-state cliffs inside runs (36/130) → CV>10 % on 21/34 cells → methodology
+  device write-state cliffs inside runs (36/130) → 21/34 cells unstable (17 with CV>10 %) → methodology
   D7 no-ranking. **No write-parity claim.** Read path PASS unchanged.
 - **Follow-up (write half):** pre-register a state-controlled write protocol (pair engines
   within one preconditioned generation; classify 1 s windows burst/steady before measuring)
