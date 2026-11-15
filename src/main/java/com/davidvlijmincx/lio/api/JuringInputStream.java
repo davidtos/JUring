@@ -214,12 +214,18 @@ public final class JuringInputStream implements AutoCloseable {
     /**
      * Opens an input stream over an explicit window of the file.
      *
+     * <p>The B6 {@link InputStreamOptions#fadvise()} hint (when not
+     * {@link FadviseAdvice#NORMAL}) is applied once, after the arguments are validated and
+     * before the first read: the declared window is hinted ({@code (offset, length)}, with
+     * {@code 0} meaning "to EOF"). A hint failure propagates out of this method.
+     *
      * @param file    the backing file (must be opened for reading)
      * @param offset  absolute start offset, {@code >= 0}
      * @param length  number of bytes to expose, or {@code -1} to read until EOF
      * @param options stream options
      * @return a new input stream
-     * @throws JuringException if reading the file fails
+     * @throws JuringException if reading the file fails, or the optional {@code fadvise}
+     *                         hint fails
      */
     public static JuringInputStream open(JuringFile file, long offset, long length,
                                          InputStreamOptions options) throws JuringException {
@@ -233,6 +239,9 @@ public final class JuringInputStream implements AutoCloseable {
         }
         if (length < -1) {
             throw new IllegalArgumentException("length must be >= -1 (-1 = until EOF): " + length);
+        }
+        if (options.fadvise() != FadviseAdvice.NORMAL) {
+            file.fadvise(options.fadvise(), offset, length <= 0 ? 0L : length);
         }
         return new JuringInputStream(file, options, offset, length);
     }

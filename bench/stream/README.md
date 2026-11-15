@@ -263,3 +263,182 @@ python3 bench/stream/analyze_stream.py --session b2-2026-11-13
 
 The datasets are read-only for the read cells and overwritten in place (never
 resized) by the write cells; results are gitignored under `bench/results/`.
+
+---
+
+# B6 durability + group commit (W24/W25)
+
+B6 adds a **durability** protocol (W24, supporting evidence only — not a milestone
+bar) and a **group-commit** micro-protocol (W25, JUring-only) on top of the B2
+buffered-stream work. Frozen contract: [`docs/b6-design.md`](../../docs/b6-design.md)
+§6 (W24 = §6.3, W25 = §6.4) + its **A2** amendment (W25 rests are between cells, not
+before every rep). The M2 W21/W22 comparison is **cited, not re-run**.
+
+## 9. B6 runner changes (additive; schema stays `"1.0"`)
+
+`bench/juring/JUringStreamBench.java` and `bench/seastar/seastar_stream_bench.cc`
+keep every historical field/meaning and their `schema_version "1.0"` (frozen by
+`docs/b2-design.md`; the shard/file tooling hard-asserts versions). B6 marks itself
+with a top-level `"schema_extensions": ["b6-durability-1"]` and adds only new keys:
+
+| runner | new CLI | new JSON |
+|---|---|---|
+| JUring stream | `--durability writeback\|fdatasync\|fsync\|dsync` (default writeback); `--sync-every BYTES` (write only, multiple of `--bs` and 4096, default 0 = pass end only); `--fadvise normal\|random\|sequential\|willneed\|dontneed\|noreuse` | `config.{durability,sync_every_bytes,fadvise,sync_latency_samples_cap}`; per-run `{durability_mode,sync_every_bytes,durability_points,syncs_issued,syncs_completed,syncs_failed,bytes_synced,sync_wait_us{samples,avg,p50,p90,p99,max},sync_wait_share}`; `aggregate.*_total` |
+| seastar stream | `--durability writeback\|fdatasync\|dsync` (default fdatasync = historical behaviour); `--durable 0\|1`; `--dsync 0\|1`; `--sync-every BYTES`; `--durability fsync` is **rejected** (seastar has no `fsync(2)` path: `file::flush()` is `fdatasync` only) | `config.{durability,sync_every_bytes,durable,dsync,aio_fsync,sync_counting}`; per-run same fields + `passes`; `aggregate.passes_total` and sync totals |
+
+Semantics (`docs/b6-design.md` §3.1/§6.1–§6.2):
+
+* `writeback` = drain only at a durability point; `fdatasync`/`fsync` = drain + exactly
+  one matching sync; `dsync` = `O_DSYNC` file, writes durable on completion and **no**
+  explicit synced call (`syncs_issued == 0`; the stream/group asserts the file mode).
+* `--sync-every S` makes `flush()` a durability point every `S` bytes inside a write
+  pass; the pass-end flush+close is unchanged. On JUring `close()` is one durability
+  point (one sync for fdatasync/fsync); seastar's historical pass end is
+  `s.flush(); s.close()` = **two** fdatasync per pass — irrelevant for the W24
+  `--sync-every 4M` arms (<1 % of the points) and reported through `syncs/s` and
+  `MiB/sync` instead of being hidden.
+* `syncs_issued/completed` are actual sync operations for JUring (`JuringOutputStream.
+  syncs()` delta) and bench-derived for seastar (one fdatasync per stream flush/close
+  with `durable=true`; seastar exports no fsync counter — recorded in
+  `config.sync_counting`). `durability_points` counts *all* durability-point calls
+  (draining writeback/dsync arms included) so `sync_wait_us`/`sync_wait_share` are
+  defined for every arm; `sync_wait_share = Σ durability-point call time / measured
+  elapsed`.
+* The seastar runner must be run with `--aio-fsync 1` (pinned by the driver) so
+  `file::flush()` is `IORING_OP_FSYNC|IORING_FSYNC_DATASYNC`, not a blocking
+  thread-pool `fdatasync`; the effective value is recorded as `config.aio_fsync`.
+* `--fadvise` is informational only (no W24 verdict uses it; W24 runs `normal`).
+
+`bench/stream/analyze_stream.py` is **byte-identical** (sha256
+`6ce4bb94f53076ffb64119480d81209a9567af6604b02ec436c19da79fb51b43`) and still
+re-emits `m2-final` from the frozen raw cells (`python3
+bench/stream/analyze_stream.py --session m2-final`; only the `generated_utc`
+timestamp changes — verified byte-identical modulo that timestamp).
+
+## 10. W24 durability A/B (`run-durability-ab.sh` + `analyze_durability.py`)
+
+**Supporting evidence only, not a milestone bar.** One write cell, matched durability
+settings on both engines, writeback-vs-writeback control bracketing the block.
+
+| item | value |
+|---|---|
+| cell | `W24-128k`: `stream_write`, bs 128 KiB, qd 8, `--size 2g` on the existing 10 GiB write file (the file is never resized; the 2 GiB dataset is a **disclosed deviation** from the frozen 10 GiB) |
+| Tier 1 (decisive) | 4 arms, all `--sync-every 4M`: `juring-writeback`, `juring-fdatasync`, `seastar-writeback`, `seastar-fdatasync`, R=3 |
+| Tier 1 protocol | **300 s idle rest before each rep window**, then the 4 arms run **back-to-back inside that post-rest window** in an order alternating per rep (rep 1 `Jw,Jd,Sw,Sd`; rep 2 `Sd,Sw,Jd,Jw`; rep 3 `Jw,Jd,Sw,Sd`); 5 s warmup + 15 s measured per arm; one fresh process per invocation; `taskset -c 2`; the `juring-writeback` arm runs **first overall** (rep 1) and **last overall** (an extra `writeback-bracket` control after rep 3) — those two appearances are the write-state control pair |
+| Tier 2 (exploratory) | `juring-dsync` / `seastar-dsync` (R=2, 120 s rests, `--sync-every 4M`); optional `juring-fsync` (`--durability fsync`, JUring-only: seastar cannot fsync). `--skip-fsync` disables it |
+| wall time | Tier 1 ≈ 3×(300+4×20)+20 s ≈ 19.3 min; Tier 2 ≈ 5–6 min; preflight/analysis ≈ 2 min ⇒ **≈ 26–30 min** |
+| session | `bench/results/b6-durability-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt`, `cell-meta.tsv` (M2's 20 columns; new sync data lives in the JSON, §6.5) |
+| variants | `writeback`, `fdatasync`, `dsync`, `fsync` (JUring only), `writeback-bracket` |
+
+```bash
+# plan only (side-effect free: preflight report + every command line + wall estimate)
+bench/stream/run-durability-ab.sh --dry-run
+# short validation run (same protocol, tiny windows; machine must stay quiet)
+ALLOW_RESIDUAL_LOAD=1 bench/stream/run-durability-ab.sh \
+    --reps 1 --warmup 1 --seconds 2 --rest 5 --tier2-reps 1 --tier2-rest 5 \
+    --size 64m --session b6-durability-smoke
+# official session (Lead only, quiet machine; default R=3/5 s/15 s/300 s, size 2g)
+bench/stream/run-durability-ab.sh
+# aggregate standalone / resume an interrupted session
+python3 bench/stream/analyze_durability.py --session b6-durability-<date>
+bench/stream/run-durability-ab.sh --resume
+```
+
+Driver overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--tier2-reps`,
+`--tier2-rest`, `--size`, `--skip-tier2`, `--skip-fsync`, `--no-analyze`, `--resume`,
+`--session`, `--force`, `--dry-run`. Environment: `CPU` (2), `WRITE_FILE`,
+`SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`. The driver refuses to overwrite a
+populated session (use `--resume`/`--session`), preflights the machine (dataset/space,
+io_uring, governor, CPU, loadavg, foreign CPU, artifacts) and records everything in
+`manifest.txt`, including the pinned seastar `--aio-fsync 1`.
+
+`analyze_durability.py` (**requires** `schema_extensions` to contain
+`b6-durability-1`; a mixed/old session fails loudly with exit 3) emits
+`aggregate/durability.{json,md}` with:
+
+* per arm: MiB/s mean/sd/95 % CI (Student t)/CV %, `syncs_issued`/s,
+  `MiB/sync` = `bytes_synced/syncs_completed`, `sync_wait_share`, durability-point
+  (sync) latency p50/p99, per-rep write-state class;
+* the **within-rep paired durability-cost ratio** per engine (durable MiB/s ÷ writeback
+  MiB/s, same rep) with 95 % CI over reps, plus the state-matched subset;
+* the frozen **state-class rule** (fixed in the analyzer *before* the campaign, derived
+  from M1 §4 + M2 §6): a rep is `fast` iff MiB/s ≥ 550 **and** write p50 ≤ 250 µs;
+  `slow` iff MiB/s < 300 **or** p50 > 600 µs; else `mixed`; the M1 0.92 same-arm rule
+  also marks a rep slow. Classes are computed **within the arm** (a durable arm is
+  designed to be slower), never across arms; class counts/n/CV are printed;
+* the disclosure rules: an arm pair is ranked only if both sides have ≥ 2 reps in the
+  same class (else INCONCLUSIVE); an arm with CV > 10 % is *"unstable, no ranking"*
+  (methodology D7); the two writeback controls bracketing the Tier-1 block must agree
+  within 10 %, otherwise the session is state-confounded and only the raw table is
+  reported;
+* every rep is kept; excluded/missing/unparsed files are listed explicitly.
+
+**W24 disclosures** (also in `aggregate/durability.md`, `manifest.txt` and
+`docs/b6-design.md` §6/§9): supporting evidence only, no new cross-engine write
+win/loss claim; M2's write arms issued 2 fdatasync/pass on seastar vs 0 on JUring and
+did not disclose it — W24 matches durability and brackets with writeback controls;
+durability points include a write-behind drain on both engines (so absolute
+`sync_wait_share` is an upper bound on pure sync cost); seastar's pass-end double
+fdatasync; the `juring-fsync` arm is JUring-only; the dataset is 2 GiB, not 10 GiB; no
+cache drop and no power-loss test.
+
+## 11. W25 group-commit micro-benchmark (`run-group-commit-bench.sh` + `analyze_group_commit.py`)
+
+**JUring-only**: seastar has no group-commit primitive (the nearest equivalent is the
+W24 `seastar-fdatasync` arm, which pays a write-behind drain the JUring helper does
+not — disclosed as an upper bound). The bench calls the **public `GroupCommit` API**
+(`GroupCommitOptions`/`GroupCommit`/`GroupCommitStats`) and uses no test hook.
+
+| item | value |
+|---|---|
+| runner | `bench/juring/JUringDurabilityBench.java`: `--file`, `--batch B`, `--records N` **or** `--seconds S`, `--bs 4096`, `--durability fdatasync\|fsync\|writeback` (default fdatasync), `--warmup-sec`, `--runs`, `--file-size`, `--json`, `--label`, `--verify-only`, `--verify-bytes`, `--no-verify` |
+| cells | `W25-4k-b1`, `W25-4k-b8`, `W25-4k-b32`, `W25-4k-b128` (bs 4096 B, batch = `GroupCommit.maxBatchSize`) |
+| workload | preallocate the file (setLength, `--file-size 1g` default); for each group fill `B` distinct 4096-aligned buffers with a deterministic position-indexed xorshift64 pattern, `B` `GroupCommit.write()` calls at consecutive aligned offsets (wrapping modulo the file capacity), then **one** `commit()`; measured window 15 s after a 5 s warmup, fresh process per invocation, `taskset -c 2`, R=3 |
+| rests (A2) | 5 s pause between reps inside a cell, **120 s idle rest between cells** (3 rests; `--rest-between cells\|reps\|none`, default `cells`; total session ≈8–12 min incl. the read-back) |
+| restart visibility | after **every** measured run the bench spawns a fresh JVM (`--verify-only`) that re-reads `[0, min(committed_bytes,file_size))` and compares every 4096-byte block with the deterministic pattern; `restart_verify{ok,verified_bytes,method,power_cut_tested:false,...}` is in the run JSON. This is **process-restart visibility, NOT a power-loss test** |
+| acceptance identities | `fsyncs_per_group == 1.0` (exactly one fdatasync per committed batch), `groups_total × batch_size == committed_writes` (a short last group is allowed only in `--records` mode with `committed_writes == records`), `syncs_completed == syncs_issued == groups_total`, `syncs_failed == 0`, `restart_verify.ok == true` |
+| session | `bench/results/b6-group-commit-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt`, `cell-meta.tsv` |
+
+```bash
+# plan only
+bench/stream/run-group-commit-bench.sh --dry-run
+# short validation run (same runner/analyzer, tiny windows, scratch file)
+ALLOW_RESIDUAL_LOAD=1 bench/stream/run-group-commit-bench.sh \
+    --reps 1 --warmup 1 --seconds 2 --rest 0 --rep-pause 0 --batches "1 8 32 128" \
+    --file scratch/b6-bench/smoke/w25-driver.bin --file-size 16m --session b6-group-commit-smoke
+# official session (Lead only, quiet machine; defaults R=3/5 s/15 s/120 s between cells)
+bench/stream/run-group-commit-bench.sh
+# aggregate standalone / resume
+python3 bench/stream/analyze_group_commit.py --session b6-group-commit-<date>
+bench/stream/run-group-commit-bench.sh --resume
+```
+
+Driver overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--rest-between`,
+`--rep-pause`, `--batches`, `--file`, `--file-size`, `--skip-compile`, `--no-analyze`,
+`--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU`, `W25_FILE`,
+`W25_FILE_SIZE`, `JURING_CLASSES` (default `target/classes`), `JURING_OUT` (default
+`bench/juring/out`), `ALLOW_RESIDUAL_LOAD=1`. The driver compiles the runner with
+`javac` against the existing `JURING_CLASSES` (it never runs Maven; the Lead owns the
+repo-root build) and preflights the B6 API presence, file space, io_uring, governor,
+CPU, loadavg and foreign CPU.
+
+`analyze_group_commit.py` (**requires** `b6-durability-1`) emits
+`aggregate/group-commit.{json,md}`: per cell MiB/s (mean/sd/95 % CI/CV), writes/s,
+groups/s, group-latency p50/p99 (ms), sync-latency p50/p99, syncs/s, MiB/sync,
+`sync_wait_share`, `fsyncs_per_group`, wrap-arounds, identity PASS/FAIL rows and the
+per-rep table; it **exits 3** (and lists the offending files/reps) if any identity,
+`restart_verify` or schema check fails. `sync_latency_us` is the `commit()` duration
+and is an upper bound on the sync-only cost (it includes waiting for the batch writes;
+the public API exposes no sync-only hook).
+
+## 12. B6 smoke evidence and guardrails
+
+* Smoke sessions and their raw JSON/logs live under `scratch/b6-bench/smoke/`
+  (never in `bench/results/`, which is reserved for real sessions); see
+  `scratch/b6-bench/STATUS.md`.
+* `bench/stream/analyze_stream.py`, the M1/M2/M3 artifact scripts, `src/`, `docs/` and
+  `pom.xml` are untouched by the B6 bench layer (the design fixes the write scope).
+* The official W24/W25 sessions are run by the **Lead** on a quiet machine; they are
+  the only heavy device work in B6, and the drivers refuse to start if the preflight
+  (loadavg/foreign CPU/governor/files/io_uring) fails.
+

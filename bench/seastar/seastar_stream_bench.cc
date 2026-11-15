@@ -61,6 +61,28 @@
  *     the deadline only ever ends on a chunk boundary, so a partial pass never
  *     truncates anything.
  *
+ * B6 durability extension (docs/b6-design.md §6.2; additive, schema stays 1.0)
+ * ---------------------------------------------------------------------------
+ *   --durability writeback|fdatasync|dsync   (default fdatasync = historical behaviour)
+ *       writeback -> file_open_options.durable=false (flush() drains only, no fdatasync)
+ *       fdatasync -> durable=true (flush() = one fdatasync; seastar never fsyncs)
+ *       dsync     -> open_flags::dsync (writes durable on completion, flush() no-op)
+ *   --durable 0|1  / --dsync 0|1             (compatibility spellings)
+ *   --sync-every BYTES                       (write only; co_await s.flush() after
+ *                                             every S bytes inside a pass; default 0 =
+ *                                             pass end only; S multiple of --bs and 4096)
+ *   --durability fsync is rejected with a clear error: seastar has no fsync(2) path
+ *   (file::flush() -> fdatasync only; SeaStarRef/src/core/file.cc:217-227).
+ *
+ * The JSON keeps `schema_version "1.0"` and adds
+ * `"schema_extensions": ["b6-durability-1"]`, config.{durability,sync_every_bytes,
+ * durable,dsync,aio_fsync,sync_counting} and per-run {passes,durability_mode,
+ * sync_every_bytes,durability_points,syncs_issued,syncs_completed,syncs_failed,
+ * bytes_synced,sync_wait_us{...},sync_wait_share}; existing fields are unchanged.
+ * No seastar fsync counter is exported, so the bench counts the durability-point
+ * calls it makes (derived: one fdatasync per output_stream flush()/close() when
+ * durable=true; documented in JSON config.sync_counting).
+ *
  * Build: bench/seastar/build-stream-bench.sh (SeaStarRef/build/release +
  *        .sysroot in the sandbox; on a host, `pkg-config --libs --cflags
  *        --static seastar` works).
@@ -88,6 +110,7 @@
 #include <boost/program_options.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -131,12 +154,18 @@ struct config {
     uint64_t dataset = 0;       // 0 => file size
     bool readonly = false;
     bool no_register_file = false;  // accepted no-op disclosure flag
+    // B6 durability (docs/b6-design.md §6.2); defaults = historical behaviour.
+    std::string durability = "fdatasync";   // writeback|fdatasync|dsync (fsync rejected)
+    uint64_t sync_every = 0;                // drain+fdatasync every S bytes (0 = pass end)
     // Shared adaptive read-ahead history: reused across every pass of this
     // process/cell so seastar's slow start is only paid once (see file header).
     seastar::lw_shared_ptr<seastar::file_input_stream_history> history;
 
     bool is_write() const { return workload == "stream_write"; }
     bool is_read() const { return workload == "stream_read"; }
+    bool is_writeback() const { return durability == "writeback"; }
+    bool is_dsync() const { return durability == "dsync"; }
+    bool is_fdatasync() const { return durability == "fdatasync"; }
 };
 
 static uint64_t parse_size(const std::string& s) {
@@ -229,6 +258,23 @@ struct pass_result {
     uint64_t errors = 0;
 };
 
+// B6 durability counters for one phase. `points` counts every durability-point
+// call the bench makes (interval flushes + pass-end flush/close, including
+// writeback/dsync drains); `issued/completed` count the fdatasync operations
+// those calls issue (derived: one per flush()/close() when durable=true — seastar
+// exports no fsync counter, docs/b6-design.md §6.2). `lat_ns` is a uniform
+// reservoir of the durability-point call durations; `bytes` is the payload those
+// sync points made durable (excludes the redundant close-time re-flush).
+struct sync_result {
+    uint64_t points = 0;
+    uint64_t issued = 0;
+    uint64_t completed = 0;
+    uint64_t failed = 0;
+    uint64_t bytes = 0;
+    uint64_t wait_ns = 0;
+    reservoir lat;                  // uniform reservoir of durability-point durations
+};
+
 struct phase_result {
     uint64_t ops = 0;
     uint64_t bytes = 0;
@@ -236,6 +282,7 @@ struct phase_result {
     uint64_t passes = 0;
     double elapsed_s = 0.0;
     std::vector<uint64_t> lat_ns;   // uniform reservoir of per-chunk latencies (ns)
+    sync_result sync;               // B6 durability counters (measured phase only)
 };
 
 // Fill a reused aligned buffer with a deterministic (xorshift64) pattern.
@@ -313,18 +360,28 @@ read_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
 }
 
 // ---------------------------------------------------------------------------
-// one write pass: open file (rw|create) + output stream, write exactly
-// `dataset` bytes as bs-sized chunks, flush(), close(), then the caller
+// one write pass: open file (rw|create, B6 durability flags) + output stream,
+// write `dataset` bytes as bs-sized chunks, flush/close the stream (plus one
+// flush per --sync-every bytes for the B6 durability arms), then the caller
 // reopens for the next pass. The chunk loop stops cleanly at the deadline.
 // ---------------------------------------------------------------------------
 
 static seastar::future<pass_result>
 write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
-           uint64_t pass_index, reservoir* res, uint64_t lat_cap) {
+           uint64_t pass_index, reservoir* res, uint64_t lat_cap,
+           sync_result* sync, uint64_t sync_cap) {
     pass_result pr;
-    auto f = co_await seastar::open_file_dma(
-        cfg.file.c_str(),
-        seastar::open_flags::rw | seastar::open_flags::create);
+
+    // B6 durability: writeback drops O_DSYNC and makes file::flush() a no-op;
+    // fdatasync keeps seastar's default durable=true (one fdatasync per flush);
+    // dsync opens with O_DSYNC (writes durable on completion, flush a no-op).
+    seastar::open_flags flags = seastar::open_flags::rw | seastar::open_flags::create;
+    if (cfg.is_dsync()) {
+        flags |= seastar::open_flags::dsync;
+    }
+    seastar::file_open_options file_opts;
+    file_opts.durable = !cfg.is_writeback();
+    auto f = co_await seastar::open_file_dma(cfg.file.c_str(), flags, file_opts);
 
     seastar::file_output_stream_options opts;
     opts.buffer_size = static_cast<unsigned>(cfg.bs);
@@ -340,6 +397,25 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
     fill_pattern(p, cfg.bs,
                  cfg.seed ^ (0x9E3779B97F4A7C15ULL * (pass_index + 1)));
 
+    // Record one durability-point call into the B6 sync counters (if collecting).
+    auto note_point = [sync, sync_cap](uint64_t dt_ns, bool ok, bool sync_issued,
+                                       uint64_t bytes) {
+        if (!sync) {
+            return;
+        }
+        sync->points++;
+        sync->wait_ns += dt_ns;
+        sync->lat.add(dt_ns, sync_cap);
+        if (!ok) {
+            sync->failed++;
+        } else if (sync_issued) {
+            sync->issued++;
+            sync->completed++;
+            sync->bytes += bytes;
+        }
+    };
+
+    uint64_t bytes_since_point = 0;
     uint64_t remaining = dataset;
     while (remaining > 0 && now_ns() < deadline) {
         const size_t n = static_cast<size_t>(std::min<uint64_t>(cfg.bs, remaining));
@@ -350,6 +426,7 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
             pr.ops++;
             pr.bytes += n;
             remaining -= n;
+            bytes_since_point += n;
             if (res) {
                 res->add(t1 - t0, lat_cap);
             }
@@ -359,24 +436,52 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
                       << current_exception_what() << "\n";
             break;
         }
+        // B6 durability point every S bytes (write only; S multiple of bs and 4096).
+        if (cfg.sync_every > 0 && bytes_since_point >= cfg.sync_every) {
+            const uint64_t f0 = now_ns();
+            try {
+                // output_stream::flush() = drain write-behind + file::flush()
+                // (= one fdatasync for the fdatasync arm; a no-op for writeback/dsync).
+                co_await s.flush();
+                note_point(now_ns() - f0, true, cfg.is_fdatasync(), bytes_since_point);
+            } catch (...) {
+                note_point(now_ns() - f0, false, false, 0);
+                pr.errors++;
+                std::cerr << "seastar_stream_bench: stream_write sync-every flush error: "
+                          << current_exception_what() << "\n";
+                break;
+            }
+            bytes_since_point = 0;
+        }
     }
 
     // Always drain + close cleanly (also when the deadline interrupted the pass;
     // all chunks are whole bs-sized chunks, so an interrupted pass leaves the
     // file length untouched - no unaligned tail => no truncate()).
-    try {
-        co_await s.flush();
-    } catch (...) {
-        pr.errors++;
-        std::cerr << "seastar_stream_bench: stream_write flush error: "
-                  << current_exception_what() << "\n";
+    {
+        const uint64_t f0 = now_ns();
+        try {
+            co_await s.flush();
+            note_point(now_ns() - f0, true, cfg.is_fdatasync(), bytes_since_point);
+        } catch (...) {
+            note_point(now_ns() - f0, false, false, 0);
+            pr.errors++;
+            std::cerr << "seastar_stream_bench: stream_write flush error: "
+                      << current_exception_what() << "\n";
+        }
+        bytes_since_point = 0;
     }
-    try {
-        co_await s.close();   // closes the file too
-    } catch (...) {
-        pr.errors++;
-        std::cerr << "seastar_stream_bench: stream_write close error: "
-                  << current_exception_what() << "\n";
+    {
+        const uint64_t f0 = now_ns();
+        try {
+            co_await s.close();   // closes the file too; flushes again (durable arm only)
+            note_point(now_ns() - f0, true, cfg.is_fdatasync(), 0);
+        } catch (...) {
+            note_point(now_ns() - f0, false, false, 0);
+            pr.errors++;
+            std::cerr << "seastar_stream_bench: stream_write close error: "
+                      << current_exception_what() << "\n";
+        }
     }
     co_return pr;
 }
@@ -407,7 +512,8 @@ run_phase(const config& cfg, uint64_t dataset, unsigned seconds, bool collect) {
                                     collect ? &res : nullptr, lat_cap);
         } else {
             pr = co_await write_pass(cfg, dataset, deadline, pass_index,
-                                     collect ? &res : nullptr, lat_cap);
+                                     collect ? &res : nullptr, lat_cap,
+                                     collect ? &ph.sync : nullptr, lat_cap);
         }
         ph.ops += pr.ops;
         ph.bytes += pr.bytes;
@@ -426,6 +532,8 @@ run_phase(const config& cfg, uint64_t dataset, unsigned seconds, bool collect) {
         // percentile_json() indexes a sorted array (same contract as
         // seastar_file_bench.cc, which sorts the merged per-fiber reservoirs).
         std::sort(ph.lat_ns.begin(), ph.lat_ns.end());
+        // B6: the sync-latency reservoir is sorted the same way.
+        std::sort(ph.sync.lat.samples.begin(), ph.sync.lat.samples.end());
     }
     co_return std::move(ph);
 }
@@ -441,6 +549,8 @@ struct manifest {
     std::string backend;
     unsigned smp = 1;
     std::string command_line;
+    // B6: effective seastar reactor --aio-fsync setting (true/false/unknown).
+    std::string aio_fsync = "unknown";
 };
 
 static std::string json_escape(const std::string& s) {
@@ -498,25 +608,27 @@ static std::string kernel_str() {
     return std::string(u.sysname) + " " + u.release;
 }
 
-static std::string percentile_json(const phase_result& r) {
+// Percentile block for an already-sorted latency reservoir (ns -> us), identical
+// arithmetic to the pre-B6 percentile_json() so existing fields keep their meaning.
+static std::string latency_json(const std::vector<uint64_t>& sorted, uint64_t population) {
     std::ostringstream o;
     auto pct = [&](double p) -> double {
-        if (r.lat_ns.empty()) {
+        if (sorted.empty()) {
             return 0.0;
         }
-        size_t idx = static_cast<size_t>(std::llround(p * (r.lat_ns.size() - 1)));
-        idx = std::min(idx, r.lat_ns.size() - 1);
-        return static_cast<double>(r.lat_ns[idx]) / 1000.0; // us
+        size_t idx = static_cast<size_t>(std::llround(p * (sorted.size() - 1)));
+        idx = std::min(idx, sorted.size() - 1);
+        return static_cast<double>(sorted[idx]) / 1000.0; // us
     };
     double sum = 0;
-    for (auto v : r.lat_ns) {
+    for (auto v : sorted) {
         sum += static_cast<double>(v);
     }
-    double avg = r.lat_ns.empty() ? 0.0 : sum / r.lat_ns.size() / 1000.0;
+    double avg = sorted.empty() ? 0.0 : sum / sorted.size() / 1000.0;
     // `samples` = reservoir size; `sampled` = true when the population is larger
     // than the reservoir (uniform sample of the whole window), as in JUring.
-    o << "\"samples\":" << r.lat_ns.size()
-      << ",\"sampled\":" << ((!r.lat_ns.empty() && r.lat_ns.size() < r.ops) ? "true" : "false");
+    o << "\"samples\":" << sorted.size()
+      << ",\"sampled\":" << ((!sorted.empty() && sorted.size() < population) ? "true" : "false");
     o << std::fixed << std::setprecision(3);
     o << ",\"avg\":" << avg
       << ",\"p50\":" << pct(0.50)
@@ -524,7 +636,36 @@ static std::string percentile_json(const phase_result& r) {
       << ",\"p95\":" << pct(0.95)
       << ",\"p99\":" << pct(0.99)
       << ",\"p999\":" << pct(0.999)
-      << ",\"max\":" << (r.lat_ns.empty() ? 0.0 : static_cast<double>(r.lat_ns.back()) / 1000.0);
+      << ",\"max\":" << (sorted.empty() ? 0.0 : static_cast<double>(sorted.back()) / 1000.0);
+    return o.str();
+}
+
+static std::string percentile_json(const phase_result& r) {
+    return latency_json(r.lat_ns, r.ops);
+}
+
+// B6 sync-latency block (docs/b6-design.md §6.1/§6.2 fields only:
+// samples,avg,p50,p90,p99,max — microseconds; reservoir over durability points).
+static std::string sync_wait_json(const sync_result& s) {
+    std::ostringstream o;
+    const std::vector<uint64_t>& sorted = s.lat.samples;
+    auto pct = [&](double p) -> double {
+        if (sorted.empty()) {
+            return 0.0;
+        }
+        size_t idx = static_cast<size_t>(std::llround(p * (sorted.size() - 1)));
+        idx = std::min(idx, sorted.size() - 1);
+        return static_cast<double>(sorted[idx]) / 1000.0;
+    };
+    const double avg = sorted.empty()
+        ? 0.0 : static_cast<double>(s.wait_ns) / sorted.size() / 1000.0;
+    o << std::fixed << std::setprecision(3);
+    o << "\"samples\":" << sorted.size()
+      << ",\"avg\":" << avg
+      << ",\"p50\":" << pct(0.50)
+      << ",\"p90\":" << pct(0.90)
+      << ",\"p99\":" << pct(0.99)
+      << ",\"max\":" << (sorted.empty() ? 0.0 : static_cast<double>(sorted.back()) / 1000.0);
     return o.str();
 }
 
@@ -544,6 +685,9 @@ static std::string render_json(const config& cfg, const manifest& m,
     o << "\"schema_version\":\"" << SCHEMA_VERSION << "\"";
     o << ",\"engine\":\"" << ENGINE << "\"";
     o << ",\"engine_detail\":\"" << ENGINE_DETAIL << "\"";
+    // B6 additive marker: schema_version stays "1.0" (docs/b2-design.md §3.1);
+    // consumers must ignore unknown keys (docs/b6-design.md §6.1/§6.5).
+    o << ",\"schema_extensions\":[\"b6-durability-1\"]";
     o << ",\"status\":\"" << json_escape(status) << "\"";
     o << ",\"error\":" << (error.empty() ? "null" : ("\"" + json_escape(error) + "\""));
     o << ",\"label\":\"" << json_escape(cfg.label.empty() ? cfg.workload : cfg.label) << "\"";
@@ -593,6 +737,13 @@ static std::string render_json(const config& cfg, const manifest& m,
     } else {
         o << ",\"read_ahead\":" << (cfg.qd - 1);
     }
+    // B6 durability config (additive).
+    o << ",\"durability\":\"" << json_escape(cfg.durability) << "\"";
+    o << ",\"sync_every_bytes\":" << cfg.sync_every;
+    o << ",\"durable\":" << (cfg.is_writeback() ? "false" : "true");
+    o << ",\"dsync\":" << (cfg.is_dsync() ? "true" : "false");
+    o << ",\"aio_fsync\":\"" << json_escape(m.aio_fsync) << "\"";
+    o << ",\"sync_counting\":\"bench-derived: one fdatasync per output_stream flush()/close() when durable=true; seastar exports no fsync counter\"";
     o << "}";
 
     o << ",\"runs\":[";
@@ -608,6 +759,20 @@ static std::string render_json(const config& cfg, const manifest& m,
         o << ",\"iops\":" << std::setprecision(3) << r.iops;
         o << ",\"mibs\":" << std::setprecision(3) << r.mibs;
         o << ",\"latency_us\":{" << percentile_json(r.measured) << "}";
+        // B6 additive durability fields (docs/b6-design.md §6.2).
+        o << ",\"passes\":" << r.measured.passes;
+        o << ",\"durability_mode\":\"" << json_escape(cfg.durability) << "\"";
+        o << ",\"sync_every_bytes\":" << cfg.sync_every;
+        o << ",\"durability_points\":" << r.measured.sync.points;
+        o << ",\"syncs_issued\":" << r.measured.sync.issued;
+        o << ",\"syncs_completed\":" << r.measured.sync.completed;
+        o << ",\"syncs_failed\":" << r.measured.sync.failed;
+        o << ",\"bytes_synced\":" << r.measured.sync.bytes;
+        o << ",\"sync_wait_us\":{" << sync_wait_json(r.measured.sync) << "}";
+        const double sync_share = r.measured.elapsed_s > 0
+            ? static_cast<double>(r.measured.sync.wait_ns) / 1e9 / r.measured.elapsed_s : 0.0;
+        o << ",\"sync_wait_share\":" << std::setprecision(6) << sync_share
+          << std::setprecision(3);
         o << "}";
     }
     o << "]";
@@ -616,16 +781,30 @@ static std::string render_json(const config& cfg, const manifest& m,
     // total bytes/ops over total elapsed; stdev/sd/ci95 are across runs when
     // runs > 1, 0 otherwise)
     uint64_t ops = 0, bytes = 0, errs = 0;
+    uint64_t passes_total = 0, sync_points_total = 0;
+    uint64_t syncs_issued_total = 0, syncs_completed_total = 0, syncs_failed_total = 0;
+    uint64_t bytes_synced_total = 0, sync_wait_ns_total = 0;
     double elapsed = 0.0;
     std::vector<uint64_t> all_lat;
+    std::vector<uint64_t> all_sync_lat;
     for (const auto& r : runs) {
         ops += r.measured.ops;
         bytes += r.measured.bytes;
         errs += r.measured.errors;
         elapsed += r.measured.elapsed_s;
+        passes_total += r.measured.passes;
+        sync_points_total += r.measured.sync.points;
+        syncs_issued_total += r.measured.sync.issued;
+        syncs_completed_total += r.measured.sync.completed;
+        syncs_failed_total += r.measured.sync.failed;
+        bytes_synced_total += r.measured.sync.bytes;
+        sync_wait_ns_total += r.measured.sync.wait_ns;
         all_lat.insert(all_lat.end(), r.measured.lat_ns.begin(), r.measured.lat_ns.end());
+        all_sync_lat.insert(all_sync_lat.end(), r.measured.sync.lat.samples.begin(),
+                            r.measured.sync.lat.samples.end());
     }
     std::sort(all_lat.begin(), all_lat.end());
+    std::sort(all_sync_lat.begin(), all_sync_lat.end());
     const double iops = elapsed > 0 ? static_cast<double>(ops) / elapsed : 0.0;
     const double mibs = elapsed > 0
         ? static_cast<double>(bytes) / (1024.0 * 1024.0) / elapsed : 0.0;
@@ -662,10 +841,32 @@ static std::string render_json(const config& cfg, const manifest& m,
     o << ",\"ops_total\":" << ops;
     o << ",\"bytes_total\":" << bytes;
     o << ",\"errors_total\":" << errs;
+    o << ",\"passes_total\":" << passes_total;
     o << ",\"iops\":{\"mean\":" << iops << ",\"stdev\":" << iops_sd << "}";
     o << ",\"mibs\":{\"mean\":" << mibs << ",\"sd\":" << mibs_sd
       << ",\"ci95\":" << mibs_ci95 << "}";
     o << ",\"latency_us\":{" << percentile_json(agg) << "}";
+    // B6 additive sync totals.
+    {
+        sync_result agg_sync;
+        agg_sync.points = sync_points_total;
+        agg_sync.issued = syncs_issued_total;
+        agg_sync.completed = syncs_completed_total;
+        agg_sync.failed = syncs_failed_total;
+        agg_sync.bytes = bytes_synced_total;
+        agg_sync.wait_ns = sync_wait_ns_total;
+        agg_sync.lat.samples = std::move(all_sync_lat);
+        o << ",\"durability_points_total\":" << sync_points_total;
+        o << ",\"syncs_issued_total\":" << syncs_issued_total;
+        o << ",\"syncs_completed_total\":" << syncs_completed_total;
+        o << ",\"syncs_failed_total\":" << syncs_failed_total;
+        o << ",\"bytes_synced_total\":" << bytes_synced_total;
+        o << ",\"sync_wait_us\":{" << sync_wait_json(agg_sync) << "}";
+        const double share = elapsed > 0
+            ? static_cast<double>(sync_wait_ns_total) / 1e9 / elapsed : 0.0;
+        o << ",\"sync_wait_share\":" << std::setprecision(6) << share
+          << std::setprecision(3);
+    }
     o << "}";
     o << "}";
     return o.str();
@@ -700,7 +901,18 @@ int main(int argc, char** argv) {
         ("buffered", bpo::bool_switch(),
             "rejected: seastar file I/O on this path is always O_DIRECT/DMA")
         ("json", bpo::value<std::string>(), "also write the JSON report to this path")
-        ("label", bpo::value<std::string>(), "case label for reports");
+        ("label", bpo::value<std::string>(), "case label for reports")
+        // B6 durability (docs/b6-design.md §6.2; additive, defaults = historical behaviour).
+        ("durability", bpo::value<std::string>()->default_value("fdatasync"),
+            "B6 durability: writeback|fdatasync|dsync (default fdatasync = historical behaviour; "
+            "fsync is rejected: seastar has no fsync(2) path)")
+        ("durable", bpo::value<int>(),
+            "B6 compatibility spelling of --durability: 0 = writeback, 1 = fdatasync")
+        ("dsync", bpo::value<int>(),
+            "B6: 1 = open with open_flags::dsync (same as --durability dsync)")
+        ("sync-every", bpo::value<std::string>(),
+            "B6: one durability point (drain + fdatasync for the fdatasync arm) every S bytes "
+            "inside a write pass; default 0 = pass end only; S multiple of --bs and 4096, write only");
 
     return app.run(argc, argv, [&app, argc, argv]() -> seastar::future<> {
         auto& vm = app.configuration();
@@ -718,6 +930,47 @@ int main(int argc, char** argv) {
         if (vm.count("json")) cfg.json_path = vm["json"].as<std::string>();
         if (vm.count("label")) cfg.label = vm["label"].as<std::string>();
         if (vm.count("size")) cfg.dataset = parse_size(vm["size"].as<std::string>());
+
+        // B6 durability CLI (docs/b6-design.md §6.2).
+        cfg.durability = vm["durability"].as<std::string>();
+        for (auto& c : cfg.durability) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+        bool durability_explicit = !vm["durability"].defaulted();
+        if (vm.count("durable")) {
+            const int v = vm["durable"].as<int>();
+            if (v != 0 && v != 1) {
+                throw std::runtime_error("--durable must be 0 or 1");
+            }
+            cfg.durability = v ? "fdatasync" : "writeback";
+            durability_explicit = true;
+        }
+        if (vm.count("dsync")) {
+            const int v = vm["dsync"].as<int>();
+            if (v != 0 && v != 1) {
+                throw std::runtime_error("--dsync must be 0 or 1");
+            }
+            if (v) {
+                cfg.durability = "dsync";
+            }
+            durability_explicit = true;
+        }
+        if (vm.count("sync-every")) {
+            cfg.sync_every = parse_size(vm["sync-every"].as<std::string>());
+        }
+        if (cfg.durability == "fsync") {
+            throw std::runtime_error(
+                "--durability fsync is not supported by seastar_stream_bench: seastar "
+                "fstream has no fsync(2) path (file::flush() issues fdatasync only; "
+                "SeaStarRef/src/core/file.cc:217-227). The fsync arm is JUring-only "
+                "(docs/b6-design.md §6.2/§9.7).");
+        }
+        if (cfg.durability != "writeback" && cfg.durability != "fdatasync"
+            && cfg.durability != "dsync") {
+            throw std::runtime_error(
+                "--durability must be writeback, fdatasync or dsync (got '"
+                + cfg.durability + "')");
+        }
 
         // --buffered is intentionally unsupported: this runner exercises seastar's
         // DMA/O_DIRECT file path (open_file_dma + fstream always issue O_DIRECT on
@@ -761,6 +1014,22 @@ int main(int argc, char** argv) {
                 "to have more than one request in flight; the runner uses read_ahead = qd-1 "
                 "with adaptive adjustment)");
         }
+        // B6 durability validation (write path only).
+        if (cfg.is_read()) {
+            if (durability_explicit) {
+                throw std::runtime_error(
+                    "--durability/--durable/--dsync only apply to stream_write");
+            }
+            if (cfg.sync_every > 0) {
+                throw std::runtime_error("--sync-every only applies to stream_write");
+            }
+            cfg.durability = "n/a";   // no write side => no durability points
+        } else if (cfg.sync_every > 0
+                   && (cfg.sync_every % cfg.bs != 0 || cfg.sync_every % 4096 != 0)) {
+            throw std::runtime_error(
+                "--sync-every must be a multiple of --bs and 4096 (got "
+                + std::to_string(cfg.sync_every) + ")");
+        }
         if (seastar::this_smp_shard_count() != 1) {
             throw std::runtime_error(
                 "run with --smp 1 for now (the runner measures one shard)");
@@ -778,6 +1047,16 @@ int main(int argc, char** argv) {
         m.backend = std::string(seastar::engine().get_backend_name());
         m.smp = seastar::this_smp_shard_count();
         m.command_line = cmd.str();
+        // B6: record the effective reactor --aio-fsync setting (the W24 driver pins
+        // --aio-fsync 1 so flush() is IORING_OP_FSYNC|IORING_FSYNC_DATASYNC, not a
+        // blocking thread-pool fdatasync; docs/b6-design.md §6.2).
+        try {
+            if (vm.count("aio-fsync")) {
+                m.aio_fsync = vm["aio-fsync"].as<bool>() ? "true" : "false";
+            }
+        } catch (...) {
+            m.aio_fsync = "unknown";
+        }
 
         // Shared adaptive read-ahead history: one per process/cell, reused by
         // every pass of every phase (warmup + measured), so the measured window
@@ -845,7 +1124,10 @@ int main(int argc, char** argv) {
                   << " warmup=" << cfg.warmup_sec
                   << " runs=" << cfg.runs
                   << " readonly=" << (cfg.is_write() ? "false" : "true")
-                  << " seed=" << cfg.seed << "\n";
+                  << " seed=" << cfg.seed
+                  << " durability=" << cfg.durability
+                  << " sync_every=" << cfg.sync_every
+                  << " aio_fsync=" << m.aio_fsync << "\n";
 
         std::vector<run_result> runs;
         for (unsigned r = 0; r < cfg.runs; ++r) {
@@ -874,7 +1156,11 @@ int main(int argc, char** argv) {
                       << " bytes=" << rr.measured.bytes
                       << " errors=" << rr.measured.errors
                       << " elapsed=" << std::setprecision(3) << rr.measured.elapsed_s
-                      << "s iops=" << rr.iops << " mibs=" << rr.mibs << "\n";
+                      << "s iops=" << rr.iops << " mibs=" << rr.mibs
+                      << " durability_points=" << rr.measured.sync.points
+                      << " syncs_issued=" << rr.measured.sync.issued
+                      << " syncs_completed=" << rr.measured.sync.completed
+                      << " bytes_synced=" << rr.measured.sync.bytes << "\n";
             runs.push_back(std::move(rr));
         }
 

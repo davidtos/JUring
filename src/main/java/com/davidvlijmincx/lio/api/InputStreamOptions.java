@@ -29,14 +29,16 @@ public final class InputStreamOptions {
     public static final int DEFAULT_ALIGNMENT = 4096;
 
     private static final InputStreamOptions DEFAULTS =
-            new InputStreamOptions(DEFAULT_BUFFER_SIZE, 0, DEFAULT_ALIGNMENT, false);
+            new InputStreamOptions(DEFAULT_BUFFER_SIZE, 0, DEFAULT_ALIGNMENT, false, FadviseAdvice.NORMAL);
 
     private final int bufferSize;
     private final int readAhead;
     private final int alignment;
     private final boolean dynamicAdjustments;
+    private final FadviseAdvice fadvise;
 
-    private InputStreamOptions(int bufferSize, int readAhead, int alignment, boolean dynamicAdjustments) {
+    private InputStreamOptions(int bufferSize, int readAhead, int alignment, boolean dynamicAdjustments,
+                               FadviseAdvice fadvise) {
         if (bufferSize < 1) {
             throw new IllegalArgumentException("bufferSize must be >= 1: " + bufferSize);
         }
@@ -50,11 +52,12 @@ public final class InputStreamOptions {
         this.readAhead = readAhead;
         this.alignment = alignment;
         this.dynamicAdjustments = dynamicAdjustments;
+        this.fadvise = Objects.requireNonNull(fadvise, "advice");
     }
 
     /**
      * Returns the shared default options (buffer 8192, readahead 0, alignment 4096,
-     * adaptive adjustments off).
+     * adaptive adjustments off, no {@code fadvise} hint).
      *
      * @return the shared default options
      */
@@ -86,13 +89,25 @@ public final class InputStreamOptions {
     }
 
     /**
+     * Returns the {@code posix_fadvise(2)} hint applied once at {@link JuringInputStream#open}
+     * (B6, see {@code docs/b6-design.md} §2.4).
+     *
+     * <p>{@link FadviseAdvice#NORMAL} is the "no hint" sentinel: it issues no syscall.
+     *
+     * @return the configured page-cache advice
+     */
+    public FadviseAdvice fadvise() {
+        return fadvise;
+    }
+
+    /**
      * Returns a copy with a different maximum buffer size.
      *
      * @param bufferSize bytes, {@code >= 1}
      * @return a new options object
      */
     public InputStreamOptions withBufferSize(int bufferSize) {
-        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments, fadvise);
     }
 
     /**
@@ -102,7 +117,7 @@ public final class InputStreamOptions {
      * @return a new options object
      */
     public InputStreamOptions withReadAhead(int readAhead) {
-        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments, fadvise);
     }
 
     /**
@@ -112,7 +127,7 @@ public final class InputStreamOptions {
      * @return a new options object
      */
     public InputStreamOptions withAlignment(int alignment) {
-        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments);
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments, fadvise);
     }
 
     /**
@@ -122,7 +137,18 @@ public final class InputStreamOptions {
      * @return a new options object
      */
     public InputStreamOptions withDynamicAdjustments(boolean enabled) {
-        return new InputStreamOptions(bufferSize, readAhead, alignment, enabled);
+        return new InputStreamOptions(bufferSize, readAhead, alignment, enabled, fadvise);
+    }
+
+    /**
+     * Returns a copy with a different {@code posix_fadvise(2)} page-cache hint, applied once
+     * when the stream is opened (B6, see {@code docs/b6-design.md} §2.4).
+     *
+     * @param advice the hint, must not be {@code null}; {@link FadviseAdvice#NORMAL} disables it
+     * @return a new options object
+     */
+    public InputStreamOptions withFadvise(FadviseAdvice advice) {
+        return new InputStreamOptions(bufferSize, readAhead, alignment, dynamicAdjustments, advice);
     }
 
     @Override
@@ -136,12 +162,13 @@ public final class InputStreamOptions {
         return bufferSize == other.bufferSize
                 && readAhead == other.readAhead
                 && alignment == other.alignment
-                && dynamicAdjustments == other.dynamicAdjustments;
+                && dynamicAdjustments == other.dynamicAdjustments
+                && fadvise == other.fadvise;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(bufferSize, readAhead, alignment, dynamicAdjustments);
+        return Objects.hash(bufferSize, readAhead, alignment, dynamicAdjustments, fadvise);
     }
 
     @Override
@@ -149,6 +176,7 @@ public final class InputStreamOptions {
         return "InputStreamOptions{bufferSize=" + bufferSize
                 + ", readAhead=" + readAhead
                 + ", alignment=" + alignment
-                + ", dynamicAdjustments=" + dynamicAdjustments + '}';
+                + ", dynamicAdjustments=" + dynamicAdjustments
+                + ", fadvise=" + fadvise + '}';
     }
 }

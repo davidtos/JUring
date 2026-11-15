@@ -36,10 +36,21 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * {@code alignUp(bufferSize, alignment)} bytes each, once, at {@code open()}.
  * {@link #bufferMemoryBytes()} reports the total.
  *
+ * <h2>Durability (B6)</h2>
+ * <p>{@link OutputStreamOptions#durability()} makes {@link #flush()} and {@link #close()}
+ * durability points (see {@code docs/b6-design.md} §2.5/§3.1): for
+ * {@link DurabilityMode#FDATASYNC}/{@link DurabilityMode#FSYNC} each point issues exactly
+ * one {@code fdatasync}/{@code fsync}; {@link DurabilityMode#WRITEBACK} keeps the frozen B2
+ * behaviour (no sync in {@code flush()}, one {@code fdatasync} in {@code close()} iff
+ * {@link OutputStreamOptions#syncOnClose()}); {@link DurabilityMode#DSYNC} never syncs
+ * explicitly because it asserts the file was opened with {@code O_DSYNC}.
+ * {@link #syncs()} reports the successful sync operations issued so far.
+ *
  * <h2>Lifecycle</h2>
- * <p>{@link #close()} flushes, optionally calls {@code fdatasync}, releases the buffers and
- * is idempotent. It does <strong>not</strong> close the underlying {@link JuringFile}.
- * Writing after {@code close()} throws {@link IllegalStateException}. The stream is
+ * <p>{@link #close()} performs one flush (hence at most one mode sync), optionally calls
+ * the B2 {@code fdatasync}-on-close, releases the buffers and is idempotent. It does
+ * <strong>not</strong> close the underlying {@link JuringFile}. Writing after
+ * {@code close()} throws {@link IllegalStateException}. The stream is
  * <strong>not thread-safe</strong> and inherits the B1 ring-ownership rule.
  */
 public final class JuringOutputStream implements AutoCloseable {
@@ -69,10 +80,13 @@ public final class JuringOutputStream implements AutoCloseable {
     private int outstandingHead;
     private int outstandingSize;
 
+    private final DurabilityMode durability;
+
     private int fillBuffer = -1;
     private int fillPos;
     private long position;
     private long flushOffset;
+    private long syncs;
     private boolean closed;
     private boolean unalignedRestart;
     private JuringException failure;
@@ -84,6 +98,7 @@ public final class JuringOutputStream implements AutoCloseable {
         this.chunkSize = alignUp(options.bufferSize(), this.alignment);
         this.writeBehind = options.writeBehind();
         this.bufferCount = writeBehind + 1;
+        this.durability = options.durability();
         this.arena = Arena.ofConfined();
         try {
             this.buffers = new MemorySegment[bufferCount];
@@ -122,10 +137,20 @@ public final class JuringOutputStream implements AutoCloseable {
     /**
      * Opens an output stream that writes the file from offset 0.
      *
+     * <p>B6 validation and hints (see {@code docs/b6-design.md} §2.6): a
+     * {@link DurabilityMode#DSYNC} request asserts that the backing file was opened with
+     * {@code O_DSYNC} ({@link LinuxOpenOptions#DSYNC}/{@link LinuxOpenOptions#SYNC}) and
+     * fails with {@link IllegalArgumentException} <em>before</em> any write is accepted;
+     * the optional preallocation hint is issued next, then the optional
+     * {@link OutputStreamOptions#fadvise()} hint for the whole file. Hint failures
+     * propagate out of this method.
+     *
      * @param file    the backing file (must be opened for writing)
      * @param options stream options
      * @return a new output stream
-     * @throws JuringException if the optional preallocation hint fails
+     * @throws IllegalArgumentException if {@code durability() == DSYNC} but the file was not
+     *                                  opened with {@code O_DSYNC}
+     * @throws JuringException if the optional preallocation or {@code fadvise} hint fails
      */
     public static JuringOutputStream open(JuringFile file, OutputStreamOptions options) throws JuringException {
         Objects.requireNonNull(file, "file");
@@ -133,14 +158,22 @@ public final class JuringOutputStream implements AutoCloseable {
         if (!file.isOpen()) {
             throw new IllegalStateException("JuringOutputStream.open: file is closed (" + file.path() + ")");
         }
+        if (options.durability() == DurabilityMode.DSYNC && file.durability() != DurabilityMode.DSYNC) {
+            throw new IllegalArgumentException("JuringOutputStream.open: durability mode DSYNC requires "
+                    + "the file to be opened with O_DSYNC (LinuxOpenOptions.DSYNC or SYNC): options.durability()="
+                    + options.durability() + ", file.durability()=" + file.durability() + " (" + file.path() + ")");
+        }
         JuringOutputStream stream = new JuringOutputStream(file, options);
-        if (options.preallocationSize() > 0) {
-            try {
+        try {
+            if (options.preallocationSize() > 0) {
                 file.allocate(0L, options.preallocationSize());
-            } catch (JuringException | RuntimeException e) {
-                stream.closeQuietly();
-                throw e;
             }
+            if (options.fadvise() != FadviseAdvice.NORMAL) {
+                file.fadvise(options.fadvise(), 0L, 0L);
+            }
+        } catch (JuringException | RuntimeException e) {
+            stream.closeQuietly();
+            throw e;
         }
         return stream;
     }
@@ -167,6 +200,30 @@ public final class JuringOutputStream implements AutoCloseable {
     /** @return number of bytes of native buffer memory held by this stream (bounded) */
     public long bufferMemoryBytes() {
         return closed ? 0L : (long) bufferCount * chunkSize;
+    }
+
+    /**
+     * @return the configured durability mode (B6; the echo of
+     *         {@link OutputStreamOptions#durability()}, readable after {@link #close()})
+     */
+    public DurabilityMode durability() {
+        return durability;
+    }
+
+    /**
+     * Number of durability sync operations ({@code fdatasync}/{@code fsync}) this stream has
+     * successfully issued so far (B6, see {@code docs/b6-design.md} §3.1).
+     *
+     * <p>It is {@code 0} for {@link DurabilityMode#WRITEBACK} (without
+     * {@link OutputStreamOptions#syncOnClose()}) and for {@link DurabilityMode#DSYNC}; it
+     * increments by one per {@code flush()} for {@link DurabilityMode#FDATASYNC}/
+     * {@link DurabilityMode#FSYNC} and by (at most) one on {@code close()}. The value is
+     * valid after {@link #close()} and is never reset.
+     *
+     * @return successful sync operations issued by this stream
+     */
+    public long syncs() {
+        return syncs;
     }
 
     /** @return the logical number of bytes accepted and written by this stream */
@@ -248,9 +305,13 @@ public final class JuringOutputStream implements AutoCloseable {
     }
 
     /**
-     * Flushes the pending partial buffer (alignment-padded) and waits for all in-flight
-     * write-behind operations. Does not {@code fsync} (that only happens on
-     * {@link #close()} when {@code syncOnClose} is set).
+     * Flushes the pending partial buffer (alignment-padded), waits for all in-flight
+     * write-behind operations and, when the durability mode is
+     * {@link DurabilityMode#FDATASYNC}/{@link DurabilityMode#FSYNC}, issues exactly one
+     * {@code fdatasync}/{@code fsync} before returning (a B6 durability point). For
+     * {@link DurabilityMode#WRITEBACK} (and {@link DurabilityMode#DSYNC}) no sync is issued
+     * here; {@code WRITEBACK} optionally syncs once on {@link #close()} when
+     * {@link OutputStreamOptions#syncOnClose()} is set.
      *
      * <p>Continuing to write after a flush is supported when the logical position is
      * alignment-aligned (the usual case after full buffers); after a padded flush at an
@@ -294,6 +355,37 @@ public final class JuringOutputStream implements AutoCloseable {
         } else {
             drainAll();
         }
+        syncAtDurabilityPoint();
+    }
+
+    /**
+     * Issued after the drain/truncate step of a flush so the mode sync is ordered after every
+     * write accepted before the durability point. No-op for {@link DurabilityMode#WRITEBACK}
+     * and {@link DurabilityMode#DSYNC}.
+     */
+    private void syncAtDurabilityPoint() throws JuringException {
+        if (durability == DurabilityMode.FDATASYNC) {
+            issueSync(false);
+        } else if (durability == DurabilityMode.FSYNC) {
+            issueSync(true);
+        }
+    }
+
+    /** Issues one {@code fdatasync}/{@code fsync}, latching the first sync failure (B2 rule). */
+    private void issueSync(boolean metadata) throws JuringException {
+        try {
+            if (metadata) {
+                file.fsync();
+            } else {
+                file.fdatasync();
+            }
+        } catch (JuringException e) {
+            if (failure == null) {
+                failure = e;
+            }
+            throw e;
+        }
+        syncs++;
     }
 
     /**
@@ -389,9 +481,20 @@ public final class JuringOutputStream implements AutoCloseable {
                 }
             }
         }
-        if (options.syncOnClose()) {
+        // Exactly one close durability point (B6 §3.2): FDATASYNC/FSYNC issue one mode sync
+        // (syncOnClose is then redundant and never adds a second one), DSYNC none, and
+        // WRITEBACK keeps the frozen B2 fdatasync-on-close shortcut.
+        boolean closeSync = false;
+        if (durability == DurabilityMode.FDATASYNC) {
+            closeSync = true;
+        } else if (durability == DurabilityMode.FSYNC) {
+            closeSync = true;
+        } else if (durability == DurabilityMode.WRITEBACK && options.syncOnClose()) {
+            closeSync = true;
+        }
+        if (closeSync) {
             try {
-                file.fdatasync();
+                issueSync(durability == DurabilityMode.FSYNC);
             } catch (JuringException e) {
                 if (first == null) {
                     first = e;

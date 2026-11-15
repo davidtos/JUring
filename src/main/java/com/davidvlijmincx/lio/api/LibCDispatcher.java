@@ -52,6 +52,12 @@ final class LibCDispatcher {
     static final MethodHandle MH_FCNTL;
     static final MethodHandle MH_SCHED_SETAFFINITY;
     static final MethodHandle MH_SCHED_GETCPU;
+    /**
+     * B6: {@code posix_fadvise(2)}. The glibc wrapper returns the error number
+     * <b>directly</b> ({@code 0} on success, a positive {@code errno} on failure), so this
+     * downcall deliberately has no {@code captureCallState("errno")} option.
+     */
+    static final MethodHandle MH_POSIX_FADVISE;
 
     static {
         SymbolLookup lookup = linker.defaultLookup();
@@ -163,6 +169,13 @@ final class LibCDispatcher {
         MH_SCHED_GETCPU = linker.downcallHandle(
                 lookup.findOrThrow("sched_getcpu"),
                 FunctionDescriptor.of(JAVA_INT)
+        );
+
+        // B6: advisory page-cache hint; returns errno directly (no -1/errno convention, no
+        // captureCallState) and needs no arena (all arguments are scalars).
+        MH_POSIX_FADVISE = linker.downcallHandle(
+                lookup.findOrThrow("posix_fadvise"),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_INT)
         );
     }
 
@@ -358,6 +371,23 @@ final class LibCDispatcher {
         try (Arena callArena = Arena.ofConfined()) {
             MemorySegment callState = callArena.allocate(CAPTURE_STATE_LAYOUT);
             return ioUringRegister(callState, fd, opcode, arg, nrArgs);
+        }
+    }
+
+    /**
+     * {@code posix_fadvise(fd, offset, length, advice)}.
+     *
+     * <p>Returns the libc result <b>as-is</b>: {@code 0} on success, the positive
+     * {@code errno} on failure (glibc's {@code posix_fadvise} returns errno directly; it is
+     * not the {@code -1 + errno} convention). {@code length == 0} means "to the end of the
+     * file" (POSIX). This is an advisory call: it does not read or write file data and is
+     * not a ring request.
+     */
+    int posixFadvise(int fd, long offset, long length, int advice) {
+        try {
+            return (int) MH_POSIX_FADVISE.invokeExact(fd, offset, length, advice);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
         }
     }
 

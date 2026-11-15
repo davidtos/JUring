@@ -71,6 +71,16 @@ public final class JuringFile implements AutoCloseable {
     private static final long GRACE_NANOS = 250_000_000L;
     private static final long POLL_SLICE_NANOS = 100_000L;
 
+    /**
+     * B6: the {@code O_DSYNC} bit of the combined open flags. It is set by both
+     * {@link LinuxOpenOptions#DSYNC} ({@code 0x1000}) and {@link LinuxOpenOptions#SYNC}
+     * ({@code 0x101000}).
+     */
+    private static final int O_DSYNC = 0x1000;
+
+    /** B6: ledger kind of an {@code fsync}/{@code fdatasync} request. */
+    private static final byte FSYNC_KIND = (byte) OperationType.FSYNC.getIndex();
+
     private static final byte FREE = 0;
     private static final byte PENDING = 1;
     private static final byte DONE = 2;
@@ -98,6 +108,7 @@ public final class JuringFile implements AutoCloseable {
     private final JUring ring;
     private final Path path;
     private final FileDescriptor fileDescriptor;
+    private final int openFlags;
     private final ResultConsumer completionConsumer = this::onCompletion;
 
     private IoPolicy policy = IoPolicy.defaults();
@@ -129,11 +140,15 @@ public final class JuringFile implements AutoCloseable {
     private long cancelledOperations;
     private long controlOperations;
     private long controlCompletions;
+    // B6: fsync/fdatasync requests prepared/completed through this handle (owner-thread counters).
+    private long syncOperations;
+    private long syncCompletions;
 
-    private JuringFile(JUring ring, Path path, FileDescriptor fileDescriptor) {
+    private JuringFile(JUring ring, Path path, FileDescriptor fileDescriptor, int openFlags) {
         this.ring = ring;
         this.path = path;
         this.fileDescriptor = fileDescriptor;
+        this.openFlags = openFlags;
     }
 
     // ------------------------------------------------------------------
@@ -178,7 +193,7 @@ public final class JuringFile implements AutoCloseable {
         if (fd < 0) {
             throw JuringException.fromResult(fd, "open", path.toString());
         }
-        return new JuringFile(ring, path, new FileDescriptor(fd));
+        return new JuringFile(ring, path, new FileDescriptor(fd), flags);
     }
 
     /** @return the ring this handle is bound to */
@@ -247,6 +262,15 @@ public final class JuringFile implements AutoCloseable {
     }
 
     /**
+     * @return the configured maximum number of unawaited ring requests (the in-flight
+     *         ledger capacity): {@link #DEFAULT_IN_FLIGHT_CAPACITY} unless changed with
+     *         {@link #withInFlightCapacity(int)}
+     */
+    public int inFlightCapacity() {
+        return ledgerCapacity;
+    }
+
+    /**
      * Sets the deadline used by {@link #close()} before it cancels in-flight operations.
      *
      * @param millis timeout in milliseconds, {@code >= 0}
@@ -258,6 +282,76 @@ public final class JuringFile implements AutoCloseable {
         }
         this.closeTimeoutMillis = millis;
         return this;
+    }
+
+    // ------------------------------------------------------------------
+    // durability and advisory page-cache hints (B6)
+    // ------------------------------------------------------------------
+
+    /**
+     * The durability mode implied by the flags this file was opened with.
+     *
+     * <p>Derived once at {@code open} from the combined flags: the {@code O_DSYNC} bit is
+     * set by {@link LinuxOpenOptions#DSYNC} and by {@link LinuxOpenOptions#SYNC}, so both
+     * report {@link DurabilityMode#DSYNC}; every other open reports
+     * {@link DurabilityMode#WRITEBACK}. This is a report only: {@code JuringFile} never
+     * issues an implicit sync (B1 contract; the B6 durability points live on the buffered
+     * streams and group commit).
+     *
+     * @return {@link DurabilityMode#DSYNC} or {@link DurabilityMode#WRITEBACK}; readable
+     *         after {@link #close()} (it reports the frozen open-time value)
+     */
+    public DurabilityMode durability() {
+        return (openFlags & O_DSYNC) != 0 ? DurabilityMode.DSYNC : DurabilityMode.WRITEBACK;
+    }
+
+    /**
+     * Issues {@code posix_fadvise(fd, offset, length, advice.value())} as a blocking,
+     * advisory page-cache hint (B6, §2.3). It never changes file content, stream position
+     * or ring state, is <b>not</b> a ring request (it does not touch the in-flight ledger or
+     * the operation counters) and therefore does not require the ring-ownership invariant
+     * of the blocking helpers. The owner-thread rule still applies.
+     *
+     * <p>{@code length == 0} means "to the end of the file" (POSIX). {@code WILLNEED} and
+     * {@code DONTNEED} can do real work and must not be called from a B4 shard task; the
+     * other advices are cheap.
+     *
+     * @param advice the hint, must not be {@code null}
+     * @param offset file offset to start the hint at, {@code >= 0}
+     * @param length number of bytes the hint covers, {@code >= 0}; {@code 0} means to EOF
+     * @throws NullPointerException     when {@code advice} is {@code null}
+     * @throws IllegalArgumentException when {@code offset < 0} or {@code length < 0}
+     * @throws IllegalStateException    when the handle or the ring is closed
+     * @throws JuringException          on a non-zero {@code posix_fadvise} return (typed errno)
+     */
+    public void fadvise(FadviseAdvice advice, long offset, long length) throws JuringException {
+        ensureOpen("fadvise");
+        Objects.requireNonNull(advice, "advice");
+        if (offset < 0) {
+            throw new IllegalArgumentException("negative offset: " + offset);
+        }
+        if (length < 0) {
+            throw new IllegalArgumentException("negative length: " + length);
+        }
+        int result = NativeDispatcher.C.posixFadvise(fileDescriptor.getFd(), offset, length, advice.value());
+        if (result != 0) {
+            // posix_fadvise returns the errno directly (no -1/errno convention).
+            throw new JuringException(result, "fadvise", path + " advice=" + advice
+                    + ", offset=" + offset + ", length=" + length);
+        }
+    }
+
+    /**
+     * Whole-file convenience for {@link #fadvise(FadviseAdvice, long, long)}: exactly
+     * equivalent to {@code fadvise(advice, 0, 0)}.
+     *
+     * @param advice the hint, must not be {@code null}
+     * @throws NullPointerException     when {@code advice} is {@code null}
+     * @throws IllegalStateException    when the handle or the ring is closed
+     * @throws JuringException          on a non-zero {@code posix_fadvise} return (typed errno)
+     */
+    public void fadvise(FadviseAdvice advice) throws JuringException {
+        fadvise(advice, 0, 0);
     }
 
     // ------------------------------------------------------------------
@@ -404,6 +498,8 @@ public final class JuringFile implements AutoCloseable {
                 ? ring.prepareFsync(registeredSlot, flags)
                 : ring.prepareFsync(fileDescriptor, flags);
         track(handle);
+        // B6: count only OperationType.FSYNC requests prepared through this handle.
+        syncOperations++;
         return handle;
     }
 
@@ -1180,6 +1276,26 @@ public final class JuringFile implements AutoCloseable {
         return controlOperations;
     }
 
+    /**
+     * @return the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
+     *         requests prepared through this handle, including syncs issued by the buffered
+     *         streams and group commit. Owner-thread counter; excludes {@code fadvise},
+     *         which is not a ring request.
+     */
+    public long syncOperations() {
+        return syncOperations;
+    }
+
+    /**
+     * @return the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
+     *         completions reaped through this handle (successful or failed). Owner-thread
+     *         counter; the delta against {@link #syncOperations()} shows issued syncs still
+     *         in flight.
+     */
+    public long syncCompletions() {
+        return syncCompletions;
+    }
+
     // ------------------------------------------------------------------
     // close
     // ------------------------------------------------------------------
@@ -1501,6 +1617,10 @@ public final class JuringFile implements AutoCloseable {
                 return;
             }
             completedOperations++;
+            if (kind == FSYNC_KIND) {
+                // B6: a terminal fsync/fdatasync completion reaped through this handle.
+                syncCompletions++;
+            }
             if (value < 0) {
                 failedOperations++;
                 // A linked timeout disarmed by a winning target always completes -ECANCELED;

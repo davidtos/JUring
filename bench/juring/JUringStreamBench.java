@@ -47,10 +47,35 @@
  * measured elapsed; iops = ops/s over the same window.
  *
  * Build/run: bench/juring/run-juring-stream.sh (compiles against target/classes).
+ *
+ * B6 durability extension (docs/b6-design.md §6.1; additive, schema stays "1.0")
+ * ------------------------------------------------------------------------------
+ *   --durability writeback|fdatasync|fsync|dsync  (default writeback = historical arm)
+ *       writeback -> OutputStreamOptions.durability()==WRITEBACK, syncOnClose=false
+ *       fdatasync -> withDurabilityMode(FDATASYNC): one fdatasync per durability point
+ *       fsync     -> withDurabilityMode(FSYNC):     one fsync per durability point
+ *       dsync     -> JuringFile opened with LinuxOpenOptions.DSYNC and
+ *                    withDurabilityMode(DSYNC): writes durable on completion, no
+ *                    explicit sync (the stream asserts the file mode)
+ *   --sync-every BYTES  (write only; default 0 = pass end only): after every S bytes
+ *       accepted inside a pass call JuringOutputStream.flush(), i.e. one durability
+ *       point per S bytes (drain only for writeback/dsync; drain + one sync for
+ *       fdatasync/fsync). S must be a multiple of --bs and 4096; the pass-end
+ *       flush()+close() is unchanged (close() performs the final flush).
+ *   --fadvise normal|random|sequential|willneed|dontneed|noreuse  (default normal;
+ *       stream hint, applied at open; informational, no verdict uses it)
+ *
+ * JSON keeps `schema_version "1.0"` and adds
+ * `"schema_extensions": ["b6-durability-1"]`, config.{durability,sync_every_bytes,
+ * fadvise} and per-run {durability_mode,sync_every_bytes,durability_points,
+ * syncs_issued,syncs_completed,syncs_failed,bytes_synced,sync_wait_us{...},
+ * sync_wait_share}; existing fields and their meanings are unchanged.
  */
 
 package bench.juring;
 
+import com.davidvlijmincx.lio.api.DurabilityMode;
+import com.davidvlijmincx.lio.api.FadviseAdvice;
 import com.davidvlijmincx.lio.api.InputStreamOptions;
 import com.davidvlijmincx.lio.api.IoUringOptions;
 import com.davidvlijmincx.lio.api.JUring;
@@ -103,6 +128,14 @@ public final class JUringStreamBench {
 
     /** Uniform reservoir cap per run; not a CLI flag (frozen §3.1 CLI). */
     static final int LATENCY_SAMPLES = 1_000_000;
+
+    /**
+     * B6: separate uniform reservoir for durability-point (flush/close) call
+     * durations, so sync latency is not mixed with the per-chunk reservoir
+     * (docs/b6-design.md §6.1). A 15 s W24 window holds at most a few thousand
+     * durability points; 100k samples is a bounded, allocation-cheap cap.
+     */
+    static final int SYNC_LATENCY_SAMPLES = 100_000;
 
     public static void main(String[] args) {
         Config cfg = null;
@@ -224,6 +257,11 @@ public final class JUringStreamBench {
         String label = null;
         long seed = 20261113L;             // deterministic dataset fill by default
 
+        // B6 durability (docs/b6-design.md §6.1); defaults = historical behaviour.
+        DurabilityMode durability = DurabilityMode.WRITEBACK;
+        long syncEvery = 0;                // bytes; 0 = pass end only
+        FadviseAdvice fadvise = FadviseAdvice.NORMAL;
+
         // Resolved at runtime, mirrored in the JSON.
         int resolvedRegisteredFiles = 0;
         boolean resolvedRegisterAttempted = false;
@@ -304,12 +342,70 @@ public final class JUringStreamBench {
                         c.seed = longArg(value(argv, i, key, inline));
                         if (inline == null) i++;
                         break;
+                    case "--durability":
+                        c.durability = durabilityArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--sync-every":
+                        c.syncEvery = sizeArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--fadvise":
+                        c.fadvise = fadviseArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
                     default:
                         throw new UsageException("unknown argument '" + arg + "' (try --help)");
                 }
             }
             c.validate();
             return c;
+        }
+
+        static DurabilityMode durabilityArg(String s) throws UsageException {
+            switch (s.trim().toLowerCase(Locale.ROOT)) {
+                case "writeback":
+                    return DurabilityMode.WRITEBACK;
+                case "fdatasync":
+                    return DurabilityMode.FDATASYNC;
+                case "fsync":
+                    return DurabilityMode.FSYNC;
+                case "dsync":
+                    return DurabilityMode.DSYNC;
+                default:
+                    throw new UsageException("unknown --durability '" + s
+                            + "' (expected writeback|fdatasync|fsync|dsync)");
+            }
+        }
+
+        static FadviseAdvice fadviseArg(String s) throws UsageException {
+            switch (s.trim().toLowerCase(Locale.ROOT)) {
+                case "normal":
+                    return FadviseAdvice.NORMAL;
+                case "random":
+                    return FadviseAdvice.RANDOM;
+                case "sequential":
+                    return FadviseAdvice.SEQUENTIAL;
+                case "willneed":
+                    return FadviseAdvice.WILLNEED;
+                case "dontneed":
+                    return FadviseAdvice.DONTNEED;
+                case "noreuse":
+                    return FadviseAdvice.NOREUSE;
+                default:
+                    throw new UsageException("unknown --fadvise '" + s + "' (expected normal|random|"
+                            + "sequential|willneed|dontneed|noreuse)");
+            }
+        }
+
+        /** CLI/JSON name of the durability arm; "n/a" for the read workload. */
+        String durabilityCliName() {
+            return workload != null && workload.isRead()
+                    ? "n/a" : durability.name().toLowerCase(Locale.ROOT);
+        }
+
+        String fadviseCliName() {
+            return fadvise.name().toLowerCase(Locale.ROOT);
         }
 
         static String value(String[] argv, int i, String key, String inline) throws UsageException {
@@ -412,6 +508,23 @@ public final class JUringStreamBench {
             if (size > 0 && size < bs) {
                 throw new UsageException("--size must be >= --bs");
             }
+            // B6 durability (docs/b6-design.md §6.1).
+            if (workload.isRead()) {
+                if (durability != DurabilityMode.WRITEBACK) {
+                    throw new UsageException("--durability only applies to stream_write");
+                }
+                if (syncEvery > 0) {
+                    throw new UsageException("--sync-every only applies to stream_write");
+                }
+            } else {
+                if (syncEvery < 0) {
+                    throw new UsageException("--sync-every must be >= 0");
+                }
+                if (syncEvery > 0 && (syncEvery % bs != 0 || syncEvery % 4096 != 0)) {
+                    throw new UsageException("--sync-every must be a multiple of --bs and 4096, got "
+                            + syncEvery + " (bs=" + bs + ")");
+                }
+            }
             if (label == null || label.isBlank()) {
                 label = defaultLabel();
             }
@@ -421,6 +534,9 @@ public final class JUringStreamBench {
             String s = workload.cliName + "_" + humanSize(bs) + "_qd" + qd;
             if (buffered) s += "_buffered";
             if (noRegisterFile) s += "_noreg";
+            if (durability != DurabilityMode.WRITEBACK) s += "_" + durabilityCliName();
+            if (syncEvery > 0) s += "_every" + humanSize(syncEvery);
+            if (fadvise != FadviseAdvice.NORMAL) s += "_" + fadviseCliName();
             return s;
         }
     }
@@ -467,6 +583,12 @@ public final class JUringStreamBench {
                 "  --json PATH             also write the JSON report to PATH",
                 "  --label TEXT            case label for reports (default derived)",
                 "  --seed N                deterministic fill/PRNG seed (default 20261113)",
+                "  --durability MODE       writeback|fdatasync|fsync|dsync (default writeback;",
+                "                          write only; dsync opens the file with O_DSYNC)",
+                "  --sync-every BYTES      durability point (flush) every S bytes in a write pass;",
+                "                          default 0 = pass end only; S multiple of --bs and 4096",
+                "  --fadvise ADVICE        normal|random|sequential|willneed|dontneed|noreuse",
+                "                          (default normal; stream hint applied at open)",
                 "  --help                  this text",
                 "",
                 "Ring: entries=max(256,2*qd); flags SINGLE_ISSUER|COOP_TASKRUN|DEFER_TASKRUN.",
@@ -559,14 +681,17 @@ public final class JUringStreamBench {
                     .withBufferSize(cfg.bs)
                     .withReadAhead(cfg.qd - 1)
                     .withAlignment(ALIGNMENT)
-                    .withDynamicAdjustments(false);
+                    .withDynamicAdjustments(false)
+                    .withFadvise(cfg.fadvise);
         } else {
             outOptions = OutputStreamOptions.defaults()
                     .withBufferSize(cfg.bs)
                     .withWriteBehind(cfg.qd)
                     .withAlignment(ALIGNMENT)
                     .withPreallocationSize(0L)
-                    .withSyncOnClose(false);
+                    .withSyncOnClose(false)
+                    .withDurabilityMode(cfg.durability)
+                    .withFadvise(cfg.fadvise);
         }
 
         try (JUring ring = new JUring(ringEntries, RING_FLAGS)) {
@@ -617,12 +742,15 @@ public final class JUringStreamBench {
                     double mibs = (measured.bytesTotal / (1024.0 * 1024.0)) / measured.elapsedSec;
                     RunStat st = new RunStat(runIndex, measured.elapsedSec, measured.opsTotal,
                             measured.bytesTotal, measured.errorsTotal, measured.passes, iops, mibs,
-                            measured.lat);
+                            measured.lat, measured);
                     System.err.printf(Locale.ROOT,
                             "[juring-stream] run %d/%d: %.2f s, %,d chunks, %,d passes, %.1f MiB/s, "
-                                    + "%.1f chunks/s, p50=%.1f us p99=%.1f us p999=%.1f us max=%.1f us, errors=%d%n",
+                                    + "%.1f chunks/s, p50=%.1f us p99=%.1f us p999=%.1f us max=%.1f us, "
+                                    + "errors=%d, durability_points=%d syncs_issued=%d "
+                                    + "syncs_completed=%d bytes_synced=%d%n",
                             runIndex + 1, cfg.runs, st.seconds, st.opsTotal, st.passes, st.mibs, st.iops,
-                            st.lat.p50, st.lat.p99, st.lat.p999, st.lat.max, st.errorsTotal);
+                            st.lat.p50, st.lat.p99, st.lat.p999, st.lat.max, st.errorsTotal,
+                            st.durabilityPoints, st.syncsIssued, st.syncsCompleted, st.bytesSynced);
                     return st;
                 } catch (JuringException e) {
                     throw new BenchException("run " + (runIndex + 1) + " I/O failed: " + describe(e));
@@ -639,11 +767,22 @@ public final class JUringStreamBench {
 
     static JuringFile openFile(JUring ring, Config cfg, Dataset ds) throws JuringException {
         if (cfg.workload.isWrite()) {
+            // B6 dsync arm: the stream's DSYNC mode is a contract assertion, so the
+            // file must be opened with O_DSYNC (docs/b6-design.md §6.1/§2.2).
+            boolean dsync = cfg.durability == DurabilityMode.DSYNC;
             if (cfg.buffered) {
-                return JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE, LinuxOpenOptions.CREATE);
+                return dsync
+                        ? JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE,
+                                LinuxOpenOptions.CREATE, LinuxOpenOptions.DSYNC)
+                        : JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE,
+                                LinuxOpenOptions.CREATE);
             }
-            return JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE, LinuxOpenOptions.CREATE,
-                    LinuxOpenOptions.DIRECT);
+            return dsync
+                    ? JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE,
+                            LinuxOpenOptions.CREATE, LinuxOpenOptions.DIRECT,
+                            LinuxOpenOptions.DSYNC)
+                    : JuringFile.open(ring, ds.file, LinuxOpenOptions.WRITE,
+                            LinuxOpenOptions.CREATE, LinuxOpenOptions.DIRECT);
         }
         if (cfg.buffered) {
             return JuringFile.open(ring, ds.file, LinuxOpenOptions.READ);
@@ -669,6 +808,14 @@ public final class JUringStreamBench {
         long unmeasuredOps;          // warmup: chunks executed (diagnostics only)
         double elapsedSec;
         LatencyStats lat = LatencyStats.empty();
+        // B6 durability counters (measured phase only; docs/b6-design.md §6.1).
+        long durabilityPoints;
+        long syncsIssued;
+        long syncsCompleted;
+        long syncsFailed;
+        long bytesSynced;
+        long syncWaitNs;
+        LatencyStats syncLat = LatencyStats.empty();
     }
 
     static Phase runPhase(Config cfg, JuringFile file, InputStreamOptions inOptions,
@@ -679,6 +826,7 @@ public final class JUringStreamBench {
             return p;
         }
         Reservoir reservoir = timed ? new Reservoir(LATENCY_SAMPLES) : null;
+        Reservoir syncReservoir = timed ? new Reservoir(SYNC_LATENCY_SAMPLES) : null;
         long start = System.nanoTime();
         long deadline = start + (long) (seconds * 1_000_000_000L);
         long lastCounted = start;
@@ -721,6 +869,7 @@ public final class JUringStreamBench {
                 }
             } else {
                 JuringOutputStream out = JuringOutputStream.open(file, outOptions);
+                long bytesSincePoint = 0;
                 try {
                     fillPattern(source, seed ^ (passNo * 0x9E3779B97F4A7C15L));
                     long remaining = dataset;
@@ -740,12 +889,52 @@ public final class JUringStreamBench {
                             p.unmeasuredOps++;
                         }
                         remaining -= len;
+                        bytesSincePoint += len;
                         if (t1 >= deadline) {
                             break phaseLoop;           // stop mid-pass; close() flushes+drains
                         }
+                        // B6 durability point every S bytes (write only; S is a multiple
+                        // of --bs and 4096, so the position stays alignment-aligned):
+                        // flush() drains, and for fdatasync/fsync issues exactly one sync
+                        // (docs/b6-design.md §3.1/§6.1).
+                        if (cfg.syncEvery > 0 && bytesSincePoint >= cfg.syncEvery) {
+                            long s0 = System.nanoTime();
+                            long before = out.syncs();
+                            out.flush();
+                            long s1 = System.nanoTime();
+                            long issued = out.syncs() - before;
+                            if (timed) {
+                                p.durabilityPoints++;
+                                p.syncWaitNs += s1 - s0;
+                                syncReservoir.record(s1 - s0);
+                                p.syncsIssued += issued;
+                                p.syncsCompleted += issued;
+                                if (issued > 0) {
+                                    p.bytesSynced += bytesSincePoint;
+                                }
+                            }
+                            bytesSincePoint = 0;
+                        }
                     }
                 } finally {
+                    // Pass-end durability point: close() performs the single flush, i.e.
+                    // one sync for fdatasync/fsync and a drain only for writeback/dsync
+                    // (docs/b6-design.md §3.1; frozen B2 close semantics unchanged).
+                    long s0 = System.nanoTime();
+                    long before = out.syncs();
                     out.close();
+                    long s1 = System.nanoTime();
+                    long issued = out.syncs() - before;
+                    if (timed) {
+                        p.durabilityPoints++;
+                        p.syncWaitNs += s1 - s0;
+                        syncReservoir.record(s1 - s0);
+                        p.syncsIssued += issued;
+                        p.syncsCompleted += issued;
+                        if (issued > 0) {
+                            p.bytesSynced += bytesSincePoint;
+                        }
+                    }
                 }
             }
         }
@@ -754,6 +943,7 @@ public final class JUringStreamBench {
         if (timed) {
             p.elapsedSec = (lastCounted - start) / 1_000_000_000.0;
             p.lat = reservoir.toStats();
+            p.syncLat = syncReservoir.toStats();
         } else {
             p.elapsedSec = (System.nanoTime() - start) / 1_000_000_000.0;
         }
@@ -884,9 +1074,17 @@ public final class JUringStreamBench {
         final double iops;
         final double mibs;
         final LatencyStats lat;
+        // B6 durability (docs/b6-design.md §6.1).
+        final long durabilityPoints;
+        final long syncsIssued;
+        final long syncsCompleted;
+        final long syncsFailed;
+        final long bytesSynced;
+        final long syncWaitNs;
+        final LatencyStats syncLat;
 
         RunStat(int run, double seconds, long opsTotal, long bytesTotal, long errorsTotal,
-                long passes, double iops, double mibs, LatencyStats lat) {
+                long passes, double iops, double mibs, LatencyStats lat, Phase phase) {
             this.run = run;
             this.seconds = seconds;
             this.opsTotal = opsTotal;
@@ -896,6 +1094,19 @@ public final class JUringStreamBench {
             this.iops = iops;
             this.mibs = mibs;
             this.lat = lat;
+            this.durabilityPoints = phase.durabilityPoints;
+            this.syncsIssued = phase.syncsIssued;
+            this.syncsCompleted = phase.syncsCompleted;
+            this.syncsFailed = phase.syncsFailed;
+            this.bytesSynced = phase.bytesSynced;
+            this.syncWaitNs = phase.syncWaitNs;
+            this.syncLat = phase.syncLat;
+        }
+
+        /** Σ durability-point call time / measured elapsed (docs/b6-design.md §6.1). */
+        double syncWaitShare() {
+            double elapsedNs = seconds * 1_000_000_000.0;
+            return elapsedNs > 0 ? syncWaitNs / elapsedNs : 0.0;
         }
     }
 
@@ -1164,6 +1375,11 @@ public final class JUringStreamBench {
             w.name("schema_version").str(SCHEMA_VERSION);
             w.name("engine").str(ENGINE);
             w.name("engine_detail").str(ENGINE_DETAIL);
+            // B6 additive marker: schema_version stays "1.0" (frozen B2 §3.1);
+            // consumers must ignore unknown keys (docs/b6-design.md §6.1/§6.5).
+            w.name("schema_extensions").arr();
+            w.str("b6-durability-1");
+            w.endArr();
             w.name("status").str(status);
             w.name("error").str(error);
             w.name("label").str(cfg != null ? cfg.label : null);
@@ -1183,7 +1399,7 @@ public final class JUringStreamBench {
             w.endObj();
             w.name("runs").arr();
             for (RunStat r : runs) {
-                renderRun(w, r);
+                renderRun(w, r, cfg);
             }
             w.endArr();
             if (runs.length > 0) {
@@ -1252,6 +1468,11 @@ public final class JUringStreamBench {
             w.name("file_register_error").str(c.resolvedRegisterError);
             w.name("latency_samples_cap").num(LATENCY_SAMPLES);
             w.name("in_flight_capacity").num(Math.max(64, 2 * c.qd + 8));
+            // B6 durability config (additive; docs/b6-design.md §6.1).
+            w.name("durability").str(c.durabilityCliName());
+            w.name("sync_every_bytes").num(c.syncEvery);
+            w.name("fadvise").str(c.fadviseCliName());
+            w.name("sync_latency_samples_cap").num(SYNC_LATENCY_SAMPLES);
         }
 
         static void renderLatency(Jw w, LatencyStats s) {
@@ -1268,7 +1489,19 @@ public final class JUringStreamBench {
             w.endObj();
         }
 
-        static void renderRun(Jw w, RunStat r) {
+        /** B6 sync-latency block: exactly samples/avg/p50/p90/p99/max (§6.1). */
+        static void renderSyncLatency(Jw w, LatencyStats s) {
+            w.obj();
+            w.name("samples").num(s.samples);
+            w.name("avg").num(s.avg);
+            w.name("p50").num(s.p50);
+            w.name("p90").num(s.p90);
+            w.name("p99").num(s.p99);
+            w.name("max").num(s.max);
+            w.endObj();
+        }
+
+        static void renderRun(Jw w, RunStat r, Config cfg) {
             w.obj();
             w.name("run").num(r.run + 1);
             w.name("seconds").num(r.seconds);
@@ -1280,18 +1513,34 @@ public final class JUringStreamBench {
             w.name("mibs").num(r.mibs);
             w.name("latency_us");
             renderLatency(w, r.lat);
+            // B6 additive durability fields (docs/b6-design.md §6.1).
+            w.name("durability_mode").str(cfg != null ? cfg.durabilityCliName() : null);
+            w.name("sync_every_bytes").num(cfg != null ? cfg.syncEvery : 0);
+            w.name("durability_points").num(r.durabilityPoints);
+            w.name("syncs_issued").num(r.syncsIssued);
+            w.name("syncs_completed").num(r.syncsCompleted);
+            w.name("syncs_failed").num(r.syncsFailed);
+            w.name("bytes_synced").num(r.bytesSynced);
+            w.name("sync_wait_us");
+            renderSyncLatency(w, r.syncLat);
+            w.name("sync_wait_share").num(r.syncWaitShare());
             w.endObj();
         }
 
         static void renderAggregate(Jw w, RunStat[] runs) {
             int n = runs.length;
             long opsTotal = 0, bytesTotal = 0, errorsTotal = 0, passesTotal = 0;
+            long durabilityPointsTotal = 0, syncsIssuedTotal = 0, syncsCompletedTotal = 0;
+            long syncsFailedTotal = 0, bytesSyncedTotal = 0, syncWaitNsTotal = 0;
             double elapsedMax = 0;
             double[] iops = new double[n];
             double[] mibs = new double[n];
             double[] p50 = new double[n], p90 = new double[n], p95 = new double[n];
             double[] p99 = new double[n], p999 = new double[n], avg = new double[n], max = new double[n];
+            double[] sAvg = new double[n], sP50 = new double[n], sP90 = new double[n];
+            double[] sP99 = new double[n], sMax = new double[n];
             int samples = 0;
+            int syncSamples = 0;
             boolean sampled = false;
             for (int i = 0; i < n; i++) {
                 RunStat r = runs[i];
@@ -1299,6 +1548,12 @@ public final class JUringStreamBench {
                 bytesTotal += r.bytesTotal;
                 errorsTotal += r.errorsTotal;
                 passesTotal += r.passes;
+                durabilityPointsTotal += r.durabilityPoints;
+                syncsIssuedTotal += r.syncsIssued;
+                syncsCompletedTotal += r.syncsCompleted;
+                syncsFailedTotal += r.syncsFailed;
+                bytesSyncedTotal += r.bytesSynced;
+                syncWaitNsTotal += r.syncWaitNs;
                 elapsedMax = Math.max(elapsedMax, r.seconds);
                 iops[i] = r.iops;
                 mibs[i] = r.mibs;
@@ -1309,7 +1564,13 @@ public final class JUringStreamBench {
                 p999[i] = r.lat.p999;
                 avg[i] = r.lat.avg;
                 max[i] = r.lat.max;
+                sAvg[i] = r.syncLat.avg;
+                sP50[i] = r.syncLat.p50;
+                sP90[i] = r.syncLat.p90;
+                sP99[i] = r.syncLat.p99;
+                sMax[i] = r.syncLat.max;
                 samples += r.lat.samples;
+                syncSamples += r.syncLat.samples;
                 sampled = sampled || r.lat.sampled;
             }
             w.name("runs").num(n);
@@ -1342,6 +1603,23 @@ public final class JUringStreamBench {
             w.name("p99").num(mean(p99));
             w.name("p999").num(mean(p999));
             w.name("max").num(maxOf(max));
+            w.endObj();
+            // B6 additive durability totals (docs/b6-design.md §6.1/§6.5).
+            w.name("durability_points_total").num(durabilityPointsTotal);
+            w.name("syncs_issued_total").num(syncsIssuedTotal);
+            w.name("syncs_completed_total").num(syncsCompletedTotal);
+            w.name("syncs_failed_total").num(syncsFailedTotal);
+            w.name("bytes_synced_total").num(bytesSyncedTotal);
+            double elapsedNsTotal = elapsedMax * n * 1_000_000_000.0;
+            w.name("sync_wait_share").num(elapsedNsTotal > 0 ? syncWaitNsTotal / elapsedNsTotal : 0.0);
+            w.name("sync_wait_us").obj();
+            w.name("method").str("mean of per-run percentiles (max across runs for max)");
+            w.name("samples").num(syncSamples);
+            w.name("avg").num(mean(sAvg));
+            w.name("p50").num(mean(sP50));
+            w.name("p90").num(mean(sP90));
+            w.name("p99").num(mean(sP99));
+            w.name("max").num(maxOf(sMax));
             w.endObj();
         }
 
