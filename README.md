@@ -14,6 +14,8 @@ Java's file APIs are synchronous. A thread issues one request and waits for it. 
 > - I tried my best to recreate `fio`'s workload in `JMH`. I think it gives a good indication of the performance. `JUring` and `FileChannel` do run the exact same workload.
 > - It's still very much in development.
 
+JUring does not do QoS, fair queuing or priorities between workload classes in v1 by design. Isolate classes with separate rings or shards (`IoShard`/`RingGroup`), or with OS-level I/O controls such as cgroup v2 `io.weight`/`io.max` and `ionice`; see [docs/m4-decision.md](docs/m4-decision.md).
+
 ## Benchmark Results
 
 The benchmarks below compare JUring against `fio` (`ioengine=io_uring`) and `FileChannel`.
@@ -62,6 +64,8 @@ The following results run 1,000 virtual threads under a fixed platform thread bu
 `JUringBlocking` uses dedicated poller threads to submit queue entries and wake parked virtual threads when operations complete. Full details and multiple workload datasets are documented in [BENCHMARK.md](BENCHMARK.md).
 
 ## Examples
+
+Runnable, self-checking versions of these patterns are in [docs/examples.md](docs/examples.md).
 
 ### Direct Read with Registered Files and Fixed Buffers
 
@@ -271,3 +275,18 @@ public class VirtualThreadExample {
     }
 }
 ```
+
+## Runnable examples
+
+Four self-checking examples live in the test suite and map to seastar use-cases: direct file I/O with registered files and fixed buffers, a stream copy with read-ahead/write-behind, many files driven by one ring, and `JUringBlocking` from virtual threads. They use JUnit `@TempDir` only, make no timing or throughput *performance* assertions (a JUnit `@Timeout` guards against hangs only):
+
+```sh
+mvn -o test -Dtest='*ExampleTest'
+```
+
+See [docs/examples.md](docs/examples.md) for the mapping table, the run instructions and what each example demonstrates.
+
+## Compatibility and upgrading
+
+- [docs/api-stability.md](docs/api-stability.md) — the public API surface (Tier 1 / Tier 2 / internal), SemVer rules, and the compatibility and deprecation policy.
+- [docs/UPGRADING.md](docs/UPGRADING.md) — capability history and migration notes (no released version exists yet).

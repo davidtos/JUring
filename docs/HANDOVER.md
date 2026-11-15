@@ -1,9 +1,14 @@
-# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 + B1 + B2 + M2 + B3 + B4 + B5 + M3 + B6)
+# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 + B1 + B2 + M2 + B3 + B4 + B5 + M3 + B6 + B9; B7/B8 decided; **basics roadmap complete**)
 
-For the next agent/session. Read this first, then **`docs/b6-report.md`** (B6 deliverable,
-most recent — **B6 delivered, independently verified**), **`docs/b6-design.md`** (B6 frozen
-contract + amendments A1/A2), **`scratch/b6-verify/VERDICT.md`** (independent B6
-verification), **`scratch/b6-lead/FREEZE.md`** (B6 freeze/session identity), then
+For the next agent/session. Read this first, then **`docs/b9-report.md`** (session-10
+deliverable — **B9 delivered; API stability, Javadoc, examples, upgrade notes**),
+**`docs/b9-design.md`** (frozen B9 contract + amendments A1–A3), **`scratch/b9-verify/VERDICT.md`**
+(independent session-10 verification), **`scratch/b9-lead/FREEZE.md`** (session-10 freeze
+identity + acceptance evidence), **`docs/b7-decision.md`** + **`docs/b7-gate.md`** (B7
+**deferred** by measured gate) and **`docs/m4-decision.md`** (B8/M4 QoS **out of v1**); then
+**`docs/b6-report.md`** (B6 deliverable — **B6 delivered, independently verified**),
+**`docs/b6-design.md`** (B6 frozen contract + amendments A1/A2), **`scratch/b6-verify/VERDICT.md`**
+(independent B6 verification), **`scratch/b6-lead/FREEZE.md`** (B6 freeze/session identity), then
 **`docs/m3-report.md`** (M3 deliverable — **M3 PASS, signed**), **`docs/m3-design.md`**
 (M3 frozen bars/protocol incl.
 pre-campaign Amendment A1), `bench/results/m3-2026-11-15/` (campaign, gitignored),
@@ -20,7 +25,117 @@ API/semantics contract + amendments A1/A2/A3), **`scratch/b5-verify/VERDICT.md`*
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
 
-## 0.0 B6 status — ninth session (2026-11-15) — **latest**
+## 0.0 Session 10 status — 2026-11-15 — **latest** (B9 delivered; B7 deferred; M4 closed; **B0–B9 basics roadmap complete**)
+
+Session 10 closed out the roadmap: the only remaining unconditional item (**B9**) was
+delivered, and the two conditional items were decided on the record — **B7 deferred by a
+measured gate** (no engine change) and **B8/M4 QoS kept out of v1 by documented decision**.
+No behaviour/performance change was made anywhere in the session.
+
+### B9 — delivered (and committed)
+
+**Deliverables:** [`docs/b9-report.md`](b9-report.md) (deliverable), frozen
+[`docs/b9-design.md`](b9-design.md) (+ amendments A1–A3, sha1 `595b8488…`),
+[`docs/api-stability.md`](api-stability.md) (Tier 1 `lio.api` / Tier 2 experimental
+`blackpanda` / 17 internal types; SemVer for `0.y.z` and after 1.0; source+binary promise;
+deprecation policy — one pre-policy grandfathered `@Deprecated`, B9 adds none; explicit
+non-guarantees; JMX note), [`docs/UPGRADING.md`](UPGRADING.md) (no releases yet; additive
+B1–B6 history; future-entry template), [`docs/examples.md`](examples.md) (4 examples mapped
+to seastar use-cases), and the README additions (QoS scope note + links; existing snippets
+and benchmark tables untouched).
+
+**Javadoc:** complete on both exported packages + package/module docs; `pom.xml` configures
+`maven-javadoc-plugin` with `doclint=all`, `failOnWarnings=true`, `failOnError=true`.
+Acceptance `mvn -o javadoc:javadoc` = **0 warnings, 0 errors, BUILD SUCCESS**
+(baseline, uncapped: **597 warnings**; the old "100" was javadoc's default `-Xmaxwarns` cap —
+design A2). The module doc in `module-info.java` is comment-only.
+
+**Examples:** `src/test/java/com/davidvlijmincx/lio/examples/{DirectFile,StreamCopy,ManyFiles,VirtualThreads}ExampleTest.java`
+— one `@Test` each, `@TempDir` only, no timing assertions, each genuinely exercising the
+claimed feature; they run in the normal suite (`mvn -o test -Dtest='*ExampleTest'`).
+
+**Evidence:** full suite **405 tests / 0 failures / 0 errors / 1 skipped, BUILD SUCCESS**
+(401 baseline + 4 examples); javadoc 0/0; **no behaviour change** — with debug info off
+(`javac -g:none`, same compiler) baseline `b75515e` and the B9 tree give **76/76
+byte-identical class files** (0 added/removed; `package-info.java` emits no class file);
+default builds differ only in line-number debug tables (design A3). Freeze record with
+content hashes + logs: `scratch/b9-lead/FREEZE.md`.
+
+**Independent verification:** on the frozen tree, `scratch/b9-verify/VERDICT.md` —
+**PASS-WITH-CONCERNS** (no finding invalidates B9 or the B7 DEFER; concerns are doc-precision
+items). Independently re-derived: 405/0/0/1 suite, javadoc 0/0 BUILD SUCCESS, 76/76 byte-identical
+classes under `javac -g:none`, 36+7 public and 17 internal types, exactly one pre-existing
+`@Deprecated`, examples non-vacuous, B7 probes/reps reproduce ≤0.6 %, D1/D2 honestly disclosed,
+adversarial `@param` removal breaks the javadoc build. Verification-driven corrections (in
+`docs/b9-report.md` §8/§9): (C1) the **pristine-baseline** `mvn -o javadoc:javadoc` actually
+exits **1** with 2 doclint errors + 100 capped (597 uncapped) warnings — the earlier "exit 0"
+came from a `-q | tail` invocation that masked the exit code; B9's tree is exit 0 / 0/0.
+(C2) `mvn -o javadoc:javadoc` needs a prior build on a clean checkout (plugin modular
+aggregated-report behaviour; reproduces on the pristine baseline) — acceptance sequence is
+`mvn -o test && mvn -o javadoc:javadoc`. (C3) wording precision fixed in
+`docs/b7-decision.md`, `docs/m4-decision.md`, `docs/examples.md`, README (D1
+`batches/op ≈ syscalls/op` with values; QoS-grep wording; `@Timeout` = hang guard only).
+(C4) the verifier's B7 spot-check ran outside the quiet window (load1 2.48–3.05) with IOPS
+−3/−5 % but cycles/op within 0.6 % — verification data only, not a gate datum.
+**Verification addendum (task-7): PASS** — the corrected docs were re-checked against the
+verified snapshot: frozen-set changes are exactly the four declared docs (docs-only; src/pom/
+test/bench unchanged, hashes in FREEZE D5), the C1/C2/C3 wording is accurate, §9 fairly
+represents the verdict, and a fresh-copy spot-check still gives 405/0/0/1 + javadoc 0/0
+(`scratch/b9-verify/ADDENDUM.md`).
+
+**Disclosures:** no CI service exists in the repo, so "examples run in CI" is satisfied as
+"examples are JUnit tests executed by `mvn -o test` (the command a CI would run)" — a hosted
+CI workflow is a follow-up. The compatibility policy is forward-looking (no release exists).
+Blackpanda's pre-existing performance prose ("sub-millisecond P99", "zero heap allocations")
+was left untouched (not part of the policy/evidence; possible future reword). Amendments
+A1 (one pre-policy `@Deprecated`), A2 (597 baseline; module-info comment-only; MXBean work
+split; workspace lock), A3 (`-g:none` proof method) are all docs-only and sha1-recorded.
+
+### B7 — DEFERRED, no engine change (measured decision gate)
+
+Frozen gate [`docs/b7-gate.md`](b7-gate.md) (+A1), outcome
+[`docs/b7-decision.md`](b7-decision.md), raw evidence `scratch/b7-gate/` (12/12 clean runs,
+R=3, quiet window, all reps kept). Key findings: `IORING_OP_READ_MULTISHOT` returns
+**`-EBADFD` on regular files** on this kernel (pipe positive control works); JUring has no
+in-scope pollable-fd workload; the pinned seastar uses **no** provided buffers, multishot or
+fixed buffers — its 0.186 syscalls/op is reactor batching (`reactor_backend.cc:1652-1660,
+1709-1721,1752-1771`), so inventory G9's rationale is corrected; and provided-buffer
+selection is **neutral-to-worse** (G1 4K/QD64: 11,156 vs 12,404 cycles/op = **+11.2 %**,
+324,855 vs 315,804 IOPS; G2 1M/QD8: +1.0 % cycles/op, IOPS identical). Strict-literal rule
+reading is disclosed as matching no branch (the pbuf arm regresses); data direction is
+unambiguously DEFER (gate readings D1/D2, decision §4). Re-open only if the kernel adds
+regular-file multishot, JUring's scope gains pollable fds, or a real workload shows a pbuf
+≥5 % cycles/op win.
+
+### B8 / M4 — CLOSED by documented decision (QoS/intent out of v1)
+
+[`docs/m4-decision.md`](m4-decision.md) satisfies M4's alternative acceptance path. Reasons:
+locked scope puts scheduler/QoS in the separate framework (D1; §4 scope note; §3.6 item 5);
+seastar QoS is reactor-layer scheduling (`io_queue`/`fair_queue` scheduling groups — a
+framework feature); no real consumer exists yet; JUring's API cannot express class/priority;
+B8 is L-sized against the library identity. v1 answer: "bring your own scheduler" — partition
+with `IoShard`/`RingGroup`, use OS-level I/O controls, apply caller backpressure. No B8 code.
+
+### Provenance and tree state
+
+- Base commit `b75515e` (B6 delivered; M3 signed). Session feature commit **`9de5867`**
+  (`docs(api): complete public Javadoc with doclint enforcement and runnable examples (B9)`);
+  the session-10 docs commit (this file, report, decision docs, plan v1.7, README) follows.
+- Frozen content hashes and acceptance evidence: `scratch/b9-lead/FREEZE.md`;
+  contracts: `docs/b9-design.md` `595b8488…`, `docs/b7-gate.md` `36a19a8c…`.
+- Worktree is clean after the commits; `scratch/` is gitignored (evidence only).
+
+### What remains (nothing from B0–B9; all measurement/publishing)
+
+- **Step A — M1 write matrix** (below): the last incomplete milestone half; needs David's
+  machine-time budget (≈6–11 h with D3 rests) and the `precondition.sh` chunk-size fix.
+- **Step D — host-root / representativeness runs** (hugetlbfs, drop_caches, thermal counters).
+- **Step E — publishing decisions** (README/BENCHMARK claims vs `docs/m1-report.md`).
+- Optional follow-ups: hosted-CI workflow (examples already run in `mvn test`), reword
+  blackpanda's pre-existing performance prose, M3 N=2 re-run for the narrowest bar,
+  VT-throughput re-benchmark, B0 close-out (stored baseline + per-commit W1/W3 gate).
+
+## 0.0b B6 status — ninth session (2026-11-15)
 
 **B6 (buffered I/O parity + durability, L1 / gap G12) is DELIVERED, tested and independently
 verified.** Independent verification: **PASS** (55/55 adversarial modes, 1,680 assertions, own private-copy suite 401/0/0/1, 4,916 bench assertions, frozen identity unchanged; `scratch/b6-verify/VERDICT.md`). Deliverables:
@@ -800,6 +915,13 @@ within 1–3 % in a separate run.
 
 ## 7. What next (ordered, with acceptance)
 
+**Session-10 status:** the B0–B9 library roadmap is **complete** (B9 delivered; B7 deferred
+by measured gate; B8/M4 closed by documented decision). What remains is measurement/publishing
+work: **Step A** (M1 write matrix — the last incomplete milestone half, needs David's
+machine-time budget), **Step D** (host-root/representativeness) and **Step E** (publishing).
+Steps B/C are closed (Step B's library items all done; Step C done). Optional follow-ups are
+listed in §0.0 and §8.
+
 ### Step A — finish the write matrix (highest priority; the M1 write gap)
 - Fix `precondition.sh` chunk size (target ~3× file size in <120 s, e.g. 4 GiB chunks).
 - Run W5/W6/W7/W8 (4K randwrite QD1/16/64/128) and W12/W13/W14 (1M seqwrite
@@ -837,9 +959,12 @@ within 1–3 % in a separate run.
   established due to the drive's burst→steady write state, position-matched 0.98–1.38×).
   Still open from the intended full protocol: separated read/write sessions, DS-M W22,
   D1 preconditioning, D2 1 s series; a state-controlled strict write rerun is optional.
-  Next library items: **B3 and B6 are DONE** (B6 delivered 2026-11-15, see §0.0); the next
-  library item is **B7** (conditional). The M1 write matrix
-  (Step A) is still open.
+- **Library roadmap — COMPLETE 2026-11-15 (session 10):** B3/B4/B5/B6 delivered earlier;
+  **B7 DEFERRED** by its measured gate (`docs/b7-decision.md`; no engine change), **B8/M4
+  CLOSED** by documented decision (`docs/m4-decision.md`; QoS out of v1), **B9 DELIVERED**
+  (`docs/b9-report.md`; API stability/Javadoc/examples/upgrade notes). No further library
+  basics remain; the open work is measurement/publishing (Steps A, D, E) plus optional
+  B0 close-out/CI. See §0.0 for the session-10 evidence.
 
 ### Step C — the M3 campaign — **DONE 2026-11-15 (M3 PASS, signed)**
 - **B5 observability — DONE 2026-11-14** (`SEASTAR-PLAN.md` §4 B5; `docs/b5-report.md`):
@@ -874,15 +999,22 @@ within 1–3 % in a separate run.
 
 1. Publish the M1 read-path result? Where (README section, separate doc, blog) and in
    what form (the report is already self-contained with CIs and caveats)?
-2. Write-matrix budget: full W5-W8/W12-W14 is ~6–11 h of machine time with D3 rests —
-   approve a full overnight run or keep trimmed blocks?
-3. `nvme-data` bind mount: persist in `/etc/fstab` (suggested line in the old handover)
+2. Write-matrix budget (Step A): full W5-W8/W12-W14 is ~6–11 h of machine time with D3
+   rests — approve a full overnight run or keep trimmed blocks? (This is now the last
+   incomplete M1 half and the only plan-measurement item that needs machine time.)
+3. `nvme-data` bind mount: persist in `/etc/fstab` (suggested line in an old handover)
    or re-create each session?
 4. `SeaStarRef/` as a git submodule (pinned `04b1c04d`) or keep gitignored?
 5. Hugepages/threshold policy: publish THP sandbox numbers (fast) or wait for a host
    hugetlbfs run (more representative for seastar)?
-6. `docs/m1-report.md` + `bench/m1/` are currently uncommitted (additive, untracked) —
-   commit them in one additive commit?
+6. **Hosted CI** (B9 follow-up): add a CI workflow (e.g. `.github/workflows/`) that runs
+   `mvn -o test` (the 405-test suite already includes the B9 examples) and
+   `mvn -o javadoc:javadoc`? None exists today; hosted runners' io_uring availability is
+   unverified, so this is a decision + experiment, not a drop-in file.
+7. **Blackpanda performance prose** (B9 flag): the Tier-2 package still carries pre-existing
+   claims ("sub-millisecond P99", "zero heap allocations", "0% write-throughput
+   degradation") that are not part of the L0–L2 evidence. Reword to evidence-backed
+   statements, or leave as aspirational but explicitly non-contractual?
 
 ## Appendix A — recreate the sandbox build stack (if `.tools`/`.sysroot` are lost)
 
@@ -897,11 +1029,15 @@ command, so do each download+extract in a single bash call under the workspace.
 
 ```bash
 cd /home/david/projects/JUring
-git status --short                       # expect .gitignore modified + new docs/ bench/
+git status --short                       # expect clean (session-10 commits in place)
+git log --oneline -4                     # expect 9de5867 (B9 feature) + the session-10 docs commit
+mvn -o test                              # expect 405 tests / 0 failures / 0 errors / 1 skipped
+mvn -o javadoc:javadoc                   # expect BUILD SUCCESS, 0 warnings (doclint enforced)
 ls -ld nvme-data && touch nvme-data/.probe && rm nvme-data/.probe   # writable?
 ls bench/seastar/seastar_file_bench SeaStarRef/build/release/apps/io_tester/io_tester
 python3 bench/m1/analyze_m1.py --dir bench/results/m1-2026-11-13   # aggregates reproduce
-head -20 docs/m1-report.md               # final M1 verdict
-cat bench/results/m1-2026-11-13/notes.md | head -40
-# then Step A (write matrix) or Step B (B1 JuringFile) per David's priority
+head -20 docs/m1-report.md               # final M1 verdict (write half open)
+head -40 docs/HANDOVER.md                # §0.0 session-10 status + §7 what next
+# then, per David: Step A (M1 write matrix — needs the budget decision), Step D (host-root),
+# or Step E (publishing). Optional: CI workflow / blackpanda prose (§8 items 6-7).
 ```
