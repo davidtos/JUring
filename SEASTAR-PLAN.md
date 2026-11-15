@@ -1,6 +1,6 @@
 # JUring vs seastar: where we are, and how to catch up on the basics
 
-**Status:** v1.4 — 2026-11-14 (**M2 signed off**; B3 + B4 + **B5 delivered — L2 runtime + observability present, M3 not yet signed**: the full R=5 W17–W20 campaign incl. seastar multi-shard and the restated scaling bars remain). v1.3 2026-11-14: B4 delivered (L2 runtime, M3 not signed); v1.2 2026-11-14: M2 sign-off + B3 contract; v1.1 2026-11-13: decisions locked; seastar checkout moved in-repo.
+**Status:** v1.5 — 2026-11-15 (**M3 SIGNED OFF PASS**: full W17–W20 R=5 campaign (60/60 invocations, 300 s rests, state-gated, all reps kept) with a new seastar `--smp N` multi-shard runner and restated same-N-vs-`fio` bars; `juring-group` N=8 = **103.2 % of `fio numjobs=8`** (LB 0.987) and **101.5 % of seastar io_uring** (seastar/JUring LB 0.959), per-shard min/mean **0.963** (LB 0.947); `docs/m3-report.md`, frozen `docs/m3-design.md`). v1.4 2026-11-14: B5 delivered, M3 not yet signed; v1.3 2026-11-14: B4 delivered; v1.2 2026-11-14: M2 sign-off + B3 contract; v1.1 2026-11-13: decisions locked; seastar checkout moved in-repo.
 **Subject:** JUring `4526338` (branch `kafka-engine`)
 **Opponent:** `SeaStarRef/` (in-repo checkout) at seastar `04b1c04d` (`seastar-25.05.0-1392-g04b1c04d`, 2026-11-11)
 **Hardware:** AMD Ryzen 9 3950X (16C/32T), 62 GiB RAM, Linux 7.0.12, GIGABYTE GP-ASM2NE6100TTTD 1 TB NVMe (`nvme1n1`, ext4, `/mnt/TestData`)
@@ -42,7 +42,7 @@ attack. The useful question is *at which layer are we behind, and by how much*.
 |---|---|---|---|
 | **L0 — io_uring engine** | Same kernel path, same workload, different driver code | **Measured.** 4K randread: seastar wins QD1/QD16 (**11.6k vs 11.1k**, **146.2k vs 143.7k**) and JUring wins QD64/QD128 (**324.2k vs 319.5k**, **420.8k vs ~399k fast-state**); 1M seqread parity (~4.77 GiB/s). **Engines are within ±5% everywhere**; fio is not a proxy (297.9k/303.3k at QD64/128). Caveats: one sandbox build, 3 reps, no hugepages, QD128 slow-state variance, fio not yet registration-matched. | **M1:** more reps + state gating, matched fio sweep, same-definition latency, cycles/op, `io_tester` cross-check. |
 | **L1 — async file API** | `file::dma_read` + `fstream` (readahead/write-behind) vs. raw SQEs | **Measured — M2 PASS 2026-11-14** (`docs/m2-report.md`). B1 `JuringFile` + B2 `JuringInputStream`/`JuringOutputStream` landed; W21/W22 campaign: 60/60 invocations ok, 0 errors, R=5, 10 s warmup + 60 s cells, 300 s rests. Seq **read 98.2 %/98.7 %** of seastar `fstream` (strict one-sided-95 % LB 0.966/0.960 ≥0.85; ±5 % parity equivalence test passes); seq **write 139 %/160 %** point estimate (strict write LB not established at n=5 — drive burst→steady write-state transition; position-matched 1.23×/0.98× and 1.27×/1.38×, pooled 1.25×/1.14×, no JUring deficit). Bounded memory, 184-test suite and L0 non-regression verified at commit `2198330`. | **B3** done 2026-11-14; next **B6** (buffered durability); DS-M W22 + a state-controlled strict write rerun later. |
-| **L2 — runtime** | Shard-per-core, scheduling, backpressure, I/O QoS, metrics | **B4 + B5 delivered 2026-11-14** (`docs/b4-design.md`, `docs/b5-design.md`, `docs/b5-report.md`): thin `IoShard`/`RingGroup` runtime — one ring per shard thread, best-effort CPU affinity, RR/hash distribution, batched poll loop, MPSC+eventfd cross-thread completion handoff, graceful bounded shutdown, per-shard counters; `JUringBlocking` now runs on shards (`RingGroup` ctor + bounded close); plus B5 observability — per-ring counters/occupancy, shard runtime-completion latency histogram, JMX MXBeans, benchmark JSON 1.1 with per-ring queue depth + p99 (overhead A/B **PASS**: no measurable cost). The M3 scaling campaign remains, so no L2 ranking is claimed. | **M3 campaign** (W17–W20 R=5 + seastar `--smp N`; restate the scaling bars). |
+| **L2 — runtime** | Shard-per-core, scheduling, backpressure, I/O QoS, metrics | **B4 + B5 delivered 2026-11-14** (`docs/b4-design.md`, `docs/b5-design.md`, `docs/b5-report.md`): thin `IoShard`/`RingGroup` runtime — one ring per shard thread, best-effort CPU affinity, RR/hash distribution, batched poll loop, MPSC+eventfd cross-thread completion handoff, graceful bounded shutdown, per-shard counters; `JUringBlocking` now runs on shards (`RingGroup` ctor + bounded close); plus B5 observability — per-ring counters/occupancy, shard runtime-completion latency histogram, JMX MXBeans, benchmark JSON 1.1 with per-ring queue depth + p99 (overhead A/B **PASS**: no measurable cost). **M3 campaign delivered 2026-11-15 (PASS, signed; `docs/m3-report.md`)**: full W17–W20 R=5 with seastar `--smp N`; N=8 = 103.2 % of `fio numjobs=8` (LB 0.987) and 101.5 % of seastar io_uring, per-shard min/mean 0.963 (LB 0.947) — the L2 claim is now evidenced at the frozen bars. | **M3 done.** Next: M4 (conditional QoS) or B6/B7 follow-ups; optional DS-M per-shard-file and host-root representativeness runs. |
 | **L3 — application/framework** | the future flagship seastar-alternative built on JUring | **Out of scope for JUring.** JUring is library-first; the framework is a separate project. It will consume JUring's L1/L2 basics, so those are still worth building — but no L3 comparison belongs in this plan. | Revisit when the framework project starts. |
 
 **Two findings that change the framing.**
@@ -81,9 +81,11 @@ buffered/durability → conditional QoS**. §4 has the details.
 (L1 stream parity, `docs/m2-report.md`); **B3 done 2026-11-14** (lifecycle hardening);
 **B4 delivered 2026-11-14** (`docs/b4-report.md`; L2 runtime in place); **B5 done
 2026-11-14** (observability: per-ring metrics + histogram + JMX + benchmark JSON 1.1;
-overhead A/B PASS, `docs/b5-report.md`; M3 **not** signed — the full W17–W20 campaign incl.
-seastar multi-shard and the restated scaling bars are the remaining M3 work); M4 conditional
-QoS. Pass/fail in §5.
+overhead A/B PASS, `docs/b5-report.md`); **M3 done 2026-11-15 — PASS, signed**
+(`docs/m3-report.md`: full W17–W20 R=5 campaign incl. a new seastar `--smp N` runner;
+bars restated vs `fio` at the same N; N=8 103.2 % of `fio numjobs=8` (one-sided 95 % LB
+0.987), 101.5 % of seastar io_uring, per-shard min/mean 0.963); M4 conditional QoS.
+Pass/fail in §5.
 
 ---
 
@@ -606,9 +608,13 @@ queue-depth/p99; official overhead A/B **PASS** (mean paired ratios **1.0190 / 1
 1.0070** shard1/shard8/threads1, min rep 0.9543, <1 % bar met, no fallback re-run; session
 `bench/results/b5-overhead-2026-11-14/`); **349 tests** green (309 B4 + 40 new); independent
 verification **PASS** (60/60 adversarial modes, its own 349/0/0/1 suite). Evidence:
-`docs/b5-report.md`, `scratch/b5-verify/VERDICT.md`, `scratch/b5-lead/FREEZE.md`. **M3
-remains:** full W17–W20 campaign + seastar `--smp N` + restated bars.
-**Milestone M3.**
+`docs/b5-report.md`, `scratch/b5-verify/VERDICT.md`, `scratch/b5-lead/FREEZE.md`.
+**M3 campaign — delivered PASS 2026-11-15** (`docs/m3-report.md`, frozen
+`docs/m3-design.md`): full W17–W20 R=5 campaign (12 cells, 60/60 invocations, 300 s rests,
+state-gated, all reps kept) with the new seastar `--smp N` multi-shard runner and same-N-vs-`fio`
+restated bars; N=8 `juring-group` = 473.1 k IOPS = 103.2 % of `fio numjobs=8` and 101.5 % of
+seastar io_uring; per-shard min/mean 0.963; per-ring qd + runtime p99 from B5 JSON 1.1.
+**Milestone M3 — PASS (signed).**
 
 ### B6. Buffered I/O parity + durability — **M** (G12)
 **Now:** buffered ops exist but have no readahead policy, no fadvise hooks, no durability
@@ -668,7 +674,7 @@ stops at B9.
 | **M0 — Measure** | week 0 — **done 2026-11-13** | harness + baseline + seastar built | one-command reproduction; seastar runs (`io_tester` + `seastar_file_bench`); manifest complete; first L0 read matrix collected |
 | **M1 — L0 parity** | weeks 1–2 — **read path PASS 2026-11-13** (`docs/m1-report.md`); write half pending | L0 report vs fio + seastar | read and write cells: ratio 90% CI inside `[0.90, 1.10]` and point estimate inside `[0.95, 1.05]` vs fio (matched batching + registration); p99 ≤1.10× fio, p999 ≤1.15× **measured with one common latency definition** (today's definitions differ); seastar reported as bracket with asymmetry table; every claim has a CI; QD64 reps classified by run state (§6) and all reps reported |
 | **M2 — L1 file/stream** | weeks 3–5 — **PASS 2026-11-14** (`docs/m2-report.md`) | B1+B2 + W21/W22 | seq 1M read/write ≥85% of seastar `fstream`; bounded memory; correctness suite green; L0 unchanged. **Evidence:** read 98.2 %/98.7 % (strict 1s95 LB 0.966/0.960 ≥ 0.85; ±5 % parity test passes); write 139 %/160 % point estimate (strict write LB not established at n=5 — drive burst→steady write-state transition; position-matched 0.98–1.38× (state-classified fast 1.27–1.29×; only 1/10 reps same-state), no JUring deficit); 184 tests green; bounded memory and L0 unchanged from B2 at commit `2198330` |
-| **M3 — L2 scaling + metrics** | weeks 6–9 — **B4+B5 delivered 2026-11-14, M3 NOT signed** (`docs/b4-report.md`, `docs/b5-report.md`): B5 observability + overhead PASS; full W17–W20 campaign (incl. seastar `--smp N`) + restated scaling bars pending | B4+B5 + W17–W20 | 8-thread ≥85% of `fio numjobs=8`; scaling/latency bars restated vs `fio` at the same N (the old SE(8)≥0.75 / p99(8)≤1.15×p99(1) were shown invalid for the single-device protocol, B4 §6); total IOPS vs seastar uring 90% CI LB ≥0.90; per-shard min/mean ≥0.85; **metrics <1% overhead PASS** on the B5 protocol (mean paired ratios 1.019/1.011/1.007, session `bench/results/b5-overhead-2026-11-14/`) |
+| **M3 — L2 scaling + metrics** | weeks 6–9 — **PASS, SIGNED OFF 2026-11-15** (`docs/m3-report.md`; frozen `docs/m3-design.md` + pre-campaign A1): full W17–W20 R=5 campaign (12 cells / 60 invocations, 300 s rests, state-gated, all reps kept) with new seastar `--smp N` runner; session `bench/results/m3-2026-11-15/` | B4+B5 + W17–W20 | **All five frozen bars PASS.** (a) one-sided 95 % LB of `IOPS(juring-group,N)/IOPS(fio numjobs=N)` = 0.959/0.859/0.961/0.987 for N=1/2/4/8 (N=8 = 103.2 %); (b) same-N SE + p99-vs-`fio` comparison complete with one-sided 95 % CIs at every N, no `N·IOPS(1)` cross-engine denominator (SE_j/SE_f 1.041 at N=8; p99 ratios engine-definition disclosure only); (c) per-shard min/mean at N=8 **0.963**, 95 % LB 0.947; (d) seastar io_uring at N=8, brief-literal `seastar/JUring` LB **0.959 ≥ 0.90** (plan-direction 1.015); (e) per-ring queue depth + runtime-completion p99 from B5 JSON 1.1 for all 20 `juring-group` cells (75 ring rows, 0 failed/cancelled/timedout). B5 metrics <1 % overhead PASS carried (1.019/1.011/1.007). State gate: 6/60 slow-state reps disclosed and kept, none trimmed. |
 | **M4 — mixed/QoS** | weeks 10–12 | B8 experiment + report | shares honoured ±10% with ≤5% overhead, no starvation — **or** a documented decision to keep QoS out of v1 |
 
 **Numbering note.** `docs/benchmark-methodology.md` calls its multi-shard pass criteria

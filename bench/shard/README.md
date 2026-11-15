@@ -1,13 +1,17 @@
 # `bench/shard/` — W17-W20 shard-scaling bench + B5 overhead A/B
 
-**Status: PRELIMINARY. M3 is NOT signed off by anything in this directory.** The
-scaling cells here are the R=3, one-session, single-shared-file subset from
-`docs/b4-design.md` §13. The full plan-M3 campaign still needs R=5, state gating
-(the 1 s state series, 300 s rests), the seastar `--smp N` runner (does not exist
-yet) and the restated M3 bars. B5 (docs/b5-design.md §7/§7.1) adds the benchmark
-schema-1.1 per-ring metrics and the official observability overhead A/B session
-(`run-b5-overhead.sh` + `analyze_b5_overhead.py`); the analyzer now emits the
-per-ring queue-depth/p99 tables that are the M3-report data source.
+**M3 status: SIGNED OFF PASS (2026-11-15).** The official M3 campaign is
+`run-m3-campaign.sh` + `analyze_m3.py` (frozen bars/protocol in `docs/m3-design.md`,
+deliverable `docs/m3-report.md`, session `bench/results/m3-2026-11-15/` — 60/60
+invocations `status=ok`). It adds the seastar `--smp N` multi-shard runner, R=5,
+300 s rest per invocation, state gating, resumable chunks, the restated same-N-vs-`fio`
+bars (a)–(e), and per-ring queue-depth + runtime-completion-p99 tables from B5 JSON 1.1.
+The older B4 preliminary cells below are the historical R=3, one-session,
+single-shared-file subset from `docs/b4-design.md` §13 — kept for provenance, not a
+sign-off. B5 (docs/b5-design.md §7/§7.1) added the benchmark schema-1.1 per-ring
+metrics and the official observability overhead A/B session (`run-b5-overhead.sh` +
+`analyze_b5_overhead.py`); its analyzer emits the per-ring queue-depth/p99 tables that
+were the M3-report data source.
 
 This directory contains:
 
@@ -15,6 +19,8 @@ This directory contains:
 |---|---|
 | `run-shard-scaling.sh` | B4 preliminary scaling driver: N ∈ {1,2,4,8} × {`juring-group`, `juring-manual`, `fio`}, CPUs 1..N, 10 s warmup + 30 s measured, R=3, 60 s rests, fresh process/JVM per rep |
 | `analyze_shard.py` | analyzer: total IOPS, ratio vs fio, SE(N), per-shard min/mean, p99(N)/p99(1), preliminary acceptance bars, all reps reported (never trimmed); **B5 schema 1.1**: per-ring queue depth + library dispatch p99 + external p99, mean/max in-flight, sq_queued/cq_ready, failed/cancelled/timed_out (old sessions analyze with every B5 column `n/a`) |
+| `run-m3-campaign.sh` | **M3 official campaign driver** (`docs/m3-design.md`): `juring-group` + `fio` + `seastar --smp N` at N=1,2,4,8, 4K randread QD64/worker, 10 s warmup + 30 s measured, **R=5, 300 s rest per invocation**, engines interleaved with order alternating per rep, fresh process/JVM, every rep kept; N=8 hctx placement; resumable (`--resume`) with per-invocation `cell-meta.tsv` + raw JSON and `--max-blocks K` chunking; the 300 s rest is made up across chunk boundaries |
+| `analyze_m3.py` | **M3 frozen-bar analyzer**: one-sided 95 % t CIs (df=R−1) for bars (a)–(e), per-rep tables, state-gate disclosure (never trims), per-ring queue-depth + runtime-completion p99, PASS/FAIL/INCONCLUSIVE + M3-signing flag; writes `aggregate/m3.{md,json}` |
 | `run-b5-overhead.sh` | **B5 overhead A/B driver** (§7.1): baseline arm = commit `6cc1a75` built in a `git archive` scratch tree (offline maven + its own javac, workspace untouched), B5 arm = frozen tree metrics on; cells shard N=1, shard N=8, threads N=1, 4K randread QD64/worker, CPUs 1..N, 10 s + 30 s, R=5, 30 s rests, interleaved arms with alternating order, fresh JVM per invocation, all reps kept; F14 gate + manifest + `--dry-run`/`--prep-baseline`/`--resume` |
 | `analyze_b5_overhead.py` | **B5 overhead analyzer**: paired per-rep ratio B5/B4, mean/stdev/one-sided 95 % t CI (df=R-1), state-gated reps disclosed (fast p99 < 600 µs + IOPS anomaly + F14), PASS = mean >= 0.99 every cell and no non-gated rep < 0.95; writes `aggregate/overhead.{json,md}` |
 | `README.md` | this file |
@@ -235,6 +241,28 @@ holds the literal flat gate as recorded at run time. Citable tables:
 §4 (per-ring queue-depth/p99 M3 evidence); raw data `cells/`, `logs/`,
 `cell-meta.tsv`, `manifest.txt`; first-pass analysis archived as
 `aggregate/overhead-first-pass.{md,json}`.
+
+## 3.2 M3 official campaign (`run-m3-campaign.sh` / `analyze_m3.py`, 2026-11-15)
+
+```bash
+# pilot (2 s harness check; NOT campaign data)
+bench/shard/run-m3-campaign.sh --session m3-pilot-2026-11-15 --force \
+  --engines juring-group,juring-manual,fio,seastar --n-list 1,2,4,8 \
+  --reps 1 --seconds 2 --warmup 2 --rest 30
+# official campaign: chunks of <=3 rep-blocks; repeat the second line until 60/60
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-m3-campaign.sh --session m3-2026-11-15 --max-blocks 3
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-m3-campaign.sh --session m3-2026-11-15 --resume --max-blocks 3
+python3 bench/shard/analyze_m3.py --session m3-2026-11-15
+```
+
+Frozen protocol/bars: `docs/m3-design.md` (incl. pre-campaign Amendment A1 that restored
+the brief-literal bars (b)/(d)). Result: `docs/m3-report.md` — all five bars PASS;
+`juring-group` N=8 = 473,126 IOPS = 103.2 % of `fio numjobs=8` and 101.5 % of seastar
+io_uring; per-shard min/mean 0.963 (95 % LB 0.947); 6/60 slow-state reps disclosed and
+kept. `ALLOW_RESIDUAL_LOAD=1` relaxes ONLY our own chunk-start loadavg residual;
+foreign-process >20 % CPU stays a hard gate. The seastar runner is
+`bench/seastar/seastar_file_bench.cc --smp N` (built by `build-file-bench.sh`; schema-1.1
+JSON parity verified).
 
 ## 4. Analyzer
 
