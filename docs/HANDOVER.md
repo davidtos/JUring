@@ -1,6 +1,6 @@
-# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 + B1 + B2 + M2 + B3 + B4 + B5 + M3 + B6 + B9; B7/B8 decided; **basics roadmap complete**)
+# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 read PASS + **Step A write matrix executed (write rule 1 INCONCLUSIVE, no write-parity claim)** + B1 + B2 + M2 + B3 + B4 + B5 + M3 + B6 + B9; B7/B8 decided; basics roadmap complete)
 
-For the next agent/session. Read this first, then **`docs/b9-report.md`** (session-10
+For the next agent/session. Read **§0.0 (session 11 — Step A, latest)**, then **`docs/m1-write-report.md`** (Step A deliverable — full write matrix, write rule 1 INCONCLUSIVE), **`docs/m1-write-design.md`** (frozen write protocol + Amendment A1), **`scratch/stepa-lead/FREEZE.md`** (pre-campaign freeze + evidence) and **`scratch/stepa-verify/VERDICT.md`** (independent verification), then **`docs/b9-report.md`** (session-10
 deliverable — **B9 delivered; API stability, Javadoc, examples, upgrade notes**),
 **`docs/b9-design.md`** (frozen B9 contract + amendments A1–A3), **`scratch/b9-verify/VERDICT.md`**
 (independent session-10 verification), **`scratch/b9-lead/FREEZE.md`** (session-10 freeze
@@ -24,6 +24,70 @@ API/semantics contract + amendments A1/A2/A3), **`scratch/b5-verify/VERDICT.md`*
 **`docs/b1-design.md`** (B1 frozen API/semantics contract), `SEASTAR-PLAN.md` (v1.4),
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
+
+## 0.0 Session 11 status — 2026-11-15 — **latest** (Step A executed: full M1 write matrix; write-half verdict INCONCLUSIVE — no ranking)
+
+Session 11 executed **SEASTAR-PLAN Step A** (the M1 write matrix) end-to-end and delivered
+the write-half evidence. No library/engine code changed; the work is harness + measurement +
+analysis + docs.
+
+**Frozen design and pre-campaign commits.** `docs/m1-write-design.md` v1.0 was frozen before
+any measurement (sha1 `1268685b…`; freeze record + sha1s + dry-run evidence in
+`scratch/stepa-lead/FREEZE.md`). Commits: `9c87532` (harness), `dc12e10` (analyzer),
+`f747f49` (frozen design = campaign tree), `5e27e20` (Amendment A1 + `regfile` variant).
+
+**Harness work (all reviewed/dry-run before use).** `bench/write/precondition.sh`: Step-A D1
+fix — default 4 GiB chunks + target-driven stop (8 chunks = 34,359,738,368 B in ~45 s instead
+of the 2026-11-13 128.8 GiB overshoot; `--condition and --chunk-bytes 10g` reproduces the old
+block). `bench/write/run-write-cells.sh`: `--reps-by-cell`, run-granular `--resume`,
+multi-invocation seq/manifest continuation (`manifest-run<N>.txt`, `state/invocations.tsv`),
+fio p99 ns→µs fix for all engines + `manifest cell_meta_p99_units=us`, `batch1` sweep variant,
+`regfile` variant (A1). New `bench/write/run-write-campaign.sh`: 3 sequential blocks, verified
+run counts 24/70/36, recorded 300 s between-block rests, abort on mismatch/failure. Analyzer
+`bench/m1/analyze_m1.py`: write-session mode, **both-comparator rule 1**, D2 series/cliff/
+burst-steady/write-amplification, W7 sweep, seastar bracket, write summary + 2 new CSVs;
+read-session output byte-identical, legacy W7 0.9644/[0.9417,0.9870] regression reproduced.
+
+**Pilot + campaign.** Pilot smoke in `bench/results/stepa-pilot-2026-11-15/` (7/7 ok; never
+cited) validated the end-to-end path. Campaign: `bench/write/run-write-campaign.sh
+--session-dir bench/results/m1-write-2026-11-15`, **31,653 s (8 h 47 m)**; **130/130 planned
+runs executed** (124 ok; **6 failed-init** 1M fio-`matched` rows due to the 8 MiB memlock
+limit) and all **130 successful measured runs** analysed (124 main + 6 A1 `regfile` rerun).
+Per-cell D1 bursts (8 chunks / 34.36 GB each), 2 between-block rests, 1 s device series per
+run, thermal 36.9–49.9 °C, `loadavg_start` max 1.58 (0 F14 flags), read dataset stat
+unchanged.
+
+**Result — M1 write rule 1 = `INCONCLUSIVE` (no ranking; no write-parity claim).** Gate rule
+(PASS iff one-sided 95 % LB ≥ 0.95 against **both** fio `matchedbatch` and `matched` at
+**both** W7 and W8): W7 primary fast-subset ratio 0.9628, LB **0.9502** but only **2 pairs**
+(sensitivity 0.9591/LB 0.8937 → INCONCLUSIVE); W8 both comparators INCONCLUSIVE (LB 0.8441 /
+n=1). Root cause is a **device write-state transition, not rep count**: **36/130 runs show a
+1 s write cliff** (within-run burst/steady ratios 0.14–3.85×; e.g. W6 fio/default r1
+195k→59k, W7 fio/matched r2 194k→87k) and **21/34 cells are unstable (CV>10 %)** →
+methodology D7 "unstable, no ranking". The 2026-11-13 n=3 INCONCLUSIVE was therefore not
+merely a rep-count problem. Everything is in `docs/m1-write-report.md` (all tables generated
+from `bench/results/m1-write-2026-11-15/aggregate/m1-write.*`); read-path PASS is unchanged.
+
+**Amendment A1 (execution, disclosed).** fio `--fixedbufs=1` cannot be registered for 1 MiB
+cells at QD8/QD32 (8 MiB/32 MiB locked memory vs 8 MiB memlock): six W13/W14 `matched`
+attempts failed at fio init and are recorded/excluded; they were re-measured as `regfile`
+(`--registerfiles=1` only, read-path precedent) in a separate invocation into the same
+session dir. The campaign wrapper therefore ended `status=aborted` (runs_failed=6) after all
+three blocks — no measurement was lost.
+
+**Docs updated in this session:** `docs/m1-write-report.md` (new deliverable),
+`docs/m1-write-design.md` (frozen + A1), `docs/m1-report.md` (session-11 cross-links and the
+write-half status in the status line/§13/§14/§15), `SEASTAR-PLAN.md` v1.8 (Step A done,
+decision D9), `bench/write/README.md` (campaign executed + results pointer). Independent
+verification: `scratch/stepa-verify/VERDICT.md`.
+
+**What remains after Step A:** **Step D** (host-root/representativeness: hugetlbfs,
+drop_caches, thermal counters) and **Step E** (publishing decisions) — see §7. For the write
+half, the next technical step is a **pre-registered state-controlled write protocol** (pair
+engines inside one preconditioned generation and classify 1 s windows into burst/steady
+before measuring, or use a drive with verified steady state), not more reps. Optional
+follow-ups unchanged (§0.0b/§8): hosted CI, blackpanda prose, M3 N=2, VT-throughput, B0
+close-out.
 
 ## 0.0 Session 10 status — 2026-11-15 — **latest** (B9 delivered; B7 deferred; M4 closed; **B0–B9 basics roadmap complete**)
 
@@ -128,8 +192,9 @@ with `IoShard`/`RingGroup`, use OS-level I/O controls, apply caller backpressure
 
 ### What remains (nothing from B0–B9; all measurement/publishing)
 
-- **Step A — M1 write matrix** (below): the last incomplete milestone half; needs David's
-  machine-time budget (≈6–11 h with D3 rests) and the `precondition.sh` chunk-size fix.
+- **Step A — M1 write matrix — DONE 2026-11-15 (session 11).** Full W5–W8/W12–W14 matrix
+  measured; write rule 1 `INCONCLUSIVE` (device write-state cliffs; no ranking, no
+  write-parity claim); `docs/m1-write-report.md`. The budget decision below is closed.
 - **Step D — host-root / representativeness runs** (hugetlbfs, drop_caches, thermal counters).
 - **Step E — publishing decisions** (README/BENCHMARK claims vs `docs/m1-report.md`).
 - Optional follow-ups: hosted-CI workflow (examples already run in `mvn test`), reword
@@ -916,23 +981,29 @@ within 1–3 % in a separate run.
 
 ## 7. What next (ordered, with acceptance)
 
-**Session-10 status:** the B0–B9 library roadmap is **complete** (B9 delivered; B7 deferred
-by measured gate; B8/M4 closed by documented decision). What remains is measurement/publishing
-work: **Step A** (M1 write matrix — the last incomplete milestone half, needs David's
-machine-time budget), **Step D** (host-root/representativeness) and **Step E** (publishing).
-Steps B/C are closed (Step B's library items all done; Step C done). Optional follow-ups are
-listed in §0.0 and §8.
+**Session-11 status:** the B0–B9 library roadmap is **complete** and **Step A is executed**
+(session 11: full write matrix measured; write rule 1 `INCONCLUSIVE` — device write-state
+cliffs, no ranking; `docs/m1-write-report.md`). What remains is **Step D** (host-root/
+representativeness), **Step E** (publishing) and the write-half follow-up (a pre-registered
+state-controlled write protocol). Steps B/C are closed. Optional follow-ups are listed in
+§0.0 and §8.
 
-### Step A — finish the write matrix (highest priority; the M1 write gap)
-- Fix `precondition.sh` chunk size (target ~3× file size in <120 s, e.g. 4 GiB chunks).
-- Run W5/W6/W7/W8 (4K randwrite QD1/16/64/128) and W12/W13/W14 (1M seqwrite
-  QD1/8/32) with the full methodology protocol: R=3–5, 300 s rest between measured
-  runs, 600 s after preconditioning, 1 s device series, preconditioned blocks.
-- Include seastar (write path now validated) and fio default+matched on W7/W8.
-- **Accept (plan/M1):** write saturation cells `IOPS_JUring ≥ IOPS_fio − 5 %` with
-  one-sided 95 % LB ≥ 0.95; report CV and both states; publish no ranking if CV>10 %.
-  The current W7 block suggests the truth is ~3.6 % below fio-matched with LB ~0.95 —
-  need R=5 to decide INCONCLUSIVE vs PASS/FAIL.
+### Step A — the write matrix — **DONE 2026-11-15 (executed; rule 1 INCONCLUSIVE)**
+- Done in session 11 (`docs/m1-write-report.md`, frozen `docs/m1-write-design.md` + A1):
+  precondition fix (4 GiB chunks, target-driven stop); W5–W8 + W12–W14 measured with the
+  frozen protocol (per-cell D1, 300 s rep rests, 600 s post-preconditioning, 1 s series,
+  3 blocks with resume); seastar + fio default/matched/matchedbatch + W7 batching sweep;
+  W7/W8 R=5. 130/130 planned runs executed (8 h 47 m), 124 ok + 6 failed-init disclosed
+  and re-measured as `regfile` (A1).
+- **Outcome:** write rule 1 `INCONCLUSIVE` at W7/W8 (W7 primary comparator passes only on a
+  2-pair fast-state subset, LB 0.9502; W7 sensitivity and all W8 rows INCONCLUSIVE). Cause:
+  device write-state cliffs inside runs (36/130) → CV>10 % on 21/34 cells → methodology
+  D7 no-ranking. **No write-parity claim.** Read path PASS unchanged.
+- **Follow-up (write half):** pre-register a state-controlled write protocol (pair engines
+  within one preconditioned generation; classify 1 s windows burst/steady before measuring)
+  before the next write campaign; do not simply bump reps. Regenerate the report with
+  `python3 bench/m1/analyze_m1.py --dir bench/results/m1-write-2026-11-15 --out-prefix
+  bench/results/m1-write-2026-11-15/aggregate/m1-write`.
 
 ### Step B — B0 close-out, then the library work begins
 - **B0:** bench/ is now the single source of truth (M1 harness, manifest, one-command
@@ -1000,9 +1071,11 @@ listed in §0.0 and §8.
 
 1. Publish the M1 read-path result? Where (README section, separate doc, blog) and in
    what form (the report is already self-contained with CIs and caveats)?
-2. Write-matrix budget (Step A): full W5-W8/W12-W14 is ~6–11 h of machine time with D3
-   rests — approve a full overnight run or keep trimmed blocks? (This is now the last
-   incomplete M1 half and the only plan-measurement item that needs machine time.)
+2. ~~Write-matrix budget (Step A)~~ **CLOSED 2026-11-15** — approved full matrix + R=5 gate
+   cells; executed in session 11 (8 h 47 m). New decision: pursue a state-controlled write
+   protocol (pair engines in one preconditioned generation, burst/steady classification
+   before measurement) for the write-parity question, or accept the write half as
+   "INCONCLUSIVE — no ranking" for v1?
 3. `nvme-data` bind mount: persist in `/etc/fstab` (suggested line in an old handover)
    or re-create each session?
 4. `SeaStarRef/` as a git submodule (pinned `04b1c04d`) or keep gitignored?
@@ -1030,15 +1103,18 @@ command, so do each download+extract in a single bash call under the workspace.
 
 ```bash
 cd /home/david/projects/JUring
-git status --short                       # expect clean (session-10 commits in place)
-git log --oneline -4                     # expect 9de5867 (B9 feature) + the session-10 docs commit
+git status --short                       # expect clean (session-11 commits in place)
+git log --oneline -6                     # expect 5e27e20 (A1) + the session-11 report/docs commit
 mvn -o test                              # expect 405 tests / 0 failures / 0 errors / 1 skipped
 mvn -o javadoc:javadoc                   # expect BUILD SUCCESS, 0 warnings (doclint enforced)
 ls -ld nvme-data && touch nvme-data/.probe && rm nvme-data/.probe   # writable?
 ls bench/seastar/seastar_file_bench SeaStarRef/build/release/apps/io_tester/io_tester
-python3 bench/m1/analyze_m1.py --dir bench/results/m1-2026-11-13   # aggregates reproduce
-head -20 docs/m1-report.md               # final M1 verdict (write half open)
-head -40 docs/HANDOVER.md                # §0.0 session-10 status + §7 what next
-# then, per David: Step A (M1 write matrix — needs the budget decision), Step D (host-root),
-# or Step E (publishing). Optional: CI workflow / blackpanda prose (§8 items 6-7).
+python3 bench/m1/analyze_m1.py --dir bench/results/m1-2026-11-13   # read aggregates reproduce
+python3 bench/m1/analyze_m1.py --dir bench/results/m1-write-2026-11-15 \
+    --out-prefix bench/results/m1-write-2026-11-15/aggregate/m1-write   # write aggregate reproduces
+head -20 docs/m1-write-report.md         # Step A write-half verdict (rule 1 INCONCLUSIVE)
+head -40 docs/HANDOVER.md                # §0.0 session-11 status + §7 what next
+# then, per David: Step D (host-root/representativeness) or Step E (publishing); the
+# write-half follow-up is a pre-registered state-controlled write protocol (§0.0).
+# Optional: CI workflow / blackpanda prose (§8 items 6-7).
 ```

@@ -1,16 +1,23 @@
 # bench/write/ — M1 write-path matrix harness (W5–W8, W12–W14)
 
-Status: **harness complete for Step A (session 11), campaign not yet run.**
-This directory is Step 2 of `docs/HANDOVER.md` §7 (write matrix) and implements
-the normative controls D1–D8 of `docs/benchmark-methodology.md` §5 for cells
-W5–W8 / W12–W14 (`docs/benchmark-methodology.md` §2). `run-write-campaign.sh`
-is the one-command Step-A driver (three blocks, one session dir).
+Status: **Step A executed 2026-11-15 (session 11).** The full write matrix was measured
+(campaign `bench/results/m1-write-2026-11-15/`, 130/130 planned runs, 8 h 47 m; six
+failed-init 1M fio-`matched` attempts were re-measured as `regfile` under Amendment A1).
+Result: **write rule 1 INCONCLUSIVE — no ranking, no write-parity claim** (device
+write-state cliffs; see [`docs/m1-write-report.md`](../../docs/m1-write-report.md) and the
+frozen [`docs/m1-write-design.md`](../../docs/m1-write-design.md)). This directory is
+Step 2 of `docs/HANDOVER.md` §7 (write matrix) and implements the normative controls D1–D8
+of `docs/benchmark-methodology.md` §5 for cells W5–W8 / W12–W14
+(`docs/benchmark-methodology.md` §2). `run-write-campaign.sh` is the one-command Step-A
+driver (three blocks, one session dir).
 
-The read matrix uses the same NVMe (`/dev/nvme1n1p1`). Until the Lead says go,
-**no script here may be run for real**: only `--dry-run`, `--help`, and
-`bash -n` are safe while the read matrix owns the device. If in doubt, run the
-equivalent command with `--dry-run` first and confirm it prints a plan instead
-of touching the device.
+The write matrix uses the same NVMe (`/dev/nvme1n1p1`) as the read dataset. A real
+run takes exclusive ownership of that device for hours: before starting one, run the
+same command with `--dry-run` and confirm it prints a plan instead of touching the
+device, and make sure no other benchmark process is running (the campaign preflight
+checks this). The Step-A campaign itself was executed on 2026-11-15; the output is
+`bench/results/m1-write-2026-11-15/` (gitignored) and the report is
+`docs/m1-write-report.md`.
 
 ## 1. Hard safety rules
 
