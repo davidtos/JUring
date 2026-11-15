@@ -1,0 +1,36 @@
+# bench/stepd/ — Step D host representativeness harness
+
+Frozen protocol: [`docs/stepd-design.md`](../../docs/stepd-design.md) v1.0 (2026-11-15).
+Host-prep evidence: `scratch/stepd-host/` (audit + preflight outputs, gitignored).
+
+| file | purpose |
+|---|---|
+| `run-stepd.sh` | campaign runner: **Block A** seastar THP vs hugetlbfs (W3/W4/W10/W11/M3N8, R=3) + **Block B** memlock best-config read cells (W9/W10/W11, juring/fio-matched/seastar, R=5) |
+| `analyze_stepd.py` | reads `<results>/cell-meta.tsv`, writes `analysis/stepd-summary.md` + `analysis/stepd.ratios.csv` (paired ratios + 95% CIs; disclosure only) |
+
+## Run it (host terminal, as user `david`)
+
+```bash
+cd /home/david/projects/JUring
+sudo sysctl -w vm.nr_hugepages=4608          # 9 GiB pool (M3N8 huge arm needs 8 GiB)
+sudo nvme smart-log /dev/nvme1n1 > scratch/stepd-host/smart-before.txt
+
+sudo prlimit --memlock=unlimited:unlimited -- runuser -u david -- env \
+  JAVA_BIN=/home/david/.jdks/openjdk-26.0.2/bin/java \
+  JAVA_HOME=/home/david/.jdks/openjdk-26.0.2 \
+  bash -lc 'cd /home/david/projects/JUring && bench/stepd/run-stepd.sh --block all 2>&1 | tee scratch/stepd-host/block1.log'
+
+sudo nvme smart-log /dev/nvme1n1 > scratch/stepd-host/smart-after.txt
+python3 bench/stepd/analyze_stepd.py --dir bench/results/stepd-2026-11-16 \
+  | tee scratch/stepd-host/block1-analysis.md
+```
+
+The memlock wrapper is mandatory for Block B (the runner aborts with instructions if it
+is missing). The runner also aborts on loadavg(1m) ≥ 1.6 (F14), on a missing/wrong JDK, a
+missing hugepage pool/mount, or a hugetlbfs run that consumes no hugepages is flagged in
+`logs/warnings.log`.
+
+**Dry-run** (no I/O, safe any time): `bench/stepd/run-stepd.sh --block all --dry-run`
+
+Outputs: `bench/results/stepd-2026-11-16/{manifest-run*.txt,cell-meta.tsv,cells/,logs/,analysis/}` (gitignored).
+Cleanup after the session: `sudo bash scratch/stepd-host/stepd-preflight.sh --cleanup`.
