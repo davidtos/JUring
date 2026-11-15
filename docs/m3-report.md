@@ -49,8 +49,10 @@ A1 was written at 23:55 local **before the campaign session directory existed**,
 engines interleaved inside each rep block with order alternating per rep (odd `(rep+N)`:
 `juring-group, fio, seastar`; even: reversed), seed 20261114, every rep kept. Cells:
 `juring-group` + `fio` + `seastar --smp N` at N=1,2,4,8 = 12 cells / 60 invocations.
-Optional `juring-manual` N=8 was not run (it was only required "if ahead of schedule"; it is
-reference disclosure, never a bar — we chose not to add a 6th engine after the frozen plan).
+The optional `juring-manual` N=8 reference **was** run after the campaign (we finished 2 h 27 m
+ahead of the schedule gate; 5 invocations, same 4K/QD64/10 s+30 s/R=5/300 s-rest protocol,
+own session `bench/results/m3-manual-2026-11-15/`) — disclosure only, **never a bar** (design
+§2), reported in §3.7.
 
 **Dataset (DS-S):** aged shared 10 GiB `/mnt/TestData/read_files/single_file_bench.bin`
 (10,737,418,240 B, read-only, O_DIRECT, whole file). seastar and `fio` read the same single
@@ -187,6 +189,18 @@ cancelled or timed-out completions in the whole campaign. The N=2 range includes
 the N=8 runtime p99 spread (2753–3146 µs) is the expected per-ring distribution at the device
 ceiling (cf. B5's shard8 demonstration), not a defect.
 
+### 3.7 Optional reference: `juring-manual` N=8 (post-campaign disclosure; never a bar)
+
+The legacy `--runtime=threads` harness (one plain Java thread + one `JUring` per worker, the
+B4 `juring-manual` reference) was run **after** the official campaign and the frozen analysis,
+with the same frozen protocol (4K randread, QD 64/worker, 10 s warmup + 30 s measured, R=5,
+300 s rests) and the same N=8 CPU set/mask (5/5 invocations `status=ok`, errors 0):
+mean **460,790 IOPS** (sd 13,712; min 440,472 / max 477,139; CV 3.0 %), per-thread min/mean
+mean 0.958, external p99 mean 3,317 µs. `juring-group` at N=8 is **1.027×** the manual
+thread pattern (473,126 vs 460,790), i.e. the B4 shard runtime adds no throughput regression
+at this power; this is disclosure only and did not influence any bar or verdict.
+
+
 ## 4. State gate (disclosed; never trims)
 
 Rules (design §4): IOPS anomaly = rep < 0.92 × max IOPS of its own cell/engine; slow-state p99
@@ -260,8 +274,9 @@ python3 bench/shard/analyze_m3.py --session m3-2026-11-15   # -> aggregate/m3.{m
    on this session", not "always ≥85 %".
 6. **`fio --group_reporting=1`** (frozen template) gives one aggregated fio job, so fio
    per-job spread is `n/a`; bar (c) is evaluated on `juring-group` shards only.
-7. **Scope:** read path only (no writes), no CPU/op or syscalls/op, no juring-manual (optional
-   reference skipped), no host-root/DS-M/hugetlbfs runs, no VT re-benchmark. B5 per-ring
+7. **Scope:** read path only (no writes), no CPU/op or syscalls/op; the optional
+   `juring-manual` reference was run only as post-campaign disclosure (§3.7, never a bar);
+   no host-root/DS-M/hugetlbfs runs, no VT re-benchmark. B5 per-ring
    metrics include runtime-internal wakeup/cancel ops and snapshots are best-effort (B5 §8);
    per-ring qd/p99 here are evidence of the runtime path, not SLO numbers.
 8. **Pilot note:** 2 s pilot cells under-report `juring-group` N=8 (240 k, JIT/warmup
@@ -300,7 +315,8 @@ ranking across engines, a per-shard-file (DS-M) result, or a throughput-per-CPU 
 - Session: `bench/results/m3-2026-11-15/` — `cells/` (60 JSONs), `logs/` (60 + compile.log),
   `cell-meta.tsv` (60 rows, one per invocation), `manifest.txt`, `aggregate/m3.{md,json}`,
   `aggregate/first-pass-loader-bug/`; `bench/results/m3-pilot-2026-11-15/` (pilot, not
-  analysed into M3), `bench/results/m3-resumetest/` (chunk/resume harness test).
+  analysed into M3), `bench/results/m3-manual-2026-11-15/` (optional `juring-manual` N=8
+  reference, §3.7), `bench/results/m3-resumetest/` (chunk/resume harness test).
 - Supporting evidence: `scratch/m3-seastar/STATUS.md` + `parity.txt` (seastar `--smp N`
   implementation and JSON parity), `scratch/m3-lead/` (frozen design hash/diagnostics/pilot/
   campaign logs/device state/STATUS), `scratch/m3-lead/diag/` (30 s placement diagnostics).
