@@ -21,6 +21,10 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * {@link #execute(ShardTask)}, {@link #handoff(Runnable)}, {@link #call(Callable)},
  * {@link #requestStop()}, the lifecycle methods and {@link #stats()}.
  *
+ * <p>{@link #start()} applies the requested CPU affinity
+ * ({@link ShardOptions#cpuAffinity()}) on a best-effort basis; a denied or out-of-range
+ * CPU is recorded in {@link ShardStats#affinityApplied()} and does not fail the shard.
+ *
  * <p>Loop shape (see {@code docs/b4-design.md} §4): reap/dispatch up to
  * {@link ShardOptions#cqeBatch()} completions, run up to
  * {@link ShardOptions#taskBatch()} inbound tasks, submit prepared SQEs once, repeat; when
@@ -173,6 +177,7 @@ public final class IoShard implements AutoCloseable {
      *
      * @param shardId non-negative shard id (used in the thread name and stats)
      * @param options shard configuration
+     * @return a new, unstarted shard
      */
     public static IoShard create(int shardId, ShardOptions options) {
         if (shardId < 0) {
@@ -182,12 +187,20 @@ public final class IoShard implements AutoCloseable {
         return new IoShard(shardId, options);
     }
 
-    /** @return the shard id */
+    /**
+     * Returns the shard id.
+     *
+     * @return the shard id
+     */
     public int id() {
         return shardId;
     }
 
-    /** @return the immutable options this shard was created with */
+    /**
+     * Returns the immutable options this shard was created with.
+     *
+     * @return the immutable options this shard was created with
+     */
     public ShardOptions options() {
         return options;
     }
@@ -310,17 +323,29 @@ public final class IoShard implements AutoCloseable {
         return new RuntimeException("Failed to start IoShard", failure);
     }
 
-    /** @return whether the shard loop is currently running */
+    /**
+     * Returns whether the shard loop is currently running.
+     *
+     * @return whether the shard loop is currently running
+     */
     public boolean isStarted() {
         return started;
     }
 
-    /** @return whether a stop was requested (new work is rejected) */
+    /**
+     * Returns whether a stop was requested (new work is rejected).
+     *
+     * @return whether a stop was requested
+     */
     public boolean isStopping() {
         return stopping;
     }
 
-    /** @return whether {@link #close(long)} completed (or the shard failed to start) */
+    /**
+     * Returns whether the shard is closed.
+     *
+     * @return whether {@link #close(long)} completed (or the shard failed to start)
+     */
     public boolean isClosed() {
         return closed;
     }
@@ -373,6 +398,7 @@ public final class IoShard implements AutoCloseable {
     /**
      * Waits up to {@code timeoutMillis} for the shard thread to end.
      *
+     * @param timeoutMillis maximum wait in milliseconds, {@code >= 0}
      * @return whether the thread ended; {@code false} on timeout or interrupt (the
      * interrupt flag is restored)
      */
@@ -495,6 +521,7 @@ public final class IoShard implements AutoCloseable {
      * while the bounded inbound queue is full (until space, stop or close); from the shard
      * thread it throws immediately instead of blocking on itself.
      *
+     * @param task the task to run on the shard thread
      * @throws IllegalStateException when the shard is stopping/closed/terminated or the
      *                               inbound queue is full and the caller is the shard thread
      */
@@ -532,6 +559,7 @@ public final class IoShard implements AutoCloseable {
      * thread and {@link ShardStats#handoffsInlineFallback()} is counted. Such a
      * continuation must therefore not assume target-shard-thread confinement.
      *
+     * @param continuation the continuation to run on this shard (may run inline on overflow)
      * @throws IllegalStateException when the shard is stopping/closed/terminated
      */
     public void handoff(Runnable continuation) {
@@ -569,6 +597,9 @@ public final class IoShard implements AutoCloseable {
      * Runs {@code action} on the shard thread and blocks the caller until it completes.
      * From the shard thread itself the action runs inline (no deadlock).
      *
+     * @param <T>    the action's result type
+     * @param action the action to run on the shard thread
+     * @return the action's result
      * @throws IllegalStateException when the shard is stopping/closed or terminates before
      *                               the action runs
      */
@@ -626,19 +657,29 @@ public final class IoShard implements AutoCloseable {
         }
     }
 
-    /** @return whether the calling thread is this shard's event-loop thread */
+    /**
+     * Returns whether the calling thread is this shard's event-loop thread.
+     *
+     * @return whether the calling thread is the shard thread
+     */
     public boolean inShardThread() {
         return Thread.currentThread() == thread;
     }
 
-    /** @return the shard platform thread, or {@code null} before {@link #start()} */
+    /**
+     * Returns the shard platform thread.
+     *
+     * @return the shard platform thread, or {@code null} before {@link #start()}
+     */
     public Thread shardThread() {
         return thread;
     }
 
     /**
-     * Snapshot of the shard's lifecycle, affinity and counters. Safe from any thread, before
-     * start, while running and after close.
+     * Returns a snapshot of the shard's lifecycle, affinity and counters. Safe from any
+     * thread, before start, while running and after close.
+     *
+     * @return an immutable stats snapshot
      */
     public ShardStats stats() {
         long inFlight = lastInFlight;
@@ -674,6 +715,8 @@ public final class IoShard implements AutoCloseable {
      * sampling is disabled, for body-hosted shards, and until a sampled registration has been
      * dispatched. Ring metrics stay readable after close (the final ring snapshot is cached
      * before the ring reference is released).
+     *
+     * @return an immutable metrics snapshot
      */
     public ShardMetrics metrics() {
         return new ShardMetrics(stats(), snapshotRingMetrics(), snapshotDispatchLatency());

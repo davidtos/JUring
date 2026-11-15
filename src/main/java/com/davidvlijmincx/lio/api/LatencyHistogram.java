@@ -93,9 +93,13 @@ public final class LatencyHistogram {
     }
 
     /**
-     * @return an immutable snapshot of the current histogram; percentiles are inclusive
-     *         bucket maxima as described in the class documentation. All-zero when empty.
-     *         May allocate; safe from any thread (best effort, never tears).
+     * Returns an immutable snapshot of the current histogram.
+     *
+     * <p>Percentiles are inclusive bucket maxima as described in the class documentation;
+     * the snapshot is all-zero when the histogram is empty. The snapshot may allocate and is
+     * safe to call from any thread as a best-effort view that never tears.
+     *
+     * @return the current histogram snapshot
      */
     public LatencySnapshot snapshot() {
         long samples = (long) VH_LONG.getAcquire(stats, S_COUNT);
@@ -158,7 +162,11 @@ public final class LatencyHistogram {
         VH_LONG.setOpaque(stats, S_MAX, 0L);
     }
 
-    /** @return the number of recorded observations */
+    /**
+     * Returns the number of recorded observations.
+     *
+     * @return the observation count
+     */
     public long count() {
         return (long) VH_LONG.getAcquire(stats, S_COUNT);
     }

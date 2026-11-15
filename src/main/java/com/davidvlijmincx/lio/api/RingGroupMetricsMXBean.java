@@ -16,41 +16,139 @@ package com.davidvlijmincx.lio.api;
  */
 public interface RingGroupMetricsMXBean {
 
-    /** @return number of shards in the group */
+    /**
+     * Returns the number of shards in the group.
+     *
+     * @return the group size
+     */
     int getShards();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#submitted()} counter over all shards.
+     *
+     * @return the summed submitted-SQE counter
+     */
     long getSubmitted();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#reaped()} counter over all shards.
+     *
+     * @return the summed reaped-CQE counter
+     */
     long getReaped();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#completed()} counter over all shards.
+     *
+     * @return the summed completed-operation counter
+     */
     long getCompleted();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#failed()} counter over all shards.
+     *
+     * @return the summed failed-operation counter
+     */
     long getFailed();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#cancelled()} counter over all shards.
+     *
+     * @return the summed cancelled-operation counter
+     */
     long getCancelled();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#timedOut()} counter over all shards.
+     *
+     * @return the summed timed-out-operation counter
+     */
     long getTimedOut();
 
+    /**
+     * Returns the summed ring {@link RingMetrics#inFlight()} count over all shards.
+     *
+     * @return the summed in-flight request count
+     */
     long getInFlight();
 
+    /**
+     * Returns the summed SQ occupancy over all shards.
+     *
+     * @return the summed SQ occupancy
+     */
     long getSqQueued();
 
+    /**
+     * Returns the summed CQ occupancy over all shards.
+     *
+     * @return the summed CQ occupancy
+     */
     long getCqReady();
 
-    /** @return number of recorded dispatch-latency samples (merged over shards) */
+    /**
+     * Returns the number of recorded dispatch-latency samples (merged over shards).
+     *
+     * @return the merged sample count
+     */
     long getLatencySamples();
 
+    /**
+     * Returns the mean completion-dispatch latency in microseconds, merged over shards.
+     *
+     * @return the mean latency, or {@code 0.0} when no sample was recorded
+     */
     double getLatencyMeanMicros();
 
+    /**
+     * Returns the 50th-percentile completion-dispatch latency in microseconds, merged over
+     * shards.
+     *
+     * @return the 50th-percentile latency (a bucket maximum; {@code 0.0} when no sample was
+     *         recorded)
+     */
     double getLatencyP50Micros();
 
+    /**
+     * Returns the 90th-percentile completion-dispatch latency in microseconds, merged over
+     * shards.
+     *
+     * @return the 90th-percentile latency (a bucket maximum; {@code 0.0} when no sample was
+     *         recorded)
+     */
     double getLatencyP90Micros();
 
+    /**
+     * Returns the 99th-percentile completion-dispatch latency in microseconds, merged over
+     * shards.
+     *
+     * @return the 99th-percentile latency (a bucket maximum; {@code 0.0} when no sample was
+     *         recorded)
+     */
     double getLatencyP99Micros();
 
+    /**
+     * Returns the 99.9th-percentile completion-dispatch latency in microseconds, merged
+     * over shards.
+     *
+     * @return the 99.9th-percentile latency (a bucket maximum; {@code 0.0} when no sample
+     *         was recorded)
+     */
     double getLatencyP999Micros();
 
+    /**
+     * Returns the maximum recorded completion-dispatch latency in microseconds, merged over
+     * shards.
+     *
+     * @return the exact maximum latency, or {@code 0.0} when no sample was recorded
+     */
     double getLatencyMaxMicros();
 
+    /**
+     * Returns the minimum recorded completion-dispatch latency in microseconds, merged over
+     * shards.
+     *
+     * @return the exact minimum latency, or {@code 0.0} when no sample was recorded
+     */
     double getLatencyMinMicros();
 }

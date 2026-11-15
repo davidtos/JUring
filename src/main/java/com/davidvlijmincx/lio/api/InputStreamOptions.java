@@ -65,25 +65,40 @@ public final class InputStreamOptions {
         return DEFAULTS;
     }
 
-    /** @return the configured maximum chunk/buffer size in bytes */
+    /**
+     * Returns the configured maximum chunk/buffer size in bytes.
+     *
+     * @return the configured maximum chunk/buffer size
+     */
     public int bufferSize() {
         return bufferSize;
     }
 
     /**
-     * @return the maximum number of <em>extra</em> prefetch buffers; the maximum number of
-     *         reads in flight is {@code readAhead() + 1}
+     * Returns the configured maximum number of <em>extra</em> prefetch buffers.
+     *
+     * <p>The maximum number of reads in flight is {@code readAhead() + 1}.
+     *
+     * @return the configured maximum number of extra prefetch buffers
      */
     public int readAhead() {
         return readAhead;
     }
 
-    /** @return buffer and read alignment in bytes (power of two) */
+    /**
+     * Returns the buffer and read alignment in bytes.
+     *
+     * @return the configured alignment (a power of two)
+     */
     public int alignment() {
         return alignment;
     }
 
-    /** @return {@code true} when seastar-style adaptive buffer-size/readahead is enabled */
+    /**
+     * Returns whether seastar-style adaptive buffer-size/readahead adjustments are enabled.
+     *
+     * @return {@code true} when adaptive adjustments are enabled
+     */
     public boolean dynamicAdjustments() {
         return dynamicAdjustments;
     }

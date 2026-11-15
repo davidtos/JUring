@@ -35,7 +35,11 @@ public enum FadviseAdvice {
         this.value = value;
     }
 
-    /** @return the POSIX {@code posix_fadvise(2)} advice constant forwarded to the kernel */
+    /**
+     * Returns the POSIX {@code posix_fadvise(2)} advice constant forwarded to the kernel.
+     *
+     * @return the native advice value
+     */
     public int value() {
         return value;
     }

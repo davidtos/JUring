@@ -10,10 +10,35 @@ import java.util.Objects;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 
 /**
- * Java API for Linux {@code io_uring}.
+ * Single-threaded Java API for Linux {@code io_uring} direct file I/O.
+ *
+ * <p>A {@code JUring} wraps one io_uring instance: a submission queue and a completion
+ * queue mapped from the kernel. Operations are <em>prepared</em> as submission queue
+ * entries on the owner thread (each {@code prepare*} method returns an operation handle),
+ * <em>submitted</em> with {@link #submit()} or one of the {@code *AndWait*} methods, and
+ * their completions are <em>reaped</em> as {@link Result} objects. A ring is confined to a
+ * single owner thread: it is not thread-safe, and the owner thread must prepare, submit
+ * and reap. Use one ring per thread, or {@link IoShard}/{@link RingGroup} for a managed
+ * multi-ring layout.
+ *
+ * <p>Registrations are explicit and lifecycle-bound to the ring: registered buffers
+ * ({@link #registerBuffers(int, int)}), the sparse registered-file table
+ * ({@link #registerFileAdd(FileDescriptor)} and friends) and the optional read-buffer pool
+ * ({@link #setupReadBufferPool(int, int)}) must be released before the ring is closed, and
+ * the registered memory must stay valid for as long as the ring uses it. Closing the ring
+ * ({@link #close()}) is bounded and idempotent.
+ *
+ * <p>Operations that take a {@link FileDescriptor} submitted with the registered-file slot
+ * overloads (an {@code int indexFD} argument) require the slot to have been registered with
+ * {@link #registerFileAdd(FileDescriptor)} or {@link #registerFiles(FileDescriptor...)}.
+ *
+ * <p>Completion results are reported exactly once per submitted SQE. A completion's
+ * {@link Result#result()} is the transfer size, {@code 0} or the new file descriptor for
+ * operations that produce one, or the negative errno on failure.
  */
 public class JUring implements AutoCloseable {
 
+    /** {@code IORING_FSYNC_DATASYNC}: {@code fsync} flag requesting {@code fdatasync} (data only). */
     public static final int IORING_FSYNC_DATASYNC = 1;
 
     /** {@code IORING_TIMEOUT_ABS}: the {@code __kernel_timespec} is an absolute CLOCK_MONOTONIC time. */
@@ -74,10 +99,34 @@ public class JUring implements AutoCloseable {
     /** B5: final frozen ring-metrics snapshot captured on close (design §2.1 after-close rule). */
     private volatile RingMetrics frozenRingMetrics;
 
+    /**
+     * Creates a ring with the given submission queue depth and setup flags.
+     *
+     * <p>The ring is owned by the calling thread; see the class documentation for the
+     * ownership contract. Closing the ring releases its kernel and off-heap resources.
+     *
+     * @param queueDepth   number of submission queue entries (the completion queue defaults
+     *                     to twice this value)
+     * @param ioUringFlags {@link IoUringOptions} setup flags, combined with bitwise OR
+     * @throws RuntimeException when {@code io_uring_setup} fails
+     */
     public JUring(int queueDepth, IoUringOptions... ioUringFlags) {
         this(queueDepth, 0, ioUringFlags);
     }
 
+    /**
+     * Creates a ring with the given queue depth, SQPOLL idle time and setup flags.
+     *
+     * <p>The ring is owned by the calling thread; see the class documentation for the
+     * ownership contract.
+     *
+     * @param queueDepth     number of submission queue entries
+     * @param sqThreadIdleMs idle time in milliseconds before the SQPOLL kernel thread
+     *                       sleeps; only meaningful with
+     *                       {@link IoUringOptions#IORING_SETUP_SQPOLL}
+     * @param ioUringFlags   {@link IoUringOptions} setup flags, combined with bitwise OR
+     * @throws RuntimeException when {@code io_uring_setup} fails
+     */
     public JUring(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringFlags) {
         ioUring = NativeDispatcher.getUringInstance(queueDepth, sqThreadIdleMs, ioUringFlags);
         registeredBuffers = new ArrayList<>();
@@ -92,60 +141,213 @@ public class JUring implements AutoCloseable {
         freeBufferTop = 0;
     }
 
+    /**
+     * Creates a second ring that shares this ring's asynchronous-worker pool
+     * ({@code IORING_SETUP_ATTACH_WQ}).
+     *
+     * <p>The returned ring is independent for submission and reaping and has its own
+     * metrics; it must be closed by its caller and is confined to the calling thread.
+     *
+     * @param queueDepth     number of submission queue entries of the new ring
+     * @param ioUringOptions additional {@link IoUringOptions} setup flags
+     * @return a new ring attached to this ring's worker pool
+     * @throws RuntimeException when the attached ring cannot be created
+     */
     public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
         ensureOpen();
         var ring = this.ioUring.getSharedWorkerRing(queueDepth, ioUringOptions);
         return new JUring(ring);
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes at file offset {@code offset} into a buffer
+     * allocated by the ring.
+     *
+     * <p>The buffer is allocated at preparation time, exposed by the completion's
+     * {@link Result#buffer()} and released by {@link Result#close()}.
+     *
+     * @param fd       file to read
+     * @param readSize maximum number of bytes to read
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code readSize} is negative
+     * @throws IllegalStateException    when the ring is closed or the submission queue is full
+     */
     public long prepareRead(FileDescriptor fd, int readSize, long offset) {
         return prepareReadInternal(fd.getFd(), readSize, offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes at {@code offset} into a ring-allocated
+     * buffer, with explicit SQE flags.
+     *
+     * @param fd         file to read
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a read into the whole of {@code buffer} at file offset {@code offset}.
+     *
+     * <p>The buffer must be native, alive and accessible by the calling thread, and must
+     * stay valid until the completion is reaped.
+     *
+     * @param fd     file to read
+     * @param buffer destination buffer; its size determines the read size
+     * @param offset file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the segment is not native writeable memory
+     * @throws IllegalStateException    when the ring is closed or the segment scope is closed
+     * @throws WrongThreadException     when the segment is confined to another thread
+     */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, long offset) {
         return prepareReadInternal(fd.getFd(), buffer, Math.toIntExact(buffer.byteSize()), offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a read into the whole of {@code buffer} at {@code offset}, with explicit SQE
+     * flags.
+     *
+     * @param fd         file to read
+     * @param buffer     destination buffer; its size determines the read size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), buffer, Math.toIntExact(buffer.byteSize()), offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a read of at most {@code readSize} bytes into the start of {@code buffer} at
+     * file offset {@code offset}.
+     *
+     * @param fd       file to read
+     * @param buffer   destination buffer
+     * @param readSize maximum number of bytes to read; must not exceed the buffer size
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code readSize} is negative or larger than the buffer
+     */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, int readSize, long offset) {
         return prepareReadInternal(fd.getFd(), buffer, readSize, offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a read of at most {@code readSize} bytes into {@code buffer} at {@code offset},
+     * with explicit SQE flags.
+     *
+     * @param fd         file to read
+     * @param buffer     destination buffer
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), buffer, readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes from a registered-file slot into a
+     * ring-allocated buffer.
+     *
+     * @param indexFD  registered-file slot number (submitted with {@code IOSQE_FIXED_FILE})
+     * @param readSize maximum number of bytes to read
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code readSize} is negative
+     * @throws IllegalStateException    when the ring is closed or the submission queue is full
+     */
     public long prepareRead(int indexFD, int readSize, long offset) {
         return prepareReadInternal(indexFD, readSize, offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes from a registered-file slot into a
+     * ring-allocated buffer, with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into the whole of {@code buffer}.
+     *
+     * @param indexFD registered-file slot number
+     * @param buffer  destination buffer; its size determines the read size
+     * @param offset  file offset in bytes
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(int indexFD, MemorySegment buffer, long offset) {
         return prepareReadInternal(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into the whole of {@code buffer}, with
+     * explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     destination buffer; its size determines the read size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(int indexFD, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a read of at most {@code readSize} bytes from a registered-file slot into
+     * {@code buffer}.
+     *
+     * @param indexFD  registered-file slot number
+     * @param buffer   destination buffer
+     * @param readSize maximum number of bytes to read
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(int indexFD, MemorySegment buffer, int readSize, long offset) {
         return prepareReadInternal(indexFD, buffer, readSize, offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a read of at most {@code readSize} bytes from a registered-file slot into
+     * {@code buffer}, with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     destination buffer
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareRead(int indexFD, MemorySegment buffer, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(indexFD, buffer, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Configures the read-buffer pool used by {@link #prepareReadPooled}.
+     *
+     * <p>The pool holds {@code capacity} off-heap buffers of {@code bufferSize} bytes each.
+     * Calling this method again replaces and closes the previous pool.
+     *
+     * @param bufferSize size of one pooled buffer in bytes
+     * @param capacity   number of buffers in the pool
+     * @throws IllegalArgumentException when {@code bufferSize} is not positive or
+     *                                  {@code capacity} is negative
+     */
     public void setupReadBufferPool(int bufferSize, int capacity) {
         if (bufferSize <= 0 || capacity < 0) {
             throw new IllegalArgumentException("Invalid read buffer pool configuration: bufferSize=" + bufferSize + ", capacity=" + capacity);
@@ -156,22 +358,72 @@ public class JUring implements AutoCloseable {
         readBufferPool = new ReadBufferPool(capacity, bufferSize);
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes into a buffer checked out of the read-buffer
+     * pool.
+     *
+     * <p>The buffer is checked out at preparation time; after reaping the completion the
+     * caller returns it with {@link #checkInReadBuffer(Result)}.
+     *
+     * @param fd       file to read
+     * @param readSize maximum number of bytes to read
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalStateException    when no read-buffer pool was configured
+     * @throws IllegalArgumentException when {@code readSize} is out of the pool buffer range
+     */
     public long prepareReadPooled(FileDescriptor fd, int readSize, long offset) {
         return prepareReadPooledInternal(fd.getFd(), readSize, offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a read into a buffer checked out of the read-buffer pool, with explicit SQE
+     * flags.
+     *
+     * @param fd         file to read
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadPooled(FileDescriptor fd, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadPooledInternal(fd.getFd(), readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into a buffer checked out of the
+     * read-buffer pool.
+     *
+     * @param indexFD  registered-file slot number
+     * @param readSize maximum number of bytes to read
+     * @param offset   file offset in bytes
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadPooled(int indexFD, int readSize, long offset) {
         return prepareReadPooledInternal(indexFD, readSize, offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into a pooled buffer, with explicit SQE
+     * flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadPooled(int indexFD, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadPooledInternal(indexFD, readSize, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Returns a pooled buffer to the read-buffer pool after its completion was reaped.
+     *
+     * @param result completion whose buffer was checked out by {@link #prepareReadPooled}
+     * @throws IllegalArgumentException when {@code result} is {@code null} or is not a
+     *                                  {@link OperationType#READ_POOLED} completion
+     */
     public void checkInReadBuffer(Result result) {
         if (result == null) {
             throw new IllegalArgumentException("Result cannot be null");
@@ -191,26 +443,80 @@ public class JUring implements AutoCloseable {
         }
     }
 
+    /**
+     * Prepares a read of {@code readSize} bytes into a registered fixed buffer.
+     *
+     * <p>The buffer must have been registered with {@link #registerBuffers(int, int)}; the
+     * completion reports the buffer index in {@link Result#bufferIdx()}.
+     *
+     * @param fd          file to read
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex) {
         return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, (byte) 0, false);
     }
 
+    /**
+     * Prepares a read into a registered fixed buffer, with explicit SQE flags.
+     *
+     * @param fd          file to read
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareReadFixedInternal(fd.getFd(), readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into a registered fixed buffer.
+     *
+     * @param indexFD     registered-file slot number
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex) {
         return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, (byte) 0, true);
     }
 
+    /**
+     * Prepares a read from a registered-file slot into a registered fixed buffer, with
+     * explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param readSize   maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareReadFixedInternal(indexFD, readSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a no-op operation that completes immediately; useful to probe reaping.
+     *
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareNop() {
         return prepareNopInternal((byte) 0);
     }
 
+    /**
+     * Prepares a no-op operation with explicit SQE flags.
+     *
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareNop(SqeOptions... sqeOptions) {
         return prepareNopInternal(SqeOptions.combineOptions(sqeOptions));
     }
@@ -224,78 +530,278 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares a write of {@code bytes} at file offset {@code offset}.
+     *
+     * <p>The bytes are copied into a native buffer at preparation time and that buffer is
+     * released by the ring when the completion is reaped; the array is not retained.
+     *
+     * @param fd     file to write
+     * @param bytes  bytes to write
+     * @param offset file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalStateException when the ring is closed or the submission queue is full
+     */
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset) {
         return prepareWriteInternal(fd.getFd(), bytes, offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a write of {@code bytes} at {@code offset}, with explicit SQE flags.
+     *
+     * @param fd         file to write
+     * @param bytes      bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(FileDescriptor fd, byte[] bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(fd.getFd(), bytes, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a zero-copy write of {@code bytes} at file offset {@code offset}.
+     *
+     * <p>The segment must be native, alive and accessible by the calling thread, and must
+     * stay valid until the completion is reaped.
+     *
+     * @param fd     file to write
+     * @param bytes  source bytes; pinned for the duration of the operation
+     * @param offset file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the segment is not native memory
+     * @throws IllegalStateException    when the ring is closed or the segment scope is closed
+     * @throws WrongThreadException     when the segment is confined to another thread
+     */
     public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset) {
         return prepareWriteInternal(fd.getFd(), bytes, offset, (byte) 0, false);
     }
 
+    /**
+     * Prepares a zero-copy write of {@code bytes} at {@code offset}, with explicit SQE flags.
+     *
+     * @param fd         file to write
+     * @param bytes      source bytes; must stay valid until the completion is reaped
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(FileDescriptor fd, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(fd.getFd(), bytes, offset, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a write of {@code bytes} at file offset {@code offset} on a registered-file
+     * slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param bytes   bytes to write
+     * @param offset  file offset in bytes
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(int indexFD, byte[] bytes, long offset) {
         return prepareWriteInternal(indexFD, bytes, offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a write of {@code bytes} on a registered-file slot, with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param bytes      bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(indexFD, bytes, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a zero-copy write of {@code bytes} on a registered-file slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param bytes   source bytes; must stay valid until the completion is reaped
+     * @param offset  file offset in bytes
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(int indexFD, MemorySegment bytes, long offset) {
         return prepareWriteInternal(indexFD, bytes, offset, (byte) 0, true);
     }
 
+    /**
+     * Prepares a zero-copy write on a registered-file slot, with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param bytes      source bytes; must stay valid until the completion is reaped
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWrite(int indexFD, MemorySegment bytes, long offset, SqeOptions... sqeOptions) {
         return prepareWriteInternal(indexFD, bytes, offset, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer, copying {@code bytes} into it first.
+     *
+     * @param fd          file to write
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the index is out of range or the bytes do not fit
+     */
     public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex) {
         return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, (byte) 0, false);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer, copying {@code bytes} into it first,
+     * with explicit SQE flags.
+     *
+     * @param fd          file to write
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer on a registered-file slot, copying
+     * {@code bytes} into the buffer first.
+     *
+     * @param indexFD     registered-file slot number
+     * @param bytes       bytes to write
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex) {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, (byte) 0, true);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer on a registered-file slot, with
+     * explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param bytes      bytes to write
+     * @param offset     file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer.
+     *
+     * <p>The bytes are copied into the registered buffer unless {@code bytes} is itself the
+     * registered buffer at {@code bufferIndex} and has the same address, in which case the
+     * write is zero-copy.
+     *
+     * @param fd          file to write
+     * @param bytes       source bytes; must stay valid until the completion is reaped
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the index is out of range or the bytes do not fit
+     */
     public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex) {
         return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, (byte) 0, false);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer, with explicit SQE flags.
+     *
+     * @param fd          file to write
+     * @param bytes       source bytes; must stay valid until the completion is reaped
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(FileDescriptor fd, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedInternal(fd.getFd(), bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer on a registered-file slot.
+     *
+     * @param indexFD     registered-file slot number
+     * @param bytes       source bytes; must stay valid until the completion is reaped
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex) {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, (byte) 0, true);
     }
 
+    /**
+     * Prepares a write from a registered fixed buffer on a registered-file slot, with
+     * explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param bytes      source bytes; must stay valid until the completion is reaped
+     * @param offset     file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, MemorySegment bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedInternal(indexFD, bytes, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Prepares a zero-copy write of the first {@code writeSize} bytes of a registered fixed
+     * buffer.
+     *
+     * <p>The caller must have filled the registered buffer with the data to write.
+     *
+     * @param fd          file to write
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
     public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex) {
         return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, (byte) 0, false);
     }
 
+    /**
+     * Prepares a zero-copy write from a registered fixed buffer, with explicit SQE flags.
+     *
+     * @param fd          file to write
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedZeroCopyInternal(fd.getFd(), writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares a zero-copy write from a raw native address that must be one of the registered
+     * buffers.
+     *
+     * @param fd           file to write
+     * @param bufferAddress native address of the data to write
+     * @param writeSize    number of bytes to write
+     * @param offset       file offset in bytes
+     * @param bufferIndex  index of the registered buffer the address belongs to
+     * @param sqeOptions   SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(FileDescriptor fd, long bufferAddress, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         long sqe = getSqe(SqeOptions.combineOptions(sqeOptions), false);
         long opId = opSeq++;
@@ -305,14 +811,44 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares a zero-copy write of the first {@code writeSize} bytes of a registered fixed
+     * buffer on a registered-file slot.
+     *
+     * @param indexFD     registered-file slot number
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
         return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, (byte) 0, true);
     }
 
+    /**
+     * Prepares a zero-copy write from a registered fixed buffer on a registered-file slot,
+     * with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param writeSize  number of bytes to write from the buffer
+     * @param offset     file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWriteFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         return prepareWriteFixedZeroCopyInternal(indexFD, writeSize, offset, bufferIndex, SqeOptions.combineOptions(sqeOptions), true);
     }
 
+    /**
+     * Returns the memory segment of a buffer registered with
+     * {@link #registerBuffers(int, int)}.
+     *
+     * @param bufferIndex index of the registered buffer
+     * @return the buffer's memory segment
+     * @throws IllegalArgumentException when the index is out of range
+     * @throws IllegalStateException    when the ring is closed
+     */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
         ensureOpen();
         if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
@@ -321,10 +857,31 @@ public class JUring implements AutoCloseable {
         return registeredBuffersArray[bufferIndex];
     }
 
+    /**
+     * Prepares a vectored read into ring-allocated buffers of the given sizes.
+     *
+     * <p>The completion's {@link Result#buffers()} exposes one segment per iovec;
+     * {@link Result#freeBuffers()} releases them.
+     *
+     * @param fd          file to read
+     * @param bufferSizes sizes of the individual iovec buffers
+     * @param offset      file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the vector count or a size is out of range
+     */
     public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset) {
         return prepareReadv(fd, bufferSizes, offset, (byte) 0);
     }
 
+    /**
+     * Prepares a vectored read into ring-allocated buffers, with explicit SQE flags.
+     *
+     * @param fd          file to read
+     * @param bufferSizes sizes of the individual iovec buffers
+     * @param offset      file offset in bytes
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadv(FileDescriptor fd, int[] bufferSizes, long offset, SqeOptions... sqeOptions) {
         return prepareReadv(fd, bufferSizes, offset, SqeOptions.combineOptions(sqeOptions));
     }
@@ -358,10 +915,28 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares a vectored read into the given registered fixed buffers.
+     *
+     * @param fd            file to read
+     * @param bufferIndices indices of the registered destination buffers
+     * @param offset        file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the vector count or an index is out of range
+     */
     public long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset) {
         return prepareReadvFixed(fd, bufferIndices, offset, (byte) 0);
     }
 
+    /**
+     * Prepares a vectored read into registered fixed buffers, with explicit SQE flags.
+     *
+     * @param fd            file to read
+     * @param bufferIndices indices of the registered destination buffers
+     * @param offset        file offset in bytes
+     * @param sqeOptions    SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareReadvFixed(FileDescriptor fd, int[] bufferIndices, long offset, SqeOptions... sqeOptions) {
         return prepareReadvFixed(fd, bufferIndices, offset, SqeOptions.combineOptions(sqeOptions));
     }
@@ -397,10 +972,32 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares a vectored zero-copy write from registered fixed buffers.
+     *
+     * @param fd            file to write
+     * @param bufferIndices indices of the registered source buffers
+     * @param lengths       number of bytes to write from each buffer
+     * @param offset        file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the arrays differ in length, an index is out of
+     *                                  range or a length exceeds its buffer size
+     */
     public long prepareWritevFixed(FileDescriptor fd, int[] bufferIndices, long[] lengths, long offset) {
         return prepareWritevFixed(fd, bufferIndices, lengths, offset, (byte) 0);
     }
 
+    /**
+     * Prepares a vectored zero-copy write from registered fixed buffers, with explicit SQE
+     * flags.
+     *
+     * @param fd            file to write
+     * @param bufferIndices indices of the registered source buffers
+     * @param lengths       number of bytes to write from each buffer
+     * @param offset        file offset in bytes
+     * @param sqeOptions    SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWritevFixed(FileDescriptor fd, int[] bufferIndices, long[] lengths, long offset, SqeOptions... sqeOptions) {
         return prepareWritevFixed(fd, bufferIndices, lengths, offset, SqeOptions.combineOptions(sqeOptions));
     }
@@ -441,10 +1038,29 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares a vectored write that copies the given heap arrays into native memory.
+     *
+     * @param fd      file to write
+     * @param buffers byte arrays to write, in iovec order
+     * @param offset  file offset in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the vector count is out of range or an array is
+     *                                  {@code null}
+     */
     public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset) {
         return prepareWritev(fd, buffers, offset, (byte) 0);
     }
 
+    /**
+     * Prepares a vectored write from heap arrays, with explicit SQE flags.
+     *
+     * @param fd         file to write
+     * @param buffers    byte arrays to write, in iovec order
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareWritev(FileDescriptor fd, byte[][] buffers, long offset, SqeOptions... sqeOptions) {
         return prepareWritev(fd, buffers, offset, SqeOptions.combineOptions(sqeOptions));
     }
@@ -479,14 +1095,44 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares an asynchronous {@code openat(2)} of {@code filePath}.
+     *
+     * <p>{@code O_CLOEXEC} is added to {@code flags}. The completion's result is the new
+     * file descriptor (see {@link Result#fd()} / {@link Result#fileDescriptor()}); the caller
+     * owns and must close it.
+     *
+     * @param filePath path to open
+     * @param flags    Linux {@code open(2)} flags (see {@link LinuxOpenOptions#getValue()})
+     * @param mode     permission bits used when the file is created
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareOpen(String filePath, int flags, int mode) {
         return prepareOpen(filePath, flags, mode, (byte) 0);
     }
 
+    /**
+     * Prepares an asynchronous {@code openat(2)} with explicit SQE flags.
+     *
+     * @param filePath   path to open
+     * @param flags      Linux {@code open(2)} flags
+     * @param mode       permission bits used when the file is created
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareOpen(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
         return prepareOpen(filePath, flags, mode, SqeOptions.combineOptions(sqeOptions));
     }
 
+    /**
+     * Prepares an asynchronous {@code openat(2)} of a {@link Path} with
+     * {@link LinuxOpenOptions} flags.
+     *
+     * @param filePath    path to open
+     * @param mode        permission bits used when the file is created
+     * @param openOptions open flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareOpen(Path filePath, int mode, LinuxOpenOptions... openOptions) {
         return prepareOpen(filePath.toString(), LinuxOpenOptions.combineOptions(openOptions), mode, (byte) 0);
     }
@@ -505,14 +1151,48 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares an asynchronous {@code openat(2)} that installs the opened file into a
+     * registered-file slot.
+     *
+     * <p>The file is opened and placed in slot {@code fileIndex} of the ring's registered-file
+     * table; the completion result is {@code 0} on success rather than a new descriptor, and
+     * the slot can then be used with the {@code indexFD} overloads.
+     *
+     * @param filePath  path to open
+     * @param flags     Linux {@code open(2)} flags
+     * @param mode      permission bits used when the file is created
+     * @param fileIndex registered-file slot to install the opened file into
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code fileIndex} is negative
+     */
     public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex) {
         return prepareOpenDirect(filePath, flags, mode, fileIndex, (byte) 0);
     }
 
+    /**
+     * Prepares an asynchronous direct-descriptor {@code openat(2)} with explicit SQE flags.
+     *
+     * @param filePath   path to open
+     * @param flags      Linux {@code open(2)} flags
+     * @param mode       permission bits used when the file is created
+     * @param fileIndex  registered-file slot to install the opened file into
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareOpenDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
         return prepareOpenDirect(filePath, flags, mode, fileIndex, SqeOptions.combineOptions(sqeOptions));
     }
 
+    /**
+     * Prepares an asynchronous direct-descriptor {@code openat(2)} of a {@link Path}.
+     *
+     * @param filePath    path to open
+     * @param mode        permission bits used when the file is created
+     * @param fileIndex   registered-file slot to install the opened file into
+     * @param openOptions open flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareOpenDirect(Path filePath, int mode, int fileIndex, LinuxOpenOptions... openOptions) {
         return prepareOpenDirect(filePath.toString(), LinuxOpenOptions.combineOptions(openOptions), mode, fileIndex, (byte) 0);
     }
@@ -535,18 +1215,50 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares an asynchronous close of a file descriptor.
+     *
+     * <p>The descriptor must not be used by any other in-flight operation once the close is
+     * submitted; the completion result is {@code 0} on success.
+     *
+     * @param fd file descriptor to close
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareClose(FileDescriptor fd) {
         return prepareCloseInternal(fd.getFd(), (byte) 0);
     }
 
+    /**
+     * Prepares an asynchronous close of a file descriptor, with explicit SQE flags.
+     *
+     * @param fd         file descriptor to close
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareClose(FileDescriptor fd, SqeOptions... sqeOptions) {
         return prepareCloseInternal(fd.getFd(), SqeOptions.combineOptions(sqeOptions));
     }
 
+    /**
+     * Prepares an asynchronous close of a file held in a registered-file slot.
+     *
+     * <p>The completion result is {@code 0} on success; the slot is released by the kernel.
+     *
+     * @param fileIndex registered-file slot to close
+     * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code fileIndex} is negative
+     */
     public long prepareCloseDirect(int fileIndex) {
         return prepareCloseDirect(fileIndex, (byte) 0);
     }
 
+    /**
+     * Prepares an asynchronous close of a registered-file slot, with explicit SQE flags.
+     *
+     * @param fileIndex  registered-file slot to close
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareCloseDirect(int fileIndex, SqeOptions... sqeOptions) {
         return prepareCloseDirect(fileIndex, SqeOptions.combineOptions(sqeOptions));
     }
@@ -751,22 +1463,64 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * Prepares an {@code fsync(2)} of a file.
+     *
+     * @param fd file to flush
+     * @return the operation handle ({@code user_data}); the completion result is {@code 0} on
+     *         success
+     */
     public long prepareFsync(FileDescriptor fd) {
         return prepareFsync(fd, 0);
     }
 
+    /**
+     * Prepares an {@code fsync(2)}/ {@code fdatasync(2)} of a file.
+     *
+     * @param fd         file to flush
+     * @param fsyncFlags {@code 0} for {@code fsync}, or {@link #IORING_FSYNC_DATASYNC} for
+     *                   {@code fdatasync}
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFsync(FileDescriptor fd, int fsyncFlags) {
         return prepareFsyncInternal(fd.getFd(), fsyncFlags, (byte) 0, false);
     }
 
+    /**
+     * Prepares an {@code fsync(2)}/ {@code fdatasync(2)} with explicit SQE flags.
+     *
+     * @param fd         file to flush
+     * @param fsyncFlags {@code 0} for {@code fsync}, or {@link #IORING_FSYNC_DATASYNC} for
+     *                   {@code fdatasync}
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFsync(FileDescriptor fd, int fsyncFlags, SqeOptions... sqeOptions) {
         return prepareFsyncInternal(fd.getFd(), fsyncFlags, SqeOptions.combineOptions(sqeOptions), false);
     }
 
+    /**
+     * Prepares an {@code fsync(2)}/ {@code fdatasync(2)} of a registered-file slot.
+     *
+     * @param indexFD    registered-file slot number
+     * @param fsyncFlags {@code 0} for {@code fsync}, or {@link #IORING_FSYNC_DATASYNC} for
+     *                   {@code fdatasync}
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFsync(int indexFD, int fsyncFlags) {
         return prepareFsyncInternal(indexFD, fsyncFlags, (byte) 0, true);
     }
 
+    /**
+     * Prepares an {@code fsync(2)}/ {@code fdatasync(2)} of a registered-file slot, with
+     * explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param fsyncFlags {@code 0} for {@code fsync}, or {@link #IORING_FSYNC_DATASYNC} for
+     *                   {@code fdatasync}
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFsync(int indexFD, int fsyncFlags, SqeOptions... sqeOptions) {
         return prepareFsyncInternal(indexFD, fsyncFlags, SqeOptions.combineOptions(sqeOptions), true);
     }
@@ -781,6 +1535,11 @@ public class JUring implements AutoCloseable {
     }
 
     /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that cancels the request identified by
+     * {@code targetOpId}.
+     *
+     * @param targetOpId the target request's {@code user_data} / operation handle
+     * @return the cancel request's own operation handle
      * @deprecated the argument is the target request's {@code user_data} value (the handle
      *             returned by the {@code prepare*} methods), not a logical operation id; use
      *             {@link #prepareCancelByUserData(long)} for explicit semantics.
@@ -925,19 +1684,35 @@ public class JUring implements AutoCloseable {
     private static final int EOPNOTSUPP = 95;
 
     /**
-     * Prepares an async {@code fallocate(2)} (opcode {@code IORING_OP_FALLOCATE}) on a plain fd.
-     * Requires kernel support for {@code IORING_OP_FALLOCATE}; otherwise throws
-     * {@link UnsupportedOperationException} before touching the submission queue.
+     * Prepares an async {@code fallocate(2)} (opcode {@code IORING_OP_FALLOCATE}) on a plain
+     * file descriptor.
      *
+     * <p>Requires kernel support for {@code IORING_OP_FALLOCATE}; otherwise
+     * {@link UnsupportedOperationException} is thrown before touching the submission queue.
+     *
+     * @param fd     file to allocate space in
      * @param mode   fallocate mode flags (0 for plain allocation, or {@code FALLOC_FL_*} bits)
      * @param offset file offset in bytes
      * @param length byte length to allocate
      * @return the operation handle to pass to {@code waitForResult}/{@code await}
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FALLOCATE}
+     * @throws IllegalArgumentException when a mode, offset or length is negative
      */
     public long prepareFallocate(FileDescriptor fd, int mode, long offset, long length) {
         return prepareFallocateInternal(fd.getFd(), mode, offset, length, (byte) 0, false);
     }
 
+    /**
+     * Prepares an async {@code fallocate(2)} on a plain file descriptor, with explicit SQE
+     * flags.
+     *
+     * @param fd         file to allocate space in
+     * @param mode       fallocate mode flags
+     * @param offset     file offset in bytes
+     * @param length     byte length to allocate
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFallocate(FileDescriptor fd, int mode, long offset, long length, SqeOptions... sqeOptions) {
         return prepareFallocateInternal(fd.getFd(), mode, offset, length, SqeOptions.combineOptions(sqeOptions), false);
     }
@@ -945,12 +1720,30 @@ public class JUring implements AutoCloseable {
     /**
      * Prepares an async {@code fallocate(2)} on a slot of the registered-file table.
      *
-     * @param indexFD slot index in the registered-file table (submitted with {@code IOSQE_FIXED_FILE})
+     * @param indexFD slot index in the registered-file table (submitted with
+     *                {@code IOSQE_FIXED_FILE})
+     * @param mode    fallocate mode flags
+     * @param offset  file offset in bytes
+     * @param length  byte length to allocate
+     * @return the operation handle ({@code user_data})
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FALLOCATE}
+     * @throws IllegalArgumentException when a mode, offset or length is negative
      */
     public long prepareFallocate(int indexFD, int mode, long offset, long length) {
         return prepareFallocateInternal(indexFD, mode, offset, length, (byte) 0, true);
     }
 
+    /**
+     * Prepares an async {@code fallocate(2)} on a registered-file slot, with explicit SQE
+     * flags.
+     *
+     * @param indexFD    slot index in the registered-file table
+     * @param mode       fallocate mode flags
+     * @param offset     file offset in bytes
+     * @param length     byte length to allocate
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFallocate(int indexFD, int mode, long offset, long length, SqeOptions... sqeOptions) {
         return prepareFallocateInternal(indexFD, mode, offset, length, SqeOptions.combineOptions(sqeOptions), true);
     }
@@ -975,22 +1768,55 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Prepares an async {@code ftruncate(2)} (opcode {@code IORING_OP_FTRUNCATE}) on a plain fd.
-     * Requires kernel support for {@code IORING_OP_FTRUNCATE}.
+     * Prepares an async {@code ftruncate(2)} (opcode {@code IORING_OP_FTRUNCATE}) on a plain
+     * file descriptor.
+     *
+     * <p>Requires kernel support for {@code IORING_OP_FTRUNCATE}.
+     *
+     * @param fd        file to truncate
+     * @param newLength new file length in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FTRUNCATE}
+     * @throws IllegalArgumentException when {@code newLength} is negative
      */
     public long prepareFtruncate(FileDescriptor fd, long newLength) {
         return prepareFtruncateInternal(fd.getFd(), newLength, (byte) 0, false);
     }
 
+    /**
+     * Prepares an async {@code ftruncate(2)} on a plain file descriptor, with explicit SQE
+     * flags.
+     *
+     * @param fd         file to truncate
+     * @param newLength  new file length in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFtruncate(FileDescriptor fd, long newLength, SqeOptions... sqeOptions) {
         return prepareFtruncateInternal(fd.getFd(), newLength, SqeOptions.combineOptions(sqeOptions), false);
     }
 
-    /** Prepares an async {@code ftruncate(2)} on a slot of the registered-file table. */
+    /**
+     * Prepares an async {@code ftruncate(2)} on a slot of the registered-file table.
+     *
+     * @param indexFD   registered-file slot number
+     * @param newLength new file length in bytes
+     * @return the operation handle ({@code user_data})
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FTRUNCATE}
+     */
     public long prepareFtruncate(int indexFD, long newLength) {
         return prepareFtruncateInternal(indexFD, newLength, (byte) 0, true);
     }
 
+    /**
+     * Prepares an async {@code ftruncate(2)} on a registered-file slot, with explicit SQE
+     * flags.
+     *
+     * @param indexFD    registered-file slot number
+     * @param newLength  new file length in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareFtruncate(int indexFD, long newLength, SqeOptions... sqeOptions) {
         return prepareFtruncateInternal(indexFD, newLength, SqeOptions.combineOptions(sqeOptions), true);
     }
@@ -1016,12 +1842,22 @@ public class JUring implements AutoCloseable {
      * {@code struct statx} size); the buffer must stay valid until the operation completes.
      * Requires kernel support for {@code IORING_OP_STATX}.
      *
+     * @param fd          file to stat
+     * @param statxBuffer native segment of at least 256 bytes receiving the {@code struct statx}
      * @return the operation handle; the completion result is 0 on success
      */
     public long prepareStatx(FileDescriptor fd, MemorySegment statxBuffer) {
         return prepareStatxInternal(fd.getFd(), statxBuffer, (byte) 0, false);
     }
 
+    /**
+     * Prepares an async {@code statx(2)} on a plain file descriptor, with explicit SQE flags.
+     *
+     * @param fd          file to stat
+     * @param statxBuffer native segment receiving the {@code struct statx}
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareStatx(FileDescriptor fd, MemorySegment statxBuffer, SqeOptions... sqeOptions) {
         return prepareStatxInternal(fd.getFd(), statxBuffer, SqeOptions.combineOptions(sqeOptions), false);
     }
@@ -1038,11 +1874,23 @@ public class JUring implements AutoCloseable {
      * the other fixed-file operations, because the kernel keeps its own reference), statx on the
      * slot fails with {@code -EBADF}. If the slot is empty/untracked, the operation is submitted as
      * a fixed-file statx and completes with {@code -EBADF}, matching the other fixed-file operations.
+     *
+     * @param indexFD     registered-file slot to stat
+     * @param statxBuffer native segment of at least 256 bytes receiving the {@code struct statx}
+     * @return the operation handle; the completion result is 0 on success
      */
     public long prepareStatx(int indexFD, MemorySegment statxBuffer) {
         return prepareStatxInternal(indexFD, statxBuffer, (byte) 0, true);
     }
 
+    /**
+     * Prepares an async {@code statx(2)} on a registered-file slot, with explicit SQE flags.
+     *
+     * @param indexFD    registered-file slot to stat
+     * @param statxBuffer native segment receiving the {@code struct statx}
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareStatx(int indexFD, MemorySegment statxBuffer, SqeOptions... sqeOptions) {
         return prepareStatxInternal(indexFD, statxBuffer, SqeOptions.combineOptions(sqeOptions), true);
     }
@@ -1122,6 +1970,16 @@ public class JUring implements AutoCloseable {
         return prepareTimeoutInternal(timespec, 1, 0, (byte) 0);
     }
 
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} with explicit SQE flags.
+     *
+     * <p>Equivalent to {@link #prepareTimeout(MemorySegment)} with the given SQE flags; the
+     * timespec rules of that method apply.
+     *
+     * @param timespec   native 16-byte {@code __kernel_timespec}, caller-managed
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareTimeout(MemorySegment timespec, SqeOptions... sqeOptions) {
         return prepareTimeoutInternal(timespec, 1, 0, SqeOptions.combineOptions(sqeOptions));
     }
@@ -1134,11 +1992,22 @@ public class JUring implements AutoCloseable {
      * @param timespec native 16-byte {@code __kernel_timespec}, caller-managed
      * @param count    number of completions that complete the timeout early (0 = a plain timeout)
      * @param flags    {@code IORING_TIMEOUT_*} flags ({@code ABS}, {@code BOOTTIME}, {@code ETIME})
+     * @return the operation handle ({@code user_data})
      */
     public long prepareTimeout(MemorySegment timespec, int count, int flags) {
         return prepareTimeoutInternal(timespec, count, flags, (byte) 0);
     }
 
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} with an explicit completion count, timeout flags
+     * and SQE flags.
+     *
+     * @param timespec   native 16-byte {@code __kernel_timespec}, caller-managed
+     * @param count      number of completions that complete the timeout early
+     * @param flags      {@code IORING_TIMEOUT_*} flags
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the operation handle ({@code user_data})
+     */
     public long prepareTimeout(MemorySegment timespec, int count, int flags, SqeOptions... sqeOptions) {
         return prepareTimeoutInternal(timespec, count, flags, SqeOptions.combineOptions(sqeOptions));
     }
@@ -1216,11 +2085,29 @@ public class JUring implements AutoCloseable {
         return prepareLinkTimeoutInternal(timespec, flags, (byte) 0);
     }
 
+    /**
+     * Prepares an {@code IORING_OP_LINK_TIMEOUT} for the preceding linked request, with
+     * explicit SQE flags.
+     *
+     * <p>The target SQE rules of {@link #prepareLinkTimeout(MemorySegment, int)} apply.
+     *
+     * @param timespec   native 16-byte {@code __kernel_timespec}, caller-managed
+     * @param flags      {@code IORING_TIMEOUT_*} flags accepted by linked timeouts
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the timeout request's operation handle
+     */
     public long prepareLinkTimeout(MemorySegment timespec, int flags, SqeOptions... sqeOptions) {
         return prepareLinkTimeoutInternal(timespec, flags, SqeOptions.combineOptions(sqeOptions));
     }
 
-    /** Linked-timeout variant with relative time and no {@code IORING_TIMEOUT_*} flags. */
+    /**
+     * Linked-timeout variant with relative time and no {@code IORING_TIMEOUT_*} flags.
+     *
+     * <p>The target SQE rules of {@link #prepareLinkTimeout(MemorySegment, int)} apply.
+     *
+     * @param timespec native 16-byte {@code __kernel_timespec}, caller-managed
+     * @return the timeout request's operation handle
+     */
     public long prepareLinkTimeout(MemorySegment timespec) {
         return prepareLinkTimeoutInternal(timespec, 0, (byte) 0);
     }
@@ -1297,6 +2184,12 @@ public class JUring implements AutoCloseable {
         return sqe;
     }
 
+    /**
+     * Submits all SQEs queued so far to the kernel without waiting for completions.
+     *
+     * <p>When the ring uses {@code IORING_SETUP_SQPOLL} this wakes the SQPOLL thread when
+     * needed; otherwise it issues {@code io_uring_enter()}.
+     */
     public void submit() {
         ensureOpen();
         ioUring.submit();
@@ -1340,16 +2233,42 @@ public class JUring implements AutoCloseable {
         return ioUring.submitAndWaitForBatchResult(minComplete, maxReap, consumer);
     }
 
+    /**
+     * Reaps up to {@code batchSize} completions that are already available, without
+     * blocking.
+     *
+     * @param batchSize maximum number of completions to reap
+     * @param consumer  zero-allocation completion callback
+     * @return the number of completions reaped (0 when none are ready)
+     */
     public int forEachBatchResult(int batchSize, ResultConsumer consumer) {
         ensureOpen();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
+    /**
+     * Reaps up to {@code batchSize} completions that are already available, without
+     * blocking.
+     *
+     * @param batchSize maximum number of completions to reap
+     * @param consumer  zero-allocation completion callback
+     * @return the number of completions reaped (0 when none are ready)
+     */
     public int peekForBatchResult(int batchSize, ResultConsumer consumer) {
         ensureOpen();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
+    /**
+     * Reaps up to {@code batchSize} completions that are already available, without
+     * blocking, and returns them as new {@link Result} instances.
+     *
+     * <p>The caller owns the returned results and must close them to release any native
+     * buffer they carry.
+     *
+     * @param batchSize maximum number of completions to reap
+     * @return the reaped results, empty when none are ready
+     */
     public List<Result> peekForBatchResult(int batchSize) {
         ensureOpen();
         return ioUring.peekForBatchResult(batchSize);
@@ -1374,6 +2293,16 @@ public class JUring implements AutoCloseable {
         return reaped;
     }
 
+    /**
+     * Waits until at least one completion is available, then reaps up to {@code batchSize}
+     * completions and returns them as new {@link Result} instances.
+     *
+     * <p>The caller owns the returned results and must close them to release any native
+     * buffer they carry.
+     *
+     * @param batchSize maximum number of completions to reap
+     * @return the reaped results
+     */
     public List<Result> waitForBatchResult(int batchSize) {
         ensureOpen();
         return ioUring.waitForBatchResult(batchSize);
@@ -1404,16 +2333,43 @@ public class JUring implements AutoCloseable {
         return ioUring.waitForBatchResult(minComplete, maxReap, consumer);
     }
 
+    /**
+     * Waits for one completion and returns it as a new {@link Result}.
+     *
+     * <p>The caller owns the returned result and must close it to release any native buffer
+     * it carries.
+     *
+     * @return the reaped completion
+     */
     public Result waitForResult() {
         ensureOpen();
         return ioUring.waitForResult();
     }
 
+    /**
+     * Waits for one completion and fills the supplied reusable {@link Result} with it.
+     *
+     * @param target result instance to reuse; returns the same instance
+     * @return the populated {@code target}
+     */
     public Result waitForResult(Result target) {
         ensureOpen();
         return ioUring.waitForResult(target);
     }
 
+    /**
+     * Registers {@code nrOfBuffers} off-heap buffers of {@code size} bytes each for fixed
+     * buffer I/O ({@code IORING_REGISTER_BUFFERS}).
+     *
+     * <p>Buffers can be registered only once per ring; unregister them with
+     * {@link #unregisterBuffers()} before registering again. The returned segments must stay
+     * valid until the buffers are unregistered or the ring is closed.
+     *
+     * @param size        size of one buffer in bytes
+     * @param nrOfBuffers number of buffers to register
+     * @return the registered buffer segments, in index order
+     * @throws IllegalStateException when buffers are already registered or the ring is closed
+     */
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
         ensureOpen();
         if (this.registeredBuffersArray != null && this.registeredBuffersArray.length > 0) {
@@ -1439,6 +2395,11 @@ public class JUring implements AutoCloseable {
         return result;
     }
 
+    /**
+     * Checks out a free registered buffer for exclusive use.
+     *
+     * @return the index of the checked-out buffer, or {@code -1} when all buffers are in use
+     */
     public int checkOutBuffer() {
         ensureOpen();
         if (freeBufferTop == 0) {
@@ -1451,6 +2412,13 @@ public class JUring implements AutoCloseable {
         return idx;
     }
 
+    /**
+     * Returns a registered buffer to the free list after it is no longer in use.
+     *
+     * @param bufferIndex index previously returned by {@link #checkOutBuffer()}
+     * @throws IllegalArgumentException when the index is out of range
+     * @throws IllegalStateException    when the buffer is not currently checked out
+     */
     public void checkInBuffer(int bufferIndex) {
         ensureOpen();
         if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
@@ -1475,6 +2443,17 @@ public class JUring implements AutoCloseable {
         return ioUring.ringFd();
     }
 
+    /**
+     * Registers file descriptors for fixed-file I/O ({@code IORING_REGISTER_FILES}).
+     *
+     * <p>The slot index of each descriptor is its position in the argument list; that index
+     * is used by the {@code indexFD} overloads and by {@code IOSQE_FIXED_FILE}. A descriptor
+     * may be closed after registration because the kernel holds its own reference.
+     *
+     * @param fileDescriptors files to register, in slot order
+     * @return the kernel's result code ({@code 0} on success)
+     * @throws IllegalStateException when the ring is closed
+     */
     public int registerFiles(FileDescriptor... fileDescriptors) {
         ensureOpen();
         int[] fds = new int[fileDescriptors.length];
@@ -1486,6 +2465,15 @@ public class JUring implements AutoCloseable {
         return ret;
     }
 
+    /**
+     * Replaces a range of the registered-file table with new file descriptors
+     * ({@code IORING_REGISTER_FILES_UPDATE}).
+     *
+     * @param offset          first slot to update
+     * @param fileDescriptors new descriptors, one per slot starting at {@code offset}
+     * @return the kernel's result code ({@code 0} on success)
+     * @throws IllegalStateException when the range exceeds the tracked table capacity
+     */
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
         ensureOpen();
         int end = offset + fileDescriptors.length;
@@ -1533,6 +2521,7 @@ public class JUring implements AutoCloseable {
      * {@link #DEFAULT_FILE_TABLE_CAPACITY} slots on first use. The first free slot is filled with
      * {@code IORING_REGISTER_FILES_UPDATE}.
      *
+     * @param fd file to register
      * @return the slot index, usable as {@code indexFD} with the {@code prepare*}/{@code *Fixed}
      * methods and with {@code IOSQE_FIXED_FILE}
      * @throws IllegalStateException if the table is full
@@ -1561,6 +2550,10 @@ public class JUring implements AutoCloseable {
     /**
      * Frees a slot of the sparse registered-file table by updating it with {@code -1}
      * ({@code IORING_REGISTER_FILES_UPDATE}). The slot is immediately reusable.
+     *
+     * @param slot slot index to free
+     * @throws IllegalArgumentException when the slot is out of range
+     * @throws IllegalStateException    when the slot is not registered
      */
     public void unregisterFileSlot(int slot) {
         ensureOpen();
@@ -1621,6 +2614,8 @@ public class JUring implements AutoCloseable {
      * memory. The replacement segments must stay valid until the buffers are re-registered or the
      * ring is closed.
      *
+     * @param offset  first buffer index to replace
+     * @param buffers replacement segments, one per index starting at {@code offset}
      * @throws IllegalStateException         if no buffers are registered
      * @throws IllegalArgumentException      if the range or a segment is invalid
      * @throws UnsupportedOperationException if the kernel rejects {@code IORING_REGISTER_BUFFERS_UPDATE}
@@ -1678,7 +2673,11 @@ public class JUring implements AutoCloseable {
         return ioUring.staticxSize(statxBuffer);
     }
 
-    /** Whether the ring accepted a close. */
+    /**
+     * Tests whether the ring was closed.
+     *
+     * @return {@code true} once {@link #close()} has been called
+     */
     public boolean isClosed() {
         return closed;
     }
@@ -1768,12 +2767,22 @@ public class JUring implements AutoCloseable {
         }
     }
 
-    /** @return {@code -ECANCELED} completions reaped during the most recent {@link #close()} */
+    /**
+     * Returns the number of {@code -ECANCELED} completions reaped during the most recent
+     * {@link #close()}.
+     *
+     * @return the count of cancelled requests observed during shutdown
+     */
     public long cancelledAtClose() {
         return cancelledAtClose;
     }
 
-    /** @return requests still in flight when the most recent bounded {@link #close(long)} gave up */
+    /**
+     * Returns the number of requests that were still in flight when the most recent bounded
+     * {@link #close(long)} gave up.
+     *
+     * @return the abandoned-request count
+     */
     public int abandonedAtClose() {
         return abandonedAtClose;
     }

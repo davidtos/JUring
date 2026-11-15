@@ -34,7 +34,10 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * <h2>Bounded memory</h2>
  * <p>The stream allocates exactly {@code writeBehind + 1} native buffers of
  * {@code alignUp(bufferSize, alignment)} bytes each, once, at {@code open()}.
- * {@link #bufferMemoryBytes()} reports the total.
+ * {@link #bufferMemoryBytes()} reports the total. Write-behind never exceeds that buffer
+ * set: when the configured window is full, {@link #write(MemorySegment)} waits for the
+ * oldest in-flight write before reusing its buffer, and short writes are retried from the
+ * last completed byte.
  *
  * <h2>Durability (B6)</h2>
  * <p>{@link OutputStreamOptions#durability()} makes {@link #flush()} and {@link #close()}
@@ -182,29 +185,47 @@ public final class JuringOutputStream implements AutoCloseable {
     // accessors
     // ------------------------------------------------------------------
 
-    /** @return the backing file */
+    /**
+     * Returns the backing file.
+     *
+     * @return the backing file (never closed by this stream)
+     */
     public JuringFile file() {
         return file;
     }
 
-    /** @return the configured logical buffer size in bytes */
+    /**
+     * Returns the configured logical buffer size in bytes.
+     *
+     * @return the configured logical buffer size
+     */
     public int bufferSize() {
         return options.bufferSize();
     }
 
-    /** @return the configured write-behind depth */
+    /**
+     * Returns the configured write-behind depth.
+     *
+     * @return the configured write-behind depth
+     */
     public int writeBehind() {
         return writeBehind;
     }
 
-    /** @return number of bytes of native buffer memory held by this stream (bounded) */
+    /**
+     * Returns the number of bytes of native buffer memory held by this stream.
+     *
+     * @return the bounded buffer memory in bytes ({@code 0} after {@link #close()})
+     */
     public long bufferMemoryBytes() {
         return closed ? 0L : (long) bufferCount * chunkSize;
     }
 
     /**
-     * @return the configured durability mode (B6; the echo of
-     *         {@link OutputStreamOptions#durability()}, readable after {@link #close()})
+     * Returns the configured durability mode (the echo of
+     * {@link OutputStreamOptions#durability()}).
+     *
+     * @return the configured durability mode, readable after {@link #close()}
      */
     public DurabilityMode durability() {
         return durability;
@@ -226,12 +247,21 @@ public final class JuringOutputStream implements AutoCloseable {
         return syncs;
     }
 
-    /** @return the logical number of bytes accepted and written by this stream */
+    /**
+     * Returns the logical number of bytes accepted and written by this stream.
+     *
+     * @return the logical write position
+     */
     public long position() {
         return position;
     }
 
-    /** @return the logical number of bytes accepted and written by this stream */
+    /**
+     * Returns the logical number of bytes accepted and written by this stream (the same
+     * value as {@link #position()}).
+     *
+     * @return the number of bytes written
+     */
     public long bytesWritten() {
         return position;
     }

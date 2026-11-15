@@ -21,10 +21,14 @@ import java.nio.file.StandardOpenOption;
  */
 public final class UringSparseIndex implements AutoCloseable {
 
+    /** Default sparse-index interval in bytes (one entry per 4 KB of segment data). */
     public static final int DEFAULT_INDEX_INTERVAL_BYTES = 4096;
-    public static final int MAX_ENTRIES = 524_288; // 4MB index capacity (~2GB segment at 4KB interval)
+    /** Maximum number of entries per index file (4 MB of entries, about 2 GB of segment data at the default interval). */
+    public static final int MAX_ENTRIES = 524_288;
 
+    /** Size in bytes of one {@code .index} entry: 4-byte relative offset followed by 4-byte physical position. */
     public static final int OFFSET_ENTRY_SIZE = 8;
+    /** Size in bytes of one {@code .timeindex} entry: 8-byte timestamp followed by 4-byte relative offset. */
     public static final int TIME_ENTRY_SIZE = 12;
 
     private static final ValueLayout.OfLong JAVA_LONG_U = ValueLayout.JAVA_LONG.withByteAlignment(1);
@@ -44,6 +48,19 @@ public final class UringSparseIndex implements AutoCloseable {
     private long lastIndexedPosition = -1L;
     private volatile boolean closed;
 
+    /**
+     * Opens (or creates) the sparse index files for a segment.
+     *
+     * <p>The index is held in off-heap shared memory; when the files already exist their
+     * entries are loaded. File names derive from the zero-padded base offset
+     * ({@code <offset>.index}, {@code <offset>.timeindex}).
+     *
+     * @param partitionDir       directory that holds the index files
+     * @param baseOffset         logical offset of the first record in the segment
+     * @param indexIntervalBytes index interval in bytes; a non-positive value selects
+     *                           {@link #DEFAULT_INDEX_INTERVAL_BYTES}
+     * @throws RuntimeException when an existing index file cannot be read
+     */
     public UringSparseIndex(Path partitionDir, long baseOffset, int indexIntervalBytes) {
         this.baseOffset = baseOffset;
         this.indexIntervalBytes = indexIntervalBytes > 0 ? indexIntervalBytes : DEFAULT_INDEX_INTERVAL_BYTES;
@@ -93,7 +110,12 @@ public final class UringSparseIndex implements AutoCloseable {
     }
 
     /**
-     * Appends an index entry if the physical position has advanced past {@code indexIntervalBytes}.
+     * Appends an index entry if the physical position has advanced past
+     * {@code indexIntervalBytes} since the last indexed position.
+     *
+     * @param offset           logical record offset
+     * @param timestamp        record timestamp in milliseconds
+     * @param physicalPosition physical position of the record within the segment file
      */
     public synchronized void maybeAppend(long offset, long timestamp, long physicalPosition) {
         if (closed) {
@@ -104,6 +126,13 @@ public final class UringSparseIndex implements AutoCloseable {
         }
     }
 
+    /**
+     * Appends an index entry unconditionally, bypassing the interval check.
+     *
+     * @param offset           logical record offset
+     * @param timestamp        record timestamp in milliseconds
+     * @param physicalPosition physical position of the record within the segment file
+     */
     public synchronized void forceAppend(long offset, long timestamp, long physicalPosition) {
         if (closed) {
             return;
@@ -132,8 +161,14 @@ public final class UringSparseIndex implements AutoCloseable {
     }
 
     /**
-     * Binary search lookup: finds largest physical position whose relativeOffset <= (targetOffset - baseOffset).
-     * Zero-allocation off-heap binary search.
+     * Finds the physical position to start scanning from for {@code targetOffset}.
+     *
+     * <p>Performs a zero-allocation off-heap binary search for the largest indexed entry whose
+     * relative offset is not greater than {@code targetOffset - baseOffset}. Callers still
+     * scan forward from the returned position to the exact record.
+     *
+     * @param targetOffset logical record offset to look up
+     * @return the indexed physical position closest below the target, or {@code 0}
      */
     public long lookup(long targetOffset) {
         int count = offsetEntriesCount;
@@ -163,7 +198,15 @@ public final class UringSparseIndex implements AutoCloseable {
     }
 
     /**
-     * Binary search lookup by timestamp: finds relative offset corresponding to greatest timestamp <= targetTimestamp.
+     * Finds the first logical offset whose indexed timestamp is not greater than
+     * {@code targetTimestamp}.
+     *
+     * <p>Performs a zero-allocation off-heap binary search over the time index and returns the
+     * absolute logical offset stored in the matching entry (or the segment base offset when
+     * the index holds no entries).
+     *
+     * @param targetTimestamp timestamp in milliseconds to look up
+     * @return the logical offset of the closest indexed record at or before the timestamp
      */
     public long lookupByTimestamp(long targetTimestamp) {
         int count = timeEntriesCount;
@@ -192,6 +235,14 @@ public final class UringSparseIndex implements AutoCloseable {
         return baseOffset + Integer.toUnsignedLong(rel);
     }
 
+    /**
+     * Writes the complete index to disk, replacing the existing files.
+     *
+     * <p>Both index files are recreated and forced to stable storage; a closed index is not
+     * flushed again.
+     *
+     * @throws RuntimeException when the index files cannot be written
+     */
     public synchronized void flush() {
         if (closed) return;
         try {
@@ -214,26 +265,54 @@ public final class UringSparseIndex implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the logical offset of the first record of the indexed segment.
+     *
+     * @return the segment base offset
+     */
     public long getBaseOffset() {
         return baseOffset;
     }
 
+    /**
+     * Returns the number of entries currently in the offset index.
+     *
+     * @return the {@code .index} entry count
+     */
     public int getOffsetEntriesCount() {
         return offsetEntriesCount;
     }
 
+    /**
+     * Returns the number of entries currently in the time index.
+     *
+     * @return the {@code .timeindex} entry count
+     */
     public int getTimeEntriesCount() {
         return timeEntriesCount;
     }
 
+    /**
+     * Returns the path of the {@code .index} file.
+     *
+     * @return the offset-index file path
+     */
     public Path getIndexPath() {
         return indexPath;
     }
 
+    /**
+     * Returns the path of the {@code .timeindex} file.
+     *
+     * @return the time-index file path
+     */
     public Path getTimeIndexPath() {
         return timeIndexPath;
     }
 
+    /**
+     * Flushes the index to disk and releases its off-heap memory; closing twice has no effect.
+     */
     @Override
     public synchronized void close() {
         if (closed) return;

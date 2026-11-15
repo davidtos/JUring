@@ -111,6 +111,8 @@ public final class GroupCommit implements AutoCloseable {
      * @return a new group commit
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
+     * @throws JuringException          retained by the frozen B6 signature; this overload
+     *                                  performs no I/O and does not normally throw it
      */
     public static GroupCommit open(JuringFile file) throws JuringException {
         return open(file, GroupCommitOptions.defaults());
@@ -130,6 +132,8 @@ public final class GroupCommit implements AutoCloseable {
      * @throws NullPointerException     if {@code file} or {@code options} is {@code null}
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
+     * @throws JuringException          retained by the frozen B6 signature; construction
+     *                                  performs no I/O and does not normally throw it
      */
     public static GroupCommit open(JuringFile file, GroupCommitOptions options) throws JuringException {
         Objects.requireNonNull(file, "file");
@@ -158,27 +162,47 @@ public final class GroupCommit implements AutoCloseable {
     // accessors
     // ------------------------------------------------------------------
 
-    /** @return the backing file (never closed by this group) */
+    /**
+     * Returns the backing file (never closed by this group).
+     *
+     * @return the backing file
+     */
     public JuringFile file() {
         return file;
     }
 
-    /** @return the durability mode applied by {@link #commit()} (echo of the option) */
+    /**
+     * Returns the durability mode applied by {@link #commit()} (the echo of the option).
+     *
+     * @return the configured durability mode
+     */
     public DurabilityMode durabilityMode() {
         return durability;
     }
 
-    /** @return the maximum number of writes in one uncommitted batch */
+    /**
+     * Returns the maximum number of writes in one uncommitted batch.
+     *
+     * @return the configured maximum batch size
+     */
     public int maxBatchSize() {
         return maxBatchSize;
     }
 
-    /** @return the number of writes in the current (uncommitted) batch; {@code 0} after a commit */
+    /**
+     * Returns the number of writes in the current (uncommitted) batch.
+     *
+     * @return the pending write count; {@code 0} after a commit
+     */
     public int pendingWrites() {
         return pendingWrites;
     }
 
-    /** @return the sum of the buffer lengths of the writes in the current batch */
+    /**
+     * Returns the sum of the buffer lengths of the writes in the current batch.
+     *
+     * @return the pending byte count; {@code 0} after a commit
+     */
     public long pendingBytes() {
         return pendingBytes;
     }
@@ -235,6 +259,12 @@ public final class GroupCommit implements AutoCloseable {
      * of them) and then exactly one {@code fdatasync}/{@code fsync} is issued for
      * {@link DurabilityMode#FDATASYNC}/{@link DurabilityMode#FSYNC}; no sync is issued for
      * {@link DurabilityMode#WRITEBACK}/{@link DurabilityMode#DSYNC}.
+     *
+     * <p>A successful commit increments {@link GroupCommitStats#batches()},
+     * {@link GroupCommitStats#committedWrites()} and
+     * {@link GroupCommitStats#committedBytes()}, records the batch size in
+     * {@link GroupCommitStats#maxObservedBatch()}, and adds the mode's one sync (if any) to
+     * {@link GroupCommitStats#syncs()}.
      *
      * <p>If a write or the sync fails, the remaining writes are drained, the first
      * {@link JuringException} is latched (thrown now and on every later call) and

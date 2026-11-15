@@ -29,11 +29,17 @@ package com.davidvlijmincx.lio.api;
  */
 public interface ShardContext {
 
-    /** @return the owning shard id */
+    /**
+     * Returns the owning shard id.
+     *
+     * @return the owning shard id
+     */
     int shardId();
 
     /**
-     * @return the shard's {@link JUring}
+     * Returns the shard's {@link JUring}.
+     *
+     * @return the shard's ring (confined to the shard thread)
      * @throws WrongThreadException when called from a thread other than the shard thread
      * @throws IllegalStateException when the shard is not running
      */
@@ -44,6 +50,8 @@ public interface ShardContext {
      * {@code userData} completes. Must be called on the shard thread <b>before</b> the
      * {@code ring.submit()} that can complete the request.
      *
+     * @param userData the raw {@code user_data} returned by the matching {@code ring.prepare*}
+     * @param handler  the handler to invoke on the shard thread when the request completes
      * @throws IllegalStateException when called off the shard thread, after
      *                               {@link IoShard#requestStop()}, for a duplicate
      *                               {@code userData}, or when the handler table is full
@@ -53,12 +61,30 @@ public interface ShardContext {
     /** Flushes SQEs prepared so far (optional; the event loop also batches and submits). */
     void submit();
 
-    /** Enqueues a task on this shard (from the shard thread; ISE when the inbound queue is full). */
+    /**
+     * Enqueues a task on this shard from the shard thread.
+     *
+     * @param task the task to enqueue on this shard
+     * @throws IllegalStateException when the inbound queue is full (a shard must not block
+     *                               on itself)
+     */
     void execute(ShardTask task);
 
-    /** Enqueues a continuation on {@code target} (MPSC + eventfd; inline fallback on overflow). */
+    /**
+     * Enqueues a continuation on {@code target} (MPSC queue plus eventfd wake; inline
+     * fallback on overflow).
+     *
+     * @param target       the shard that should run the continuation
+     * @param continuation the continuation (may run on the current thread after an overflow
+     *                     fallback, so it must not assume target-shard confinement)
+     * @throws IllegalStateException when {@code target} is stopping or closed
+     */
     void handoff(IoShard target, Runnable continuation);
 
-    /** @return whether {@link IoShard#requestStop()} has been observed */
+    /**
+     * Returns whether {@link IoShard#requestStop()} has been observed.
+     *
+     * @return whether a stop was requested
+     */
     boolean stopping();
 }

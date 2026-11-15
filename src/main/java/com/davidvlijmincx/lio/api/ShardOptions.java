@@ -87,52 +87,96 @@ public final class ShardOptions {
         this.latencySampleEvery = latencySampleEvery;
     }
 
-    /** Default shard configuration: 256-entry ring, the proven three ring flags, no affinity. */
+    /**
+     * Returns the default shard configuration: a 256-entry ring, the proven three ring
+     * flags and no affinity.
+     *
+     * @return the shared default options
+     */
     public static ShardOptions defaults() {
         return DEFAULTS;
     }
 
-    /** Human-readable shard name; appears in the platform thread name. */
+    /**
+     * Returns the human-readable shard name, which appears in the platform thread name.
+     *
+     * @return the shard name
+     */
     public String name() {
         return name;
     }
 
-    /** Requested ring depth ({@code >= 8}); effective depth may be rounded up by the kernel. */
+    /**
+     * Returns the requested ring depth ({@code >= 8}).
+     *
+     * <p>The effective depth may be rounded up by the kernel.
+     *
+     * @return the requested SQE ring depth
+     */
     public int ringEntries() {
         return ringEntries;
     }
 
-    /** Defensive copy of the ring setup flags used to create the shard's ring. */
+    /**
+     * Returns a defensive copy of the ring setup flags used to create the shard's ring.
+     *
+     * @return a defensive copy of the ring setup flags
+     */
     public IoUringOptions[] ringOptions() {
         return ringOptions.clone();
     }
 
-    /** {@link #NO_CPU_AFFINITY} or a logical CPU id. */
+    /**
+     * Returns the requested CPU affinity.
+     *
+     * @return {@link #NO_CPU_AFFINITY} or a logical CPU id
+     */
     public int cpuAffinity() {
         return cpuAffinity;
     }
 
-    /** Inbound tasks/handoffs executed per loop pass ({@code >= 1}). */
+    /**
+     * Returns the number of inbound tasks/handoffs executed per loop pass ({@code >= 1}).
+     *
+     * @return the inbound task batch size
+     */
     public int taskBatch() {
         return taskBatch;
     }
 
-    /** Completions reaped/dispatched per loop pass ({@code >= 1}). */
+    /**
+     * Returns the number of completions reaped and dispatched per loop pass ({@code >= 1}).
+     *
+     * @return the completion batch size
+     */
     public int cqeBatch() {
         return cqeBatch;
     }
 
-    /** Idle spin iterations before blocking in the kernel ({@code >= 0}). */
+    /**
+     * Returns the number of idle spin iterations before blocking in the kernel
+     * ({@code >= 0}).
+     *
+     * @return the idle spin count
+     */
     public int spinIterations() {
         return spinIterations;
     }
 
-    /** Inbound MPSC capacity (power of two, {@code >= 2}). */
+    /**
+     * Returns the inbound MPSC queue capacity (a power of two, {@code >= 2}).
+     *
+     * @return the inbound queue capacity
+     */
     public int inboundCapacity() {
         return inboundCapacity;
     }
 
-    /** Graceful-shutdown budget in milliseconds ({@code >= 0}). */
+    /**
+     * Returns the graceful-shutdown budget in milliseconds ({@code >= 0}).
+     *
+     * @return the shutdown budget in milliseconds
+     */
     public long shutdownTimeoutMillis() {
         return shutdownTimeoutMillis;
     }
@@ -142,12 +186,19 @@ public final class ShardOptions {
      * registered completion; {@code N >= 2} = measure every Nth successful
      * {@link ShardContext#onCompletion(long, CompletionHandler)} registration (deterministic,
      * 1-based, per shard). See {@code docs/b5-design.md} §2.4/§4.
+     *
+     * @return the sampling interval ({@code 0} = disabled)
      */
     public int latencySampleEvery() {
         return latencySampleEvery;
     }
 
-    /** @return a copy with a new shard name (thread name component) */
+    /**
+     * Returns a copy with a new shard name (thread name component).
+     *
+     * @param name the new non-empty shard name
+     * @return a copy with the given name
+     */
     public ShardOptions withName(String name) {
         Objects.requireNonNull(name, "name");
         if (name.isEmpty()) {
@@ -157,7 +208,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new requested ring depth ({@code >= 8}) */
+    /**
+     * Returns a copy with a new requested ring depth ({@code >= 8}).
+     *
+     * @param ringEntries the new requested SQE ring depth
+     * @return a copy with the given ring depth
+     */
     public ShardOptions withRingEntries(int ringEntries) {
         if (ringEntries < 8) {
             throw new IllegalArgumentException("ringEntries must be >= 8: " + ringEntries);
@@ -167,8 +223,11 @@ public final class ShardOptions {
     }
 
     /**
-     * @return a copy whose ring setup flags are <b>replaced</b> (not merged) by
-     * {@code ringOptions}; no arguments means "no setup flags"
+     * Returns a copy whose ring setup flags are <b>replaced</b> (not merged) by
+     * {@code ringOptions}; no arguments means "no setup flags".
+     *
+     * @param ringOptions the complete replacement flag set
+     * @return a copy with the given ring setup flags
      */
     public ShardOptions withRingOptions(IoUringOptions... ringOptions) {
         Objects.requireNonNull(ringOptions, "ringOptions");
@@ -181,7 +240,10 @@ public final class ShardOptions {
     }
 
     /**
-     * @return a copy pinned to {@code cpuAffinity} ({@link #NO_CPU_AFFINITY} for none)
+     * Returns a copy pinned to {@code cpuAffinity} ({@link #NO_CPU_AFFINITY} for none).
+     *
+     * @param cpuAffinity the exact CPU id, or {@link #NO_CPU_AFFINITY} for no affinity
+     * @return a copy with the given affinity
      * @throws IllegalArgumentException if {@code cpuAffinity < NO_CPU_AFFINITY}
      */
     public ShardOptions withCpuAffinity(int cpuAffinity) {
@@ -193,7 +255,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new inbound task batch size ({@code >= 1}) */
+    /**
+     * Returns a copy with a new inbound task batch size ({@code >= 1}).
+     *
+     * @param taskBatch the new inbound task batch size
+     * @return a copy with the given batch size
+     */
     public ShardOptions withTaskBatch(int taskBatch) {
         if (taskBatch < 1) {
             throw new IllegalArgumentException("taskBatch must be >= 1: " + taskBatch);
@@ -202,7 +269,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new completion batch size ({@code >= 1}) */
+    /**
+     * Returns a copy with a new completion batch size ({@code >= 1}).
+     *
+     * @param cqeBatch the new completion batch size
+     * @return a copy with the given completion batch size
+     */
     public ShardOptions withCqeBatch(int cqeBatch) {
         if (cqeBatch < 1) {
             throw new IllegalArgumentException("cqeBatch must be >= 1: " + cqeBatch);
@@ -211,7 +283,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new idle spin count ({@code >= 0}) */
+    /**
+     * Returns a copy with a new idle spin count ({@code >= 0}).
+     *
+     * @param spinIterations the new idle spin count
+     * @return a copy with the given spin count
+     */
     public ShardOptions withSpinIterations(int spinIterations) {
         if (spinIterations < 0) {
             throw new IllegalArgumentException("spinIterations must be >= 0: " + spinIterations);
@@ -220,7 +297,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new inbound MPSC capacity (power of two, {@code >= 2}) */
+    /**
+     * Returns a copy with a new inbound MPSC capacity (a power of two, {@code >= 2}).
+     *
+     * @param inboundCapacity the new inbound queue capacity
+     * @return a copy with the given capacity
+     */
     public ShardOptions withInboundCapacity(int inboundCapacity) {
         if (inboundCapacity < 2 || Integer.bitCount(inboundCapacity) != 1) {
             throw new IllegalArgumentException("inboundCapacity must be a power of two >= 2: " + inboundCapacity);
@@ -229,7 +311,12 @@ public final class ShardOptions {
                 spinIterations, inboundCapacity, shutdownTimeoutMillis, latencySampleEvery);
     }
 
-    /** @return a copy with a new graceful-shutdown budget ({@code >= 0} ms) */
+    /**
+     * Returns a copy with a new graceful-shutdown budget ({@code >= 0} ms).
+     *
+     * @param shutdownTimeoutMillis the new shutdown budget in milliseconds
+     * @return a copy with the given budget
+     */
     public ShardOptions withShutdownTimeoutMillis(long shutdownTimeoutMillis) {
         if (shutdownTimeoutMillis < 0) {
             throw new IllegalArgumentException("shutdownTimeoutMillis must be >= 0: " + shutdownTimeoutMillis);
@@ -239,8 +326,11 @@ public final class ShardOptions {
     }
 
     /**
-     * @return a copy with a new dispatch-latency sampling interval ({@code 0} = disabled,
-     * {@code >= 1} = every Nth successful registration)
+     * Returns a copy with a new dispatch-latency sampling interval ({@code 0} = disabled,
+     * {@code >= 1} = every Nth successful registration).
+     *
+     * @param latencySampleEvery the new sampling interval; {@code 0} disables sampling
+     * @return a copy with the given sampling interval
      * @throws IllegalArgumentException when {@code latencySampleEvery < 0}
      */
     public ShardOptions withLatencySampleEvery(int latencySampleEvery) {

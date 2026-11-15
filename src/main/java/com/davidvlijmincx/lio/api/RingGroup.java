@@ -50,6 +50,7 @@ public final class RingGroup implements AutoCloseable {
      * @param shardCount number of shards/rings, {@code 1..1024}
      * @param options    per-shard options; a non-{@code NO_CPU_AFFINITY} cpu affinity is
      *                   used as the base CPU (shard {@code i} pinned to {@code base + i})
+     * @return the new, unstarted group
      */
     public static RingGroup create(int shardCount, ShardOptions options) {
         Objects.requireNonNull(options, "options");
@@ -62,6 +63,11 @@ public final class RingGroup implements AutoCloseable {
      * Creates a group of {@code shardCount} unstarted shards with an explicit affinity base
      * CPU: shard {@code i} is pinned to {@code firstCpu + i}. A negative {@code firstCpu}
      * means no affinity (even when {@code options.cpuAffinity()} is set).
+     *
+     * @param shardCount number of shards/rings, {@code 1..1024}
+     * @param options    per-shard options
+     * @param firstCpu   first logical CPU id, or a negative value for no affinity
+     * @return the new, unstarted group
      */
     public static RingGroup create(int shardCount, ShardOptions options, int firstCpu) {
         Objects.requireNonNull(options, "options");
@@ -78,12 +84,18 @@ public final class RingGroup implements AutoCloseable {
         return new RingGroup(created);
     }
 
-    /** @return the number of shards (and rings) in the group */
+    /**
+     * Returns the number of shards (and rings) in the group.
+     *
+     * @return the group size
+     */
     public int size() {
         return shards.length;
     }
 
     /**
+     * Returns the shard at {@code index}.
+     *
      * @param index shard index
      * @return the shard
      * @throws IllegalArgumentException when {@code index} is out of range
@@ -96,14 +108,22 @@ public final class RingGroup implements AutoCloseable {
     }
 
     /**
-     * Stable hash distribution: the same key always maps to the same shard for the group's
-     * lifetime (splitmix64 finalizer, {@link Math#floorMod}).
+     * Returns the shard selected by a stable hash of {@code key}: the same key always maps
+     * to the same shard for the group's lifetime (splitmix64 finalizer,
+     * {@link Math#floorMod}).
+     *
+     * @param key the distribution key
+     * @return the shard for {@code key}
      */
     public IoShard shardFor(long key) {
         return shards[Math.floorMod(mix64(key), shards.length)];
     }
 
-    /** Round-robin distribution; never creates or reorders shards. */
+    /**
+     * Returns the next shard in round-robin order; never creates or reorders shards.
+     *
+     * @return the next shard
+     */
     public IoShard nextShard() {
         int index = (int) Math.floorMod(roundRobin.getAndIncrement(), shards.length);
         return shards[index];
@@ -134,25 +154,47 @@ public final class RingGroup implements AutoCloseable {
         }
     }
 
-    /** Enqueues a task on the next shard (round-robin); lazily starts it. */
+    /**
+     * Enqueues a task on the next shard in round-robin order; lazily starts it.
+     *
+     * @param task the task to enqueue
+     * @throws IllegalStateException when the selected shard is stopping or closed
+     */
     public void execute(ShardTask task) {
         Objects.requireNonNull(task, "task");
         nextShard().execute(task);
     }
 
-    /** Enqueues a task on the shard selected by {@code hash(key)}; lazily starts it. */
+    /**
+     * Enqueues a task on the shard selected by a stable hash of {@code key}; lazily starts
+     * it.
+     *
+     * @param key  the distribution key
+     * @param task the task to enqueue
+     * @throws IllegalStateException when the selected shard is stopping or closed
+     */
     public void execute(long key, ShardTask task) {
         Objects.requireNonNull(task, "task");
         shardFor(key).execute(task);
     }
 
-    /** Enqueues a continuation on an explicit target shard (MPSC + eventfd). */
+    /**
+     * Enqueues a continuation on an explicit target shard (MPSC queue plus eventfd wake).
+     *
+     * @param target       the shard that should run the continuation
+     * @param continuation the continuation
+     * @throws IllegalStateException when {@code target} is stopping or closed
+     */
     public void handoff(IoShard target, Runnable continuation) {
         Objects.requireNonNull(target, "target");
         target.handoff(continuation);
     }
 
-    /** @return one stats snapshot per shard, in shard order */
+    /**
+     * Returns one stats snapshot per shard, in shard order.
+     *
+     * @return an immutable list of per-shard stats snapshots
+     */
     public List<ShardStats> stats() {
         ShardStats[] snapshot = new ShardStats[shards.length];
         for (int i = 0; i < shards.length; i++) {
@@ -164,6 +206,8 @@ public final class RingGroup implements AutoCloseable {
     /**
      * Per-shard B5 metrics in shard-id order (unstarted and closed shards included). Safe
      * from any thread; never throws.
+     *
+     * @return an immutable list of per-shard metrics snapshots
      */
     public List<ShardMetrics> metrics() {
         ShardMetrics[] snapshot = new ShardMetrics[shards.length];
@@ -178,6 +222,8 @@ public final class RingGroup implements AutoCloseable {
      * bucket-wise merged dispatch-latency histogram ({@code docs/b5-design.md} §2.6). Safe
      * from any thread; never throws. A group of unstarted shards aggregates to zeroes and
      * {@link LatencySnapshot#empty()}.
+     *
+     * @return the aggregate group metrics
      */
     public GroupMetrics aggregateMetrics() {
         long submitted = 0L;
@@ -233,6 +279,7 @@ public final class RingGroup implements AutoCloseable {
     /**
      * Waits for every shard thread to end against one shared timeout budget.
      *
+     * @param timeoutMillis maximum total wait in milliseconds, {@code >= 0}
      * @return whether all shard threads ended within {@code timeoutMillis}
      */
     public boolean awaitTermination(long timeoutMillis) {

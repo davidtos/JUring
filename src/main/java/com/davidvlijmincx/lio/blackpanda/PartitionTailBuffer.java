@@ -14,10 +14,14 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class PartitionTailBuffer implements AutoCloseable {
 
-    public static final int DEFAULT_CAPACITY_SLOTS = 16_384; // 16,384 slots
-    public static final int SLOT_SIZE = 4096; // 4KB per slot = 64MB off-heap ring buffer
+    /** Default number of slots; the configured capacity is rounded up to a power of two. */
+    public static final int DEFAULT_CAPACITY_SLOTS = 16_384;
+    /** Size in bytes of one slot's payload area; 16,384 slots are 64 MB of off-heap memory. */
+    public static final int SLOT_SIZE = 4096;
 
+    /** Returned by {@link #read(long, MemorySegment)} when the requested offset was already evicted. */
     public static final int RESULT_LAGGING = -1;
+    /** Returned by {@link #read(long, MemorySegment)} when the offset is beyond the published high watermark. */
     public static final int RESULT_NO_DATA = 0;
 
     private final int capacity;
@@ -36,10 +40,19 @@ public final class PartitionTailBuffer implements AutoCloseable {
     private volatile long maxAvailableOffset = -1L;
     private volatile boolean closed = false;
 
+    /**
+     * Creates a buffer with {@link #DEFAULT_CAPACITY_SLOTS} slots.
+     */
     public PartitionTailBuffer() {
         this(DEFAULT_CAPACITY_SLOTS);
     }
 
+    /**
+     * Creates a buffer with at least {@code capacitySlots} slots; the capacity is rounded up
+     * to the next power of two so slot selection can use a bit mask.
+     *
+     * @param capacitySlots requested slot count
+     */
     public PartitionTailBuffer(int capacitySlots) {
         // Ensure power of 2
         int cap = 1;
@@ -66,8 +79,18 @@ public final class PartitionTailBuffer implements AutoCloseable {
     }
 
     /**
-     * Publishes a committed batch to the tail buffer.
-     * Zero-allocation off-heap copy.
+     * Publishes a committed batch to the tail buffer with a zero-allocation off-heap copy.
+     *
+     * <p>The slot is selected from {@code baseOffset} and its payload area is overwritten, so
+     * publishing more than {@link #SLOT_SIZE} payload bytes truncates the copy. Publication is
+     * lock-free and becomes visible to readers through a release fence.
+     *
+     * @param baseOffset  logical offset of the first record in the batch
+     * @param recordCount number of records in the batch
+     * @param timestamp   batch timestamp in milliseconds
+     * @param source      segment that holds the payload bytes
+     * @param srcOffset   offset of the payload bytes within {@code source}
+     * @param payloadLen  total payload length in bytes
      */
     public void publish(long baseOffset, int recordCount, long timestamp, MemorySegment source, long srcOffset, int payloadLen) {
         if (closed) return;
@@ -159,18 +182,36 @@ public final class PartitionTailBuffer implements AutoCloseable {
         return RESULT_NO_DATA;
     }
 
+    /**
+     * Returns the lowest logical offset that is still available in the buffer.
+     *
+     * @return the lowest available offset, or {@code Long.MAX_VALUE} when nothing was published
+     */
     public long getMinAvailableOffset() {
         return minAvailableOffset;
     }
 
+    /**
+     * Returns the highest record offset published so far.
+     *
+     * @return the highest published offset, or {@code -1} when nothing was published
+     */
     public long getMaxAvailableOffset() {
         return maxAvailableOffset;
     }
 
+    /**
+     * Returns the capacity in slots (the rounded-up value used for slot masking).
+     *
+     * @return the buffer capacity in slots
+     */
     public int getCapacity() {
         return capacity;
     }
 
+    /**
+     * Releases the off-heap payload slab; closing an already-closed buffer has no effect.
+     */
     @Override
     public synchronized void close() {
         if (closed) return;

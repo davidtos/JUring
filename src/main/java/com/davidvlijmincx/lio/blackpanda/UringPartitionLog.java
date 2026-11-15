@@ -38,10 +38,14 @@ import static com.davidvlijmincx.lio.blackpanda.RecordBatch.*;
  */
 public final class UringPartitionLog implements AutoCloseable {
 
-    public static final int DEFAULT_SLAB_SIZE = 4 * 1024 * 1024; // 4 MB write slab
-    public static final int MAX_FLUSH_BATCH_SIZE = 512 * 1024; // 512 KB group commit flush batch
-    public static final int FSYNC_THRESHOLD_BYTES = 512 * 1024 * 1024; // 512 MB multi-megabyte group commit fsync threshold
-    public static final int MAX_PIPELINE_DEPTH = 16; // Concurrent in-flight writes on NVMe
+    /** Default off-heap write-slab size in bytes (4 MB, shared by concurrent appenders). */
+    public static final int DEFAULT_SLAB_SIZE = 4 * 1024 * 1024;
+    /** Maximum number of bytes written by one group-commit flush batch (512 KB). */
+    public static final int MAX_FLUSH_BATCH_SIZE = 512 * 1024;
+    /** Number of unflushed bytes that forces an {@code fdatasync} with the next write (512 MB). */
+    public static final int FSYNC_THRESHOLD_BYTES = 512 * 1024 * 1024;
+    /** Maximum number of write batches kept in flight on the storage device. */
+    public static final int MAX_PIPELINE_DEPTH = 16;
 
     private static final int STATUS_EMPTY = 0;
     private static final int STATUS_WRITING = 1;
@@ -112,6 +116,12 @@ public final class UringPartitionLog implements AutoCloseable {
     private long totalBatchBytes = 0;
     private int maxBatchSeen = 0;
 
+    /**
+     * Creates a log over {@code partitionDir} with the default segment size, index interval,
+     * tail-buffer capacity and slab size.
+     *
+     * @param partitionDir directory that holds the partition's segment files
+     */
     public UringPartitionLog(Path partitionDir) {
         this(partitionDir, UringLogSegment.DEFAULT_MAX_SEGMENT_SIZE_BYTES,
                 UringSparseIndex.DEFAULT_INDEX_INTERVAL_BYTES,
@@ -119,6 +129,20 @@ public final class UringPartitionLog implements AutoCloseable {
                 DEFAULT_SLAB_SIZE);
     }
 
+    /**
+     * Creates a log over {@code partitionDir} and starts its background flusher thread.
+     *
+     * <p>The existing segments are recovered from disk, the tail buffer and write slab are
+     * allocated off-heap, and a dedicated platform thread is started to write appended
+     * records to the storage device with group commit.
+     *
+     * @param partitionDir        directory that holds the partition's segment files
+     * @param maxSegmentSizeBytes maximum size of a segment in bytes
+     * @param indexIntervalBytes  sparse-index interval in bytes
+     * @param tailBufferCapacity  tail-buffer capacity in slots
+     * @param slabSizeBytes       off-heap write-slab size in bytes
+     * @throws RuntimeException when the partition directory or its segments cannot be opened
+     */
     public UringPartitionLog(Path partitionDir, long maxSegmentSizeBytes, int indexIntervalBytes,
                              int tailBufferCapacity, int slabSizeBytes) {
         this.partitionDir = partitionDir;
@@ -175,6 +199,7 @@ public final class UringPartitionLog implements AutoCloseable {
      * @param payload off-heap memory segment containing record bytes
      * @param timestamp timestamp in milliseconds
      * @return committed monotonic logical offset
+     * @throws IllegalStateException when the log is closed
      */
     public long append(MemorySegment payload, long timestamp) {
         if (!running) {
@@ -239,15 +264,40 @@ public final class UringPartitionLog implements AutoCloseable {
         return assignedOffset;
     }
 
+    /**
+     * Appends a record using the current system time as its timestamp.
+     *
+     * @param payload off-heap memory segment containing record bytes
+     * @return committed monotonic logical offset
+     * @throws IllegalStateException when the log is closed
+     */
     public long append(MemorySegment payload) {
         return append(payload, System.currentTimeMillis());
     }
 
+    /**
+     * Appends a record from a heap array.
+     *
+     * <p>The bytes are copied into an automatic off-heap arena first, so this overload does
+     * allocate and is meant for convenience rather than the zero-allocation fast path.
+     *
+     * @param payload   record bytes
+     * @param timestamp timestamp in milliseconds
+     * @return committed monotonic logical offset
+     * @throws IllegalStateException when the log is closed
+     */
     public long append(byte[] payload, long timestamp) {
         MemorySegment mem = Arena.ofAuto().allocateFrom(ValueLayout.JAVA_BYTE, payload);
         return append(mem, timestamp);
     }
 
+    /**
+     * Appends a record from a heap array using the current system time as its timestamp.
+     *
+     * @param payload record bytes
+     * @return committed monotonic logical offset
+     * @throws IllegalStateException when the log is closed
+     */
     public long append(byte[] payload) {
         return append(payload, System.currentTimeMillis());
     }
@@ -256,6 +306,8 @@ public final class UringPartitionLog implements AutoCloseable {
      * Reads from real-time in-memory {@link PartitionTailBuffer}.
      * Zero-disk I/O and zero heap allocations.
      *
+     * @param offset    logical offset to read
+     * @param dstBuffer destination for the payload bytes
      * @return payload length read, 0 if at tip, or -1 if consumer is lagging
      */
     public int readTail(long offset, MemorySegment dstBuffer) {
@@ -263,12 +315,23 @@ public final class UringPartitionLog implements AutoCloseable {
     }
 
     /**
-     * Creates an asynchronous {@code O_DIRECT} historic reader for lagging consumers.
+     * Creates an asynchronous {@code O_DIRECT} historic reader for lagging consumers with the
+     * default queue depth.
+     *
+     * <p>The reader is independent of the log and must be closed by its caller.
+     *
+     * @return a new historic reader over this log's partition
      */
     public UringHistoricReader createHistoricReader() {
         return new UringHistoricReader(partitionManager);
     }
 
+    /**
+     * Creates an asynchronous {@code O_DIRECT} historic reader with the given queue depth.
+     *
+     * @param queueDepth number of concurrent direct reads (clamped to {@code 1..32})
+     * @return a new historic reader over this log's partition
+     */
     public UringHistoricReader createHistoricReader(int queueDepth) {
         return new UringHistoricReader(partitionManager, queueDepth);
     }
@@ -573,22 +636,46 @@ public final class UringPartitionLog implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns the logical offset just past the last record published to the tail buffer.
+     *
+     * @return the high watermark (next logical offset)
+     */
     public long getHighWatermark() {
         return highWatermark;
     }
 
+    /**
+     * Returns the slab position up to which records have been flushed and published.
+     *
+     * @return the flushed slab position in bytes
+     */
     public long getFlushedPosition() {
         return flushedPosition;
     }
 
+    /**
+     * Returns the partition manager that owns this log's segments.
+     *
+     * @return the partition manager
+     */
     public UringPartitionManager getPartitionManager() {
         return partitionManager;
     }
 
+    /**
+     * Returns the tail buffer that serves real-time consumers.
+     *
+     * @return the tail buffer
+     */
     public PartitionTailBuffer getTailBuffer() {
         return tailBuffer;
     }
 
+    /**
+     * Stops the flusher, drains in-flight writes, then closes the ring, the tail buffer and the
+     * partition manager; closing twice has no effect.
+     */
     @Override
     public synchronized void close() {
         if (closed) return;

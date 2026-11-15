@@ -250,57 +250,94 @@ public final class JuringInputStream implements AutoCloseable {
     // accessors
     // ------------------------------------------------------------------
 
-    /** @return the backing file */
+    /**
+     * Returns the backing file.
+     *
+     * @return the backing file (never closed by this stream)
+     */
     public JuringFile file() {
         return file;
     }
 
-    /** @return the configured maximum chunk size in bytes */
+    /**
+     * Returns the configured maximum chunk size in bytes.
+     *
+     * @return the configured maximum chunk size
+     */
     public int bufferSize() {
         return options.bufferSize();
     }
 
-    /** @return the adaptive current chunk size in bytes ({@code bufferSize()} when adaptation is off) */
+    /**
+     * Returns the adaptive current chunk size in bytes.
+     *
+     * @return the current chunk size ({@code bufferSize()} when adaptation is off)
+     */
     public int currentBufferSize() {
         return currentBufferSize;
     }
 
-    /** @return the configured maximum number of extra prefetch buffers */
+    /**
+     * Returns the configured maximum number of extra prefetch buffers.
+     *
+     * @return the configured maximum readahead depth
+     */
     public int readAhead() {
         return maxReadAhead;
     }
 
-    /** @return the adaptive current number of extra prefetch buffers */
+    /**
+     * Returns the adaptive current number of extra prefetch buffers.
+     *
+     * @return the current readahead depth
+     */
     public int currentReadAhead() {
         return currentReadAhead;
     }
 
-    /** @return number of bytes of native buffer memory held by this stream (bounded) */
+    /**
+     * Returns the number of bytes of native buffer memory held by this stream.
+     *
+     * @return the bounded buffer memory in bytes ({@code 0} after {@link #close()})
+     */
     public long bufferMemoryBytes() {
         return closed ? 0L : (long) buffers.length * bufferCapacity;
     }
 
-    /** @return the absolute file offset of the next byte the stream will return */
+    /**
+     * Returns the absolute file offset of the next byte the stream will return.
+     *
+     * @return the next absolute file offset
+     */
     public long position() {
         return position - unreadCarry();
     }
 
     /**
-     * @return the number of bytes left in the declared window, or {@code -1} when the
-     *         stream reads until EOF
+     * Returns the number of bytes left in the declared window.
+     *
+     * @return the bytes left in the declared window, or {@code -1} when the stream reads
+     *         until EOF
      */
     public long remaining() {
         return windowRemaining < 0 ? -1 : windowRemaining + unreadCarry();
     }
 
-    /** @return the total number of bytes returned or skipped by this stream */
+    /**
+     * Returns the total number of bytes returned or skipped by this stream.
+     *
+     * @return the number of bytes consumed so far
+     */
     public long bytesRead() {
         return bytesRead - unreadCarry();
     }
 
     /**
-     * @return {@code true} once EOF has been observed (or a zero-length window was
-     *         requested); not a lookahead guarantee before that
+     * Returns whether EOF has been observed (or a zero-length window was requested).
+     *
+     * <p>This is not a lookahead guarantee before EOF has been reached.
+     *
+     * @return {@code true} once EOF has been observed
      */
     public boolean eof() {
         return (fileEof || windowRemaining == 0) && unreadCarry() == 0;

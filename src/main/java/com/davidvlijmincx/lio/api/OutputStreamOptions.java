@@ -72,27 +72,48 @@ public final class OutputStreamOptions {
         return DEFAULTS;
     }
 
-    /** @return the configured logical buffer size in bytes */
+    /**
+     * Returns the configured logical buffer size in bytes.
+     *
+     * @return the configured logical buffer size
+     */
     public int bufferSize() {
         return bufferSize;
     }
 
-    /** @return the maximum number of concurrent write-behind operations */
+    /**
+     * Returns the maximum number of concurrent write-behind operations.
+     *
+     * @return the configured write-behind depth
+     */
     public int writeBehind() {
         return writeBehind;
     }
 
-    /** @return buffer and write alignment in bytes (power of two) */
+    /**
+     * Returns the buffer and write alignment in bytes.
+     *
+     * @return the configured alignment (a power of two)
+     */
     public int alignment() {
         return alignment;
     }
 
-    /** @return the {@code fallocate} preallocation hint issued at open, {@code 0} for none */
+    /**
+     * Returns the {@code fallocate} preallocation hint issued at open.
+     *
+     * @return the preallocation size in bytes, {@code 0} for none
+     */
     public long preallocationSize() {
         return preallocationSize;
     }
 
-    /** @return {@code true} when {@link JuringOutputStream#close()} calls {@code fdatasync} */
+    /**
+     * Returns whether {@link JuringOutputStream#close()} issues one {@code fdatasync} for
+     * {@link DurabilityMode#WRITEBACK} streams.
+     *
+     * @return {@code true} when close calls {@code fdatasync}
+     */
     public boolean syncOnClose() {
         return syncOnClose;
     }

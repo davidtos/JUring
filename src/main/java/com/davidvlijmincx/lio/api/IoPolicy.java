@@ -81,17 +81,29 @@ public final class IoPolicy {
         return new IoPolicy(eagainRetries, eagainBackoffNanos, shortReadAtEofAllowed);
     }
 
-    /** @return maximum number of {@code EAGAIN} retries per blocking operation */
+    /**
+     * Returns the maximum number of {@code EAGAIN} retries per blocking operation.
+     *
+     * @return the configured retry count
+     */
     public int eagainRetries() {
         return eagainRetries;
     }
 
-    /** @return park time in nanoseconds between {@code EAGAIN} retries */
+    /**
+     * Returns the park time in nanoseconds between {@code EAGAIN} retries.
+     *
+     * @return the configured backoff in nanoseconds
+     */
     public long eagainBackoffNanos() {
         return eagainBackoffNanos;
     }
 
-    /** @return {@code true} when a short read at EOF is returned instead of failing */
+    /**
+     * Returns whether a short read at EOF is returned instead of failing.
+     *
+     * @return {@code true} when a short read at EOF is allowed
+     */
     public boolean shortReadAtEofAllowed() {
         return shortReadAtEofAllowed;
     }

@@ -19,6 +19,23 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
  * Zero-GC, Virtual Thread friendly blocking wrapper over {@code io_uring}.
+ *
+ * <p>An instance owns a {@link RingGroup} of poller shards (one platform thread and one
+ * {@code io_uring} per worker). A blocking call picks the worker bound to the calling thread,
+ * hands the request to that worker's event loop and parks the caller; the worker submits the
+ * request, reaps its completion and unparks the caller. Callers park instead of blocking in a
+ * native syscall, so virtual threads waiting on I/O do not pin their carrier thread and a
+ * small platform-thread budget serves many virtual threads.
+ *
+ * <p>Calls return the raw io_uring completion result: the transferred byte count for reads
+ * and writes, the new file descriptor for opens, {@code 0} for closes, or the negative errno
+ * on failure. They do not throw {@link JuringException}; misuse (closed instance, invalid
+ * buffer or size) throws unchecked exceptions. Methods are safe to call from multiple
+ * threads and from virtual threads.
+ *
+ * <p>Registered buffers and files are installed on every worker ring, so the {@code *Fixed}
+ * and {@code indexFD} overloads work from any calling thread. {@link #close()} is bounded
+ * and idempotent, and the instance must not be used after it.
  */
 public class JUringBlocking implements AutoCloseable {
 
@@ -211,7 +228,7 @@ public class JUringBlocking implements AutoCloseable {
         // ShardBody seam (B4 §9): the tuned worker loop runs on the IoShard thread.
         // ------------------------------------------------------------------
 
-        /**
+    /**
          * Runs the existing poller loop on the shard platform thread. The ring, its native
          * memory, the thread, CPU affinity and the bounded ring teardown all belong to
          * {@link IoShard}; this body only borrows the shard-thread-confined dispatcher.
@@ -266,7 +283,7 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
 
-        /**
+    /**
          * Frees this worker's own eventfd and its two 8-byte wakeup buffers, but only once the
          * shard thread has fully terminated (the armed wakeup READ may otherwise still write
          * into the read buffer while the ring is being closed).
@@ -741,10 +758,32 @@ public class JUringBlocking implements AutoCloseable {
         return Math.max(1, Math.min(4, Integer.highestOneBit(procs / 4)));
     }
 
+    /**
+     * Creates a wrapper with the default number of poller workers.
+     *
+     * <p>The worker count comes from the {@code juring.blocking.pollers} system property when
+     * set (rounded down to a power of two, at most sixteen); otherwise it is {@code 1} for
+     * queue depths below {@code 64} and a small CPU-derived value (1 to 4) for larger depths.
+     *
+     * @param queueDepth   submission queue entries per worker ring
+     * @param ioUringFlags {@link IoUringOptions} setup flags for each worker ring
+     * @throws RuntimeException when a worker ring or its poller thread cannot be started
+     */
     public JUringBlocking(int queueDepth, IoUringOptions... ioUringFlags) {
         this(queueDepth, defaultWorkerCount(queueDepth), ioUringFlags);
     }
 
+    /**
+     * Creates a wrapper with an explicit number of poller workers.
+     *
+     * <p>{@code numPollers} is rounded down to a power of two (minimum one); each worker gets
+     * its own ring with {@code max(8, queueDepth)} submission queue entries.
+     *
+     * @param queueDepth   submission queue entries per worker ring
+     * @param numPollers   requested number of poller workers
+     * @param ioUringFlags {@link IoUringOptions} setup flags for each worker ring
+     * @throws RuntimeException when a worker ring or its poller thread cannot be started
+     */
     public JUringBlocking(int queueDepth, int numPollers, IoUringOptions... ioUringFlags) {
         int workerCount = Math.max(1, Integer.highestOneBit(Math.max(1, numPollers)));
         int ringEntries = Math.max(8, queueDepth);
@@ -780,6 +819,7 @@ public class JUringBlocking implements AutoCloseable {
      * pinning is inherited. Ownership transfers to this instance: {@link #close()} closes the
      * group.
      *
+     * @param group unstarted group that becomes the worker rings; closed by {@link #close()}
      * @throws NullPointerException      when {@code group} is {@code null}
      * @throws IllegalStateException     when the group is started, stopping or closed
      */
@@ -890,10 +930,34 @@ public class JUringBlocking implements AutoCloseable {
         JUring.validateNativeSegment(segment, forRead);
     }
 
+    /**
+     * Reads into the whole of {@code buffer} at file offset {@code offset}, blocking until the
+     * read completes.
+     *
+     * @param fd         file to read
+     * @param buffer     native destination buffer; its size determines the read size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the segment is not native writeable memory
+     * @throws IllegalStateException    when this instance is closed
+     */
     public long read(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return read(fd, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
     }
 
+    /**
+     * Reads at most {@code length} bytes into {@code buffer} at file offset {@code offset},
+     * blocking until the read completes.
+     *
+     * @param fd         file to read
+     * @param buffer     native destination buffer
+     * @param length     maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the length exceeds the buffer or a segment check fails
+     */
     public long read(FileDescriptor fd, MemorySegment buffer, int length, long offset, SqeOptions... sqeOptions) {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid read length: " + length);
@@ -917,10 +981,31 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    /**
+     * Reads into the whole of {@code buffer} from a registered-file slot, blocking until the
+     * read completes.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     native destination buffer; its size determines the read size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     */
     public long read(int indexFD, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return read(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
     }
 
+    /**
+     * Reads at most {@code length} bytes from a registered-file slot, blocking until the read
+     * completes.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     native destination buffer
+     * @param length     maximum number of bytes to read
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     */
     public long read(int indexFD, MemorySegment buffer, int length, long offset, SqeOptions... sqeOptions) {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid read length: " + length);
@@ -944,10 +1029,31 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    /**
+     * Writes the whole of {@code buffer} at file offset {@code offset}, blocking until the
+     * write completes.
+     *
+     * @param fd         file to write
+     * @param buffer     native source buffer; its size determines the write size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return write(fd, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
     }
 
+    /**
+     * Writes at most {@code length} bytes from {@code buffer} at file offset {@code offset},
+     * blocking until the write completes.
+     *
+     * @param fd         file to write
+     * @param buffer     native source buffer
+     * @param length     number of bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(FileDescriptor fd, MemorySegment buffer, int length, long offset, SqeOptions... sqeOptions) {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid write length: " + length);
@@ -971,6 +1077,18 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    /**
+     * Writes a heap array at file offset {@code offset}, blocking until the write completes.
+     *
+     * <p>The bytes are copied into native memory for the duration of the call and released
+     * after the completion is reaped.
+     *
+     * @param fd         file to write
+     * @param bytes      bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(FileDescriptor fd, byte[] bytes, long offset, SqeOptions... sqeOptions) {
         MemorySegment buff = libc.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
@@ -988,10 +1106,31 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Writes the whole of {@code buffer} to a registered-file slot, blocking until the write
+     * completes.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     native source buffer; its size determines the write size
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(int indexFD, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return write(indexFD, buffer, Math.toIntExact(buffer.byteSize()), offset, sqeOptions);
     }
 
+    /**
+     * Writes at most {@code length} bytes from {@code buffer} to a registered-file slot,
+     * blocking until the write completes.
+     *
+     * @param indexFD    registered-file slot number
+     * @param buffer     native source buffer
+     * @param length     number of bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(int indexFD, MemorySegment buffer, int length, long offset, SqeOptions... sqeOptions) {
         if (length < 0 || length > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid write length: " + length);
@@ -1015,6 +1154,15 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    /**
+     * Writes a heap array to a registered-file slot, blocking until the write completes.
+     *
+     * @param indexFD    registered-file slot number
+     * @param bytes      bytes to write
+     * @param offset     file offset in bytes
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long write(int indexFD, byte[] bytes, long offset, SqeOptions... sqeOptions) {
         MemorySegment buff = libc.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
@@ -1032,6 +1180,19 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Registers {@code nrOfBuffers} off-heap buffers of {@code size} bytes on every worker
+     * ring.
+     *
+     * <p>The buffers must stay valid until the instance is closed and should be registered
+     * only once per instance; the returned segments are indexed by the buffer index used by
+     * the {@code *Fixed} methods.
+     *
+     * @param size        size of one buffer in bytes
+     * @param nrOfBuffers number of buffers to register
+     * @return the registered buffer segments, in index order
+     * @throws IllegalStateException when this instance is closed
+     */
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
         var iovecStructure = workers[0].runOnPoller(() -> workers[0].dispatcher.allocateAndRegisterBuffers(size, nrOfBuffers));
         for (int i = 1; i < workers.length; i++) {
@@ -1070,6 +1231,13 @@ public class JUringBlocking implements AutoCloseable {
         return buffers;
     }
 
+    /**
+     * Returns the memory segment of a registered buffer.
+     *
+     * @param bufferIndex index of the registered buffer
+     * @return the buffer's memory segment
+     * @throws IllegalArgumentException when no buffers are registered or the index is out of range
+     */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
         MemorySegment[] bufs = this.registeredBuffers;
         if (bufs == null || bufferIndex < 0 || bufferIndex >= bufs.length) {
@@ -1078,6 +1246,12 @@ public class JUringBlocking implements AutoCloseable {
         return bufs[bufferIndex];
     }
 
+    /**
+     * Checks out a free registered buffer for exclusive use.
+     *
+     * @return the index of the checked-out buffer, or {@code -1} when all buffers are in use
+     * @throws IllegalStateException when no buffers are registered
+     */
     public int checkOutBuffer() {
         final int[] bufArr = this.freeBufBuffer;
         final long[] seqArr = this.freeBufSeq;
@@ -1106,6 +1280,14 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns a registered buffer to the free list.
+     *
+     * @param bufferIndex index previously returned by {@link #checkOutBuffer()}
+     * @throws IllegalStateException    when no buffers are registered or the pool already
+     *                                  holds every buffer
+     * @throws IllegalArgumentException when the index is out of range
+     */
     public void checkInBuffer(int bufferIndex) {
         final MemorySegment[] bufs = this.registeredBuffers;
         final int[] bufArr = this.freeBufBuffer;
@@ -1158,6 +1340,17 @@ public class JUringBlocking implements AutoCloseable {
         return addrs[bufferIndex];
     }
 
+    /**
+     * Reads into a registered fixed buffer, blocking until the read completes.
+     *
+     * @param fd          file to read
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
     public long readFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         long bufAddr = validateRegisteredBuffer(bufferIndex, readSize);
         return getWorker().submitAndAwaitSlot(
@@ -1174,6 +1367,17 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Reads from a registered-file slot into a registered fixed buffer, blocking until the
+     * read completes.
+     *
+     * @param indexFD     registered-file slot number
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the number of bytes read, or the negative errno
+     */
     public long readFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         long bufAddr = validateRegisteredBuffer(bufferIndex, readSize);
         return getWorker().submitAndAwaitSlot(
@@ -1190,6 +1394,17 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Writes from a registered fixed buffer, blocking until the write completes.
+     *
+     * @param fd          file to write
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
     public long writeFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize);
         return getWorker().submitAndAwaitSlot(
@@ -1206,6 +1421,17 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Writes from a registered fixed buffer to a registered-file slot, blocking until the
+     * write completes.
+     *
+     * @param indexFD     registered-file slot number
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long writeFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize);
         return getWorker().submitAndAwaitSlot(
@@ -1222,18 +1448,49 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Copies a heap array into a registered fixed buffer and writes it, blocking until the
+     * write completes.
+     *
+     * @param fd          file to write
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long writeFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         validateRegisteredBuffer(bufferIndex, bytes.length);
         MemorySegment.copy(bytes, 0, this.registeredBuffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
         return writeFixed(fd, bytes.length, offset, bufferIndex, sqeOptions);
     }
 
+    /**
+     * Copies a heap array into a registered fixed buffer and writes it to a registered-file
+     * slot, blocking until the write completes.
+     *
+     * @param indexFD     registered-file slot number
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @param sqeOptions  SQE flags, combined with bitwise OR
+     * @return the number of bytes written, or the negative errno
+     */
     public long writeFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
         validateRegisteredBuffer(bufferIndex, bytes.length);
         MemorySegment.copy(bytes, 0, this.registeredBuffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
         return writeFixed(indexFD, bytes.length, offset, bufferIndex, sqeOptions);
     }
 
+    /**
+     * Registers file descriptors for fixed-file I/O on every worker ring.
+     *
+     * <p>The slot index of each descriptor is its position in the argument list, matching the
+     * {@code indexFD} overloads.
+     *
+     * @param fileDescriptors files to register, in slot order
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     */
     public int registerFiles(FileDescriptor... fileDescriptors) {
         int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
         for (Worker w : workers) {
@@ -1245,6 +1502,13 @@ public class JUringBlocking implements AutoCloseable {
         return 0;
     }
 
+    /**
+     * Replaces a range of the registered-file table on every worker ring.
+     *
+     * @param offset          first slot to update
+     * @param fileDescriptors new descriptors, one per slot
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     */
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
         int ret = 0;
         for (Worker w : workers) {
@@ -1256,6 +1520,17 @@ public class JUringBlocking implements AutoCloseable {
         return ret;
     }
 
+    /**
+     * Opens a path, blocking until the open completes.
+     *
+     * <p>{@code O_CLOEXEC} is added to {@code flags}.
+     *
+     * @param filePath   path to open
+     * @param flags      Linux {@code open(2)} flags
+     * @param mode       permission bits used when the file is created
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return the new file descriptor, or the negative errno
+     */
     public int open(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
         byte[] pathBytes = LibCDispatcher.encodePath(filePath);
         MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
@@ -1274,10 +1549,29 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Opens a {@link Path} with {@link LinuxOpenOptions} flags, blocking until the open
+     * completes.
+     *
+     * @param path        path to open
+     * @param mode        permission bits used when the file is created
+     * @param openOptions open flags, combined with bitwise OR
+     * @return the new file descriptor, or the negative errno
+     */
     public int open(Path path, int mode, LinuxOpenOptions... openOptions) {
         return open(path.toString(), LinuxOpenOptions.combineOptions(openOptions), mode);
     }
 
+    /**
+     * Opens a path and wraps the resulting descriptor in a {@link FileDescriptor}.
+     *
+     * @param filePath   path to open
+     * @param flags      Linux {@code open(2)} flags
+     * @param mode       permission bits used when the file is created
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return a file descriptor for the opened file
+     * @throws IllegalStateException when the open fails (the message carries the errno)
+     */
     public FileDescriptor openFile(String filePath, int flags, int mode, SqeOptions... sqeOptions) {
         int fd = open(filePath, flags, mode, sqeOptions);
         if (fd < 0) {
@@ -1286,14 +1580,50 @@ public class JUringBlocking implements AutoCloseable {
         return new FileDescriptor(fd);
     }
 
+    /**
+     * Opens a {@link Path} and wraps the resulting descriptor in a {@link FileDescriptor}.
+     *
+     * @param path        path to open
+     * @param mode        permission bits used when the file is created
+     * @param openOptions open flags, combined with bitwise OR
+     * @return a file descriptor for the opened file
+     * @throws IllegalStateException when the open fails (the message carries the errno)
+     */
     public FileDescriptor openFile(Path path, int mode, LinuxOpenOptions... openOptions) {
         return openFile(path.toString(), LinuxOpenOptions.combineOptions(openOptions), mode);
     }
 
+    /**
+     * Opens a path into a registered-file slot on every worker ring, blocking until the opens
+     * complete.
+     *
+     * @param filePath   path to open
+     * @param flags      open flags
+     * @param mode       permission bits used when the file is created
+     * @param fileIndex  registered-file slot to install the opened file into
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     */
     public int openDirect(String filePath, LinuxOpenOptions flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
         return openDirect(filePath, flags.getValue(), mode, fileIndex, sqeOptions);
     }
 
+    /**
+     * Opens a path into a registered-file slot on every worker ring, blocking until the opens
+     * complete.
+     *
+     * <p>{@code O_CLOEXEC} is stripped from {@code flags} because it is not allowed for a
+     * direct-descriptor open. On success the slot can be used with the {@code indexFD}
+     * overloads.
+     *
+     * @param filePath   path to open
+     * @param flags      Linux {@code open(2)} flags
+     * @param mode       permission bits used when the file is created
+     * @param fileIndex  registered-file slot to install the opened file into
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     * @throws IllegalArgumentException when {@code fileIndex} is negative
+     */
     public int openDirect(String filePath, int flags, int mode, int fileIndex, SqeOptions... sqeOptions) {
         if (fileIndex < 0) {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
@@ -1323,14 +1653,37 @@ public class JUringBlocking implements AutoCloseable {
         return res;
     }
 
+    /**
+     * Opens a {@link Path} into a registered-file slot on every worker ring.
+     *
+     * @param path        path to open
+     * @param mode        permission bits used when the file is created
+     * @param fileIndex   registered-file slot to install the opened file into
+     * @param openOptions open flags, combined with bitwise OR
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     */
     public int openDirect(Path path, int mode, int fileIndex, LinuxOpenOptions... openOptions) {
         return openDirect(path.toString(), LinuxOpenOptions.combineOptions(openOptions), mode, fileIndex);
     }
 
+    /**
+     * Closes a file descriptor, blocking until the close completes.
+     *
+     * @param fd         file descriptor to close
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return {@code 0} on success, or the negative errno
+     */
     public int closeFd(FileDescriptor fd, SqeOptions... sqeOptions) {
         return closeFd(fd.getFd(), sqeOptions);
     }
 
+    /**
+     * Closes a raw file descriptor, blocking until the close completes.
+     *
+     * @param rawFd      native file descriptor to close
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return {@code 0} on success, or the negative errno
+     */
     public int closeFd(int rawFd, SqeOptions... sqeOptions) {
         return (int) getWorker().submitAndAwaitSlot(
                 IORING_OP_CLOSE,
@@ -1346,6 +1699,15 @@ public class JUringBlocking implements AutoCloseable {
         );
     }
 
+    /**
+     * Closes a file held in a registered-file slot on every worker ring, blocking until the
+     * closes complete.
+     *
+     * @param fileIndex  registered-file slot to close
+     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @return {@code 0} on success, otherwise the first negative kernel result
+     * @throws IllegalArgumentException when {@code fileIndex} is negative
+     */
     public int closeDirect(int fileIndex, SqeOptions... sqeOptions) {
         if (fileIndex < 0) {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
@@ -1371,6 +1733,10 @@ public class JUringBlocking implements AutoCloseable {
         return res;
     }
 
+    /**
+     * Closes this wrapper with the default {@link JUring#DEFAULT_CLOSE_TIMEOUT_MILLIS}
+     * shutdown budget.
+     */
     @Override
     public void close() {
         close(JUring.DEFAULT_CLOSE_TIMEOUT_MILLIS);

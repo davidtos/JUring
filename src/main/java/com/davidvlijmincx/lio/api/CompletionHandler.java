@@ -15,5 +15,10 @@ package com.davidvlijmincx.lio.api;
  */
 @FunctionalInterface
 public interface CompletionHandler {
+    /**
+     * Handles one completion on the shard thread.
+     *
+     * @param result the completion to handle; revalidated before the next handler runs
+     */
     void completed(Result result);
 }

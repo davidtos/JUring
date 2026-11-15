@@ -13,5 +13,10 @@ package com.davidvlijmincx.lio.api;
  */
 @FunctionalInterface
 public interface ShardTask {
+    /**
+     * Runs this unit of work on the shard thread.
+     *
+     * @param ctx the shard-thread-confined context of the executing shard
+     */
     void run(ShardContext ctx);
 }

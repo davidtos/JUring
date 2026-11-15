@@ -46,8 +46,23 @@ public final class JuringException extends IOException {
     /** {@code EALREADY} — a cancellation target was already completing/completed. */
     public static final int EALREADY = 114;
 
+    /**
+     * Positive Linux errno carried by this failure, or {@code 0} for a synthetic failure.
+     *
+     * @serial
+     */
     private final int errno;
+    /**
+     * Name of the operation that failed (for example {@code "read"}).
+     *
+     * @serial
+     */
     private final String operation;
+    /**
+     * Human-readable context supplied at construction; may be {@code null}.
+     *
+     * @serial
+     */
     private final String detail;
 
     /**
@@ -88,22 +103,38 @@ public final class JuringException extends IOException {
         return new JuringException(negativeResult < 0 ? -negativeResult : negativeResult, operation, detail);
     }
 
-    /** @return the positive Linux errno, or {@code 0} for a synthetic failure */
+    /**
+     * Returns the positive Linux errno carried by this failure.
+     *
+     * @return the positive errno, or {@code 0} for a synthetic failure
+     */
     public int errno() {
         return errno;
     }
 
-    /** @return the operation name that failed (e.g. {@code "read"}) */
+    /**
+     * Returns the name of the operation that failed.
+     *
+     * @return the operation name (for example {@code "read"})
+     */
     public String operation() {
         return operation;
     }
 
-    /** @return the human-readable context passed at construction, may be {@code null} */
+    /**
+     * Returns the human-readable context supplied at construction.
+     *
+     * @return the context string, may be {@code null}
+     */
     public String detail() {
         return detail;
     }
 
-    /** @return the libc {@code strerror} text for this errno, or {@code "no errno"} for synthetic failures */
+    /**
+     * Returns the libc error text for the carried errno.
+     *
+     * @return the {@code strerror} text, or {@code "no errno"} for synthetic failures
+     */
     public String strerror() {
         if (errno == 0) {
             return "no errno";
@@ -121,32 +152,56 @@ public final class JuringException extends IOException {
         return this.errno == errno && this.errno != 0;
     }
 
-    /** @return {@code true} for {@code ENOENT} */
+    /**
+     * Tests whether this failure is {@code ENOENT}.
+     *
+     * @return {@code true} for {@code ENOENT}
+     */
     public boolean isNotFound() {
         return isErrno(ENOENT);
     }
 
-    /** @return {@code true} for {@code EBADF} */
+    /**
+     * Tests whether this failure is {@code EBADF}.
+     *
+     * @return {@code true} for {@code EBADF}
+     */
     public boolean isBadFileDescriptor() {
         return isErrno(EBADF);
     }
 
-    /** @return {@code true} for {@code EINVAL} */
+    /**
+     * Tests whether this failure is {@code EINVAL}.
+     *
+     * @return {@code true} for {@code EINVAL}
+     */
     public boolean isInvalidArgument() {
         return isErrno(EINVAL);
     }
 
-    /** @return {@code true} for {@code EAGAIN} */
+    /**
+     * Tests whether this failure is {@code EAGAIN}.
+     *
+     * @return {@code true} for {@code EAGAIN}
+     */
     public boolean isAgain() {
         return isErrno(EAGAIN);
     }
 
-    /** @return {@code true} for {@code ETIMEDOUT} */
+    /**
+     * Tests whether this failure is {@code ETIMEDOUT}.
+     *
+     * @return {@code true} for {@code ETIMEDOUT}
+     */
     public boolean isTimedOut() {
         return isErrno(ETIMEDOUT);
     }
 
-    /** @return {@code true} for {@code ECANCELED} (the request was canceled) */
+    /**
+     * Tests whether this failure is {@code ECANCELED}, that is the request was canceled.
+     *
+     * @return {@code true} for {@code ECANCELED}
+     */
     public boolean isCancelled() {
         return isErrno(ECANCELED);
     }

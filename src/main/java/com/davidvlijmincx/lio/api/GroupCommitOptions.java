@@ -55,12 +55,20 @@ public final class GroupCommitOptions {
         return DEFAULTS;
     }
 
-    /** @return the durability mode applied by {@link GroupCommit#commit()} */
+    /**
+     * Returns the durability mode applied by {@link GroupCommit#commit()}.
+     *
+     * @return the configured durability mode
+     */
     public DurabilityMode durability() {
         return durability;
     }
 
-    /** @return the maximum number of writes in one uncommitted batch, {@code 1..4096} */
+    /**
+     * Returns the maximum number of writes in one uncommitted batch.
+     *
+     * @return the configured batch-size bound, {@code 1..4096}
+     */
     public int maxBatchSize() {
         return maxBatchSize;
     }

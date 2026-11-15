@@ -24,6 +24,18 @@ public final class UringPartitionManager implements AutoCloseable {
     private volatile UringLogSegment activeSegment;
     private volatile boolean closed = false;
 
+    /**
+     * Opens (or creates) the partition directory and discovers its segment files.
+     *
+     * <p>Existing segments other than the newest are opened and sealed as read-only closed
+     * segments; the newest becomes the active segment. An empty directory gets a new active
+     * segment starting at offset {@code 0}.
+     *
+     * @param partitionDir       directory that holds the partition's segment files
+     * @param maxSegmentSizeBytes maximum size of a segment in bytes
+     * @param indexIntervalBytes sparse-index interval in bytes
+     * @throws RuntimeException when the directory cannot be created or read
+     */
     public UringPartitionManager(Path partitionDir, long maxSegmentSizeBytes, int indexIntervalBytes) {
         this.partitionDir = partitionDir;
         this.maxSegmentSizeBytes = maxSegmentSizeBytes;
@@ -68,7 +80,15 @@ public final class UringPartitionManager implements AutoCloseable {
     }
 
     /**
-     * Rolls the active segment and creates a new active segment starting at {@code nextBaseOffset}.
+     * Rolls the active segment and creates a new active segment starting at
+     * {@code nextBaseOffset}.
+     *
+     * <p>The old active segment is sealed and moved to the closed segments. The caller must
+     * pass the logical offset that the next appended record will have.
+     *
+     * @param nextBaseOffset logical offset of the first record in the new segment
+     * @return the new active segment
+     * @throws IllegalStateException when the manager is closed
      */
     public synchronized UringLogSegment roll(long nextBaseOffset) {
         if (closed) {
@@ -85,6 +105,10 @@ public final class UringPartitionManager implements AutoCloseable {
 
     /**
      * Finds the log segment containing {@code offset}.
+     *
+     * @param offset logical record offset
+     * @return the active segment for the newest offsets, otherwise the newest closed segment
+     *         whose base offset is not greater than the requested offset
      */
     public UringLogSegment findSegmentForOffset(long offset) {
         UringLogSegment curActive = this.activeSegment;
@@ -99,7 +123,12 @@ public final class UringPartitionManager implements AutoCloseable {
     }
 
     /**
-     * Finds the log segment for a given timestamp.
+     * Finds the log segment for a timestamp by consulting the sparse time indexes of the
+     * closed segments.
+     *
+     * @param timestamp timestamp in milliseconds
+     * @return the first closed segment whose time index reaches the timestamp, otherwise the
+     *         active segment
      */
     public UringLogSegment findSegmentForTimestamp(long timestamp) {
         for (UringLogSegment seg : closedSegments.values()) {
@@ -111,10 +140,20 @@ public final class UringPartitionManager implements AutoCloseable {
         return activeSegment;
     }
 
+    /**
+     * Returns the segment that currently receives appends.
+     *
+     * @return the active segment, or {@code null} after close
+     */
     public UringLogSegment getActiveSegment() {
         return activeSegment;
     }
 
+    /**
+     * Returns all segments in base-offset order, with the active segment last.
+     *
+     * @return an immutable list of the segments
+     */
     public List<UringLogSegment> getAllSegments() {
         List<UringLogSegment> all = new ArrayList<>(closedSegments.values());
         UringLogSegment act = activeSegment;
@@ -124,10 +163,18 @@ public final class UringPartitionManager implements AutoCloseable {
         return Collections.unmodifiableList(all);
     }
 
+    /**
+     * Returns the directory that holds the partition's segment files.
+     *
+     * @return the partition directory
+     */
     public Path getPartitionDir() {
         return partitionDir;
     }
 
+    /**
+     * Closes every closed segment and the active segment; closing twice has no effect.
+     */
     @Override
     public synchronized void close() {
         if (closed) return;

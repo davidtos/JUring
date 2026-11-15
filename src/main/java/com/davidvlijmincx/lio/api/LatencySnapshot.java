@@ -30,12 +30,21 @@ public record LatencySnapshot(
         long p99Nanos,
         long p999Nanos) {
 
-    /** The all-zero snapshot used when no observation was recorded (sampling disabled/empty). */
+    /**
+     * Returns the all-zero snapshot used when no observation was recorded (sampling
+     * disabled or an empty histogram).
+     *
+     * @return the all-zero snapshot
+     */
     public static LatencySnapshot empty() {
         return new LatencySnapshot(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L);
     }
 
-    /** @return {@code totalNanos / samples}, or {@code 0} when no sample was recorded */
+    /**
+     * Returns the arithmetic mean of the recorded latencies.
+     *
+     * @return {@code totalNanos / samples}, or {@code 0} when no sample was recorded
+     */
     public double meanNanos() {
         return samples == 0L ? 0.0d : (double) totalNanos / (double) samples;
     }

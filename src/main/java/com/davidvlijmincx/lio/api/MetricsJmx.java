@@ -58,10 +58,20 @@ public final class MetricsJmx {
      */
     public interface Handle extends AutoCloseable {
 
-        /** @return the shard/group bean of this handle (the group bean for a group handle) */
+        /**
+         * Returns the primary bean name of this handle: the shard bean for a shard handle and
+         * the group bean for a group handle.
+         *
+         * @return the primary bean name
+         */
         ObjectName name();
 
-        /** @return all beans registered by this handle, immutable, in registration order (group bean first) */
+        /**
+         * Returns every bean registered by this handle, in registration order with the group
+         * bean first.
+         *
+         * @return an immutable list of the registered bean names
+         */
         List<ObjectName> names();
 
         @Override
@@ -74,6 +84,7 @@ public final class MetricsJmx {
     /**
      * Registers the shard's MXBean on the platform {@code MBeanServer}.
      *
+     * @param shard shard to expose through JMX; must not be {@code null}
      * @return a handle owning the bean; {@link Handle#close()} unregisters it
      * @throws IllegalStateException when the shard is already registered by a live handle or
      *                               the platform server rejects the registration
@@ -110,6 +121,7 @@ public final class MetricsJmx {
      * everything already registered by this call and rethrows an {@link IllegalStateException}
      * carrying the cause.
      *
+     * @param group group to expose through JMX; must not be {@code null}
      * @return a handle owning all beans (group bean first in {@link Handle#names()})
      * @throws IllegalStateException when the group (or one of its shards) is already
      *                               registered by a live handle, or registration fails

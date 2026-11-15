@@ -21,7 +21,10 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  *
  * <h2>Threading</h2>
  * <p>A {@code JuringFile} is not thread-safe; like {@link JUring}, it is designed for
- * one ring per thread and one owner thread.
+ * one ring per thread and one owner thread. It is single-owner state and is not a
+ * cross-shard object: create and use it inside one shard task rather than sharing it
+ * between {@link RingGroup} shards (see {@link ShardContext} for how the blocking file
+ * helpers interact with a shard loop).
  *
  * <h2>Ring ownership</h2>
  * <p>The blocking helpers ({@link #await}, {@link #drain}, {@link #close} and the
@@ -38,6 +41,14 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * with ring-registered fixed buffers, then {@link #await(long)} or the ring's own batch
  * reap. That path performs zero heap allocations per operation, including the await
  * bookkeeping.
+ *
+ * <h2>Buffer lifetime</h2>
+ * <p>The caller owns every buffer passed to a {@code prepare*} or blocking method. A
+ * native segment must stay valid and accessible to the owner thread until the operation's
+ * completion has been reaped; for writes its contents must not change until then. The
+ * fixed-buffer path uses ring-registered buffers, whose registration must outlive every
+ * operation that references them ({@link JUring#unregisterBuffers()} must not run while
+ * such an operation is in flight).
  *
  * <h2>Example</h2>
  * <pre>{@code
@@ -196,37 +207,66 @@ public final class JuringFile implements AutoCloseable {
         return new JuringFile(ring, path, new FileDescriptor(fd), flags);
     }
 
-    /** @return the ring this handle is bound to */
+    /**
+     * Returns the ring this handle is bound to.
+     *
+     * @return the ring this handle is bound to
+     */
     public JUring ring() {
         return ring;
     }
 
-    /** @return the path this handle was opened with */
+    /**
+     * Returns the path this handle was opened with.
+     *
+     * @return the path this handle was opened with
+     */
     public Path path() {
         return path;
     }
 
-    /** @return the raw file descriptor (valid until {@link #close()}) */
+    /**
+     * Returns the raw file descriptor.
+     *
+     * @return the raw file descriptor (valid until {@link #close()})
+     */
     public int fd() {
         return fileDescriptor.getFd();
     }
 
-    /** @return {@code true} while the handle is open */
+    /**
+     * Returns whether the handle is open.
+     *
+     * @return {@code true} while the handle is open
+     */
     public boolean isOpen() {
         return open;
     }
 
-    /** @return the fixed-file slot index, or {@code -1} when the file is not registered */
+    /**
+     * Returns the fixed-file slot index of this file.
+     *
+     * @return the fixed-file slot index, or {@code -1} when the file is not registered
+     */
     public int registeredSlot() {
         return registeredSlot;
     }
 
-    /** @return {@code true} when the file is registered with the ring as a fixed file */
+    /**
+     * Returns whether the file is registered with the ring as a fixed file.
+     *
+     * @return {@code true} when the file is registered with the ring as a fixed file
+     */
     public boolean isRegistered() {
         return registeredSlot >= 0;
     }
 
-    /** @return the current short-I/O / {@code EAGAIN} policy */
+    /**
+     * Returns the short-I/O / {@code EAGAIN} policy currently used by the blocking
+     * convenience methods.
+     *
+     * @return the current short-I/O / {@code EAGAIN} policy
+     */
     public IoPolicy policy() {
         return policy;
     }
@@ -262,9 +302,11 @@ public final class JuringFile implements AutoCloseable {
     }
 
     /**
-     * @return the configured maximum number of unawaited ring requests (the in-flight
-     *         ledger capacity): {@link #DEFAULT_IN_FLIGHT_CAPACITY} unless changed with
-     *         {@link #withInFlightCapacity(int)}
+     * Returns the configured maximum number of unawaited ring requests (the in-flight
+     * ledger capacity).
+     *
+     * @return the configured capacity: {@link #DEFAULT_IN_FLIGHT_CAPACITY} unless changed
+     *         with {@link #withInFlightCapacity(int)}
      */
     public int inFlightCapacity() {
         return ledgerCapacity;
@@ -362,6 +404,10 @@ public final class JuringFile implements AutoCloseable {
      * Registers this file with the ring's fixed-file table (runtime add). Idempotent;
      * after registration the fixed-file fast path is available.
      *
+     * <p>Registration is ring-wide state: an external ring-wide change
+     * ({@link JUring#unregisterFiles()}) invalidates the slot while this handle still uses
+     * it, so do not mix external registration changes with a live handle.
+     *
      * @return the fixed-file slot index
      * @throws IllegalStateException when the handle is closed or the ring is not usable
      */
@@ -402,7 +448,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length number of bytes to read, {@code 0 <= length <= buffer.byteSize()}
      * @param buffer native memory segment (must be writable)
      * @return the operation handle to pass to {@link #await(long)}
-     * @throws JuringException if the operation cannot be prepared
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareRead(long offset, int length, MemorySegment buffer) throws JuringException {
         ensureOpen("read");
@@ -424,6 +471,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length      number of bytes to read
      * @param bufferIndex registered buffer index
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareReadFixed(long offset, int length, int bufferIndex) throws JuringException {
         ensureOpen("readFixed");
@@ -446,6 +495,8 @@ public final class JuringFile implements AutoCloseable {
      * @param offset file offset
      * @param buffer native memory segment containing the bytes to write
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareWrite(long offset, MemorySegment buffer) throws JuringException {
         ensureOpen("write");
@@ -469,6 +520,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length      number of bytes to write, {@code 0 <= length <= buffer size}
      * @param bufferIndex registered buffer index
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareWriteFixed(long offset, int length, int bufferIndex) throws JuringException {
         ensureOpen("writeFixed");
@@ -489,6 +542,8 @@ public final class JuringFile implements AutoCloseable {
      *
      * @param dataOnly {@code true} for {@code fdatasync} semantics
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareFsync(boolean dataOnly) throws JuringException {
         ensureOpen("fsync");
@@ -506,9 +561,11 @@ public final class JuringFile implements AutoCloseable {
     /**
      * Prepares an asynchronous {@code ftruncate}.
      *
-     * @param newLength the new file length in bytes (negative values are rejected by the
-     *                  kernel with {@code EINVAL}, surfaced as a typed error)
+     * @param newLength the new file length in bytes (a negative value is rejected
+     *                  client-side as a typed {@code EINVAL}, matching the kernel contract)
      * @return the operation handle
+     * @throws JuringException if {@code newLength} is negative (typed {@code EINVAL}, matching
+     *                         the kernel contract) or the request cannot be prepared
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FTRUNCATE}
      */
     public long prepareTruncate(long newLength) throws JuringException {
@@ -537,6 +594,8 @@ public final class JuringFile implements AutoCloseable {
      *               {@link #FALLOC_FL_PUNCH_HOLE}, {@link #FALLOC_FL_ZERO_RANGE}, or a
      *               combination supported by the filesystem)
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FALLOCATE}
      */
     public long prepareFallocate(long offset, long length, int mode) throws JuringException {
@@ -563,6 +622,8 @@ public final class JuringFile implements AutoCloseable {
      * @param offset file offset
      * @param length number of bytes
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      */
     public long prepareDiscard(long offset, long length) throws JuringException {
         return prepareFallocate(offset, length, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE);
@@ -583,6 +644,8 @@ public final class JuringFile implements AutoCloseable {
      *
      * @param timeoutMillis relative timeout in milliseconds, {@code >= 0}
      * @return the operation handle
+     * @throws JuringException retained for API compatibility; preparation-time failures are
+     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      */
     public long prepareTimeout(long timeoutMillis) throws JuringException {
@@ -636,6 +699,9 @@ public final class JuringFile implements AutoCloseable {
      * @param buffer      native writable segment
      * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return the read operation handle
+     * @throws JuringException retained by the frozen signature; preparation-time failures
+     *                         (including ledger exhaustion and a full submission queue) are
+     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      *                                       or {@code IORING_OP_LINK_TIMEOUT}
      */
@@ -675,6 +741,11 @@ public final class JuringFile implements AutoCloseable {
      * @param buffer      native segment with the bytes to write
      * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return the write operation handle
+     * @throws JuringException retained by the frozen signature; preparation-time failures
+     *                         (including ledger exhaustion and a full submission queue) are
+     *                         reported as unchecked exceptions
+     * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
+     *                                       or {@code IORING_OP_LINK_TIMEOUT}
      */
     public long prepareWrite(long offset, MemorySegment buffer, long timeoutMillis) throws JuringException {
         ensureOpen("write");
@@ -711,6 +782,9 @@ public final class JuringFile implements AutoCloseable {
      * the read when the deadline expires, so this method returns or throws within the
      * timeout (plus scheduling overhead) even on a hung device.
      *
+     * @param offset        file offset, {@code >= 0}
+     * @param buffer        native writable segment to fill
+     * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return bytes read (short count at EOF); the read is not retried
      * @throws JuringException {@code ETIMEDOUT} when the kernel timeout won, {@code ECANCELED}
      *                         when the request was explicitly cancelled, or the real errno
@@ -725,7 +799,12 @@ public final class JuringFile implements AutoCloseable {
      * Single-shot write bounded by a kernel linked timeout; see
      * {@link #read(long, MemorySegment, long)}.
      *
+     * @param offset        file offset, {@code >= 0}
+     * @param buffer        native segment containing the bytes to write
+     * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return bytes written; the write is not retried
+     * @throws JuringException {@code ETIMEDOUT} when the kernel timeout won, {@code ECANCELED}
+     *                         when the request was explicitly cancelled, or the real errno
      */
     public int write(long offset, MemorySegment buffer, long timeoutMillis) throws JuringException {
         long handle = prepareWrite(offset, buffer, timeoutMillis);
@@ -1212,13 +1291,21 @@ public final class JuringFile implements AutoCloseable {
         await(handle);
     }
 
-    /** Flushes file data and metadata ({@code fsync}). */
+    /**
+     * Flushes file data and metadata ({@code fsync}).
+     *
+     * @throws JuringException on failure (typed errno)
+     */
     public void fsync() throws JuringException {
         long handle = prepareFsync(false);
         await(handle);
     }
 
-    /** Flushes file data ({@code fdatasync}). */
+    /**
+     * Flushes file data ({@code fdatasync}).
+     *
+     * @throws JuringException on failure (typed errno)
+     */
     public void fdatasync() throws JuringException {
         long handle = prepareFsync(true);
         await(handle);
@@ -1228,69 +1315,104 @@ public final class JuringFile implements AutoCloseable {
     // counters
     // ------------------------------------------------------------------
 
-    /** @return total number of operations prepared through this handle */
+    /**
+     * Returns the total number of ring requests prepared through this handle.
+     *
+     * <p>A timed operation ({@link #prepareRead(long, int, MemorySegment, long)}) is two
+     * requests (target plus linked timeout) and therefore counts twice.
+     *
+     * @return total number of ring requests prepared through this handle
+     */
     public long issuedOperations() {
         return issuedOperations;
     }
 
-    /** @return number of operations that completed (successfully or not) and were reaped */
+    /**
+     * Returns the number of ring requests that completed and were reaped, successfully or
+     * not.
+     *
+     * @return number of reaped completions
+     */
     public long completedOperations() {
         return completedOperations;
     }
 
-    /** @return number of operations that completed with a negative result */
+    /**
+     * Returns the number of reaped completions with a negative result.
+     *
+     * @return number of failed completions
+     */
     public long failedOperations() {
         return failedOperations;
     }
 
-    /** @return number of operations currently prepared but not yet reaped */
+    /**
+     * Returns the number of ring requests currently prepared but not yet reaped.
+     *
+     * @return number of in-flight ring requests
+     */
     public int inFlightOperations() {
         return inFlight;
     }
 
     /**
-     * @return number of operations abandoned at close because they could not be reaped
-     *         (drain deadline + grace expired, or foreign work on the ring made reaping
-     *         unsafe). Abandoned requests are counted, never silent; their completions may
-     *         still be delivered through the ring's CQ.
+     * Returns the number of operations abandoned at close because they could not be reaped.
+     *
+     * <p>An operation is abandoned when the drain deadline plus grace expired or foreign
+     * work on the ring made reaping unsafe. Abandoned requests are counted, never silent;
+     * their completions may still be delivered through the ring's CQ.
+     *
+     * @return number of operations abandoned at close
      */
     public int abandonedOperations() {
         return (int) abandonedOperations;
     }
 
     /**
-     * @return number of terminal {@code -ECANCELED} completions observed by this handle
-     *         (explicitly cancelled requests, disarmed linked timeouts of timed operations,
-     *         and requests cancelled by {@link #close(long)})
+     * Returns the number of terminal {@code -ECANCELED} completions observed by this handle:
+     * explicitly cancelled requests, disarmed linked timeouts of timed operations, and
+     * requests cancelled by {@link #close(long)}.
+     *
+     * @return number of terminal {@code -ECANCELED} completions
      */
     public long cancelledOperations() {
         return cancelledOperations;
     }
 
     /**
-     * @return number of internal cancel control requests issued by this handle
-     *         ({@link #cancel(long)}, {@link #cancelAll()}, {@link #close(long)}); these are
-     *         tracked and reaped but are not user-visible operations
+     * Returns the number of internal cancel control requests issued by this handle
+     * ({@link #cancel(long)}, {@link #cancelAll()}, {@link #close(long)}).
+     *
+     * <p>Control requests are tracked and reaped but are not user-visible operations.
+     *
+     * @return number of internal cancel control requests
      */
     public long controlOperations() {
         return controlOperations;
     }
 
     /**
-     * @return the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
-     *         requests prepared through this handle, including syncs issued by the buffered
-     *         streams and group commit. Owner-thread counter; excludes {@code fadvise},
-     *         which is not a ring request.
+     * Returns the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
+     * requests prepared through this handle, including syncs issued by the buffered streams
+     * and group commit.
+     *
+     * <p>This is an owner-thread counter; it excludes {@code fadvise}, which is not a ring
+     * request.
+     *
+     * @return number of sync requests prepared through this handle
      */
     public long syncOperations() {
         return syncOperations;
     }
 
     /**
-     * @return the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
-     *         completions reaped through this handle (successful or failed). Owner-thread
-     *         counter; the delta against {@link #syncOperations()} shows issued syncs still
-     *         in flight.
+     * Returns the number of {@code fsync}/{@code fdatasync} ({@link OperationType#FSYNC})
+     * completions reaped through this handle, successful or failed.
+     *
+     * <p>This is an owner-thread counter; the delta against {@link #syncOperations()} shows
+     * issued syncs still in flight.
+     *
+     * @return number of sync completions reaped through this handle
      */
     public long syncCompletions() {
         return syncCompletions;
@@ -1305,6 +1427,9 @@ public final class JuringFile implements AutoCloseable {
      * ({@link #DEFAULT_CLOSE_TIMEOUT_MILLIS} by default), cancelling what cannot be drained,
      * reconciling the cancelled completions, unregistering the fixed-file slot and closing the
      * descriptor. Never throws because an operation failed, and is idempotent.
+     *
+     * <p>The {@link JUring} is not closed: the caller owns the ring and may close it after
+     * the handle.
      *
      * <p><b>Bounded shutdown contract:</b> the method returns after at most
      * {@code timeoutMillis + GRACE_NANOS} (250 ms) when cancellation is required; it returns
