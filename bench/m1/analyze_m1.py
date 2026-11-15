@@ -62,11 +62,40 @@ M1 gate (§7 of docs/benchmark-methodology.md)
 
 Verdicts are PASS / FAIL / INCONCLUSIVE, always with the achieved CI half-width.
 
+Write-session mode (M1 write matrix, session 11)
+------------------------------------------------
+When the session contains write throughput cells (W5-W8, W12-W14) the tool
+additionally emits a write-half section and two extra CSV tables:
+
+* the write-cell throughput table (p99 in us from the raw engine JSON);
+* the W7/W8 **rule 1** gate against BOTH registration-matched fio variants --
+  ``matchedbatch`` (primary) and ``matched`` (sensitivity). PASS requires the
+  one-sided 95 % lower bound of the paired JUring/fio ratio >= 0.95 against
+  BOTH; FAIL if either 95 % upper bound is < 0.95; otherwise INCONCLUSIVE
+  (docs/m1-write-design.md §6). All reps are primary; the existing unstable-cell
+  fast-subset policy is applied only when a cell is unstable and the excluded
+  rep ids are disclosed;
+* the W7 fio batching sweep (informational) and the seastar write bracket
+  (no threshold);
+* the D2/D7 analysis of the 1 s device series: per-run window n/mean/CV/min/max,
+  write-cliff detection (>30 % step drop or samples <70 % of the run mean),
+  burst-vs-steady split (first 10 s of the measured window vs the remainder),
+  write amplification = device write-sector delta x 512 / engine measured bytes,
+  thermal range and loadavg_start (>1.6 flagged). The sampler's ``io_busy_pct``
+  column is never used (known ~100x unit bug in older samplers).
+
+The ``cell-meta.tsv`` p99 units are manifest-driven: with
+``cell_meta_p99_units=us`` every engine's cell-meta p99 is already in
+microseconds; the legacy 2026-11-13 write block (no flag) keeps the documented
+fio ns->us normalisation for the cross-check only.
+
 Write policy
 ------------
 Aggregate artifacts are written only when ``--out-prefix`` is given, or when
-``--dir`` is the M1 session dir (then under ``<dir>/aggregate/``).  The legacy
-2026-11-13 results directory is never written to.
+``--dir`` is exactly the canonical M1 read session dir (then under
+``<dir>/aggregate/``). Every other directory -- including the legacy write block
+``bench/results/m1-2026-11-13-write``, whose name contains "m1-2026-11-13" -- is
+raw evidence and is never written to by default.
 
 Stdlib only (no numpy/scipy/PyYAML).
 """
@@ -134,10 +163,44 @@ TAIL_FACTOR = 2.0            # rule 3: p99 <= 2x fio
 P99_PARITY = 1.10
 P999_PARITY = 1.15
 
+# --- write-session policy (docs/m1-write-design.md, frozen 2026-11-15) ------
+# M1 write cells (methodology §2): W5-W8 4K randwrite, W12-W14 1M seqwrite.
+# case -> (workload, bs bytes, qd)
+WRITE_CASE_SPEC = {
+    "W5": ("randwrite", 4096, 1),
+    "W6": ("randwrite", 4096, 16),
+    "W7": ("randwrite", 4096, 64),
+    "W8": ("randwrite", 4096, 128),
+    "W12": ("seqwrite", 1048576, 1),
+    "W13": ("seqwrite", 1048576, 8),
+    "W14": ("seqwrite", 1048576, 32),
+}
+WRITE_GATE_CASES = ("W7", "W8")
+WRITE_CASE_ORDER = ("W5", "W6", "W7", "W8", "W12", "W13", "W14")
+# M1 write rule 1 is evaluated against BOTH registration-matched fio configs
+# (design §4/§6): matchedbatch is primary (batching matched to JUring's fused
+# submit), matched is the read-gate comparator (sensitivity). PASS needs the
+# one-sided 95% lower bound >= 0.95 against BOTH; FAIL if either 95% upper
+# bound < 0.95; otherwise INCONCLUSIVE. No comparator is ever selected by data.
+WRITE_PRIMARY_VARIANT = "matchedbatch"
+WRITE_SENSITIVITY_VARIANT = "matched"
+WRITE_SWEEP_VARIANTS = ("batch1", "batch8", "batch16", "batch32")
+FIO_SWEEP_ORDER = {"default": 0, "matched": 1, "matchedbatch": 2,
+                   "batch1": 3, "batch8": 4, "batch16": 5, "batch32": 6}
+# D2 analysis (methodology §5 D2/D7, design §5): burst vs steady state is the
+# first 10 s of the measured window vs the remainder.
+SERIES_BURST_S = 10
+CLIFF_STEP_DROP = 0.30        # >30% one-step drop = cliff
+CLIFF_MEAN_FRACTION = 0.70    # a sample <70% of the run mean = cliff sample
+LOADAVG_FLAG = 1.6            # F14 disclosure threshold (design §11-D6)
+
 ENGINE_ORDER = {"juring": 0, "fio-io_uring": 1, "fio-libaio": 2,
                 "seastar": 3, "seastar-io_tester": 4}
+# Existing read-session variants keep their original ranks: the read aggregate
+# (cell/ratio row order) must stay byte-identical. Only variants that never
+# appear in the read session (matchedbatch, batch1) are appended.
 VARIANT_ORDER = {"std": 0, "matched": 1, "uring": 2, "b1": 3, "default": 4,
-                 "libaio": 5}
+                 "libaio": 5, "matchedbatch": 6, "batch1": 7}
 
 # legacy harness filenames -> methodology workload IDs
 LEGACY_HARNESS_WF = {
@@ -1234,6 +1297,81 @@ def load_session_manifest(session_dir, warnings):
     return {"path": path, "text": text, "lines": text.splitlines()}
 
 
+def manifest_value(manifest, key):
+    """First `key=value` line in the session manifest (plus manifest-run*.txt).
+
+    The write driver rewrites `manifest.txt` for the first invocation and writes
+    `manifest-run<N>.txt` for later blocks of the same session; the design's
+    units flag (`cell_meta_p99_units=us`) may therefore live in any of them.
+    """
+    if not manifest:
+        return None
+    paths = [manifest] + list(manifest.get("extra", []))
+    for entry in paths:
+        for line in entry.get("lines") or []:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _sep, v = line.partition("=")
+            if k.strip() == key:
+                return v.strip()
+    return None
+
+
+def manifest_int(manifest, key, default=None):
+    """First `<key>=<int>` token in the manifest, including combined lines.
+
+    The write manifest stores `reps=3 measured_s=60 warmup=...` on one line, so
+    a plain `key=value` split is not enough; search every line for the token.
+    """
+    if not manifest:
+        return default
+    pattern = re.compile(r"(?:^|\s)" + re.escape(key) + r"=(\d+)")
+    for entry in [manifest] + list(manifest.get("extra", [])):
+        for line in entry.get("lines") or []:
+            m = pattern.search(line)
+            if m:
+                return int(m.group(1))
+    return default
+
+
+def load_session_manifests(session_dir, warnings):
+    """Read manifest.txt + manifest-run*.txt (multi-invocation write sessions)."""
+    main = load_session_manifest(session_dir, warnings)
+    if main is None:
+        return None
+    extra = []
+    for path in sorted(session_dir.glob("manifest-run*.txt")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception as exc:
+            warnings.append(f"{rel(path)}: unreadable manifest ({exc})")
+            continue
+        extra.append({"path": path, "text": text, "lines": text.splitlines()})
+    main["extra"] = extra
+    return main
+
+
+def cell_meta_p99_units(session_dir, manifest, warnings):
+    """Return (units, flag_source) for the `cell-meta.tsv` p99_us column.
+
+    The 2026-11-13 write block wrote fio clat (nanoseconds) into `p99_us` (the
+    documented units defect); the session-11 write harness writes microseconds
+    for every engine and declares `cell_meta_p99_units=us` in the manifest.
+    Detection is manifest-driven (design §7); the legacy ns->us normalisation is
+    kept only when no flag is present.
+    """
+    raw = manifest_value(manifest, "cell_meta_p99_units")
+    if raw:
+        units = raw.strip().lower()
+        source = "manifest cell_meta_p99_units"
+        return units, source
+    if (session_dir / "cell-meta.tsv").is_file():
+        return None, "absent (legacy 2026-11-13 behaviour)"
+    return None, "no cell-meta.tsv"
+
+
+
 # ---------------------------------------------------------------------------
 # seastar io_tester YAML parsing (stdlib only)
 # ---------------------------------------------------------------------------
@@ -1690,8 +1828,19 @@ def compute_ratios(cells):
                 continue
             if c["engine"] in ("seastar", "seastar-io_tester"):
                 kind, matched = "seastar-bracket", False
+            elif (c["engine"] == "fio-io_uring" and
+                  c["variant"] == WRITE_PRIMARY_VARIANT):
+                kind, matched = "fio-matchedbatch", True
             elif c["engine"] == "fio-io_uring" and c["variant"] in MATCHED_FIO_VARIANTS:
                 kind, matched = "fio-matched", True
+            elif (c["engine"] == "fio-io_uring" and
+                  c["variant"] in WRITE_SWEEP_VARIANTS and
+                  c["case"] in WRITE_CASE_SPEC):
+                # Write-session W7 batching sweep: informational, never a gate
+                # comparator. (Read-session W3 batch cells keep their original
+                # "fio-unmatched-info" classification so the read aggregate is
+                # byte-identical.)
+                kind, matched = "fio-batch-sweep", False
             elif (c["engine"] or "").startswith("fio"):
                 kind, matched = "fio-unmatched-info", False
             else:
@@ -1726,8 +1875,10 @@ def compute_ratios(cells):
                 "note": "; ".join(note),
             })
     ratios.sort(key=lambda r: (cell_sort_key(r["left"]),
-                               {"fio-matched": 0, "fio-unmatched-info": 1,
-                                "seastar-bracket": 2}.get(r["kind"], 9),
+                               {"fio-matchedbatch": -1, "fio-matched": 0,
+                                "fio-batch-sweep": 1,
+                                "fio-unmatched-info": 2,
+                                "seastar-bracket": 3}.get(r["kind"], 9),
                                VARIANT_ORDER.get(r["right"]["variant"], 9)))
     return ratios
 
@@ -1765,12 +1916,21 @@ def _ratio_line(st):
 
 
 def evaluate_throughput_gate(cells, warnings):
+    """Rule 1 gate: read cells W3/W4 (as before) + write cells W7/W8.
+
+    Read half: unchanged — paired JUring/fio-matched ratio, one-sided 95 % LB
+    >= 0.95. Write half: paired JUring/fio ratio against BOTH registration-
+    matched fio variants (matchedbatch primary, matched sensitivity), all reps
+    primary with the existing unstable-cell fast-subset policy disclosed.
+
+    Returns (rows, verdicts, saturation_cells_present, write_gate_detail).
+    """
     rows = []
     verdicts = []
     sat_cases = list(SATURATION_CASES_READ) + list(SATURATION_CASES_WRITE)
     present = [c for c in sat_cases if any(x["case"] == c for x in cells)]
-    write_cells_present = any(c["workload"] in ("randwrite", "seqwrite")
-                              for c in cells)
+    read_cells_present = session_has_read(cells)
+    write_cells_present = session_has_write(cells)
     if not present:
         rows.append({
             "rule": "1-throughput", "cells": "W3/W4 (W7/W8)",
@@ -1779,19 +1939,22 @@ def evaluate_throughput_gate(cells, warnings):
             "half_width": "—",
             "note": "no saturation cells in this directory",
         })
-        return rows, ["INCONCLUSIVE"], present
-    for case in sat_cases:
+        return rows, ["INCONCLUSIVE"], present, None
+
+    # ---- read saturation cells: unchanged read-path logic ------------------
+    for case in SATURATION_CASES_READ:
         jc = gate_juring_cell(cells, case)
         fc = gate_fio_matched_cell(cells, case)
         fio_variants = sorted({c["variant"] for c in cells
                                if c["case"] == case and
                                c["engine"] == "fio-io_uring"})
-        is_write = case in SATURATION_CASES_WRITE
         if jc is None and fc is None:
-            if is_write and not write_cells_present:
+            if not read_cells_present and write_cells_present:
+                # A write session has no read cells: rule 1 for the read path is
+                # out of scope here, not failed (Step A is the write half).
                 verdict = "N/A"
-                note = ("no write cells in session (read-only dataset); write "
-                        "half of M1 not assessed")
+                note = ("read-path cell not in this write session; write half "
+                        "only (M1 read path is recorded in the read session)")
             else:
                 verdict = "INCONCLUSIVE"
                 note = "case absent from this session"
@@ -1829,33 +1992,17 @@ def evaluate_throughput_gate(cells, warnings):
         # is flagged unstable (CV>10 %, mixed state, or >10 % IOPS spread) does
         # the gate fall back to the fast-state subset -- stated explicitly with
         # its CI and the excluded rep ids.
-        st_all = ratio_stats(jc["reps"], fc["reps"])
-        st_fast = ratio_stats(jc["fast_reps"], fc["fast_reps"])
-        unstable_sides = []
-        if jc["unstable"]:
-            unstable_sides.append("JUring")
-        if fc["unstable"]:
-            unstable_sides.append("fio")
-        used_subset = bool(unstable_sides)
-        st = st_fast if used_subset else st_all
-        if used_subset and st.get("n_pairs", 0) < 2:
-            verdict = "INCONCLUSIVE"
-            detail = (f"fast-state subset has n_pairs={st.get('n_pairs', 0)} "
-                      f"(need >=2); primary all-reps ratio "
-                      f"{fratio(st_all.get('mean'))} is on an unstable cell")
-        else:
-            verdict, detail = lower_bound_verdict(st, THROUGHPUT_LB)
-        half = "—"
-        if st.get("ci95_half") is not None:
-            half = f"±{st['ci95_half']:.4f} ({st['ci95_half_pct']:.1f}% of mean)"
-        if is_write:
-            detail = (detail + " " if detail else "") + "write cell"
+        stat = _paired_gate_stats(jc, fc)
+        st_all = stat["st_all"]
+        used_subset = stat["used_subset"]
+        half = stat["half"]
+        detail = stat["detail"]
         if used_subset:
             rule_note = (
                 f"all-reps ratio {fratio(st_all.get('mean'))} "
                 f"[90% {_ci_str(st_all, 'ci90')}]; "
-                f"fast-state subset used ({'+'.join(unstable_sides)} unstable: "
-                f"CV>10%/mixed state/spread; all-reps CV "
+                f"fast-state subset used ({'+'.join(stat['unstable_sides'])} "
+                f"unstable: CV>10%/mixed state/spread; all-reps CV "
                 f"{fnum(jc['cv_pct'], 1)}%/{fnum(fc['cv_pct'], 1)}%, "
                 f"slow JUring [{', '.join(jc['slow_ids']) or '-'}], "
                 f"slow fio [{', '.join(fc['slow_ids']) or '-'}], "
@@ -1869,17 +2016,41 @@ def evaluate_throughput_gate(cells, warnings):
                 f"fio [{', '.join(fc['slow_ids']) or '-'}]); ")
         ratio_text = _ratio_line(st_all)
         if used_subset:
-            ratio_text += " | fast subset: " + _ratio_line(st_fast)
+            ratio_text += " | fast subset: " + _ratio_line(stat["st_fast"])
         rows.append({
             "rule": "1-throughput", "cells": case,
             "juring": _cell_pair_desc(jc),
             "comparator": _cell_pair_desc(fc),
             "ratio": ratio_text,
-            "threshold": "1s95 LB >= 0.95", "verdict": verdict,
+            "threshold": "1s95 LB >= 0.95", "verdict": stat["verdict"],
             "half_width": half, "note": rule_note + detail,
         })
-        verdicts.append(verdict)
-    return rows, verdicts, present
+        verdicts.append(stat["verdict"])
+
+    # ---- write saturation cells: both comparators --------------------------
+    write_detail = None
+    if write_cells_present:
+        write_rows, write_verdicts, comparators, case_verdicts = \
+            evaluate_write_gate(cells)
+        rows.extend(write_rows)
+        verdicts.extend(write_verdicts)
+        write_detail = {"rows": write_rows, "comparators": comparators,
+                        "case_verdicts": case_verdicts,
+                        "verdict": combine_verdicts(write_verdicts),
+                        "gated_cases_present": [
+                            c for c in WRITE_GATE_CASES
+                            if any(x["case"] == c for x in cells)]}
+    else:
+        for case in SATURATION_CASES_WRITE:
+            rows.append({
+                "rule": "1-throughput", "cells": case, "juring": "—",
+                "comparator": "—", "ratio": "—",
+                "threshold": "1s95 LB >= 0.95", "verdict": "N/A",
+                "half_width": "—",
+                "note": ("no write cells in session (read-only dataset); write "
+                         "half of M1 not assessed"),
+            })
+    return rows, verdicts, present, write_detail
 
 
 def _perf_group(perf_records, case, engine, bs, qd):
@@ -2204,7 +2375,7 @@ def evaluate_ci_rule(cells, cited_cells):
 # cell-meta.tsv cross-check
 # ---------------------------------------------------------------------------
 
-def cross_check_meta(session_dir, reps, perf_tsv_rows=None):
+def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None):
     """Compare parsed JSON with cell-meta.tsv, tolerating documented collisions.
 
     cell-meta.tsv has no phase column, and the perf phase reused the W1/W3 ids
@@ -2214,6 +2385,10 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None):
     bogus mismatch. The six fio perf `perf-matched` JSON files are missing
     because of the documented fio `perf`/`perf-matched` filename-stem collision;
     they are reported as documented collisions, not as errors.
+
+    `meta_p99_units`: 'us' when the session manifest declares
+    `cell_meta_p99_units=us` (session-11 write harness); None/absent keeps the
+    legacy 2026-11-13 write-block behaviour where fio rows are nanoseconds.
     """
     path = session_dir / "cell-meta.tsv"
     if not path.is_file():
@@ -2252,6 +2427,8 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None):
     collision_missing = []
     byte_rows = []
     unit_normalized_p99 = []
+    confirmed_us_p99 = 0
+    legacy_ns_p99 = 0
     for key, rows in by_key.items():
         case, engine, variant, bs_txt, qd_txt, rep_txt = key
         bs = parse_size(bs_txt)
@@ -2309,14 +2486,20 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None):
                                   f"json {rec['iops']:.1f} vs meta {iops_meta:.1f}")
         p99_meta = as_float(row.get("p99_us"))
         if p99_meta and rec.get("p99"):
-            # Known write-session defect: the write cell-meta/RESULT p99_us for
-            # fio rows is fio clat in NANOSECONDS (e.g. 2211840 vs 2211.84 us).
-            # Normalise for the CROSS-CHECK only; report values still come from
-            # the raw JSON / cells-normalized.csv (never from this meta column).
+            # Session-11 write harness: the manifest declares
+            # cell_meta_p99_units=us, so the cell-meta column is already
+            # microseconds for EVERY engine -- no conversion. Legacy 2026-11-13
+            # write block: fio rows carry fio clat in NANOSECONDS (e.g. 2211840
+            # where the truth is 2211.84 us); normalise ns->us for the
+            # CROSS-CHECK only. Cited values always come from the raw JSON (the
+            # analyzer never cites the cell-meta p99 column).
             unit_normalized = None
-            if (engine.startswith("fio") and p99_meta > 100.0 * rec["p99"]
+            if meta_p99_units == "us":
+                confirmed_us_p99 += 1
+            elif (engine.startswith("fio") and p99_meta > 100.0 * rec["p99"]
                     and p99_meta > 100000.0):
                 unit_normalized = p99_meta / 1000.0
+                legacy_ns_p99 += 1
             meta_for_check = unit_normalized if unit_normalized else p99_meta
             diff = abs(rec["p99"] - meta_for_check) / meta_for_check
             max_p99 = max(max_p99, diff)
@@ -2336,6 +2519,9 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None):
         "missing": missing, "mismatches": mismatches,
         "ambiguous": ambiguous, "collision_missing": collision_missing,
         "unit_normalized_p99": unit_normalized_p99,
+        "meta_p99_units": meta_p99_units,
+        "confirmed_us_p99": confirmed_us_p99,
+        "legacy_ns_p99": legacy_ns_p99,
         "byte_rows": byte_rows,
         "n_byte_warn": sum(1 for b in byte_rows if b["verdict"] != "PASS"),
     }
@@ -2477,7 +2663,588 @@ def cross_check_iotester(iotester, iot_check):
 
 
 # ---------------------------------------------------------------------------
+# write-session analysis: rule-1 gate (both comparators), D2 device series
+# ---------------------------------------------------------------------------
+
+def workload_is_write(workload):
+    return workload in ("randwrite", "seqwrite")
+
+
+def session_has_write(cells):
+    """True when the session contains any write throughput cell."""
+    return any(workload_is_write(c["workload"]) for c in cells)
+
+
+def session_has_read(cells):
+    """True when the session contains any read throughput cell."""
+    return any(c["workload"] in ("randread", "seqread") for c in cells)
+
+
+def _write_cell_spec(case):
+    return WRITE_CASE_SPEC.get(case)
+
+
+def write_juring_cell(cells, case):
+    """JUring std cell for a write case at the methodology's bs/QD."""
+    spec = _write_cell_spec(case)
+    if not spec:
+        return None
+    _workload, bs, qd = spec
+    cell = pick_cell(cells, case, engine="juring", variants=["std"], bs=bs, qd=qd,
+                     threads=1)
+    if cell is None:
+        cell = pick_cell(cells, case, engine="juring", bs=bs, qd=qd, threads=1)
+    return cell
+
+
+def write_fio_cell(cells, case, variant):
+    """fio-io_uring cell for one write comparator variant at bs/QD."""
+    spec = _write_cell_spec(case)
+    if not spec:
+        return None
+    _workload, bs, qd = spec
+    return pick_cell(cells, case, engine="fio-io_uring", variants=[variant],
+                     bs=bs, qd=qd, threads=1)
+
+
+def _paired_gate_stats(jc, fc):
+    """Paired ratio statistics + the existing unstable-cell gate policy.
+
+    All reps are primary; the fast-state subset is used only when a cell is
+    flagged unstable (CV>10 %, mixed state, or >10 % IOPS spread), and the
+    excluded rep ids are disclosed. This is the same policy the read gate uses.
+    """
+    st_all = ratio_stats(jc["reps"], fc["reps"])
+    st_fast = ratio_stats(jc["fast_reps"], fc["fast_reps"])
+    unstable_sides = []
+    if jc["unstable"]:
+        unstable_sides.append("JUring")
+    if fc["unstable"]:
+        unstable_sides.append("fio")
+    used_subset = bool(unstable_sides)
+    st = st_fast if used_subset else st_all
+    if used_subset and st.get("n_pairs", 0) < 2:
+        verdict = "INCONCLUSIVE"
+        detail = (f"fast-state subset has n_pairs={st.get('n_pairs', 0)} "
+                  f"(need >=2); primary all-reps ratio "
+                  f"{fratio(st_all.get('mean'))} is on an unstable cell")
+    else:
+        verdict, detail = lower_bound_verdict(st, THROUGHPUT_LB)
+    half = "—"
+    if st.get("ci95_half") is not None:
+        half = f"±{st['ci95_half']:.4f} ({st['ci95_half_pct']:.1f}% of mean)"
+    note = []
+    if used_subset:
+        note.append(
+            f"fast-state subset used ({'+'.join(unstable_sides)} unstable: "
+            f"CV>10%/mixed state/spread; all-reps CV "
+            f"{fnum(jc['cv_pct'], 1)}%/{fnum(fc['cv_pct'], 1)}%, slow JUring "
+            f"[{', '.join(jc['slow_ids']) or '-'}], slow fio "
+            f"[{', '.join(fc['slow_ids']) or '-'}], classification differs: "
+            f"{'YES' if set(jc['slow_ids']) != set(fc['slow_ids']) else 'no'})")
+    else:
+        note.append(
+            f"all-reps primary (CV {fnum(jc['cv_pct'], 1)}%/"
+            f"{fnum(fc['cv_pct'], 1)}%, slow reps JUring "
+            f"[{', '.join(jc['slow_ids']) or '-'}] / fio "
+            f"[{', '.join(fc['slow_ids']) or '-'}])")
+    if st.get("lb95_1s") is not None:
+        note.append(f"1s95 LB {st['lb95_1s']:.4f} vs {THROUGHPUT_LB}")
+    note.append(detail)
+    return {
+        "st_all": st_all, "st_fast": st_fast, "st": st,
+        "used_subset": used_subset, "unstable_sides": unstable_sides,
+        "verdict": verdict, "detail": detail, "half": half,
+        "note": "; ".join(n for n in note if n),
+    }
+
+
+def evaluate_write_gate(cells):
+    """M1 write rule 1: paired JUring/fio at W7/W8 vs BOTH fio comparators.
+
+    Returns (rows, verdicts, comparators, case_verdicts). For every gated case
+    both comparator rows are emitted (matchedbatch = primary, matched =
+    sensitivity). Combining the two per-comparator verdicts with the standard
+    PASS-if-all / FAIL-if-any / else-INCONCLUSIVE rule is exactly the frozen
+    decision rule: PASS requires the one-sided 95 % LB >= 0.95 against BOTH.
+    """
+    rows = []
+    verdicts = []
+    comparators = []
+    case_verdicts = {}
+    for case in WRITE_GATE_CASES:
+        jc = write_juring_cell(cells, case)
+        fio_variants = sorted({c["variant"] for c in cells
+                               if c["case"] == case and
+                               c["engine"] == "fio-io_uring"})
+        if jc is None and not any(write_fio_cell(cells, case, v)
+                                  for v in (WRITE_PRIMARY_VARIANT,
+                                            WRITE_SENSITIVITY_VARIANT)):
+            rows.append({
+                "rule": "1-throughput", "cells": case, "juring": "—",
+                "comparator": "—", "ratio": "—",
+                "threshold": "1s95 LB >= 0.95 (both comparators)",
+                "verdict": "INCONCLUSIVE", "half_width": "—",
+                "note": ("case absent from this write session; write rule 1 "
+                         "needs both W7 and W8 with both fio comparators"),
+            })
+            verdicts.append("INCONCLUSIVE")
+            case_verdicts[case] = "INCONCLUSIVE"
+            continue
+        case_v = []
+        for variant, role in ((WRITE_PRIMARY_VARIANT, "primary"),
+                              (WRITE_SENSITIVITY_VARIANT, "sensitivity")):
+            fc = write_fio_cell(cells, case, variant)
+            comparator_cell = (
+                f"{_cell_pair_desc(fc)} [fio {variant} ({role})]"
+                if fc is not None else f"— (fio {variant} ({role}) absent)")
+            if jc is None:
+                rows.append({
+                    "rule": "1-throughput", "cells": case, "juring": "—",
+                    "comparator": comparator_cell, "ratio": "—",
+                    "threshold": "1s95 LB >= 0.95 (both comparators)",
+                    "verdict": "INCONCLUSIVE", "half_width": "—",
+                    "note": f"no JUring cell for {case}; cannot evaluate",
+                })
+                verdicts.append("INCONCLUSIVE")
+                case_v.append("INCONCLUSIVE")
+                continue
+            if fc is None:
+                rows.append({
+                    "rule": "1-throughput", "cells": case,
+                    "juring": _cell_pair_desc(jc),
+                    "comparator": comparator_cell, "ratio": "—",
+                    "threshold": "1s95 LB >= 0.95 (both comparators)",
+                    "verdict": "INCONCLUSIVE", "half_width": "—",
+                    "note": (f"no fio `{variant}` comparator cell (variants "
+                             f"present: {', '.join(fio_variants) or 'none'}); "
+                             f"write rule 1 requires BOTH matchedbatch and "
+                             f"matched — cannot PASS"),
+                })
+                verdicts.append("INCONCLUSIVE")
+                case_v.append("INCONCLUSIVE")
+                continue
+            stat = _paired_gate_stats(jc, fc)
+            st = stat["st"]
+            ratio_text = _ratio_line(stat["st_all"])
+            if stat["used_subset"]:
+                ratio_text += " | fast subset: " + _ratio_line(stat["st_fast"])
+            note = (f"write rule 1 vs {role} comparator fio/{variant}; both "
+                    f"comparators required (PASS iff both 1s95 LBs >= "
+                    f"{THROUGHPUT_LB}, FAIL iff either 95% UB < "
+                    f"{THROUGHPUT_LB}); " + stat["note"])
+            rows.append({
+                "rule": "1-throughput", "cells": case,
+                "juring": _cell_pair_desc(jc),
+                "comparator": comparator_cell,
+                "ratio": ratio_text,
+                "threshold": "1s95 LB >= 0.95 (both comparators)",
+                "verdict": stat["verdict"], "half_width": stat["half"],
+                "note": note,
+            })
+            verdicts.append(stat["verdict"])
+            case_v.append(stat["verdict"])
+            comparators.append({
+                "case": case, "comparator_role": role,
+                "comparator_variant": variant,
+                "juring": jc, "fio": fc,
+                "stats": stat["st"], "stats_all": stat["st_all"],
+                "stats_fast": stat["st_fast"],
+                "used_subset": stat["used_subset"],
+                "unstable_sides": stat["unstable_sides"],
+                "excluded_juring": list(jc["slow_ids"]),
+                "excluded_fio": list(fc["slow_ids"]),
+                "verdict": stat["verdict"], "half": stat["half"],
+                "note": stat["note"], "detail": stat["detail"],
+            })
+        case_verdicts[case] = combine_verdicts(case_v)
+    return rows, verdicts, comparators, case_verdicts
+
+
+# --- D2 device 1 s series / write amplification ----------------------------
+
+def load_runs_tsv(session_dir, warnings):
+    """`state/runs.tsv` -> {(case, engine, variant, bs_bytes, qd, rep): row}.
+
+    Last row wins (a resumed/re-run cell may append a new row). Written by
+    bench/write/run-write-cells.sh; every measured run appears here with its
+    device write-sector delta, engine bytes, thermal state and loadavg.
+    """
+    path = session_dir / "state" / "runs.tsv"
+    if not path.is_file():
+        return {}, path
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+            raw_rows = list(csv.DictReader(fh, delimiter="\t"))
+    except Exception as exc:
+        warnings.append(f"{rel(path)}: unreadable state/runs.tsv ({exc})")
+        return {}, path
+    rows = {}
+    for row in raw_rows:
+        # bench/write/run-write-cells.sh names the case column `cell` in
+        # state/runs.tsv and `case` in cell-meta.tsv; accept both.
+        case = (row.get("case") or row.get("cell") or "").strip()
+        engine = (row.get("engine") or "").strip()
+        variant = (row.get("variant") or "").strip()
+        qd = as_int((row.get("qd") or "").strip())
+        rep = as_int((row.get("rep") or "").strip())
+        bs = parse_size((row.get("bs") or "").strip())
+        if not case or not engine or bs is None or qd is None or rep is None:
+            continue
+        rows[(case, engine, variant, bs, qd, rep)] = {
+            "case": case, "engine": engine, "variant": variant, "bs": bs,
+            "qd": qd, "rep": rep,
+            "status": (row.get("status") or "").strip(),
+            "measured_s": as_float(row.get("measured_s")),
+            "warmup_s": as_float(row.get("warmup_s")),
+            "iops": as_float(row.get("iops")),
+            "mibs": as_float(row.get("mibs")),
+            "bytes": as_float(row.get("bytes")),
+            "dev_write_sectors": as_float(row.get("dev_write_sectors_d")),
+            "dev_write_mib": as_float(row.get("dev_write_mib")),
+            "loadavg_start": (row.get("loadavg_start") or "").strip(),
+            "loadavg_end": (row.get("loadavg_end") or "").strip(),
+            "governor": (row.get("governor") or "").strip(),
+            "thermal_start": (row.get("thermal_start") or "").strip(),
+            "thermal_end": (row.get("thermal_end") or "").strip(),
+            "started_utc": (row.get("started_utc") or "").strip(),
+            "source": rel(path),
+        }
+    return rows, path
+
+
+def load_cell_meta_rows(session_dir, warnings):
+    """`cell-meta.tsv` -> {(case, engine, variant, bs_bytes, qd, rep): row}.
+
+    Fallback provenance for engine bytes / device write sectors when
+    `state/runs.tsv` is absent (e.g. a partially copied session). Last status
+    `ok` row wins, matching the read-session analyzer convention.
+    """
+    path = session_dir / "cell-meta.tsv"
+    if not path.is_file():
+        return {}, path
+    try:
+        with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+            raw_rows = list(csv.DictReader(fh, delimiter="\t"))
+    except Exception as exc:
+        warnings.append(f"{rel(path)}: unreadable cell-meta.tsv ({exc})")
+        return {}, path
+    rows = {}
+    for row in raw_rows:
+        if (row.get("status") or "").strip() not in ("", "ok"):
+            continue
+        case = (row.get("case") or "").strip()
+        engine = (row.get("engine") or "").strip()
+        variant = (row.get("variant") or "").strip()
+        qd = as_int((row.get("qd") or "").strip())
+        rep = as_int((row.get("rep") or "").strip())
+        bs = parse_size((row.get("bs") or "").strip())
+        if not case or not engine or bs is None or qd is None or rep is None:
+            continue
+        rows[(case, engine, variant, bs, qd, rep)] = {
+            "bytes": as_float((row.get("bytes") or "").strip()),
+            "dev_write_sectors": as_float(
+                (row.get("write_sectors_delta") or "").strip()),
+            "wall_s": as_float((row.get("wall_s") or "").strip()),
+            "loadavg_start": (row.get("loadavg_start") or "").strip(),
+            "source": rel(path),
+        }
+    return rows, path
+
+
+def parse_thermal_c(text):
+    """Driver thermal token -> degrees C (hwmon is milli-degC; smart-log is C)."""
+    if not text:
+        return None
+    text = str(text).strip()
+    if text.startswith("unavailable"):
+        return None
+    value = None
+    if "=" in text:
+        token = text.split("=", 1)[1].strip()
+        value = as_float(token)
+        if value is None:
+            value = as_float(re.split(r"[\s]", token)[0])
+        if value is None:
+            return None
+        if text.startswith("hwmon_mc") or value > 1000.0:
+            value = value / 1000.0
+        return value
+    value = as_float(text.split()[0]) if text.split() else None
+    if value is None:
+        return None
+    return value / 1000.0 if value > 1000.0 else value
+
+
+def parse_loadavg_1m(text):
+    """Loadavg token -> the 1-minute value (accepts '0.9' or '0.9/0.8/0.7')."""
+    if not text:
+        return None
+    first = str(text).strip().split("/")[0].strip()
+    return as_float(first)
+
+
+def load_series_file(path, warnings):
+    """Parse one D2 sampler TSV (`series/<stem>.tsv`).
+
+    The sampler writes comment headers (`# columns=...`, `# label=...`) then
+    1 s rows. Rows shorter than the declared column count are a partially
+    written live file and are skipped (never crash).
+    """
+    columns = None
+    header = {}
+    samples = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                line = raw.rstrip("\n")
+                if not line.strip():
+                    continue
+                if line.startswith("#"):
+                    body = line.lstrip("#").strip()
+                    if body.startswith("columns="):
+                        columns = body[len("columns="):].split("\t")
+                    elif "=" in body:
+                        key, _sep, value = body.partition("=")
+                        header[key.strip()] = value.strip()
+                    continue
+                if not columns:
+                    continue
+                parts = line.split("\t")
+                if len(parts) < len(columns):
+                    continue
+                sample = {}
+                ok = True
+                for name, value in zip(columns, parts):
+                    value = value.strip()
+                    if name in ("iso_utc", "label", "device_stat"):
+                        sample[name] = value
+                        continue
+                    num = as_float(value)
+                    if num is None:
+                        ok = False
+                        break
+                    sample[name] = num
+                if ok:
+                    samples.append(sample)
+    except Exception as exc:
+        warnings.append(f"{rel(path)}: unreadable device series ({exc})")
+        return None
+    return {"path": path, "header": header, "columns": columns,
+            "samples": samples}
+
+
+def _series_iops(sample, derived_count):
+    """Write IOPS for one 1 s sample; derive from deltas if the column is absent.
+
+    The sampler's `io_busy_pct` column is deliberately NOT used (sampler v1
+    units bug, ~100x off); only the per-interval device counters are used.
+    """
+    value = sample.get("write_iops")
+    if value is not None:
+        return value
+    ios = sample.get("write_ios_d")
+    dt_ms = sample.get("dt_ms")
+    if ios is not None and dt_ms:
+        derived_count[0] += 1
+        return ios / (dt_ms / 1000.0)
+    return None
+
+
+def _series_window(samples, measured_s, path, warnings):
+    """Measured-window samples: the `measured_s` full 1 s samples before the
+    final run-end transition sample (the last sampler interval is cut short by
+    the process exit and is not a full 1 s sample)."""
+    n = len(samples)
+    if n == 0:
+        warnings.append(f"{rel(path)}: device series has no parseable samples")
+        return [], "empty"
+    if n >= measured_s + 2:
+        return samples[-(measured_s + 1):-1], (
+            f"last sample dropped as the run-end transition; {measured_s} "
+            f"full 1 s samples")
+    if n > measured_s:
+        warnings.append(
+            f"{rel(path)}: series has {n} samples (< measured+2 = "
+            f"{measured_s + 2}); used the last {measured_s} samples without "
+            f"confirming the run-end transition")
+        return samples[-measured_s:], (
+            f"series shorter than measured+2; last {measured_s} samples used")
+    warnings.append(
+        f"{rel(path)}: series has only {n} samples for a {measured_s} s "
+        f"measured window (sampler stopped early or run still in progress)")
+    return samples, f"series shorter than the measured window ({n} samples)"
+
+
+def _series_stats(values):
+    return describe(values)
+
+
+def analyse_write_series(session_dir, cells, manifest, warnings):
+    """D2/D7 write analysis from `series/*.tsv` (+ `state/runs.tsv`).
+
+    Per run: 1 s IOPS n/mean/CV/min/max over the measured window, write-cliff
+    detection (>30 % one-step drop, or samples <70 % of the run mean), the
+    burst-vs-steady split (first 10 s of the measured window vs the remainder),
+    write amplification = device write-sector delta x 512 / engine measured-phase
+    bytes, thermal min/max, and loadavg_start with >1.6 flagged.
+    """
+    series_dir = session_dir / "series"
+    rows = []
+    n_derived = 0
+    measured_default = manifest_int(manifest, "measured_s", 60) or 60
+    runs, runs_path = load_runs_tsv(session_dir, warnings)
+    meta, meta_path = load_cell_meta_rows(session_dir, warnings)
+    if not runs and not meta:
+        warnings.append("no state/runs.tsv or cell-meta.tsv: write amplification "
+                        "and thermal/loadavg context are unavailable")
+    paths = sorted(series_dir.glob("*.tsv")) if series_dir.is_dir() else []
+    seen = set()
+    for path in paths:
+        stem = path.name[: -len(path.suffix)]
+        key = parse_cell_stem(stem)
+        if key is None:
+            warnings.append(f"{rel(path)}: series file name does not encode a "
+                            f"cell id; skipped")
+            continue
+        case = key["case"]
+        if case not in WRITE_CASE_SPEC:
+            warnings.append(f"{rel(path)}: series for non-write case {case}; "
+                            f"skipped")
+            continue
+        series = load_series_file(path, warnings)
+        if series is None:
+            continue
+        run_key = (case, key["engine"], key["variant"], key["bs"], key["qd"],
+                   key["rep"])
+        ledger = runs.get(run_key)
+        fallback = meta.get(run_key)
+        measured_s = (as_int(ledger.get("measured_s")) if ledger and
+                      ledger.get("measured_s") else None) or measured_default
+        window, window_note = _series_window(series["samples"], measured_s, path,
+                                             warnings)
+        derived = [0]
+        values = [v for v in (_series_iops(s, derived) for s in window)
+                  if v is not None]
+        n_derived += derived[0]
+        if not values:
+            warnings.append(f"{rel(path)}: no write-IOPS samples in the "
+                            f"measured window; run not analysable")
+            continue
+        st = _series_stats(values)
+        mean = st["mean"]
+        below = sum(1 for v in values
+                    if mean and v < CLIFF_MEAN_FRACTION * mean)
+        drops = []
+        for left, right in zip(values, values[1:]):
+            if left and left > 0 and right is not None:
+                drops.append(max(0.0, 1.0 - right / left))
+        max_drop = max(drops) if drops else 0.0
+        burst = values[:SERIES_BURST_S]
+        steady = values[SERIES_BURST_S:]
+        burst_mean = statistics.fmean(burst) if burst else None
+        steady_mean = statistics.fmean(steady) if steady else None
+        burst_ratio = (burst_mean / steady_mean
+                       if burst_mean is not None and steady_mean else None)
+        whole_vals = [v for v in (_series_iops(s, [0]) for s in series["samples"])
+                      if v is not None]
+        whole = _series_stats(whole_vals)
+        whole_below = sum(1 for v in whole_vals
+                          if whole["mean"] and v < CLIFF_MEAN_FRACTION * whole["mean"])
+        engine_bytes = None
+        dev_sectors = None
+        bytes_source = None
+        if ledger and ledger.get("bytes"):
+            engine_bytes = ledger["bytes"]
+            bytes_source = rel(runs_path)
+        elif fallback and fallback.get("bytes"):
+            engine_bytes = fallback["bytes"]
+            bytes_source = fallback.get("source")
+        if ledger and ledger.get("dev_write_sectors") is not None:
+            dev_sectors = ledger["dev_write_sectors"]
+        elif fallback and fallback.get("dev_write_sectors") is not None:
+            dev_sectors = fallback["dev_write_sectors"]
+        amp = None
+        if dev_sectors is not None and engine_bytes:
+            amp = dev_sectors * 512.0 / engine_bytes
+        thermal_start = parse_thermal_c(ledger.get("thermal_start")) if ledger else None
+        thermal_end = parse_thermal_c(ledger.get("thermal_end")) if ledger else None
+        loadavg_start = None
+        if ledger:
+            loadavg_start = parse_loadavg_1m(ledger.get("loadavg_start"))
+        elif fallback:
+            loadavg_start = parse_loadavg_1m(fallback.get("loadavg_start"))
+        if loadavg_start is None:
+            first = series["samples"][0].get("loadavg_1m") if series["samples"] else None
+            loadavg_start = first
+        if not ledger:
+            warnings.append(f"{rel(path)}: series has no state/runs.tsv ledger row "
+                            f"(run in progress or ledger not written yet); "
+                            f"amplification/thermal unavailable")
+        seen.add(run_key)
+        rows.append({
+            "case": case, "engine": key["engine"], "variant": key["variant"],
+            "rep": key["rep"], "qd": key["qd"],
+            "workload": WRITE_CASE_SPEC[case][0],
+            "measured_s": measured_s,
+            "window_note": window_note,
+            "n": st["n"], "mean": st["mean"], "sd": st["sd"],
+            "cv_pct": st["cv_pct"], "min": st["min"], "max": st["max"],
+            "below70": below, "max_step_drop_pct": 100.0 * max_drop,
+            "cliff_low": below > 0, "cliff_step": max_drop > CLIFF_STEP_DROP,
+            "cliff": (below > 0) or (max_drop > CLIFF_STEP_DROP),
+            "burst_mean": burst_mean, "steady_mean": steady_mean,
+            "burst_steady_ratio": burst_ratio,
+            "whole_n": whole["n"], "whole_cv_pct": whole["cv_pct"],
+            "whole_below70": whole_below,
+            "engine_bytes": engine_bytes, "dev_write_sectors": dev_sectors,
+            "write_amp": amp, "bytes_source": bytes_source,
+            "thermal_start_c": thermal_start, "thermal_end_c": thermal_end,
+            "loadavg_start": loadavg_start,
+            "loadavg_flag": (loadavg_start is not None and
+                             loadavg_start > LOADAVG_FLAG),
+            "series_path": rel(path),
+        })
+    # expected write runs from the parsed cell JSON (warn on missing series; a
+    # live session may legitimately have the newest run still being sampled)
+    write_reps = [r for c in cells if workload_is_write(c["workload"])
+                  for r in c["reps"]]
+    missing = []
+    for rep in write_reps:
+        key = (rep["case"], rep["engine"], rep["variant"], rep["bs"],
+               rep["qd"], rep["rep_index"])
+        if key not in seen:
+            missing.append(f"{rep['case']}/{rep['engine']}/{rep['variant']}/"
+                           f"r{rep['rep_index']}")
+    if missing:
+        warnings.append(f"{len(missing)} measured write run(s) have no "
+                        f"series/*.tsv sample file (sampler disabled, run in "
+                        f"progress, or file not yet flushed): "
+                        f"{', '.join(missing[:6])}"
+                        + (" ..." if len(missing) > 6 else ""))
+    if n_derived:
+        warnings.append(f"{n_derived} series sample(s) lacked the write_iops "
+                        f"column; IOPS derived from write_ios_d/dt_ms")
+    rows.sort(key=lambda r: (cell_sort_key({"case": r["case"]}),
+                             ENGINE_ORDER.get(r["engine"], 9),
+                             VARIANT_ORDER.get(r["variant"], 9),
+                             str(r["variant"]), r["rep"]))
+    thermals = [t for r in rows for t in (r["thermal_start_c"],
+                                          r["thermal_end_c"]) if t is not None]
+    session = {
+        "thermal_min_c": min(thermals) if thermals else None,
+        "thermal_max_c": max(thermals) if thermals else None,
+        "n_thermal_values": len(thermals),
+        "n_loadavg_flagged": sum(1 for r in rows if r["loadavg_flag"]),
+        "n_cliff": sum(1 for r in rows if r["cliff"]),
+    }
+    return {"rows": rows, "runs_path": runs_path, "meta_path": meta_path,
+            "measured_default": measured_default, "session": session}
+
+
+# ---------------------------------------------------------------------------
 # rendering
+
 # ---------------------------------------------------------------------------
 
 def render_cells_md(cells):
@@ -2715,6 +3482,234 @@ def render_seastar_md(bracket):
     return md_table(headers, rows)
 
 
+# --- write-half tables -----------------------------------------------------
+
+def _write_cell_sort(cell):
+    case = cell["case"]
+    if case in WRITE_CASE_ORDER:
+        rank = WRITE_CASE_ORDER.index(case)
+    else:
+        rank = len(WRITE_CASE_ORDER)
+    return (rank, ENGINE_ORDER.get(cell["engine"], 9),
+            FIO_SWEEP_ORDER.get(cell["variant"],
+                                VARIANT_ORDER.get(cell["variant"], 9)),
+            str(cell["variant"]))
+
+
+def render_write_cells_md(cells):
+    """Write-cell throughput table: raw-JSON IOPS/MiB/s and p99 (us)."""
+    headers = ["case", "workload", "bs", "qd", "engine", "variant", "n",
+               "IOPS mean ± 95% CI", "MiB/s", "CV%", "p50 us", "p99 us",
+               "flags", "state"]
+    rows = []
+    for c in sorted(cells, key=_write_cell_sort):
+        state = "—"
+        if c["cv_unstable"]:
+            state = "unstable (CV>10%), no ranking"
+        elif c["slow_reps"]:
+            state = f"slow reps excluded from fast subset: {', '.join(c['slow_ids'])}"
+        else:
+            state = "stable"
+        rows.append([
+            c["case"], c["workload"], fnum(c["bs"], 0), c["qd"], c["engine"],
+            c["variant"], c["n"], fci(c["iops_mean"], c["ci95_half"], 0),
+            fnum(c["mibs_mean"], 1), fnum(c["cv_pct"], 1) +
+            (" !" if c["cv_unstable"] else "") if c["cv_pct"] is not None else "—",
+            fnum(c["p50"], 1), fnum(c["p99"], 1), cell_flags(c), state,
+        ])
+    if not rows:
+        return "_(no write cells parsed)_"
+    return md_table(headers, rows)
+
+
+def render_write_ratios_md(ratios):
+    """Paired JUring/comparator ratios for write cells (informational rows)."""
+    headers = ["case", "qd", "kind", "comparator", "n pairs", "ratio",
+               "paired SD", "90% CI", "95% CI", "1s95 LB", "half-width",
+               "fast-subset ratio [CI]", "note"]
+    rows = []
+    for r in ratios:
+        st = r["stats"]
+        stf = r["stats_fast"]
+        fast = "—"
+        if stf.get("mean") is not None and stf.get("n_pairs", 0) > 0:
+            if stf.get("ci90_low") is not None:
+                fast = (f"{stf['mean']:.4f} [{stf['ci90_low']:.4f}.."
+                        f"{stf['ci90_high']:.4f}] (n={stf['n_pairs']})")
+            else:
+                fast = f"{stf['mean']:.4f} (n={stf['n_pairs']}, no CI)"
+        rows.append([
+            r["case"], r["qd"], r["kind"],
+            f"{r['right']['engine']}/{r['right']['variant']}",
+            st["n_pairs"], fratio(st["mean"]),
+            f"{st['sd']:.4f}" if st.get("sd") is not None else "—",
+            f"{st['ci90_low']:.4f}..{st['ci90_high']:.4f}"
+            if st.get("ci90_low") is not None else "—",
+            f"{st['ci95_low']:.4f}..{st['ci95_high']:.4f}"
+            if st.get("ci95_low") is not None else "—",
+            f"{st['lb95_1s']:.4f}" if st.get("lb95_1s") is not None else "—",
+            f"±{st['ci95_half']:.4f} ({st['ci95_half_pct']:.1f}%)"
+            if st.get("ci95_half") is not None else "—",
+            fast, r["note"],
+        ])
+    if not rows:
+        return "_(no write-cell paired ratios)_"
+    return md_table(headers, rows)
+
+
+def render_write_gate_md(write_gate):
+    """Rule-1 gate detail: both comparator rows per gated case + case verdict."""
+    headers = ["case", "comparator", "JUring IOPS (n)",
+               "fio IOPS (n)", "n pairs", "ratio [90% CI; 95% CI]",
+               "1s95 LB", "half-width", "verdict"]
+    rows = []
+    for comp in write_gate.get("comparators") or []:
+        st = comp["stats"]
+        role = comp["comparator_role"]
+        rows.append([
+            comp["case"], f"fio/{comp['comparator_variant']} ({role})",
+            _cell_pair_desc(comp["juring"]), _cell_pair_desc(comp["fio"]),
+            st["n_pairs"], _ratio_line(st),
+            f"{st['lb95_1s']:.4f}" if st.get("lb95_1s") is not None else "—",
+            comp["half"], comp["verdict"],
+        ])
+    if not rows:
+        return "_(no W7/W8 write-gate comparator cells in this session)_"
+    table = md_table(headers, rows)
+    verdict_rows = []
+    for case in WRITE_GATE_CASES:
+        by_role = {c["comparator_role"]: c for c in
+                   (write_gate.get("comparators") or []) if c["case"] == case}
+        verdict_rows.append([
+            case,
+            by_role.get("primary", {}).get("verdict", "absent"),
+            by_role.get("sensitivity", {}).get("verdict", "absent"),
+            write_gate.get("case_verdicts", {}).get(case, "INCONCLUSIVE"),
+        ])
+    table += "\n\n" + md_table(
+        ["case", "matchedbatch (primary)", "matched (sensitivity)",
+         "case verdict (PASS iff both PASS; FAIL iff either FAIL)"],
+        verdict_rows)
+    return table
+
+
+def render_write_sweep_md(cells):
+    """W7 fio batching sweep (informational) with juring/seastar context rows."""
+    by_key = {}
+    for c in cells:
+        if c["case"] == "W7":
+            by_key[(c["engine"], c["variant"])] = c
+    jc = by_key.get(("juring", "std"))
+    order = [("juring", "std"), ("seastar", "std"),
+             ("fio-io_uring", "default"), ("fio-io_uring", "matched"),
+             ("fio-io_uring", "matchedbatch"),
+             ("fio-io_uring", "batch1"), ("fio-io_uring", "batch8"),
+             ("fio-io_uring", "batch16"), ("fio-io_uring", "batch32")]
+    seen = set()
+    headers = ["role", "engine/variant", "flags", "n",
+               "IOPS mean ± 95% CI", "CV%", "p99 us", "vs JUring ratio",
+               "1s95 LB"]
+    rows = []
+    for engine, variant in order:
+        cell = by_key.get((engine, variant))
+        if cell is None:
+            continue
+        seen.add((engine, variant))
+        ratio_text = lb = "—"
+        if jc is not None and cell is not jc:
+            st = ratio_stats(jc["reps"], cell["reps"])
+            ratio_text = fratio(st["mean"])
+            if st.get("lb95_1s") is not None:
+                lb = f"{st['lb95_1s']:.4f}"
+        role = "JUring" if engine == "juring" else (
+            "seastar bracket" if engine == "seastar" else "fio bracket")
+        rows.append([
+            role, f"{engine}/{variant}", cell_flags(cell), cell["n"],
+            fci(cell["iops_mean"], cell["ci95_half"], 0),
+            fnum(cell["cv_pct"], 1) if cell["cv_pct"] is not None else "—",
+            fnum(cell["p99"], 1), ratio_text, lb,
+        ])
+    for (engine, variant), cell in sorted(by_key.items()):
+        if (engine, variant) in seen:
+            continue
+        rows.append(["other", f"{engine}/{variant}", cell_flags(cell),
+                     cell["n"], fci(cell["iops_mean"], cell["ci95_half"], 0),
+                     fnum(cell["cv_pct"], 1) if cell["cv_pct"] is not None else "—",
+                     fnum(cell["p99"], 1), "—", "—"])
+    if not rows:
+        return "_(no W7 cells)_"
+    return md_table(headers, rows)
+
+
+def render_write_seastar_md(bracket, write_cases):
+    """seastar write bracket (no threshold; asymmetric engine configuration)."""
+    headers = ["case", "qd", "JUring IOPS", "seastar IOPS", "JUring/seastar",
+               "90% CI", "95% CI", "paired SD"]
+    rows = []
+    for b in bracket:
+        if b["case"] not in write_cases:
+            continue
+        st = b["stats"]
+        rows.append([
+            b["case"], b["qd"], _cell_pair_desc(b["left"]),
+            _cell_pair_desc(b["right"]), fratio(st["mean"]),
+            f"{st['ci90_low']:.4f}..{st['ci90_high']:.4f}"
+            if st.get("ci90_low") is not None else "—",
+            f"{st['ci95_low']:.4f}..{st['ci95_high']:.4f}"
+            if st.get("ci95_low") is not None else "—",
+            f"{st['sd']:.4f}" if st.get("sd") is not None else "—",
+        ])
+    if not rows:
+        return "_(no seastar write cells)_"
+    return md_table(headers, rows)
+
+
+def _fmt_c(value):
+    return f"{value:.1f}" if value is not None else "—"
+
+
+def render_series_md(series):
+    """D2/D7 device 1 s series table: stats, cliff detection, burst vs steady."""
+    rows = series.get("rows") or []
+    if not rows:
+        return "_(no device series parsed)_"
+    headers = ["case", "engine/variant/rep", "meas n", "IOPS mean", "CV%",
+               "min", "max", "samples <70% mean", "max step drop %", "cliff",
+               "burst IOPS (first 10 s)", "steady IOPS", "burst/steady",
+               "whole-run CV% (warmup+meas)"]
+    out = []
+    for r in rows:
+        out.append([
+            r["case"], f"{r['engine']}/{r['variant']}/r{r['rep']}",
+            r["n"], fnum(r["mean"], 0), fnum(r["cv_pct"], 1),
+            fnum(r["min"], 0), fnum(r["max"], 0), r["below70"],
+            fnum(r["max_step_drop_pct"], 1),
+            "YES" if r["cliff"] else "no",
+            fnum(r["burst_mean"], 0), fnum(r["steady_mean"], 0),
+            fnum(r["burst_steady_ratio"], 3), fnum(r["whole_cv_pct"], 1),
+        ])
+    table = md_table(headers, out)
+    amp_headers = ["case", "engine/variant/rep", "engine measured bytes",
+                   "device write sectors delta", "write amplification",
+                   "thermal start..end C", "loadavg_start", "source"]
+    amp_rows = []
+    for r in rows:
+        amp_rows.append([
+            r["case"], f"{r['engine']}/{r['variant']}/r{r['rep']}",
+            fnum(r["engine_bytes"], 0),
+            fnum(r["dev_write_sectors"], 0),
+            f"{r['write_amp']:.3f}x" if r["write_amp"] is not None else "—",
+            (f"{_fmt_c(r['thermal_start_c'])}..{_fmt_c(r['thermal_end_c'])}"
+             if (r["thermal_start_c"] is not None or
+                 r["thermal_end_c"] is not None) else "—"),
+            (fnum(r["loadavg_start"], 2) +
+             (" !>1.6" if r["loadavg_flag"] else ""))
+            if r["loadavg_start"] is not None else "—",
+            r["series_path"],
+        ])
+    return table + "\n\n" + md_table(amp_headers, amp_rows)
+
+
 # ---------------------------------------------------------------------------
 # serialisation
 # ---------------------------------------------------------------------------
@@ -2817,6 +3812,99 @@ def perf_report_brief(rec):
     }
 
 
+def comparator_brief(comparator):
+    """Compact per-(case, comparator) row for the write-gate aggregate payload."""
+    st = comparator["stats"]
+    jc = comparator["juring"]
+    fc = comparator["fio"]
+    return {
+        "case": comparator["case"],
+        "comparator_role": comparator["comparator_role"],
+        "comparator_variant": comparator["comparator_variant"],
+        "juring": {"engine": jc["engine"], "variant": jc["variant"],
+                   "n": jc["n"], "iops_mean": jc["iops_mean"],
+                   "ci95_half": jc["ci95_half"], "cv_pct": jc["cv_pct"]},
+        "fio": {"engine": fc["engine"], "variant": fc["variant"],
+                "n": fc["n"], "iops_mean": fc["iops_mean"],
+                "ci95_half": fc["ci95_half"], "cv_pct": fc["cv_pct"]},
+        "n_pairs": st["n_pairs"], "mean": st["mean"], "sd": st["sd"],
+        "ci90": [st["ci90_low"], st["ci90_high"]],
+        "ci95": [st["ci95_low"], st["ci95_high"]],
+        "lb95_1s": st["lb95_1s"], "ub95_1s": st["ub95_1s"],
+        "ci95_half": st["ci95_half"], "ci95_half_pct": st["ci95_half_pct"],
+        "verdict": comparator["verdict"],
+        "used_fast_subset": comparator["used_subset"],
+        "unstable_sides": comparator["unstable_sides"],
+        "excluded_juring_reps": comparator["excluded_juring"],
+        "excluded_fio_reps": comparator["excluded_fio"],
+        "detail": comparator["detail"],
+        "note": comparator["note"],
+    }
+
+
+def series_brief(row):
+    """Compact D2 per-run row for the write aggregate payload."""
+    keys = ("case", "engine", "variant", "rep", "qd", "workload", "measured_s",
+            "n", "mean", "sd", "cv_pct", "min", "max", "below70",
+            "max_step_drop_pct", "cliff_low", "cliff_step", "cliff",
+            "burst_mean", "steady_mean", "burst_steady_ratio", "whole_n",
+            "whole_cv_pct", "whole_below70", "engine_bytes",
+            "dev_write_sectors", "write_amp", "thermal_start_c",
+            "thermal_end_c", "loadavg_start", "loadavg_flag", "series_path",
+            "window_note")
+    return {key: row.get(key) for key in keys}
+
+
+def _write_csv_tables(write_analysis, write_gate):
+    """Extra CSV tables emitted only for write sessions (D2 series + gate detail)."""
+    series = (write_analysis.get("series") or {}).get("rows") or []
+    series_rows = [[
+        r["case"], r["engine"], r["variant"], r["rep"], r["workload"],
+        r["qd"], r["measured_s"], r["n"], r["mean"], r["sd"], r["cv_pct"],
+        r["min"], r["max"], r["below70"], r["max_step_drop_pct"],
+        int(r["cliff_low"]), int(r["cliff_step"]), int(r["cliff"]),
+        r["burst_mean"], r["steady_mean"], r["burst_steady_ratio"],
+        r["whole_n"], r["whole_cv_pct"], r["whole_below70"],
+        r["engine_bytes"], r["dev_write_sectors"], r["write_amp"],
+        r["thermal_start_c"], r["thermal_end_c"], r["loadavg_start"],
+        int(r["loadavg_flag"]), r["series_path"]]
+        for r in series]
+    tables = [("series_csv", series_rows,
+               ["case", "engine", "variant", "rep", "workload", "qd",
+                "measured_s", "n_samples_window", "iops_mean", "iops_sd",
+                "cv_pct", "iops_min", "iops_max", "samples_below_70pct_mean",
+                "max_step_drop_pct", "cliff_low", "cliff_step", "cliff",
+                "burst_mean_first_10s", "steady_mean_remainder",
+                "burst_steady_ratio", "whole_n_samples", "whole_cv_pct",
+                "whole_below70", "engine_bytes", "dev_write_sectors",
+                "write_amplification", "thermal_start_c", "thermal_end_c",
+                "loadavg_start", "loadavg_flag_gt_1.6", "series_source"])]
+    comparator_rows = []
+    for c in (write_gate or {}).get("comparators", []):
+        st = c["stats"]
+        comparator_rows.append([
+            c["case"], c["comparator_role"], c["comparator_variant"],
+            c["juring"]["n"], c["juring"]["iops_mean"],
+            c["juring"]["ci95_half"], c["juring"]["cv_pct"],
+            c["fio"]["n"], c["fio"]["iops_mean"], c["fio"]["ci95_half"],
+            c["fio"]["cv_pct"], st["n_pairs"], st["mean"], st["sd"],
+            st["ci90_low"], st["ci90_high"], st["ci95_low"], st["ci95_high"],
+            st["lb95_1s"], st["ub95_1s"], st["ci95_half"],
+            st["ci95_half_pct"], c["verdict"], int(c["used_subset"]),
+            ";".join(c["excluded_juring"]), ";".join(c["excluded_fio"]),
+            c["note"]])
+    tables.append(("comparators_csv", comparator_rows,
+                   ["case", "comparator_role", "comparator_variant",
+                    "juring_n", "juring_iops_mean", "juring_ci95_half",
+                    "juring_cv_pct", "fio_n", "fio_iops_mean", "fio_ci95_half",
+                    "fio_cv_pct", "n_pairs", "ratio_mean", "paired_sd",
+                    "ci90_low", "ci90_high", "ci95_low", "ci95_high",
+                    "lb95_one_sided", "ub95_one_sided", "ci95_half",
+                    "ci95_half_pct", "verdict", "used_fast_subset",
+                    "excluded_juring_reps", "excluded_fio_reps", "note"]))
+    return tables
+
+
 def write_outputs(prefix, summary_md, tables, payload):
     prefix = Path(prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -2829,20 +3917,186 @@ def write_outputs(prefix, summary_md, tables, payload):
         "perf_csv": prefix.with_name(prefix.name + ".perf.csv"),
         "gates_csv": prefix.with_name(prefix.name + ".gates.csv"),
         "iotester_csv": prefix.with_name(prefix.name + ".iotester.csv"),
+        # write-session-only artifacts (never emitted for the read session)
+        "series_csv": prefix.with_name(prefix.name + ".series.csv"),
+        "comparators_csv": prefix.with_name(prefix.name + ".comparators.csv"),
         "aggregate_json": prefix.with_name(prefix.name + ".aggregate.json"),
     }
     files["summary_md"].write_text(summary_md + "\n", encoding="utf-8")
+    out["summary_md"] = str(files["summary_md"])
     for key, rows, header in tables:
         target = files[key]
         with open(target, "w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(header)
             writer.writerows(rows)
+        out[key] = str(target)
     files["aggregate_json"].write_text(
         json.dumps(payload, indent=1, sort_keys=False) + "\n", encoding="utf-8")
-    for key, path in files.items():
-        out[key] = str(path)
+    out["aggregate_json"] = str(files["aggregate_json"])
     return out
+
+
+# ---------------------------------------------------------------------------
+# write-half summary section (only emitted for sessions with write cells)
+# ---------------------------------------------------------------------------
+
+def _render_write_summary(session_dir, write_analysis):
+    cells = write_analysis.get("cells") or []
+    ratios = write_analysis.get("ratios") or []
+    gate = write_analysis.get("gate")
+    series = write_analysis.get("series") or {}
+    units = write_analysis.get("units") or {}
+    lines = []
+    lines.append("## 9b. Write half — M1 write matrix (write session)")
+    lines.append("")
+    lines.append(
+        "This session contains " + str(len(cells)) + " write-throughput cell(s) "
+        f"({', '.join(sorted({c['case'] for c in cells}, key=lambda c: (
+            WRITE_CASE_ORDER.index(c) if c in WRITE_CASE_ORDER else 99))) or 'none'}); "
+        "the write half of M1 is analysed here and the read-path gates are not "
+        "part of this session (docs/m1-write-design.md §9). Every number below "
+        "is derived from the raw per-run files cited in the tables.")
+    lines.append("")
+    lines.append("### 9b.1 Write-cell throughput (mean ± two-sided 95% CI of "
+                 "the mean; p50/p99 in us from the raw engine JSON)")
+    lines.append("")
+    lines.append(render_write_cells_md(cells))
+    lines.append("")
+    lines.append("p99 is the mean of the per-rep percentiles from the raw JSON "
+                 "(fio `clat_ns` / 1000 -> us; JUring/seastar `latency_us` "
+                 "already us). Write latency is descriptive here: Step A has no "
+                 "write tail gate (design §9). A cell with CV > 10% is reported "
+                 "'unstable, no ranking' (methodology §5 D7).")
+    lines.append("")
+    lines.append("### 9b.2 Paired ratios — JUring/comparator, paired by rep "
+                 "index (90% CI = one-sided 95% bounds)")
+    lines.append("")
+    lines.append(render_write_ratios_md(ratios))
+    lines.append("")
+    lines.append("### 9b.3 M1 write rule 1 — W7/W8 against BOTH fio "
+                 "comparators (matchedbatch primary; matched sensitivity)")
+    lines.append("")
+    lines.append(
+        "Decision rule, frozen before measurement (design §6): **PASS** iff the "
+        "one-sided 95% lower bound of the paired JUring/fio ratio is >= 0.95 "
+        "against BOTH `matchedbatch` and `matched` at BOTH W7 and W8; **FAIL** "
+        "iff either comparator's 95% upper bound is < 0.95; otherwise "
+        "**INCONCLUSIVE**. All reps are primary; the fast-state subset is used "
+        "only when a cell is unstable (CV>10%, mixed state or >10% IOPS spread), "
+        "with the excluded rep ids disclosed. `default` and the batching sweep "
+        "are informational only and never gate.")
+    lines.append("")
+    if gate is None:
+        lines.append("_(write rule 1 not evaluated: no W7/W8 saturation cells "
+                     "in this session yet)_")
+    else:
+        lines.append(render_write_gate_md(gate))
+        lines.append("")
+        case_v = gate.get("case_verdicts") or {}
+        lines.append(
+            "**Write-half rule-1 verdict: " + str(gate.get("verdict")) + "** — "
+            "W7 " + str(case_v.get("W7", "INCONCLUSIVE")) + ", W8 " +
+            str(case_v.get("W8", "INCONCLUSIVE")) + ". The write half is PASS "
+            "only if both gated cells are PASS; FAIL if either is FAIL; "
+            "otherwise INCONCLUSIVE (no write-parity claim). No speedup is "
+            "claimed from overlapping CIs.")
+    lines.append("")
+    lines.append("### 9b.4 W7 fio batching sweep (methodology §2 W7 row; "
+                 "informational — not a gate)")
+    lines.append("")
+    lines.append(render_write_sweep_md([c for c in cells if c["case"] == "W7"]))
+    lines.append("")
+    lines.append("### 9b.5 seastar write bracket (no pass threshold; seastar "
+                 "is asymmetric by construction — no JUring ring flags, no "
+                 "registered files/fixed buffers, io_queue path; methodology "
+                 "§3.5)")
+    lines.append("")
+    lines.append(render_write_seastar_md(write_analysis.get("bracket") or [],
+                                         set(WRITE_CASE_SPEC)))
+    lines.append("")
+    lines.append("### 9b.6 D2 device 1 s series, write cliff, burst vs steady "
+                 "state, write amplification")
+    lines.append("")
+    lines.append(
+        "Definitions (design §5 D2/D7): the **measured window** is the "
+        "`measured_s` full 1 s samples before the final run-end transition "
+        "sample (the last sampler interval is cut short by process exit and is "
+        "dropped). **Cliff** = any measured-window sample below 70% of the run "
+        "mean, or a one-step drop >30%. **Burst vs steady** = the first 10 s of "
+        "the measured window vs the remainder; they are never pooled in a "
+        "claim. **Write amplification** = device write-sector delta x 512 / "
+        "engine measured-phase bytes from `state/runs.tsv` (fallback "
+        "`cell-meta.tsv`); the sector delta spans the whole engine process "
+        "(warmup+measured), so a 3:1 window yields ~3x. The sampler's "
+        "`io_busy_pct` column is NOT used (sampler v1 units bug, ~100x off); "
+        "only per-interval device counters are used. Thermal is the hwmon "
+        "temperature in Celsius; `loadavg_start > 1.6` is flagged (F14 "
+        "disclosure threshold).")
+    lines.append("")
+    lines.append(render_series_md(series))
+    lines.append("")
+    session = series.get("session") or {}
+    summary_bits = []
+    if session.get("thermal_max_c") is not None:
+        summary_bits.append(
+            f"session thermal range **{session['thermal_min_c']:.1f} - "
+            f"{session['thermal_max_c']:.1f} C** "
+            f"({session['n_thermal_values']} readings)")
+    else:
+        summary_bits.append("thermal readings unavailable (no root/smart-log)")
+    summary_bits.append(f"{session.get('n_cliff', 0)} run(s) flagged with a "
+                        f"write cliff")
+    flagged = session.get("n_loadavg_flagged", 0)
+    summary_bits.append(f"{flagged} run(s) with loadavg_start > "
+                        f"{LOADAVG_FLAG}")
+    lines.append("Session-level: " + "; ".join(summary_bits) + ".")
+    lines.append("")
+    lines.append("### 9b.7 Write provenance")
+    lines.append("")
+    provenance = []
+    if units:
+        used = units.get("units")
+        if used == "us":
+            provenance.append(
+                f"- cell-meta p99 units: **microseconds** (manifest "
+                f"`cell_meta_p99_units=us`); no ns->us normalisation was "
+                f"applied to the cell-meta cross-check "
+                f"({units.get('confirmed_us', 0)} row(s) verified as us).")
+        elif units.get("legacy_ns", 0):
+            provenance.append(
+                f"- cell-meta p99 units: **nanoseconds for fio rows** "
+                f"(legacy 2026-11-13 write block, no `cell_meta_p99_units` "
+                f"flag); {units['legacy_ns']} value(s) normalised ns->us for "
+                f"the cross-check only. Cited latencies come from the raw "
+                f"JSON; the write cell-meta fio p99 is never cited.")
+        else:
+            provenance.append(
+                f"- cell-meta p99 units: not declared "
+                f"({units.get('source')}); no ns->us normalisation was needed "
+                f"({units.get('legacy_ns', 0)} ns-like fio value(s)).")
+    if series.get("runs_path"):
+        provenance.append(f"- device/state ledger: `{rel(series['runs_path'])}` "
+                          f"(engine bytes, device sector delta, thermal, "
+                          f"loadavg); fallback `cell-meta.tsv` "
+                          f"`{rel(series['meta_path'])}`.")
+    provenance.append(f"- raw cells: `{rel(session_dir / 'cells')}/"
+                      f"{'<case>'}__*.json`; raw D2 series: "
+                      f"`{rel(session_dir / 'series')}/*.tsv`.")
+    manifest_path = write_analysis.get("manifest_path")
+    if manifest_path:
+        provenance.append(f"- session manifest: `{rel(manifest_path)}` "
+                          f"(protocol/units provenance).")
+    prov_path = session_dir / "state" / "precondition-results.txt"
+    if prov_path.is_file():
+        provenance.append(f"- D1 preconditioning record: `{rel(prov_path)}` "
+                          f"(bursts, condition/stop_reason, fsync, capped).")
+    provenance.append("- every table above regenerates from the same raw files "
+                      "by re-running the reproduce command; no number is "
+                      "hand-typed. Reps are never trimmed.")
+    lines.extend(provenance)
+    lines.append("")
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -2852,14 +4106,14 @@ def write_outputs(prefix, summary_md, tables, payload):
 def build_summary(session_dir, cells, ratios, perf_report, iotester, bracket,
                   gate_rows, rule_verdicts, parsed, warnings, meta_check,
                   overall, argv_text, perf_check=None, iot_check=None,
-                  manifest=None):
+                  manifest=None, write_analysis=None, analyzer_version=VERSION):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = []
     lines.append(f"# M1 aggregate — `{rel(session_dir)}`")
     lines.append("")
     lines.append(f"Generated {now} by `bench/m1/analyze_m1.py` "
-                 f"(v{VERSION}). Stdlib only; every number below is derived "
-                 f"from the raw files cited in the tables.")
+                 f"(v{analyzer_version}). Stdlib only; every number below is "
+                 f"derived from the raw files cited in the tables.")
     lines.append("")
     lines.append(f"- parsed: {parsed.get('harness', 0)} harness JSON, "
                  f"{parsed.get('fio', 0)} fio JSON, "
@@ -2996,6 +4250,8 @@ def build_summary(session_dir, cells, ratios, perf_report, iotester, bracket,
     for rule, verdict in rule_verdicts.items():
         lines.append(f"| {rule} | {verdict} |")
     lines.append("")
+    if write_analysis is not None:
+        lines.extend(_render_write_summary(session_dir, write_analysis))
     lines.append("## 10. Warnings / provenance")
     lines.append("")
     if warnings:
@@ -3053,11 +4309,18 @@ def main(argv=None):
     reps = good_reps
     perf_windows = load_perf_windows(session_dir, warnings)
     perf_tsv_rows = load_perf_cells_tsv(session_dir, warnings)
-    manifest = load_session_manifest(session_dir, warnings)
+    manifest = load_session_manifests(session_dir, warnings)
+    live_session = (manifest is not None or (session_dir / "cells").is_dir() or
+                    (session_dir / "series").is_dir() or
+                    (session_dir / "state").is_dir())
     if not reps and not perf_records and not iotester:
-        print(f"error: no parseable artifacts found under {session_dir}",
-              file=sys.stderr)
-        return 2
+        if not live_session:
+            print(f"error: no parseable artifacts found under {session_dir}",
+                  file=sys.stderr)
+            return 2
+        warnings.append(
+            "no per-cell JSON parsed yet (live/incomplete session?); the tables "
+            "below are empty — re-run after the cells/*.json files are written")
 
     cells = build_cells(reps)
     if cells:
@@ -3067,10 +4330,32 @@ def main(argv=None):
         warnings.append("perf-cells.tsv rows parsed but no cycles/op values found")
     ratios = compute_ratios(cells)
     bracket, bracket_cases = evaluate_seastar_bracket(cells)
+    write_cells_present = session_has_write(cells)
+    read_cells_present = session_has_read(cells)
+    write_only = write_cells_present and not read_cells_present
 
-    gate1, v1, sat_present = evaluate_throughput_gate(cells, warnings)
+    gate1, v1, sat_present, write_gate = evaluate_throughput_gate(cells, warnings)
     gate2, v2 = evaluate_cpu_gate(cells, perf_records, warnings, perf_tsv_rows)
     gate3, v3 = evaluate_tail_gate(cells)
+    if write_only:
+        # Step A write half: the CPU and tail gates are read-path gates and are
+        # explicitly out of scope for this session (docs/m1-write-design.md §9).
+        gate2 = [{
+            "rule": "2-cpu", "cells": "—", "juring": "—", "comparator": "—",
+            "ratio": "—", "threshold": "95% UB of ratio <= 1.15",
+            "verdict": "N/A", "half_width": "—",
+            "note": ("read-path CPU gate not part of the Step A write design "
+                     "(docs/m1-write-design.md §9)"),
+        }]
+        gate3 = [{
+            "rule": "3-tail", "cells": "—", "juring": "—",
+            "comparator": "—", "ratio": "—",
+            "threshold": "p99 <= 2x fio p99", "verdict": "N/A",
+            "half_width": "—",
+            "note": ("write tail is descriptive only: no write tail gate in "
+                     "Step A (docs/m1-write-design.md §9)"),
+        }]
+        v2, v3 = [], []
     gate5 = evaluate_ci_rule(cells, [])
 
     gate_rows = gate1 + gate2 + gate3 + gate5
@@ -3083,16 +4368,31 @@ def main(argv=None):
              if bracket_cases else "no seastar cells"),
         "5 every cited number has a CI": gate5[0]["verdict"],
     }
-    # rule 5 over the cells cited by rules 1-3
+    if write_only:
+        rule_verdicts["2 CPU (cycles/op within 15% of fio-matched)"] = (
+            "N/A (read-path gate; not part of the Step A write design)")
+        rule_verdicts["3 tails (W15/W16 p99 <= 2x fio p99)"] = (
+            "N/A (write tail is descriptive only)")
+    # rule 5 over the cells cited by rules 1-3 (both write comparators included)
     cited = []
     for rat in ratios:
-        if rat["kind"] == "fio-matched":
+        if rat["kind"] in ("fio-matched", "fio-matchedbatch"):
             cited.append(rat["left"])
             cited.append(rat["right"])
     for case in list(SATURATION_CASES_READ) + list(SATURATION_CASES_WRITE):
         jc = gate_juring_cell(cells, case)
         fc = gate_fio_matched_cell(cells, case)
         cited.extend([x for x in (jc, fc) if x is not None])
+    if write_cells_present:
+        for case in WRITE_GATE_CASES:
+            jc = write_juring_cell(cells, case)
+            if jc is not None:
+                cited.append(jc)
+            for variant in (WRITE_PRIMARY_VARIANT,
+                            WRITE_SENSITIVITY_VARIANT):
+                fc = write_fio_cell(cells, case, variant)
+                if fc is not None:
+                    cited.append(fc)
     for case in LATENCY_CASES:
         jc = gate_juring_cell(cells, case)
         fc = gate_fio_matched_cell(cells, case)
@@ -3105,26 +4405,52 @@ def main(argv=None):
             rule_verdicts["2 CPU (cycles/op within 15% of fio-matched)"],
             rule_verdicts["3 tails (W15/W16 p99 <= 2x fio p99)"],
             rule_verdicts["5 every cited number has a CI"]]
-    read_only = not any(c["workload"] in ("randwrite", "seqwrite") for c in cells)
+    read_only = not write_cells_present
+    if write_only:
+        core = [rule_verdicts["1 throughput (1s95 LB >= 0.95 at W3/W4, W7/W8)"],
+                rule_verdicts["5 every cited number has a CI"]]
     if "FAIL" in core:
-        overall = {"verdict": "FAIL",
-                   "reason": "at least one M1 gate rule failed (see table)"}
-    elif all(v == "PASS" for v in core):
         overall = {
-            "verdict": "PASS" + (" (read path only; write half W7/W8 not assessed)"
-                                 if read_only else ""),
-            "reason": ("rules 1-3 and 5 pass at the saturation/latency cells; "
-                       "seastar reported as a bracket"),
-        }
+            "verdict": "FAIL (write half)" if write_only else "FAIL",
+            "reason": ("write rule 1 failed against at least one fio comparator "
+                       "(95% UB < 0.95)" if write_only else
+                       "at least one M1 gate rule failed (see table)")}
+    elif all(v == "PASS" for v in core):
+        if write_only:
+            overall = {
+                "verdict": ("PASS (write half; rule 1 at W7/W8 vs BOTH fio "
+                            "comparators)"),
+                "reason": ("rule 1 passes at both saturation cells against both "
+                           "matchedbatch and matched; rule 5 passes; seastar "
+                           "reported as a bracket"),
+            }
+        else:
+            overall = {
+                "verdict": "PASS" + (
+                    " (read path only; write half W7/W8 not assessed)"
+                    if read_only else ""),
+                "reason": ("rules 1-3 and 5 pass at the saturation/latency "
+                           "cells; seastar reported as a bracket"),
+            }
     else:
         pending = [name for name, v in zip(
             ("rule 1 throughput", "rule 2 CPU", "rule 3 tails",
              "rule 5 CI"), core) if v != "PASS"]
-        overall = {"verdict": "INCONCLUSIVE",
-                   "reason": ("pending/insufficient data: " + ", ".join(pending)
-                              + ". Achieved CI half-widths are in the gate table; "
-                                "more reps or a registration-matched fio cell and "
-                                "perf captures are needed to decide.")}
+        if write_only:
+            overall = {
+                "verdict": "INCONCLUSIVE (write half)",
+                "reason": ("write rule 1 is not decidable from this session: "
+                           "one-sided 95% LBs / 95% UBs against both fio "
+                           "comparators are in the gate table; more reps or the "
+                           "missing W7/W8 cells are needed. " + ", ".join(pending))}
+        else:
+            overall = {"verdict": "INCONCLUSIVE",
+                       "reason": ("pending/insufficient data: " +
+                                  ", ".join(pending) +
+                                  ". Achieved CI half-widths are in the gate "
+                                  "table; more reps or a registration-matched "
+                                  "fio cell and perf captures are needed to "
+                                  "decide.")}
     if read_only:
         rule_verdicts["1 throughput (1s95 LB >= 0.95 at W3/W4, W7/W8)"] = (
             rule_verdicts["1 throughput (1s95 LB >= 0.95 at W3/W4, W7/W8)"]
@@ -3158,7 +4484,15 @@ def main(argv=None):
                         "iotester-check.tsv summary (raw YAML not found)")
     iot_check_report = cross_check_iotester(iotester, iot_check)
 
-    meta_check = cross_check_meta(session_dir, reps, perf_tsv_rows)
+    meta_p99_units, meta_units_source = cell_meta_p99_units(
+        session_dir, manifest, warnings)
+    if meta_p99_units is not None and meta_p99_units != "us":
+        warnings.append(
+            f"cell-meta.tsv p99 units flag has unexpected value "
+            f"'{meta_p99_units}' (expected 'us'); the legacy fio ns->us "
+            f"normalisation is used for the cross-check")
+    meta_check = cross_check_meta(session_dir, reps, perf_tsv_rows,
+                                  meta_p99_units=meta_p99_units)
     perf_check = cross_check_perf_tsv(session_dir, perf_records, perf_tsv_rows)
     if iot_check_report and iot_check_report["mismatches"]:
         for mismatch in iot_check_report["mismatches"][:10]:
@@ -3202,9 +4536,23 @@ def main(argv=None):
     if meta_check and meta_check.get("unit_normalized_p99"):
         warnings.append(
             f"cell-meta.tsv: {len(meta_check['unit_normalized_p99'])} fio p99 "
-            f"value(s) are in nanoseconds (write-session units defect) and were "
-            f"normalised ns->us for the cross-check only; cited latency values "
-            f"come from the raw JSON / cells-normalized.csv")
+            f"value(s) are in nanoseconds (legacy 2026-11-13 write block; no "
+            f"cell_meta_p99_units manifest flag) and were normalised ns->us for "
+            f"the cross-check only; cited latency values come from the raw JSON")
+    if meta_check and meta_check.get("meta_p99_units") == "us":
+        warnings.append(
+            f"cell-meta.tsv p99 units: microseconds for ALL engines (manifest "
+            f"cell_meta_p99_units=us); no ns->us normalisation applied to the "
+            f"cell-meta cross-check "
+            f"({meta_check.get('confirmed_us_p99', 0)} row(s) checked as us). "
+            f"Cited latencies still come from the raw engine JSON")
+    elif (write_cells_present and meta_check
+          and not meta_check.get("unit_normalized_p99")):
+        warnings.append(
+            "cell-meta.tsv p99 units are not declared (no cell_meta_p99_units "
+            "manifest flag) and no fio nanosecond-looking values were detected; "
+            "no normalisation applied — verify the units before citing "
+            "cell-meta p99")
     if meta_check and meta_check.get("collision_missing"):
         warnings.append(
             f"cell-meta.tsv: {len(meta_check['collision_missing'])} fio "
@@ -3212,24 +4560,71 @@ def main(argv=None):
             f"perf/perf-matched filename-stem collision; their computed numbers "
             f"are in perf-cells.tsv (see notes.md)")
 
+    write_analysis = None
+    analyzer_version = VERSION
+    if write_cells_present:
+        series_analysis = analyse_write_series(session_dir, cells, manifest,
+                                               warnings)
+        units_info = {
+            "units": meta_p99_units, "source": meta_units_source,
+            "confirmed_us": (meta_check or {}).get("confirmed_us_p99", 0),
+            "legacy_ns": (meta_check or {}).get("legacy_ns_p99", 0),
+        }
+        write_analysis = {
+            "cells": [c for c in cells if workload_is_write(c["workload"])],
+            "ratios": [r for r in ratios if r["case"] in WRITE_CASE_SPEC],
+            "gate": write_gate,
+            "series": series_analysis,
+            "bracket": bracket,
+            "units": units_info,
+            "manifest_path": manifest["path"] if manifest else None,
+            "write_only": write_only,
+        }
+        analyzer_version = VERSION + "+write"
+        if write_gate is None:
+            warnings.append("write rule 1 not evaluated: no W7/W8 saturation "
+                            "cells in this session (yet)")
+
     summary_md = build_summary(
         session_dir, cells, ratios, perf_report, iotester, bracket, gate_rows,
         rule_verdicts, parsed, warnings, meta_check, overall, argv_text, perf_check,
-        iot_check_report, manifest)
+        iot_check_report, manifest, write_analysis=write_analysis,
+        analyzer_version=analyzer_version)
 
-    # ---- write policy: never write into the legacy 2026-11-13 dir ----------
+    # ---- write policy ------------------------------------------------------
+    # Only the canonical M1 read session may write its aggregate/ tree by
+    # default. Every other session dir (including the legacy write block, whose
+    # name contains "m1-2026-11-13") is RAW EVIDENCE: aggregate artifacts are
+    # written only when --out-prefix is given explicitly.
     prefix = None
     if args.out_prefix:
         prefix = Path(args.out_prefix).expanduser()
     else:
         resolved = session_dir.resolve()
-        if resolved == DEFAULT_DIR.resolve() or "m1-2026-11-13" in str(resolved):
+        if resolved == DEFAULT_DIR.resolve():
             prefix = session_dir / "aggregate" / "m1"
     written = {}
+    write_payload = None
+    if write_analysis is not None:
+        write_payload = {
+            "session_kind": "write-only" if write_only else "mixed",
+            "rule1_verdict": (write_gate or {}).get("verdict"),
+            "case_verdicts": (write_gate or {}).get("case_verdicts") or {},
+            "comparators": [comparator_brief(c) for c in
+                            (write_gate or {}).get("comparators", [])],
+            "series": [series_brief(r) for r in
+                       (write_analysis.get("series") or {}).get("rows") or []],
+            "cell_meta_p99_units": meta_p99_units,
+            "cell_meta_p99_units_source": meta_units_source,
+            "series_source": rel(session_dir / "series"),
+            "runs_source": (rel(write_analysis["series"]["runs_path"])
+                            if (write_analysis.get("series") or {}).get("runs_path")
+                            else None),
+        }
     payload = {
         "schema": "m1-aggregate-1.0",
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "analyzer": f"bench/m1/analyze_m1.py v{VERSION}",
+        "analyzer": f"bench/m1/analyze_m1.py v{analyzer_version}",
         "dir": str(session_dir),
         "argv": argv_text,
         "parsed": parsed,
@@ -3296,6 +4691,7 @@ def main(argv=None):
             "n_byte_rows": len(meta_check.get("byte_rows") or []),
             "n_byte_warn": meta_check.get("n_byte_warn", 0),
         } if meta_check else None),
+        **({"write": write_payload} if write_payload is not None else {}),
         "warnings": warnings,
     }
     csv_tables = [
@@ -3361,20 +4757,24 @@ def main(argv=None):
           "p999_us", "source"]),
     ]
 
+    if write_analysis is not None:
+        csv_tables.extend(_write_csv_tables(write_analysis, write_gate))
+
     if prefix is not None:
         written = write_outputs(prefix, summary_md, csv_tables, payload)
         print(summary_md)
         print()
         print("artifacts written:")
-        for key in ("summary_md", "cells_csv", "reps_csv", "ratios_csv",
-                    "perf_csv", "gates_csv", "iotester_csv", "aggregate_json"):
-            print(f"  {key:16s} {rel(written[key])}")
+        for key, path in written.items():
+            print(f"  {key:16s} {rel(path)}")
     else:
         print(summary_md)
         print()
-        print("note: aggregate artifacts NOT written (this directory is not the "
-              "M1 session dir and --out-prefix was not given; legacy results are "
-              "treated as read-only). Pass --out-prefix <path> to emit them.")
+        print("note: aggregate artifacts NOT written. Only the canonical M1 read "
+              "session (bench/results/m1-2026-11-13) writes its aggregate/ tree "
+              "automatically; every other session dir is raw evidence and "
+              "requires an explicit --out-prefix. Pass --out-prefix <path> to "
+              "emit them.")
     return 0
 
 
