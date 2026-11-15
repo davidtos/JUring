@@ -8,15 +8,30 @@
 # a fresh file or after a long idle.  Record 'file write generation' and total
 # bytes written since last idle."
 #
-# This script does exactly that with fio (io_uring, O_DIRECT, 4K randwrite,
-# QD64, one job pinned to --cpu), in chunks of --chunk-bytes, until BOTH
-#   bytes_written >= --target-mult x file size   AND
-#   elapsed >= --min-sec seconds
-# (the strict reading of D1: a 3x-file-size burst that finishes in 40 s is
-# still topped up to the 120 s minimum), with a hard --max-sec safety cap.
+# This script does that with fio (io_uring, O_DIRECT, 4K randwrite, QD64, one
+# job pinned to --cpu), in chunks of --chunk-bytes (default 4 GiB).
+#
+# Two stop conditions (--condition):
+#   target (default)  Stop as soon as bytes_written >= target (--target-mult x
+#                     file size, e.g. 32,212,254,720 B for the 10 GiB file).
+#                     This is the Step-A fix for the 2026-11-13 block, where the
+#                     old AND condition wrote 128.8 GiB: 4 GiB chunks reach the
+#                     32 GiB target in 8 chunks, no 120 s minimum is imposed.
+#                     --min-sec is only a time cap here: if the target is NOT
+#                     reached by --min-sec, the burst stops with
+#                     stop_reason=min-sec-cap and rc=1 (capped), exactly like
+#                     the --max-sec hard cap.
+#   and               Old behaviour (reproduce the 2026-11-13 block): stop only
+#                     when BOTH bytes_written >= target AND elapsed >=
+#                     --min-sec.  To reproduce that block's full 12 x 10 GiB
+#                     burst, also pass --chunk-bytes 10g (the old default chunk
+#                     was one file size).
+# --max-sec is always the hard safety cap (rc=1, capped) in both conditions.
+#
 # It then fsyncs the file, and emits a machine-readable PRECONDITION_RESULT line
-# with bytes written, elapsed time, fsync status and pre/post device counters
-# from /sys/block/nvme1n1/stat so a run block is reproducible.
+# with bytes written, elapsed time, condition, stop_reason, fsync status and
+# pre/post device counters from /sys/block/nvme1n1/stat so a run block is
+# reproducible.
 #
 # A monotonically increasing "write generation" number is stored under
 #   <session-dir>/state/write-generation.counter
@@ -28,8 +43,9 @@
 #   bench/write/precondition.sh                 # real burst (needs the write file)
 #   bench/write/precondition.sh --dry-run       # print the exact fio commands
 #
-# Exit status: 0 success (including a capped burst, which warns), 1 failure,
-# 2 usage error.
+# Exit status: 0 the stop condition was met (target reached / and-satisfied),
+# 1 capped or failed (target not reached within --min-sec/--max-sec, or fio
+# error), 2 usage error.
 #
 set -euo pipefail
 
@@ -45,7 +61,9 @@ DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
 TARGET_MULT=3
 MIN_SEC=120
 MAX_SEC=900
-CHUNK_SPEC=               # empty -> one file size per chunk
+CHUNK_SPEC=               # empty -> default 4 GiB chunks (Step A fix)
+DEFAULT_CHUNK_BYTES=$(( 4 * 1073741824 ))
+CONDITION=target          # target (Step A default) | and (old 2026-11-13 behaviour)
 BS=4k
 QD=64
 CPU=2
@@ -67,9 +85,13 @@ Options:
                          (default <repo>/bench/results/m1-2026-11-13-write)
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --target-mult N        bytes target = N x file size (default 3)
-  --min-sec SEC          minimum burst duration (default 120)
-  --max-sec SEC          safety cap on burst duration (default 900)
-  --chunk-bytes SIZE     fio --io_size per chunk (default: one file size)
+  --condition target|and stop rule (default target = stop as soon as the target
+                         is reached; `and` = old behaviour: target AND --min-sec)
+  --min-sec SEC          target: time cap if the target is not reached (default
+                         120; stopping there is capped, rc=1);
+                         and: minimum burst duration (default 120)
+  --max-sec SEC          hard safety cap on burst duration (default 900)
+  --chunk-bytes SIZE     fio --io_size per chunk (default 4 GiB)
   --bs SIZE              block size (default 4k)
   --qd N                 per-job queue depth (default 64)
   --cpu N                CPU to pin fio to with taskset (default 2)
@@ -79,8 +101,9 @@ Options:
   -h, --help             this text
 
 Machine-readable output: one PRECONDITION_RESULT line on stdout:
-  generation, chunks, bytes_written, target_bytes, min_sec, elapsed_s, fsync,
-  pre/post write sectors, device write delta, loadavg start/end.
+  generation, condition, stop_reason, chunks, bytes_written, target_bytes,
+  min_sec, elapsed_s, fsync, capped, pre/post write sectors, device write
+  delta, loadavg start/end.
 
 This script writes ONLY the given --file (via fio) and files under
 <session-dir>/{state,logs}; it never touches the read dataset.
@@ -111,6 +134,7 @@ while [[ $# -gt 0 ]]; do
         --session-dir)     [[ $# -ge 2 ]] || die "--session-dir needs a value"; SESSION_DIR=$2; shift 2 ;;
         --device-stat)     [[ $# -ge 2 ]] || die "--device-stat needs a value"; DEVICE_STAT=$2; shift 2 ;;
         --target-mult)     [[ $# -ge 2 ]] || die "--target-mult needs a value"; TARGET_MULT=$2; shift 2 ;;
+        --condition)       [[ $# -ge 2 ]] || die "--condition needs a value"; CONDITION=$2; shift 2 ;;
         --min-sec)         [[ $# -ge 2 ]] || die "--min-sec needs a value"; MIN_SEC=$2; shift 2 ;;
         --max-sec)         [[ $# -ge 2 ]] || die "--max-sec needs a value"; MAX_SEC=$2; shift 2 ;;
         --chunk-bytes)     [[ $# -ge 2 ]] || die "--chunk-bytes needs a value"; CHUNK_SPEC=$2; shift 2 ;;
@@ -126,6 +150,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ "$TARGET_MULT" =~ ^[1-9][0-9]*$ ]] || die "--target-mult must be a positive integer"
+[[ "$CONDITION" == "target" || "$CONDITION" == "and" ]] || die "--condition must be target or and"
 [[ "$MIN_SEC" =~ ^[0-9]+$ ]] || die "--min-sec must be a non-negative integer"
 [[ "$MAX_SEC" =~ ^[0-9]+$ ]] || die "--max-sec must be a non-negative integer"
 [[ "$QD" =~ ^[1-9][0-9]*$ ]] || die "--qd must be a positive integer"
@@ -187,10 +212,14 @@ fi
 if [[ -n "$CHUNK_SPEC" ]]; then
     CHUNK_BYTES=$(parse_size "$CHUNK_SPEC") || die "cannot parse --chunk-bytes '$CHUNK_SPEC'"
 else
-    CHUNK_BYTES=$FILE_SIZE
-    if (( CHUNK_BYTES <= 0 )); then CHUNK_BYTES=$(( 10 * 1073741824 )); fi
+    CHUNK_BYTES=$DEFAULT_CHUNK_BYTES
 fi
 (( CHUNK_BYTES >= 1048576 )) || die "--chunk-bytes must be >= 1 MiB"
+if (( CHUNK_BYTES > TARGET_BYTES )); then
+    warn "--chunk-bytes ($CHUNK_BYTES) exceeds the target ($TARGET_BYTES); one chunk will overshoot"
+fi
+# Chunks needed if the target were hit exactly, for the dry-run/help estimate.
+EXPECTED_CHUNKS=$(( (TARGET_BYTES + CHUNK_BYTES - 1) / CHUNK_BYTES ))
 
 read -r PREV_R_IOS PREV_R_SEC PREV_W_IOS PREV_W_SEC PREV_INFLIGHT <<<"$(devstat)"
 for v in "$PREV_R_IOS" "$PREV_R_SEC" "$PREV_W_IOS" "$PREV_W_SEC" "$PREV_INFLIGHT"; do
@@ -208,12 +237,19 @@ SOURCE=$(findmnt -no SOURCE -T "$PROBE_DIR" 2>/dev/null | tail -n1 || true)
 if (( DRY_RUN )); then
     printf '# dry-run: precondition.sh (methodology D1)\n'
     printf '#   file=%s exists=%s size_bytes=%s\n' "$WF" "$FILE_EXISTS" "$FILE_SIZE"
-    printf '#   target_mult=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s\n' \
-        "$TARGET_MULT" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES"
+    printf '#   target_mult=%s condition=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s expected_chunks_if_exact=%s\n' \
+        "$TARGET_MULT" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES" "$EXPECTED_CHUNKS"
     printf '#   bs=%s qd=%s cpu=%s fsync=%s fstype=%s source=%s\n' \
         "$BS" "$QD" "$CPU" "$( (( NO_FSYNC )) && echo skipped || echo after-burst )" "${FSTYPE:-unknown}" "${SOURCE:-unknown}"
-    printf '#   loop condition: bytes_written >= %s AND elapsed_s >= %s, capped at %s s\n' \
-        "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC"
+    if [[ "$CONDITION" == "target" ]]; then
+        printf '#   loop condition: stop as soon as bytes_written >= %s; --max-sec=%s hard cap;\n' \
+            "$TARGET_BYTES" "$MAX_SEC"
+        printf '#     --min-sec=%s is only a time cap when the target is NOT reached (stop_reason=min-sec-cap, rc=1)\n' \
+            "$MIN_SEC"
+    else
+        printf '#   loop condition (and): bytes_written >= %s AND elapsed_s >= %s, capped at %s s\n' \
+            "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC"
+    fi
     printf '#   chunk command (repeated, chunk index increments; each chunk writes %s bytes):\n' "$CHUNK_BYTES"
     printf 'taskset -c %s fio --name=precondition_g<GEN>_c<CHUNK> --filename=%s --ioengine=io_uring --direct=1 --rw=randwrite --bs=%s --iodepth=%s --numjobs=1 --io_size=%s --randrepeat=0 --group_reporting --clocksource=clock_gettime --output-format=json --output=%s\n' \
         "$CPU" "$WF" "$BS" "$QD" "$CHUNK_BYTES" \
@@ -221,8 +257,8 @@ if (( DRY_RUN )); then
     if (( ! NO_FSYNC )); then
         printf 'sync -f %s   # D1: fsync after the burst\n' "$(printf '%q' "$WF")"
     fi
-    printf 'PRECONDITION_RESULT action=dry-run file=%s generation=would-increment target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s fsync=%s\n' \
-        "$WF" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES" "$( (( NO_FSYNC )) && echo skipped || echo after-burst )"
+    printf 'PRECONDITION_RESULT action=dry-run file=%s generation=would-increment condition=%s stop_reason=not-run target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s fsync=%s\n' \
+        "$WF" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES" "$( (( NO_FSYNC )) && echo skipped || echo after-burst )"
     exit 0
 fi
 
@@ -239,14 +275,14 @@ printf '%s\n' "$GEN" >"$COUNTER_FILE"
 
 GEN_TSV="$SESSION_DIR/state/write-generations.tsv"
 if [[ ! -s "$GEN_TSV" ]]; then
-    printf '%s\n' $'generation\tstarted_utc\tfile\tfile_size_bytes\tbytes_written\ttarget_bytes\tmin_sec\telapsed_s\tchunks\tfsync\tpre_write_sectors\tpost_write_sectors\tdevice_write_sectors_d\tloadavg_start\tloadavg_end\tcapped' >"$GEN_TSV"
+    printf '%s\n' $'generation\tstarted_utc\tfile\tfile_size_bytes\tbytes_written\ttarget_bytes\tmin_sec\telapsed_s\tchunks\tfsync\tpre_write_sectors\tpost_write_sectors\tdevice_write_sectors_d\tloadavg_start\tloadavg_end\tcapped\tcondition\tstop_reason' >"$GEN_TSV"
 fi
 
 RUN_LOG="$SESSION_DIR/logs/precondition_g${GEN}-$(date -u +%Y%m%dT%H%M%SZ).log"
 {
     printf '=== precondition.sh D1 burst generation=%s %s\n' "$GEN" "$(now_utc)"
-    printf 'file=%s size_bytes=%s target_mult=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s\n' \
-        "$WF" "$FILE_SIZE" "$TARGET_MULT" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES"
+    printf 'file=%s size_bytes=%s target_mult=%s condition=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s\n' \
+        "$WF" "$FILE_SIZE" "$TARGET_MULT" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES"
     printf 'bs=%s qd=%s cpu=%s fstype=%s source=%s governor=%s loadavg=%s\n' \
         "$BS" "$QD" "$CPU" "$FSTYPE" "$SOURCE" "$GOVERNOR" "$LOADAVG_START"
     printf 'pre_device_stat: read_ios=%s read_sectors=%s write_ios=%s write_sectors=%s inflight=%s\n' \
@@ -258,15 +294,28 @@ TOTAL_BYTES=0
 CHUNKS=0
 ZERO_CHUNKS=0
 CAPPED=0
+STOP_REASON="unset"
 
 while :; do
     ELAPSED=$(( $(now_s) - START_S ))
-    if (( TOTAL_BYTES >= TARGET_BYTES && ELAPSED >= MIN_SEC )); then
+    if [[ "$CONDITION" == "target" ]] && (( TOTAL_BYTES >= TARGET_BYTES )); then
+        STOP_REASON="target-reached"
+        break
+    fi
+    if [[ "$CONDITION" == "and" ]] && (( TOTAL_BYTES >= TARGET_BYTES && ELAPSED >= MIN_SEC )); then
+        STOP_REASON="and-satisfied"
         break
     fi
     if (( MAX_SEC > 0 && ELAPSED >= MAX_SEC )); then
         CAPPED=1
-        warn "reached --max-sec=$MAX_SEC before target/min-sec; stopping burst (bytes=$TOTAL_BYTES elapsed=${ELAPSED}s)"
+        STOP_REASON="max-sec-cap"
+        warn "reached --max-sec=$MAX_SEC before the stop condition; stopping burst (bytes=$TOTAL_BYTES elapsed=${ELAPSED}s)"
+        break
+    fi
+    if [[ "$CONDITION" == "target" ]] && (( MIN_SEC > 0 && ELAPSED >= MIN_SEC )); then
+        CAPPED=1
+        STOP_REASON="min-sec-cap"
+        warn "target $TARGET_BYTES B not reached within --min-sec=$MIN_SEC s (bytes=$TOTAL_BYTES); stopping capped (rc=1)"
         break
     fi
     CHUNKS=$(( CHUNKS + 1 ))
@@ -346,21 +395,21 @@ FSYNC_STATUS="ok"
 (( CAPPED )) && FSYNC_STATUS="${FSYNC_STATUS}-capped"
 
 {
-    printf '=== precondition end %s elapsed_s=%s bytes_written=%s chunks=%s capped=%s fsync=%s\n' \
-        "$(now_utc)" "$ELAPSED" "$TOTAL_BYTES" "$CHUNKS" "$CAPPED" "$FSYNC_STATUS"
+    printf '=== precondition end %s elapsed_s=%s bytes_written=%s chunks=%s capped=%s condition=%s stop_reason=%s fsync=%s\n' \
+        "$(now_utc)" "$ELAPSED" "$TOTAL_BYTES" "$CHUNKS" "$CAPPED" "$CONDITION" "$STOP_REASON" "$FSYNC_STATUS"
     printf 'post_device_stat: read_ios=%s read_sectors=%s write_ios=%s write_sectors=%s inflight=%s\n' \
         "$POST_R_IOS" "$POST_R_SEC" "$POST_W_IOS" "$POST_W_SEC" "$POST_INFLIGHT"
     printf 'device_write_ios_delta=%s device_write_sectors_delta=%s loadavg_end=%s\n' \
         "$W_DELTA" "$WSEC_DELTA" "$LOADAVG_END"
 } >>"$RUN_LOG"
 
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$GEN" "$(now_utc)" "$WF" "$FILE_SIZE" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" \
     "$ELAPSED" "$CHUNKS" "$FSYNC_STATUS" "$PREV_W_SEC" "$POST_W_SEC" "$WSEC_DELTA" \
-    "$LOADAVG_START" "$LOADAVG_END" "$CAPPED" >>"$GEN_TSV"
+    "$LOADAVG_START" "$LOADAVG_END" "$CAPPED" "$CONDITION" "$STOP_REASON" >>"$GEN_TSV"
 
-printf 'PRECONDITION_RESULT file=%s generation=%s chunks=%s bytes_written=%s target_bytes=%s min_sec=%s elapsed_s=%s fsync=%s capped=%s pre_write_sectors=%s post_write_sectors=%s device_write_sectors_delta=%s device_write_mib=%s loadavg_start=%s loadavg_end=%s log=%s\n' \
-    "$WF" "$GEN" "$CHUNKS" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" "$ELAPSED" \
+printf 'PRECONDITION_RESULT file=%s generation=%s condition=%s stop_reason=%s chunks=%s bytes_written=%s target_bytes=%s min_sec=%s elapsed_s=%s fsync=%s capped=%s pre_write_sectors=%s post_write_sectors=%s device_write_sectors_delta=%s device_write_mib=%s loadavg_start=%s loadavg_end=%s log=%s\n' \
+    "$WF" "$GEN" "$CONDITION" "$STOP_REASON" "$CHUNKS" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" "$ELAPSED" \
     "$FSYNC_STATUS" "$CAPPED" "$PREV_W_SEC" "$POST_W_SEC" "$WSEC_DELTA" \
     "$(( WSEC_DELTA / 2048 ))" "$LOADAVG_START" "$LOADAVG_END" "$RUN_LOG"
 

@@ -1,9 +1,10 @@
 # bench/write/ — M1 write-path matrix harness (W5–W8, W12–W14)
 
-Status: **prepared, not executed.** This directory is Step 2 of
-`docs/HANDOVER.md` §7 (write matrix) and implements the normative controls
-D1–D8 of `docs/benchmark-methodology.md` §5 for cells W5–W8 / W12–W14
-(`docs/benchmark-methodology.md` §2).
+Status: **harness complete for Step A (session 11), campaign not yet run.**
+This directory is Step 2 of `docs/HANDOVER.md` §7 (write matrix) and implements
+the normative controls D1–D8 of `docs/benchmark-methodology.md` §5 for cells
+W5–W8 / W12–W14 (`docs/benchmark-methodology.md` §2). `run-write-campaign.sh`
+is the one-command Step-A driver (three blocks, one session dir).
 
 The read matrix uses the same NVMe (`/dev/nvme1n1p1`). Until the Lead says go,
 **no script here may be run for real**: only `--dry-run`, `--help`, and
@@ -26,9 +27,10 @@ of touching the device.
 4. **Do not delete the write file while another engine is using it.** Only
    `create-write-file.sh --force` recreates it, and only after all checks pass.
 5. **One writer at a time.** `run-write-cells.sh` takes an `flock` on
-   `<session-dir>/.run-write-cells.lock` and refuses to start if another
-   `fio`/`seastar_file_bench`/`JUringFileBench` process is running (override:
-   `--allow-concurrent`; not recommended).
+   `<session-dir>/.run-write-cells.lock`; `run-write-campaign.sh` additionally
+   holds `<session-dir>/.run-write-campaign.lock` for all three blocks + rests.
+   Both refuse to start if another `fio`/`seastar_file_bench`/`JUringFileBench`
+   process is running (override: `--allow-concurrent`; not recommended).
 6. The write file is non-sparse and preallocated; cells run **in place** on it.
    It is never truncated by the harness (no `--size` is passed that would extend
    it).
@@ -38,12 +40,13 @@ of touching the device.
 | file | purpose |
 |---|---|
 | `create-write-file.sh` | create/verify the non-sparse 10 GiB O_DIRECT write file (`fallocate` → `dd oflag=direct` → fsync → stat/filefrag verify); idempotent, `--force` to recreate, `--dry-run` |
-| `precondition.sh` | D1 preconditioning burst: 4K randwrite QD64 until ≥3× file size **and** ≥120 s, then fsync; records write generation + pre/post device state; `--dry-run` |
-| `run-write-cells.sh` | W5–W8 + W12–W14 matrix for juring/fio (+ seastar opt-in): warmup/measured per methodology, R=3, D1/D2/D3/D6/RESULT + CELL_SUMMARY lines; `--dry-run` |
+| `precondition.sh` | D1 preconditioning burst: 4K randwrite QD64 in **4 GiB chunks** until `bytes_written >= 3× file size` (`--condition target`, default; 32,212,254,720 B for the 10 GiB file), then fsync; `--condition and` reproduces the old target AND ≥120 s behaviour; records write generation, condition/stop_reason + pre/post device state; `--dry-run` |
+| `run-write-cells.sh` | W5–W8 + W12–W14 matrix for juring/fio (+ seastar opt-in): warmup/measured per methodology, default R=3, `--reps-by-cell`, `--resume` (run-granular), D1/D2/D3/D6/RESULT + CELL_SUMMARY lines; `--dry-run` |
+| `run-write-campaign.sh` | **Step-A driver**: blocks B1 `W5,W6` reps 3 → B2 `W7,W8` reps-by-cell W7=5/W8=5 → B3 `W12,W13,W14` reps 3, one session dir, verified 24/70/36 runs, enforced+recorded 300 s rest between blocks, preflight, `--resume`, `--dry-run` |
 | `sample-device-iops.sh` | D2 1 s-resolution `/sys/block/nvme1n1/stat` time series to TSV; backgrounded by the matrix driver, can also run standalone; `--dry-run` |
 | `README.md` | this file |
 
-All four scripts: `bash -n` clean, `--help`, `--dry-run`, no `$HOME`
+All five scripts: `bash -n` clean, `--help`, `--dry-run`, no `$HOME`
 assumptions, `set -euo pipefail`, no root required for the harness itself.
 
 ## 3. Environmental assumptions (verified in this sandbox)
@@ -73,10 +76,13 @@ cd /home/david/projects/JUring
 bash -n bench/write/create-write-file.sh
 bash -n bench/write/precondition.sh
 bash -n bench/write/run-write-cells.sh
+bash -n bench/write/run-write-campaign.sh
 bash -n bench/write/sample-device-iops.sh
 bench/write/create-write-file.sh --dry-run
 bench/write/precondition.sh --dry-run
 bench/write/run-write-cells.sh --dry-run
+bench/write/run-write-campaign.sh --dry-run \
+    --session-dir scratch/stepa-harness/dryrun-session
 bench/write/sample-device-iops.sh --out /tmp/x.tsv --dry-run
 
 # ---- Step 1: create/verify the 10 GiB write file (once) ------------------
@@ -87,10 +93,13 @@ bench/write/create-write-file.sh
 # bench/write/create-write-file.sh --force
 
 # ---- Step 2: one D1 preconditioning burst (standalone check) -------------
-# (~2-4 min: 3x10 GiB randwrite at QD64 + max(120 s) minimum + fsync)
+# (~1.5-2.5 min with the target-driven 4 GiB chunks: 8 chunks = 32 GiB)
 bench/write/precondition.sh
-# expect: PRECONDITION_RESULT ... bytes_written>=32212254720 min_sec=120
-#         fsync=ok device_write_sectors_delta=...
+# expect: PRECONDITION_RESULT ... condition=target stop_reason=target-reached
+#         chunks=8 bytes_written>=32212254720 fsync=ok
+#         device_write_sectors_delta=... (capped=0)
+# the burst stops as soon as the target is reached; --min-sec=120 only caps the
+# burst (rc=1, stop_reason=min-sec-cap) if a slow device cannot reach it.
 # after the burst the device must idle 600 s (D3) before the first cell;
 # run-write-cells.sh does this itself when it owns the session.
 
@@ -101,9 +110,13 @@ bench/write/run-write-cells.sh --cells W5 --reps 1 --rest-sec 60 --precond-rest-
 # for a zero-I/O structural check of the same plan:
 bench/write/run-write-cells.sh --cells W5 --reps 1 --dry-run
 
-# ---- Step 4: full matrix (overnight, ~11 h for juring+fio) ----------------
-bench/write/run-write-cells.sh
-# add seastar ONLY after its write path is validated by the Lead:
+# ---- Step 4: the Step-A campaign (one command, ~9 h, 130 runs) -----------
+# add seastar ONLY after its write path is validated by the Lead (done 2026-11-13):
+bench/write/run-write-campaign.sh --session-dir bench/results/stepa-write-<date>
+# continue an interrupted campaign (run-granular; skips present JSONs):
+bench/write/run-write-campaign.sh --resume --session-dir bench/results/stepa-write-<date>
+# the underlying driver remains available for custom/smoke selections:
+bench/write/run-write-cells.sh --cells W5 --reps 1
 bench/write/run-write-cells.sh --engines juring,fio,seastar --allow-seastar-write
 
 # ---- Optional: standalone 1 s series during any manual run ---------------
@@ -121,13 +134,20 @@ concurrent benchmark process, or a loadavg(1m) above `--loadavg-max 0.5`
 
 | cell | workload | bs | QD | dataset | warmup / measured | R | engines |
 |---|---|---|---|---|---|---|---|
-| W5 | randwrite | 4K | 1 | write file | 60 / 60 s | 3 | juring, fio-io_uring |
-| W6 | randwrite | 4K | 16 | write file | 120 / 60 s | 3 | juring, fio-io_uring |
-| W7 | randwrite | 4K | 64 | write file | 120 / 60 s | 3 | juring, fio-io_uring (+ registration-only `matched`, `matchedbatch`, batching sweep `batch8/16/32`) |
-| W8 | randwrite | 4K | 128 | write file | 120 / 60 s | 3 | juring, fio-io_uring (+ `matchedbatch`) |
-| W12 | seqwrite | 1M | 1 | write file | 60 / 60 s | 3 | juring, fio-io_uring |
-| W13 | seqwrite | 1M | 8 | write file | 60 / 60 s | 3 | juring, fio-io_uring |
-| W14 | seqwrite | 1M | 32 | write file | 60 / 60 s | 3 | juring, fio-io_uring |
+| W5 | randwrite | 4K | 1 | write file | 60 / 60 s | 3 | juring, fio-io_uring, seastar (campaign) |
+| W6 | randwrite | 4K | 16 | write file | 120 / 60 s | 3 | juring, fio-io_uring, seastar (campaign) |
+| W7 | randwrite | 4K | 64 | write file | 120 / 60 s | **5** in the campaign | juring, seastar, fio-io_uring (+ registration-only `matched`, `matchedbatch`, batching sweep `batch1/8/16/32`) |
+| W8 | randwrite | 4K | 128 | write file | 120 / 60 s | **5** in the campaign | juring, seastar, fio-io_uring (+ `matchedbatch`) |
+| W12 | seqwrite | 1M | 1 | write file | 60 / 60 s | 3 | juring, fio-io_uring, seastar (campaign) |
+| W13 | seqwrite | 1M | 8 | write file | 60 / 60 s | 3 | juring, fio-io_uring, seastar (campaign) |
+| W14 | seqwrite | 1M | 32 | write file | 60 / 60 s | 3 | juring, fio-io_uring, seastar (campaign) |
+
+The campaign raises W7/W8 to R=5 (`--reps-by-cell W7=5,W8=5`, HANDOVER §7
+Step A) because the 2026-11-13 W7 block was **INCONCLUSIVE** at R=3 (paired LB
+0.9490), and keeps R=3 for the other cells. The matrix table names only
+fio-uring+juring for the write cells; seastar is the HANDOVER-mandated bracket
+and its write cells are reported as a bracket, never as a pass/fail. fio-libaio
+is available via `--fio-variants libaio` but is not in the Step-A campaign.
 
 Warmups follow `docs/benchmark-methodology.md` §2 (the task brief summarised
 "60/60"; W6–W8 specify 120 s warmup in the normative table). Override with
@@ -137,9 +157,10 @@ simplification — record the deviation in `notes.md`.
 Per-cell protocol (encoded by `run-write-cells.sh`):
 
 1. **D1 preconditioning** before the cell (`--precondition=per-cell`, default):
-   `precondition.sh` runs until ≥3× file size (32,212,254,720 B) **and**
-   ≥120 s of 4K randwrite QD64, then fsyncs and records a write generation.
-   Then a **600 s idle rest** (D3).
+   `precondition.sh` writes 4 GiB chunks of 4K randwrite QD64 until it reaches
+   ≥3× file size (32,212,254,720 B), then fsyncs and records a write
+   generation (`condition=target`, `stop_reason=target-reached`). Then a
+   **600 s idle rest** (D3).
 2. For every rep 1..R, run the selected engines **in rotated order** (rep 1:
    juring, fio-default, fio-matched; rep 2: fio-default, fio-matched, juring;
    …), each as a fresh process; the exact order is written to
@@ -187,9 +208,10 @@ fio variants:
 
 | variant | extra flags | purpose |
 |---|---|---|
-| `default` | (none; `iodepth_batch_submit=1`) | the README/"default" configuration |
+| `default` | (none; fio's implicit `iodepth_batch_submit=1`) | the README/"default" configuration |
 | `matched` | `--registerfiles=1 --fixedbufs=1` | matched registration, default batching = the read session's `matched` variant |
 | `matchedbatch` | `--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit=<qd>` | matched registration + fused submit = the M1-gate comparator; auto-added for W7/W8 |
+| `batch1` | `--iodepth_batch_submit=1` | explicit one-SQE-per-enter point; auto-added for W7 so the sweep is `batch1, batch8, batch16, batch32, matchedbatch` |
 | `batch8`, `batch16`, `batch32` | `--iodepth_batch_submit=8/16/32` | W7 batching sweep (F0/§3.2 mandatory, auto-added for W7) |
 | `sqpoll` | `--sqthread_poll=1` | seastar asymmetry bracket (optional, not in default plan) |
 | `libaio` | `--ioengine=libaio` | kernel-AIO reference (optional, W7 in the methodology) |
@@ -218,7 +240,7 @@ matrix; the 1M/QD32 cell is expected to be the slowest to validate.
 
 | control | implementation |
 |---|---|
-| D1 preconditioning | `precondition.sh` before every cell: ≥3× file size (32,212,254,720 B) 4K randwrite QD64 **and** ≥120 s, fsync, generation counter `state/write-generation.counter`, rows in `state/write-generations.tsv`, `PRECONDITION_RESULT` line |
+| D1 preconditioning | `precondition.sh` before every cell: **4 GiB chunks** of 4K randwrite QD64 until ≥3× file size (32,212,254,720 B), then fsync (`--condition target`, default; `condition=`/`stop_reason=target-reached` in the result); `--min-sec` only caps a burst that cannot reach the target (rc=1, `stop_reason=min-sec-cap`); generation counter `state/write-generation.counter`, rows in `state/write-generations.tsv`, `PRECONDITION_RESULT` line with `condition=`/`stop_reason=` |
 | D2 SLC cliff / 1 s series | `sample-device-iops.sh` per run → `series/<stem>.tsv`: read/write IOPS, MiB/s, in-flight, `io_busy_pct`, loadavg at 1 s; warmup+measured window (approximate ± process startup) |
 | D3 rests | 300 s between measured runs, 600 s after every preconditioning burst; actual durations in `state/rests.tsv` |
 | D4 TRIM/discard | mount options recorded in `manifest.txt`; warns if `discard` present; no discard command anywhere |
@@ -240,11 +262,20 @@ Session root: `bench/results/m1-2026-11-13-write/` (override `--session-dir`).
 cells/<case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>.json
 logs/<same stem>.log
 series/<same stem>.tsv
-cell-meta.tsv                      # 17-column meta, same format as the read session
+cell-meta.tsv                      # 17-column meta, same format as the read session;
+                                   # p99_us is MICROSECONDS for every engine
 state/order.tsv, runs.tsv, rests.tsv, cell-summaries.txt,
+state/resumed.tsv                  # --resume skip/reprecondition log (utc, cell, stem, rep, action)
+state/invocations.tsv              # one row per invocation (utc, manifest, argv, run counts)
 state/write-file.tsv, write-generations.tsv, precondition-results.txt
-manifest.txt
+manifest.txt                       # first invocation
+manifest-run<N>.txt                # invocation N>1 (manifest.txt is never truncated)
+logs/campaign-block<N>.log         # campaign wrapper block logs
 ```
+
+A campaign session mixes all three blocks in one dir; `state/order.tsv` seq
+numbers stay monotonic across blocks **and** across later `--resume`
+invocations (the seq offset is the max seq already present).
 
 Examples (same convention as the read session, e.g.
 `W3__juring__std__bs4k__qd64__t1__r2.json`):
@@ -285,6 +316,32 @@ Final line: `SESSION_RESULT session_dir=.. runs_planned=.. runs_ok=..
 runs_failed=.. elapsed_s=..` (exit 1 if any run failed).
 
 ## 9. Decisions and deviations (review checklist)
+
+0. **Step-A precondition condition (2026-11-15).** `precondition.sh` now
+   defaults to `--condition target`: 4 GiB chunks until `bytes_written >= 3×
+   file size`, stopping immediately (≈8 chunks / 32–34 GiB) instead of the old
+   `target AND >=120 s` rule that wrote **128.8 GiB** in the 2026-11-13 block.
+   `--condition and` reproduces the old rule (add `--chunk-bytes 10g` to
+   reproduce that block exactly). This is a deliberate deviation from the
+   literal "3× file size or 120 s minimum" wording of methodology D1; the
+   overshoot was the documented Step-A problem, the HANDOVER fix is
+   target-driven chunks. `--min-sec` now only caps a burst that cannot reach
+   the target (rc=1, `stop_reason=min-sec-cap`).
+0b. **W7/W8 R=5, batch1, seastar writes.** The campaign raises W7/W8 to 5 reps
+   (`--reps-by-cell W7=5,W8=5`) to decide the 2026-11-13 INCONCLUSIVE W7 result;
+   the W7 fio batching sweep now starts at `batch1` (explicit) as well as
+   `batch8/16/32/matchedbatch`; seastar write cells are included for all blocks
+   per HANDOVER §7 Step A (bracket, not a gate). fio-libaio is not in the
+   campaign (optional `--fio-variants libaio`).
+0c. **p99 units defect fixed (2026-11-13 write-session defect).** fio
+   `clat_ns` percentiles are divided by 1000 before writing `RESULT` /
+   `runs.tsv` / `cell-meta.tsv`, so `p99_us` is microseconds for **all**
+   engines; the manifest records `cell_meta_p99_units=us`. Sessions written
+   before this fix keep their ns values and remain non-citable for fio p99.
+0d. **Multi-invocation sessions.** Seq numbers are offset by the max seq in
+   `state/order.tsv`/`state/runs.tsv`; `manifest.txt` is only written by the
+   first invocation, later ones write `manifest-run<N>.txt`; every invocation
+   appends a row to `state/invocations.tsv`.
 
 1. **Warmups**: methodology says 120 s warmup for W6–W8, 60 s otherwise; the
    task brief said "60/60". Default follows the methodology; `--warmup-sec`
@@ -332,20 +389,25 @@ runs_failed=.. elapsed_s=..` (exit 1 if any run failed).
 
 ## 10. Wall-time estimate
 
-Default full plan (juring + fio, `default,matched`, W7 sweep added):
+Step-A campaign plan (juring + fio + seastar, W7 sweep incl. `batch1`):
 
-| item | count / cost |
-|---|---|
-| measured runs | 78 (juring 21, fio 57; W7 has 7 fio variants incl. the sweep) |
-| run time | Σ(warmup+60 s run+~3 s startup) ≈ 3.4 h |
-| D3 rests | 77 × 300 s ≈ 6.4 h |
-| preconditioning + 600 s rests | 7 × ~(150+600) s ≈ 1.5 h |
-| **total** | **≈ 11 h** |
-| + seastar (`--engines juring,fio,seastar`) | +21 runs ≈ +3 h |
-| `--rest-scope reps` | ≈ 6 h |
-| smoke `--cells W5 --reps 1` | 3 runs, 1 precondition, 2 rests ≈ 30 min |
+| block | cells / reps | runs | estimate |
+|---|---|---|---|
+| B1 | `W5,W6` reps 3 (`--rest-scope reps`) | 24 | ≈ 6,552 s ≈ 1.8 h |
+| B2 | `W7,W8` reps-by-cell 5/5 | 70 | ≈ 16,890 s ≈ 4.7 h |
+| B3 | `W12–W14` reps 3 | 36 | ≈ 8,898 s ≈ 2.5 h |
+| between-block rests | 2 × 300 s enforced + recorded | — | ≈ 600 s |
+| **campaign total** | juring + fio + seastar, 7 precondition bursts | **130** | **≈ 32,940 s ≈ 9.2 h** |
+| smoke `--cells W5 --reps 1` (juring+fio) | 3 runs, 1 precondition, 2 run rests + precond rest | 3 | ≈ 28 min |
 
-Use `--dry-run` to print the exact estimate for any selection.
+For reference, the previous `run-write-cells.sh` default plan (78 runs, R=3,
+`default,matched` only, no seastar) was estimated at ≈11 h; the campaign is
+longer because W7/W8 now have R=5, `batch1` and seastar.
+
+The estimate uses run = warmup + measured + 3 s startup, a **90 s
+target-driven precondition + 600 s rest** per burst, and 300 s between rep
+groups. Use `--dry-run` on either script to print the exact estimate for any
+selection; the campaign wrapper prints per-block estimates and the total.
 
 ## 11. What still needs host root
 
@@ -363,23 +425,32 @@ Use `--dry-run` to print the exact estimate for any selection.
 
 A write session is citable only if all of these hold (methodology §7–§8):
 
-1. **Static**: `bash -n` clean for all four scripts; every `--dry-run` prints a
-   plan and does not touch the device.
+1. **Static**: `bash -n` clean for all five scripts; every `--dry-run` prints a
+   plan and does not touch the device, and the campaign dry-run plans exactly
+   24/70/36 runs (130 total).
 2. **Dataset**: `CREATE_WRITE_FILE_RESULT` (or `action=skipped`) with
    `size_bytes=10737418240`, `allocated_bytes>=size*0.99`, `fstype=ext4`,
    source `/dev/nvme1n1p1`; read file stat unchanged across the session
    (`read_file_unchanged=true` in `manifest.txt`).
 3. **Preconditioning**: each `PRECONDITION_RESULT` has
-   `bytes_written >= 32212254720`, `elapsed_s >= 120`, `fsync=ok`,
+   `condition=target`, `stop_reason=target-reached`,
+   `bytes_written >= 32212254720`, `fsync=ok`,
    `device_write_sectors_delta > 0`; the generation number is recorded.
+   A `stop_reason=min-sec-cap`/`max-sec-cap` result is a D1 shortfall: abort
+   (the driver does unless `--allow-capped-precondition` is given).
 4. **Per run**: `RESULT ... status=ok`, `errors=0`, engine bytes > 0, device
    write sectors moved, `series/<stem>.tsv` has ≈ warmup+measured rows at 1 s.
 5. **Per cell**: `CELL_SUMMARY n=3`, all `ok=3`, mean/sd/CV reported. A cell
    with `CV > 10 %` is **unstable, no ranking** (D7) and needs a cause note
    (cliff via the series, thermal via D5, loadavg via the run log).
-6. **Session**: `SESSION_RESULT runs_failed=0`; `manifest.txt` complete
-   (governor, loadavg, device deltas, exact commands in logs); every JSON has
-   its cell-named file and every log its exact command line.
+6. **Session**: `SESSION_RESULT runs_failed=0`; the manifest of the invocation
+   (`manifest.txt`, then `manifest-run<N>.txt`) is complete (governor, loadavg,
+   device deltas, exact argv); every JSON has its cell-named file and every log
+   its exact command line; `cell_meta_p99_units=us` is present and the
+   `cell-meta.tsv` p99 values are microseconds (no fio ns values).
+   For a campaign: `CAMPAIGN_RESULT status=ok` with `runs_planned=130`,
+   `blocks_ok=3`, and two `phase=between-blocks` rows in `state/rests.tsv`
+   (`after_run_seq` = last seq of the finished block, requested_s=300).
 7. **Analysis**: use the same statistics as the read path (`docs/benchmark-
    methodology.md` §7: mean ± 95% CI, min/max/median, CV, paired ratios against
    fio-matched; no delta claim whose CI contains 0; parity only inside
@@ -393,6 +464,12 @@ A write session is citable only if all of these hold (methodology §7–§8):
   overwritten per stem, so **copy a completed session before re-running it**
   (or use a new `--session-dir`, e.g.
   `--session-dir bench/results/m1-2026-11-13-write-r2`).
+* To continue an interrupted session use `--resume` (run-granular): a planned
+  run whose `cells/<stem>.json` parses with `iops>0` is skipped, a cell with
+  missing runs is preconditioned once more, a fully present cell skips
+  cell+preconditioning; skips land in `state/resumed.tsv`, and the manifest is
+  preserved as `manifest-run<N>.txt`. The campaign wrapper forwards `--resume`
+  to all three blocks.
 * To recreate the write file from scratch:
   `bench/write/create-write-file.sh --force` (10 GiB write, ~20 s; run only
   when the device is idle).

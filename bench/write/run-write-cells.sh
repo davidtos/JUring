@@ -20,8 +20,9 @@
 #
 # Device-state controls encoded here:
 #   D1  preconditioning before every measured block: calls precondition.sh
-#       (3x file size of 4K randwrite QD64 AND >=120 s, then fsync), records the
-#       write generation; --precondition=per-cell|session-once|none.
+#       (default condition=target: stop as soon as 3x file size = 32,212,254,720 B
+#       of 4K randwrite QD64 is written, then fsync), records the write
+#       generation; --precondition=per-cell|session-once|none.
 #   D2  1 s /sys/block/nvme1n1/stat series per measured run via
 #       sample-device-iops.sh (background); --no-sampler to disable.
 #   D3  300 s idle rest between measured runs (--rest-sec), 600 s after a
@@ -39,22 +40,37 @@
 #       mean, sd, CV%; CV>10% is flagged unstable (no ranking).
 #   F14 gate: loadavg(1m) > --loadavg-max aborts (or warns) before a run.
 #
+# Multi-invocation support: --resume lets a later invocation re-use a session
+# dir (run-granular skip of cells/<stem>.json that parses with iops>0; a cell
+# with any missing run is preconditioned once more, a fully present cell is
+# skipped with its preconditioning).  Sequence numbers stay monotonic across
+# invocations (offset from the max seq in state/order.tsv + state/runs.tsv);
+# manifest.txt is never truncated (later invocations write manifest-run<N>.txt);
+# every invocation appends one row to state/invocations.tsv.  p99 units are
+# microseconds for every engine in RESULT / runs.tsv / cell-meta.tsv (fio
+# clat_ns is divided by 1000; manifest line cell_meta_p99_units=us).
+#
 # Outputs (all below <session-dir>, default bench/results/m1-2026-11-13-write):
 #   cells/<case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>.json
 #   logs/<same stem>.log
 #   series/<same stem>.tsv                  (D2 device time series)
 #   state/order.tsv, runs.tsv, rests.tsv, cell-summaries.txt,
+#   state/resumed.tsv, state/invocations.tsv,
 #   state/write-generations.tsv, state/precondition-results.txt
-#   manifest.txt
+#   manifest.txt (first invocation) / manifest-run<N>.txt (later invocations)
 #
 # Usage:
 #   bench/write/run-write-cells.sh --dry-run            # print the whole plan
 #   bench/write/run-write-cells.sh --cells W5 --reps 1  # smoke subset
+#   bench/write/run-write-cells.sh --resume             # continue a session
 #   bench/write/run-write-cells.sh                      # full protocol (R=3)
+#   bench/write/run-write-campaign.sh                   # the Step-A 3-block campaign
 #
-# Exit status: 0 all runs ok, 1 at least one failure, 2 usage error.
+# Exit status: 0 all executed runs ok, 1 at least one failure, 2 usage error.
 #
 set -euo pipefail
+
+ORIG_ARGV=("$@")   # preserved verbatim for state/invocations.tsv
 
 PROG=$(basename -- "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -73,6 +89,8 @@ CPU=2
 SEED=20261113
 MEASURED_SEC=60
 REPS=3
+REPS_BY_CELL_RAW=""
+RESUME=0
 REST_SEC=300
 PRECOND_REST_SEC=600
 REST_SCOPE=runs
@@ -98,17 +116,24 @@ Selection:
   --cells LIST           comma/space list from W5,W6,W7,W8,W12,W13,W14
                          (default all, monotonic order preserved)
   --engines LIST         subset of juring,fio,seastar (default juring,fio)
-  --fio-variants LIST    subset of default,matched,matchedbatch,batch8,batch16,
-                         batch32,sqpoll,libaio (default default,matched; the
-                         batching sweep batch8/batch16/batch32 is added for W7
-                         unless --no-w7-sweep, and matchedbatch is added for
-                         W7/W8 as the M1 gate comparator)
+  --fio-variants LIST    subset of default,matched,matchedbatch,batch1,batch8,
+                         batch16,batch32,sqpoll,libaio (default default,matched;
+                         the batching sweep batch1/batch8/batch16/batch32 is added
+                         for W7 unless --no-w7-sweep, and matchedbatch is added
+                         for W7/W8 as the M1 gate comparator)
   --no-w7-sweep          do not add the W7 fio batching sweep / W7-W8
                          matchedbatch comparator
   --allow-seastar-write  enable the seastar write path (untested; opt-in)
 
 Protocol:
-  --reps N               repetitions per cell (default 3, methodology D7)
+  --reps N               default repetitions per cell (default 3, methodology D7)
+  --reps-by-cell LIST    per-cell repetition override, e.g. W7=5,W8=5; a cell
+                         not listed falls back to --reps
+  --resume               run-granular resume into an existing --session-dir:
+                         a planned run whose cells/<stem>.json exists and parses
+                         with iops>0 is skipped (logged to state/resumed.tsv); a
+                         cell with any missing run is preconditioned once more,
+                         a fully present cell skips cell+preconditioning
   --measured-sec S       measured window (default 60)
   --warmup-sec S         warmup override for every cell; default per cell
                          from the methodology table (W5/W12/W13/W14=60,
@@ -121,8 +146,8 @@ Protocol:
   --precondition MODE    per-cell (D1 before every cell, default),
                          session-once (before the first cell only), or none
   --allow-capped-precondition
-                         continue if precondition.sh stops at --max-sec without
-                         meeting D1 (recorded as capped); default: abort
+                         continue if precondition.sh stops capped (target not
+                         reached within --min-sec/--max-sec); default: abort
 
 Paths / safety:
   --write-file PATH      dedicated write dataset
@@ -137,6 +162,8 @@ Paths / safety:
   --loadavg-action abort|warn   (default abort)
   --allow-concurrent     do not abort when another fio/seastar/JUring bench
                          process is already running
+  --sampler              enable the D2 device time series (default; accepted
+                         explicitly so wrappers can state the whole protocol)
   --no-sampler           disable the D2 device time series
   --dry-run              print the complete plan + every command; execute
                          NOTHING (no I/O, no mkdir, no sleeps)
@@ -182,6 +209,8 @@ while [[ $# -gt 0 ]]; do
         --no-w7-sweep)              W7_SWEEP=0; shift ;;
         --allow-seastar-write)      ALLOW_SEASTAR_WRITE=1; shift ;;
         --reps)                     [[ $# -ge 2 ]] || die "--reps needs a value"; REPS=$2; shift 2 ;;
+        --reps-by-cell)             [[ $# -ge 2 ]] || die "--reps-by-cell needs a value"; REPS_BY_CELL_RAW=$2; shift 2 ;;
+        --resume)                   RESUME=1; shift ;;
         --measured-sec)             [[ $# -ge 2 ]] || die "--measured-sec needs a value"; MEASURED_SEC=$2; shift 2 ;;
         --warmup-sec)               [[ $# -ge 2 ]] || die "--warmup-sec needs a value"; WARMUP_OVERRIDE=$2; shift 2 ;;
         --rest-sec)                 [[ $# -ge 2 ]] || die "--rest-sec needs a value"; REST_SEC=$2; shift 2 ;;
@@ -198,6 +227,7 @@ while [[ $# -gt 0 ]]; do
         --loadavg-max)              [[ $# -ge 2 ]] || die "--loadavg-max needs a value"; LOADAVG_MAX=$2; shift 2 ;;
         --loadavg-action)           [[ $# -ge 2 ]] || die "--loadavg-action needs a value"; LOADAVG_ACTION=$2; shift 2 ;;
         --allow-concurrent)         ALLOW_CONCURRENT=1; shift ;;
+        --sampler)                  SAMPLER=1; shift ;;
         --no-sampler)               SAMPLER=0; shift ;;
         --dry-run)                  DRY_RUN=1; shift ;;
         -h|--help)                  usage; exit 0 ;;
@@ -267,8 +297,27 @@ if [[ " $ENGINES " == *" seastar "* ]] && (( ! ALLOW_SEASTAR_WRITE )); then
     die "seastar write path is unvalidated: pass --allow-seastar-write to opt in explicitly"
 fi
 for v in $FIO_VARIANTS; do
-    case "$v" in default|matched|matchedbatch|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
+    case "$v" in default|matched|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
 done
+
+# --reps-by-cell W7=5,W8=5 (a cell not listed falls back to --reps)
+declare -A CELL_REPS=()
+if [[ -n "$REPS_BY_CELL_RAW" ]]; then
+    for item in $(printf '%s' "$REPS_BY_CELL_RAW" | tr ',' ' '); do
+        if [[ "$item" != *=* ]]; then
+            die "--reps-by-cell entries must look like W7=5 (got '$item')"
+        fi
+        rc_cell=${item%%=*}
+        rc_reps=${item#*=}
+        cell_meta "$rc_cell" >/dev/null || die "--reps-by-cell: unknown cell '$rc_cell' (W5 W6 W7 W8 W12 W13 W14)"
+        [[ "$rc_reps" =~ ^[1-9][0-9]*$ ]] || die "--reps-by-cell: '$rc_cell' needs a positive integer reps value (got '$rc_reps')"
+        [[ -z "${CELL_REPS[$rc_cell]:-}" ]] || die "--reps-by-cell: cell '$rc_cell' given more than once"
+        CELL_REPS[$rc_cell]=$rc_reps
+    done
+fi
+cell_reps() { # $1 = cell -> effective repetitions
+    printf '%s' "${CELL_REPS[$1]:-$REPS}"
+}
 
 # ------------------------------------------------------------------ run plan
 SPEC_TOKEN=()
@@ -288,7 +337,7 @@ build_specs() { # $1 = cell
                 local variants=$FIO_VARIANTS
                 if (( W7_SWEEP )); then
                     if [[ "$cell" == "W7" ]]; then
-                        for extra in batch8 batch16 batch32 matchedbatch; do
+                        for extra in batch1 batch8 batch16 batch32 matchedbatch; do
                             case " $variants " in *" $extra "*) : ;; *) variants="$variants $extra" ;; esac
                         done
                     elif [[ "$cell" == "W8" ]]; then
@@ -311,9 +360,10 @@ SEQ=0
 for cell in $CELLS; do
     read -r wl bs_label bs_bytes qd def_warmup <<<"$(cell_meta "$cell")"
     warmup=${WARMUP_OVERRIDE:-$def_warmup}
+    nreps=$(cell_reps "$cell")
     build_specs "$cell"
     nspec=${#SPEC_TOKEN[@]}
-    for rep in $(seq 1 "$REPS"); do
+    for rep in $(seq 1 "$nreps"); do
         for i in $(seq 0 $(( nspec - 1 ))); do
             idx=$(( (i + rep - 1) % nspec ))
             SEQ=$(( SEQ + 1 ))
@@ -410,9 +460,15 @@ if kind == "fio":
     wr = job.get("write") or {}
     pcts = (wr.get("clat_ns") or {}).get("percentile") or {}
     p99 = pcts.get("99.000000", pcts.get("99.0", "NA"))
+    try:
+        # fio reports clat percentiles in NANOSECONDS (clat_ns); every
+        # cell-meta.tsv / runs.tsv / RESULT p99_us must be MICROSECONDS.
+        p99_us = round(float(p99) / 1000.0, 3)
+    except Exception:
+        p99_us = "NA"
     emit(num(wr.get("iops")),
          num(float(wr.get("bw_bytes", 0) or 0) / 1048576.0),
-         num(p99),
+         p99_us,
          wr.get("total_ios", 0),
          wr.get("io_bytes", 0),
          job.get("error", 0),
@@ -464,6 +520,7 @@ build_engine_cmd() { # kind variant workload bs_label qd warmup stem out_json
                 default) : ;;
                 matched)      CMD+=(--registerfiles=1 --fixedbufs=1) ;;
                 matchedbatch) CMD+=(--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit="$qd") ;;
+                batch1)  CMD+=(--iodepth_batch_submit=1) ;;
                 batch8)  CMD+=(--iodepth_batch_submit=8) ;;
                 batch16) CMD+=(--iodepth_batch_submit=16) ;;
                 batch32) CMD+=(--iodepth_batch_submit=32) ;;
@@ -485,6 +542,75 @@ build_engine_cmd() { # kind variant workload bs_label qd warmup stem out_json
 }
 
 fmt_cmd() { printf '%q ' "${CMD[@]}" | sed 's/ $//'; }
+
+# ------------------------------------------------------------------ resume helpers
+json_run_ok() { # $1 = cell JSON -> rc 0 iff the JSON parses and reports iops > 0
+    [[ -f "$1" ]] || return 1
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        doc = json.load(fh)
+except Exception:
+    sys.exit(1)
+iops = 0.0
+try:
+    jobs = doc.get("jobs")
+    if isinstance(jobs, list) and jobs:
+        wr = jobs[0].get("write") or {}
+        iops = float(wr.get("iops") or 0)
+    else:
+        agg = doc.get("aggregate") or {}
+        iops = float((agg.get("iops") or {}).get("mean") or 0)
+except Exception:
+    iops = 0.0
+sys.exit(0 if iops > 0 else 1)
+PY
+}
+
+max_state_seq() { # $1 = state dir -> max seq in order.tsv/runs.tsv (0 when absent)
+    local dir=$1 f m best=0
+    for f in "$dir/order.tsv" "$dir/runs.tsv"; do
+        [[ -s "$f" ]] || continue
+        m=$(awk -F'\t' 'NR > 1 && $1 ~ /^[0-9]+$/ { if ($1 + 0 > m) m = $1 + 0 } END { print m + 0 }' "$f")
+        [[ "$m" =~ ^[0-9]+$ ]] || m=0
+        (( m > best )) && best=$m
+    done
+    printf '%s' "$best"
+}
+
+declare -A RESUME_SKIP=()        # stem -> 1 when an existing valid JSON covers it
+declare -A RESUME_CELL_SKIP=()   # cell -> number of planned runs already present
+declare -A RESUME_CELL_MISSING=() # cell -> number of planned runs missing
+RESUME_EXISTING=0
+resume_scan() { # $1 = cells dir; fills the RESUME_* maps from the current PLAN
+    local cells_dir=$1 entry stem
+    local seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after
+    RESUME_EXISTING=0
+    for entry in "${PLAN[@]}"; do
+        IFS='|' read -r seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after <<<"$entry"
+        stem="${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}"
+        if json_run_ok "$cells_dir/$stem.json"; then
+            RESUME_SKIP[$stem]=1
+            RESUME_CELL_SKIP[$cell]=$(( ${RESUME_CELL_SKIP[$cell]:-0} + 1 ))
+            RESUME_EXISTING=$(( RESUME_EXISTING + 1 ))
+        else
+            RESUME_CELL_MISSING[$cell]=$(( ${RESUME_CELL_MISSING[$cell]:-0} + 1 ))
+        fi
+    done
+}
+
+offset_plan() { # $1 = seq base; shift every PLAN seq so invocations stay monotonic
+    local base=$1 entry seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after
+    local -a out=()
+    for entry in "${PLAN[@]}"; do
+        IFS='|' read -r seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after <<<"$entry"
+        out+=("$(( seq + base ))|$cell|$token|$variant|$kind|$bs_label|$bs_bytes|$qd|$warmup|$rep|$nspec|$pos|$rest_after")
+    done
+    PLAN=("${out[@]}")
+}
 
 do_rest() { # seconds phase after_ref
     local secs=$1 phase=$2 after=$3
@@ -566,7 +692,8 @@ for path in sorted(glob.glob(os.path.join(cells_dir, cell + "__*.json"))):
             continue
         pcts = (wr.get("clat_ns") or {}).get("percentile") or {}
         try:
-            p99 = float(pcts.get("99.000000", 0))
+            # ns -> us for ALL engines (fio clat is nanoseconds)
+            p99 = float(pcts.get("99.000000", 0)) / 1000.0
         except Exception:
             p99 = 0.0
         ok = (jobs[0].get("error", 0) == 0)
@@ -641,7 +768,7 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
     {
         printf '=== run %s %s\n' "$stem" "$started_utc"
         printf 'CMD: %s\n' "$(fmt_cmd)"
-        printf 'warmup_s=%s measured_s=%s reps=%s seed=%s cpu=%s\n' "$warmup" "$MEASURED_SEC" "$REPS" "$SEED" "$CPU"
+        printf 'warmup_s=%s measured_s=%s reps=%s seed=%s cpu=%s\n' "$warmup" "$MEASURED_SEC" "$(cell_reps "$cell")" "$SEED" "$CPU"
         printf 'loadavg_start=%s top_proc=%s governor=%s thermal_start=%s\n' \
             "$(awk '{print $1"/"$2"/"$3}' /proc/loadavg)" "$top_proc" "$GOVERNOR" "$thermal_start"
         printf 'device_write_ios_before=%s device_write_sectors_before=%s\n' "$DW_IOS" "$DW_SEC"
@@ -736,14 +863,15 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
 
 # ------------------------------------------------------------------ dry run
 if (( DRY_RUN )); then
+    STATE_DIR_D="$SESSION_DIR/state"
     printf '# dry-run: run-write-cells.sh - NOTHING is executed (no I/O, no dirs, no sleeps)\n'
     printf '#   write_file=%s\n' "$WF"
     printf '#   read_file=%s (never touched)\n' "$RF"
     printf '#   session_dir=%s\n' "$SESSION_DIR"
     printf '#   cells=%s engines=%s fio_variants=%s w7_sweep=%s\n' \
         "$CELLS" "$ENGINES" "$FIO_VARIANTS" "$W7_SWEEP"
-    printf '#   protocol: reps=%s measured=%ss warmup=%s rest=%ss rest_scope=%s precond_rest=%ss precondition=%s\n' \
-        "$REPS" "$MEASURED_SEC" "${WARMUP_OVERRIDE:-per-cell}" "$REST_SEC" "$REST_SCOPE" "$PRECOND_REST_SEC" "$PRECOND_MODE"
+    printf '#   protocol: reps_default=%s reps_by_cell=%s measured=%ss warmup=%s rest=%ss rest_scope=%s precond_rest=%ss precondition=%s resume=%s\n' \
+        "$REPS" "${REPS_BY_CELL_RAW:-none}" "$MEASURED_SEC" "${WARMUP_OVERRIDE:-per-cell}" "$REST_SEC" "$REST_SCOPE" "$PRECOND_REST_SEC" "$PRECOND_MODE" "$RESUME"
     printf '#   cpu=%s seed=%s expect_size_bytes=%s sampler=%s\n' \
         "$CPU" "$SEED" "$EXPECT_BYTES" "$SAMPLER"
     if [[ ! -e "$WF" ]]; then
@@ -752,25 +880,91 @@ if (( DRY_RUN )); then
         read -r cur_size cur_blocks < <(stat -c '%s %b' -- "$WF")
         printf '#   write file exists: size=%s allocated=%s (expected %s)\n' "$cur_size" "$(( cur_blocks * 512 ))" "$EXPECT_BYTES"
     fi
+
+    printf '#\n# per-cell plan (effective reps after --reps-by-cell; order preserved):\n'
+    for cell in $CELLS; do
+        read -r wl0 bs_label0 _ qd0 _ <<<"$(cell_meta "$cell")"
+        build_specs "$cell"
+        nspec0=${#SPEC_TOKEN[@]}
+        nreps0=$(cell_reps "$cell")
+        nc=0
+        for entry in "${PLAN[@]}"; do
+            IFS='|' read -r _ c0 _ _ _ _ _ _ _ _ _ _ _ <<<"$entry"
+            [[ "$c0" == "$cell" ]] && nc=$(( nc + 1 ))
+        done
+        printf '#   cell=%s workload=%s bs=%s qd=%s reps=%s engine_specs=%s planned_runs=%s\n' \
+            "$cell" "$wl0" "$bs_label0" "$qd0" "$nreps0" "$nspec0" "$nc"
+    done
+
+    if (( RESUME )); then
+        resume_scan "$SESSION_DIR/cells"
+        printf '#\n# --resume scan of %s/cells: %s of %s planned runs already present (parsed with iops>0)\n' \
+            "$SESSION_DIR" "$RESUME_EXISTING" "$TOTAL"
+        for cell in $CELLS; do
+            rs=${RESUME_CELL_SKIP[$cell]:-0}
+            rm=${RESUME_CELL_MISSING[$cell]:-0}
+            if (( rm == 0 )); then
+                printf '#   cell=%s fully present (%s/%s) -> skip cell + preconditioning\n' "$cell" "$rs" "$(( rs + rm ))"
+            elif (( rs > 0 )); then
+                printf '#   cell=%s partial (%s/%s present) -> re-precondition once, then run %s missing\n' \
+                    "$cell" "$rs" "$(( rs + rm ))" "$rm"
+            else
+                printf '#   cell=%s nothing present -> precondition + all %s runs\n' "$cell" "$rm"
+            fi
+        done
+    fi
+
+    seq_base=$(max_state_seq "$STATE_DIR_D")
+    if (( seq_base > 0 )); then
+        printf '#\n# session state present: seq offset %s (next seq=%s); order.tsv/runs.tsv are appended and manifest.txt is kept, a later invocation writes manifest-run<N>.txt\n' \
+            "$seq_base" "$(( seq_base + 1 ))"
+        offset_plan "$seq_base"
+    fi
+    # read-only decision: which manifest file would this invocation write?
+    dry_invocation=1
+    dry_manifest="manifest.txt"
+    if [[ -e "$SESSION_DIR/manifest.txt" ]]; then
+        dry_invocation=2
+        while [[ -e "$SESSION_DIR/manifest-run${dry_invocation}.txt" ]]; do
+            dry_invocation=$(( dry_invocation + 1 ))
+        done
+        dry_manifest="manifest-run${dry_invocation}.txt"
+    fi
+    printf '# manifest: invocation %s would write %s (manifest.txt is never truncated)\n' \
+        "$dry_invocation" "$dry_manifest"
+
     printf '#\n# planned runs: %s\n#\n' "$TOTAL"
     prev_cell=""
+    pd_seen=0
     for entry in "${PLAN[@]}"; do
         IFS='|' read -r seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after <<<"$entry"
+        stem="${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}"
         if [[ "$cell" != "$prev_cell" ]]; then
-            if [[ "$PRECOND_MODE" == "per-cell" ]] || { [[ "$PRECOND_MODE" == "session-once" ]] && [[ -z "$prev_cell" ]]; }; then
-                printf '# precondition (D1) before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64\n' \
+            need_precond=0
+            case "$PRECOND_MODE" in
+                per-cell) need_precond=1 ;;
+                session-once) (( pd_seen == 0 )) && need_precond=1 ;;
+            esac
+            if (( RESUME )) && (( ${RESUME_CELL_MISSING[$cell]:-0} == 0 )); then
+                printf '# precondition (D1) before cell %s: SKIP (cell fully present under --resume)\n' "$cell"
+                need_precond=0
+            elif (( need_precond )); then
+                printf '# precondition (D1) before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64 (condition=target)\n' \
                     "$cell" "$SCRIPT_DIR" "$WF" "$SESSION_DIR" "$DEVICE_STAT" "$CPU"
                 printf '# rest %ss after preconditioning (D3)\n' "$PRECOND_REST_SEC"
+                pd_seen=1
             fi
             prev_cell=$cell
         fi
-        local_json="$SESSION_DIR/cells/${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}.json"
-        stem="${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}"
+        local_json="$SESSION_DIR/cells/${stem}.json"
         read -r wl0 _ _ _ _ <<<"$(cell_meta "$cell")"
         build_engine_cmd "$kind" "$variant" "$wl0" "$bs_label" "$qd" "$warmup" "$stem" "$local_json"
         printf '# seq=%s cell=%s rep=%s warmup=%ss measured=%ss\n' "$seq" "$cell" "$rep" "$warmup" "$MEASURED_SEC"
         printf '#   cmd: %s\n' "$(fmt_cmd)"
         printf '#   json: %s\n' "$local_json"
+        if (( RESUME )) && [[ -n "${RESUME_SKIP[$stem]:-}" ]]; then
+            printf '#   resume: SKIP (existing valid JSON with iops>0)\n'
+        fi
         if (( SAMPLER )); then
             printf '#   sampler: %s/sample-device-iops.sh --out %s/series/%s.tsv --device-stat %s --interval 1 --label %s\n' \
                 "$SCRIPT_DIR" "$SESSION_DIR" "$stem" "$DEVICE_STAT" "$stem"
@@ -779,19 +973,50 @@ if (( DRY_RUN )); then
             printf '#   rest: %ss after this run (D3)\n' "$REST_SEC"
         fi
     done
-    precond_count=0
-    case "$PRECOND_MODE" in per-cell) precond_count=0; for c in $CELLS; do precond_count=$(( precond_count + 1 )); done ;; session-once) precond_count=1 ;; none) precond_count=0 ;; esac
+
+    # wall-time estimate: run = warmup+measured+~3 s startup; 90 s precondition +
+    # precond rest per burst (Step-A target-driven burst, not the old 120 s AND).
+    PRECOND_COST=$(( 90 + PRECOND_REST_SEC ))
     est=0
+    est_exec=0
     for entry in "${PLAN[@]}"; do
         IFS='|' read -r seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after <<<"$entry"
-        est=$(( est + warmup + MEASURED_SEC + 3 ))
+        stem="${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}"
+        cost=$(( warmup + MEASURED_SEC + 3 ))
+        est=$(( est + cost ))
         if (( rest_after )); then est=$(( est + REST_SEC )); fi
+        if (( RESUME )) && [[ -n "${RESUME_SKIP[$stem]:-}" ]]; then
+            :
+        else
+            est_exec=$(( est_exec + cost ))
+            if (( rest_after )); then est_exec=$(( est_exec + REST_SEC )); fi
+        fi
     done
-    est=$(( est + precond_count * (150 + PRECOND_REST_SEC) ))
-    printf '#\n# estimated wall time: ~%ss (~%s min ~%s h), excluding JVM/fio startup variance and any precondition overrun\n' \
-        "$est" "$(( est / 60 ))" "$(( est / 3600 ))"
-    printf 'SESSION_PLAN cells=%s engines=%s runs=%s est_sec=%s session_dir=%s status=dry-run\n' \
-        "$(printf '%s' "$CELLS")" "$(printf '%s' "$ENGINES")" "$TOTAL" "$est" "$SESSION_DIR"
+    # simulate the real per-cell precondition decisions
+    precond_all=0
+    precond_exec=0
+    case "$PRECOND_MODE" in
+        per-cell)
+            for cell in $CELLS; do
+                precond_all=$(( precond_all + 1 ))
+                if (( RESUME )) && (( ${RESUME_CELL_MISSING[$cell]:-0} == 0 )); then :; else precond_exec=$(( precond_exec + 1 )); fi
+            done ;;
+        session-once)
+            precond_all=1
+            if (( RESUME )) && (( RESUME_EXISTING == TOTAL )); then :; else precond_exec=1; fi ;;
+        none) : ;;
+    esac
+    est=$(( est + precond_all * PRECOND_COST ))
+    est_exec=$(( est_exec + precond_exec * PRECOND_COST ))
+    printf '#\n# estimated wall time (full plan): ~%ss (~%s min ~%s h); %s precondition burst(s) x (%ss + %ss rest)\n' \
+        "$est" "$(( est / 60 ))" "$(( est / 3600 ))" "$precond_all" 90 "$PRECOND_REST_SEC"
+    if (( RESUME )); then
+        printf '# estimated wall time under --resume (skipping %s present run(s) and their rests): ~%ss (~%s min ~%s h)\n' \
+            "$RESUME_EXISTING" "$est_exec" "$(( est_exec / 60 ))" "$(( est_exec / 3600 ))"
+    fi
+    printf 'SESSION_PLAN cells=%s engines=%s runs=%s est_sec=%s session_dir=%s reps_default=%s reps_by_cell=%s precondition=%s resume=%s runs_existing=%s est_resume_sec=%s status=dry-run\n' \
+        "$(printf '%s' "$CELLS")" "$(printf '%s' "$ENGINES")" "$TOTAL" "$est" "$SESSION_DIR" \
+        "$REPS" "${REPS_BY_CELL_RAW:-none}" "$PRECOND_MODE" "$RESUME" "$( (( RESUME )) && echo "$RESUME_EXISTING" || echo 0 )" "$est_exec"
     exit 0
 fi
 
@@ -878,18 +1103,49 @@ fi
 
 READ_STATE_START=$(read_file_state)
 
+# ------------------------------------------------------------------ multi-invocation state
+# Seq numbers must stay monotonic when this script is invoked again into an
+# existing session dir (campaign blocks and --resume).  Offset the whole plan
+# by the max seq already present in order.tsv/runs.tsv.
+SEQ_BASE=$(max_state_seq "$STATE_DIR")
+if (( SEQ_BASE > 0 )); then
+    note "== resuming into existing session state: seq offset $SEQ_BASE (next seq $(( SEQ_BASE + 1 ))) =="
+    offset_plan "$SEQ_BASE"
+fi
+if (( RESUME )); then
+    resume_scan "$CELLS_DIR"
+    note "== --resume: $RESUME_EXISTING of $TOTAL planned runs already present (iops>0) =="
+fi
+
 # state file headers
 [[ -s "$STATE_DIR/order.tsv" ]] || printf '%s\n' $'seq\tcell\tengine\tvariant\tbs\tqd\trep\twarmup_s\tmeasured_s\trest_after_s' >"$STATE_DIR/order.tsv"
 [[ -s "$STATE_DIR/runs.tsv" ]] || printf '%s\n' $'seq\tcell\tengine\tvariant\tbs\tqd\trep\twarmup_s\tmeasured_s\tstatus\texit\tjson\tlog\tseries\tiops\tmibs\tp99_us\tops\tbytes\terrors\tbuffer_mode\tdev_write_sectors_d\tdev_write_mib\tloadavg_start\tloadavg_end\tgovernor\tthermal_start\tthermal_end\tstarted_utc' >"$STATE_DIR/runs.tsv"
 [[ -s "$STATE_DIR/rests.tsv" ]] || printf '%s\n' $'phase\tafter_run_seq\trequested_s\tactual_s\tstart_utc\tend_utc' >"$STATE_DIR/rests.tsv"
+[[ -s "$STATE_DIR/resumed.tsv" ]] || printf '%s\n' $'utc\tsession_dir\tcell\tstem\trep\taction' >"$STATE_DIR/resumed.tsv"
+[[ -s "$STATE_DIR/invocations.tsv" ]] || printf '%s\n' $'utc\tmanifest\targv\truns_planned\truns_executed\truns_skipped\truns_ok\truns_failed\tsession_elapsed_s' >"$STATE_DIR/invocations.tsv"
 # bench/m1/lib.sh-compatible meta file so the M1 analyzer can consume this session too
 CELL_META=$SESSION_DIR/cell-meta.tsv
 [[ -s "$CELL_META" ]] || printf '%s\n' $'case\tengine\tvariant\tbs\tqd\trep\tts_utc\tloadavg_start\tloadavg_end\tread_sectors_delta\twrite_sectors_delta\tops\tiops\tp99_us\twall_s\tstatus\tbytes' >"$CELL_META"
+
+# manifest: the first invocation writes manifest.txt; later invocations must not
+# truncate it, they write manifest-run<N>.txt instead.
+MANIFEST_FILE="$SESSION_DIR/manifest.txt"
+INVOCATION=1
+if [[ -e "$MANIFEST_FILE" ]]; then
+    INVOCATION=2
+    while [[ -e "$SESSION_DIR/manifest-run${INVOCATION}.txt" ]]; do
+        INVOCATION=$(( INVOCATION + 1 ))
+    done
+    MANIFEST_FILE="$SESSION_DIR/manifest-run${INVOCATION}.txt"
+fi
 
 # manifest
 {
     printf '# M1 write-session manifest (methodology D1-D8)\n'
     printf '# generated=%s host=%s kernel=%s\n' "$(now_utc)" "$(cat /proc/sys/kernel/hostname 2>/dev/null || uname -n)" "$(uname -r)"
+    printf 'invocation=%s manifest=%s\n' "$INVOCATION" "$(basename -- "$MANIFEST_FILE")"
+    printf 'argv=%s\n' "$(printf '%q ' "${ORIG_ARGV[@]}")"
+    printf 'resume=%s seq_base=%s\n' "$RESUME" "$SEQ_BASE"
     printf 'cpu=%s\n' "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
     printf 'logical_cpus=%s\n' "$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)"
     printf 'juring_git_commit=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -919,11 +1175,14 @@ CELL_META=$SESSION_DIR/cell-meta.tsv
     printf 'engines=%s\n' "$(printf '%s' "$ENGINES")"
     printf 'fio_variants=%s\n' "$(printf '%s' "$FIO_VARIANTS")"
     printf 'w7_sweep=%s\n' "$W7_SWEEP"
-    printf 'reps=%s measured_s=%s warmup=%s rest_s=%s rest_scope=%s precond_rest_s=%s precondition=%s\n' \
-        "$REPS" "$MEASURED_SEC" "${WARMUP_OVERRIDE:-per-cell}" "$REST_SEC" "$REST_SCOPE" "$PRECOND_REST_SEC" "$PRECOND_MODE"
+    printf 'reps_default=%s reps_by_cell=%s\n' "$REPS" "${REPS_BY_CELL_RAW:-none}"
+    printf 'cell_reps=%s\n' "$(for c in $CELLS; do printf '%s=%s ' "$c" "$(cell_reps "$c")"; done)"
+    printf 'measured_s=%s warmup=%s rest_s=%s rest_scope=%s precond_rest_s=%s precondition=%s\n' \
+        "$MEASURED_SEC" "${WARMUP_OVERRIDE:-per-cell}" "$REST_SEC" "$REST_SCOPE" "$PRECOND_REST_SEC" "$PRECOND_MODE"
+    printf 'cell_meta_p99_units=us\n'
     printf 'loadavg_at_start=%s\n' "$(cat /proc/loadavg)"
     printf 'run_plan_runs=%s\n' "$TOTAL"
-} >"$SESSION_DIR/manifest.txt"
+} >"$MANIFEST_FILE"
 
 # planned order
 for entry in "${PLAN[@]}"; do
@@ -939,7 +1198,14 @@ SESSION_START_S=$(now_s)
 note "== M1 write session =="
 note "   write file: $WF"
 note "   session dir: $SESSION_DIR"
-note "   plan: $TOTAL measured runs, reps=$REPS, measured=${MEASURED_SEC}s, rest=${REST_SEC}s ($REST_SCOPE), precondition=$PRECOND_MODE"
+note "   manifest: $MANIFEST_FILE (invocation $INVOCATION)"
+note "   plan: $TOTAL measured runs, reps_default=$REPS reps_by_cell=${REPS_BY_CELL_RAW:-none}, measured=${MEASURED_SEC}s, rest=${REST_SEC}s ($REST_SCOPE), precondition=$PRECOND_MODE, resume=$RESUME"
+if (( SEQ_BASE > 0 )); then
+    note "   seq offset: $SEQ_BASE (appending to existing state)"
+fi
+if (( RESUME )); then
+    note "   resume: $RESUME_EXISTING/$TOTAL planned runs already present"
+fi
 note "   engines: $ENGINES (fio variants: $FIO_VARIANTS)"
 
 SAMPLER_PID=""
@@ -951,13 +1217,23 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+log_resume() { # action cell stem rep
+    local action=$1 cell=$2 stem=$3 rep=$4
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(now_utc)" "$SESSION_DIR" "$cell" "$stem" "$rep" "$action" >>"$STATE_DIR/resumed.tsv"
+}
+
 OK=0
 FAILED=0
+EXECUTED=0
+SKIPPED_RUNS=0
+SKIPPED_CELLS=0
 PREV_CELL=""
 PRECOND_DONE=0
 
 for entry in "${PLAN[@]}"; do
     IFS='|' read -r seq cell token variant kind bs_label bs_bytes qd warmup rep nspec pos rest_after <<<"$entry"
+    stem="${cell}__${token}__${variant}__bs${bs_label}__qd${qd}__t1__r${rep}"
 
     if [[ "$cell" != "$PREV_CELL" ]]; then
         if [[ -n "$PREV_CELL" ]]; then
@@ -969,6 +1245,19 @@ for entry in "${PLAN[@]}"; do
             session-once) (( PRECOND_DONE == 0 )) && need_precond=1 ;;
             none) need_precond=0 ;;
         esac
+        if (( RESUME )); then
+            cell_missing=${RESUME_CELL_MISSING[$cell]:-0}
+            cell_present=${RESUME_CELL_SKIP[$cell]:-0}
+            if (( cell_missing == 0 )); then
+                need_precond=0
+                SKIPPED_CELLS=$(( SKIPPED_CELLS + 1 ))
+                log_resume "skip-cell" "$cell" "-" "-"
+                note "== [resume] cell $cell fully present ($cell_present/$(( cell_present + cell_missing ))); skipping cell + preconditioning =="
+            elif (( cell_present > 0 )); then
+                log_resume "reprecondition" "$cell" "-" "-"
+                note "== [resume] cell $cell partial ($cell_present present, $cell_missing missing); re-preconditioning once =="
+            fi
+        fi
         if (( need_precond )); then
             run_precondition "$cell"
             PRECOND_DONE=1
@@ -977,8 +1266,15 @@ for entry in "${PLAN[@]}"; do
         PREV_CELL=$cell
     fi
 
+    if (( RESUME )) && [[ -n "${RESUME_SKIP[$stem]:-}" ]]; then
+        log_resume "skip-run" "$cell" "$stem" "$rep"
+        SKIPPED_RUNS=$(( SKIPPED_RUNS + 1 ))
+        continue
+    fi
+
     LAST_STATUS=""
     run_one "$seq" "$cell" "$token" "$variant" "$kind" "$bs_label" "$bs_bytes" "$qd" "$warmup" "$rep" "$rest_after"
+    EXECUTED=$(( EXECUTED + 1 ))
     # run_one returns 0 even on a failed engine run; the status is in LAST_STATUS.
     if [[ "$LAST_STATUS" == "ok" ]]; then
         OK=$(( OK + 1 ))
@@ -1002,16 +1298,30 @@ fi
     printf 'read_file_stat_end=%s\n' "$READ_STATE_END"
     printf 'read_file_unchanged=%s\n' "$(if [[ "$READ_STATE_START" == "$READ_STATE_END" ]]; then echo true; else echo false; fi)"
     printf 'session_elapsed_s=%s\n' "$SESSION_ELAPSED"
+    printf 'runs_planned=%s\n' "$TOTAL"
+    printf 'runs_executed=%s\n' "$EXECUTED"
+    printf 'runs_skipped=%s\n' "$SKIPPED_RUNS"
+    printf 'cells_skipped=%s\n' "$SKIPPED_CELLS"
     printf 'runs_ok=%s\n' "$OK"
     printf 'runs_failed=%s\n' "$FAILED"
-} >>"$SESSION_DIR/manifest.txt"
+} >>"$MANIFEST_FILE"
 
-printf 'SESSION_RESULT session_dir=%s runs_planned=%s runs_ok=%s runs_failed=%s elapsed_s=%s\n' \
-    "$SESSION_DIR" "$TOTAL" "$OK" "$FAILED" "$SESSION_ELAPSED"
+# one row per invocation, so later invocations are auditable side by side
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$(now_utc)" "$(basename -- "$MANIFEST_FILE")" "$(printf '%q ' "${ORIG_ARGV[@]}")" \
+    "$TOTAL" "$EXECUTED" "$SKIPPED_RUNS" "$OK" "$FAILED" "$SESSION_ELAPSED" \
+    >>"$STATE_DIR/invocations.tsv"
+
+printf 'SESSION_RESULT session_dir=%s runs_planned=%s runs_executed=%s runs_skipped=%s cells_skipped=%s runs_ok=%s runs_failed=%s elapsed_s=%s\n' \
+    "$SESSION_DIR" "$TOTAL" "$EXECUTED" "$SKIPPED_RUNS" "$SKIPPED_CELLS" "$OK" "$FAILED" "$SESSION_ELAPSED"
 
 if (( FAILED > 0 )); then
     warn "$FAILED of $TOTAL runs failed; see $SESSION_DIR/state/runs.tsv and logs/"
     exit 1
 fi
-note "done: $OK/$TOTAL write runs ok"
+if (( EXECUTED == 0 )); then
+    note "done: nothing to execute (all $TOTAL planned runs already present under --resume)"
+    exit 0
+fi
+note "done: $OK/$EXECUTED executed write runs ok ($SKIPPED_RUNS skipped as already present)"
 exit 0
