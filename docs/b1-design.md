@@ -434,3 +434,17 @@ announces the API compiles.
 - `close()` failing to drain within the deadline is a device/kernel hang class of
   problem; it is bounded and counted (`abandonedOperations()`), never silent. Abandoned
   completions may still arrive through the CQ.
+
+## 9. B6 addendum (additive extension, 2026-11-15)
+
+B6 (`docs/b6-design.md`, frozen) extends this frozen B1 API **additively only**:
+`JuringFile.durability()` (derived from the `O_DSYNC` bit of the open flags; no new open
+overloads), `JuringFile.fadvise(FadviseAdvice, long offset, long length)` and
+`fadvise(FadviseAdvice)` (blocking advisory `posix_fadvise`; not a ring request, no ledger
+slot, no operation-counter change, no ring-ownership check), `JuringFile.inFlightCapacity()`
+(configured ledger capacity), and `JuringFile.syncOperations()`/`syncCompletions()`
+(owner-thread `OperationType.FSYNC` issued/reaped counters). New public enums
+`FadviseAdvice` and `DurabilityMode` live in the same package. No existing B1 signature,
+behaviour, error mapping, threading rule or hot-path guarantee changes; `pom.xml` and
+`module-info.java` are unchanged. Full contract and evidence: `docs/b6-design.md` §2.3,
+`docs/b6-report.md`.

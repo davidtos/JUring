@@ -510,3 +510,21 @@ runs the final full `mvn -o test`.
   exploratory only (F0 asymmetry disclosure).
 - Full plan-M2 (60 s cells, DS-M multi-file W22, 300 s rests) remains a separate run;
   B2 delivers the layer, the harness and a preliminary verdict.
+
+## 9. B6 addendum (additive extension, 2026-11-15)
+
+B6 (`docs/b6-design.md`, frozen) extends this frozen B2 API **additively only**:
+`InputStreamOptions.fadvise()`/`withFadvise(FadviseAdvice)` and
+`OutputStreamOptions.fadvise()`/`withFadvise(FadviseAdvice)` apply an advisory
+`posix_fadvise` hint once at stream `open` (`NORMAL` = no syscall);
+`OutputStreamOptions.durability()`/`withDurabilityMode(DurabilityMode)` and
+`JuringOutputStream.durability()`/`syncs()` make `flush()`/`close()` **durability points**
+for `FDATASYNC`/`FSYNC` (exactly one `fdatasync`/`fsync` per point), keep `WRITEBACK` exactly
+as the frozen B2 behaviour (flush never syncs; close syncs once iff `syncOnClose`), and make
+`DSYNC` an assertion that the file was opened `O_DSYNC`/`O_SYNC` (no explicit sync). New
+public types `DurabilityMode`, `FadviseAdvice`, `GroupCommit`, `GroupCommitOptions`,
+`GroupCommitStats` live in the same package; `GroupCommit` is a new helper over
+`JuringFile` and does not change the stream contract. No existing B2 signature, default,
+validation, memory bound, padding/truncate rule or ownership rule changes; `pom.xml` and
+`module-info.java` are unchanged. Full contract and evidence: `docs/b6-design.md` §2.4–§2.9,
+`docs/b6-report.md`.

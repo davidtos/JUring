@@ -1,7 +1,11 @@
-# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 + B1 + B2 + M2 + B3 + B4 + B5 + M3)
+# Handover — JUring vs seastar comparison (sessions through 2026-11-15; M1 + B1 + B2 + M2 + B3 + B4 + B5 + M3 + B6)
 
-For the next agent/session. Read this first, then **`docs/m3-report.md`** (M3 deliverable,
-most recent — **M3 PASS, signed**), **`docs/m3-design.md`** (M3 frozen bars/protocol incl.
+For the next agent/session. Read this first, then **`docs/b6-report.md`** (B6 deliverable,
+most recent — **B6 delivered, independently verified**), **`docs/b6-design.md`** (B6 frozen
+contract + amendments A1/A2), **`scratch/b6-verify/VERDICT.md`** (independent B6
+verification), **`scratch/b6-lead/FREEZE.md`** (B6 freeze/session identity), then
+**`docs/m3-report.md`** (M3 deliverable — **M3 PASS, signed**), **`docs/m3-design.md`**
+(M3 frozen bars/protocol incl.
 pre-campaign Amendment A1), `bench/results/m3-2026-11-15/` (campaign, gitignored),
 **`docs/b5-report.md`** (B5 deliverable), **`docs/b5-design.md`** (B5 frozen
 API/semantics contract + amendments A1/A2/A3), **`scratch/b5-verify/VERDICT.md`**
@@ -16,7 +20,80 @@ API/semantics contract + amendments A1/A2/A3), **`scratch/b5-verify/VERDICT.md`*
 `docs/benchmark-methodology.md` (the measurement contract), and `bench/README.md` +
 `bench/write/README.md`.
 
-## 0.0 M3 status — eighth session (2026-11-15) — **latest**
+## 0.0 B6 status — ninth session (2026-11-15) — **latest**
+
+**B6 (buffered I/O parity + durability, L1 / gap G12) is DELIVERED, tested and independently
+verified.** Independent verification: **PASS** (55/55 adversarial modes, 1,680 assertions, own private-copy suite 401/0/0/1, 4,916 bench assertions, frozen identity unchanged; `scratch/b6-verify/VERDICT.md`). Deliverables:
+[`docs/b6-design.md`](b6-design.md) (frozen contract written before implementation, sha1
+`7490aa9b…`; amendments A1 = `inFlightCapacity()` public per §2.3, A2 = W25 rests between
+cells), [`docs/b6-report.md`](b6-report.md) (deliverable), `scratch/b6-verify/VERDICT.md`
+(independent verification), `scratch/b6-lead/{FREEZE.md,session-hashes.txt,code-hashes.txt}`
+(frozen identity + official-session hashes), official sessions
+`bench/results/b6-durability-2026-11-15/` (W24) and `bench/results/b6-group-commit-2026-11-15/`
+(W25) (gitignored).
+
+- **New public API (com.davidvlijmincx.lio.api, additive only; no new dependency, no
+  `module-info`/`pom` change, existing defaults unchanged):** `FadviseAdvice` (POSIX advice
+  enum), `DurabilityMode` (`WRITEBACK`/`FDATASYNC`/`FSYNC`/`DSYNC`), `GroupCommit` +
+  `GroupCommitOptions` + `GroupCommitStats`; `JuringFile.durability()`/`fadvise(...)`/
+  `fadvise(...)`/`inFlightCapacity()`/`syncOperations()`/`syncCompletions()`;
+  `InputStreamOptions.fadvise()`/`withFadvise(...)`; `OutputStreamOptions.durability()`/
+  `fadvise()`/`withDurabilityMode(...)`/`withFadvise(...)`; `JuringOutputStream.durability()`/
+  `syncs()`. Full signatures in report §2.
+- **Semantics:** `posix_fadvise` hints are advisory (blocking libc downcall through
+  `LibCDispatcher`, no ring request/ledger/counter change, no ring-ownership check) and are
+  applied once at stream open (`NORMAL` = no syscall). `JuringOutputStream`'s `flush()` and
+  `close()` are **durability points**: `FDATASYNC`/`FSYNC` issue exactly one
+  `fdatasync`/`fsync` per point, `WRITEBACK` keeps the frozen B2 behaviour (flush never
+  syncs; close syncs once iff `syncOnClose`), `DSYNC` asserts an `O_DSYNC`/`O_SYNC` open and
+  issues no explicit sync. `GroupCommit` is a caller-driven batch: `write()` queues async
+  writes (no auto-commit; batch-full ISE), `commit()` awaits them and issues **exactly one**
+  `fdatasync`/`fsync` for the batch (none for `WRITEBACK`/`DSYNC`; empty commit = no-op),
+  failures latch, `close()` commits a pending batch and never closes the file;
+  `maxBatchSize + 1 <= file.inFlightCapacity()` is validated at open. Proof counters on both
+  the helper and `JuringFile` (`syncOperations()`/`syncCompletions()`).
+- **Tests:** full `mvn -o test` on the frozen tree = **401 tests, 0 failures, 0 errors,
+  1 skipped** (349 baseline byte-identical + **52 new**: `B6FadviseTest` 12,
+  `B6DurabilityModesTest` 8, `B6GroupCommitTest` 17, `B6GroupCommitCrashTest` 1,
+  `B6StreamDurabilityTest` 14). The crash test spawns a child JVM that commits one FDATASYNC
+  batch and `halt(137)`s; a fresh parent reopens and verifies every byte (process-restart
+  visibility on tmpfs — no power-loss claim). Zero-allocation steady state for
+  `GroupCommit.write/commit` measured (0 B).
+- **Benchmark evidence (supporting, not a milestone bar):** W24 durability A/B (JUring vs
+  seastar `fstream`, matched explicit durability, `--sync-every 4M`, 19/19 invocations ok,
+  0 errors) — matched-durability accounting confirmed (`MiB/sync` ≈ 3.99 both engines;
+  writeback/dsync 0 explicit syncs) but the drive's write-state bimodality confounded
+  throughput (writeback bracket control drifted 148.9 % > 10 %), so **no ranked
+  durability-cost number is quoted** (raw per-rep table in report §7). W25 group-commit
+  micro-bench (12/12 ok, 0 errors) proves the plan's acceptance clause:
+  **`fsyncs_per_group == 1.000000`** at batch sizes 1/8/32/128 with
+  `groups × batch == committed_writes`, 0 syncs failed, and **fresh-process restart
+  verification PASS** in every cell; durable-write throughput rises 5.9 → 720.7 MiB/s
+  (1,522 → 184,497 4 KiB writes/s) at one `fdatasync` per batch (report §8).
+- **M2 disclosure (new, important):** the signed M2 W21 write comparison was
+  durability-asymmetric — seastar ran `durable=true` (2 `fdatasync` per pass: fstream
+  `flush()` + `close()`) while the JUring arm ran `syncOnClose=false` (0 per pass); M2 did
+  not state this. B6's W24 arms remove the asymmetry and run writeback-vs-writeback controls;
+  M2's numbers remain the signed buffered comparison and **must not** be quoted as
+  "durability is free" evidence (report §6).
+- **Deliverable scope:** B6 does **not** change M1/M2/M3 sign-off status, does not touch the
+  B1/B2/B3/B4/B5 behaviours, and intentionally does not add async `IORING_OP_FADVISE`,
+  concurrent/multi-writer group commit, a commit timeout, or a power-loss test (design §0/§9).
+- **Provenance:** frozen tree G3b src/main `5690c498…`, src/test `6796f83e…`, bench
+  `b2eb2d80…`, design `7490aa9b…` (all re-derived unchanged after G4 and G5); **feature
+  commit `2883b34`** (`feat(api): add fadvise hints, durability modes and group commit (B6)`);
+  final Lead suite on the committed tree = 401/0/0/1 BUILD SUCCESS; docs commit (this
+  HANDOVER + `docs/b6-report.md` + `SEASTAR-PLAN.md` v1.6 + B1/B2 addenda) follows. Official
+  sessions: `bench/results/b6-durability-2026-11-15/` (19/19 ok) and
+  `bench/results/b6-group-commit-2026-11-15/` (12/12 ok), hashes in
+  `scratch/b6-lead/session-hashes.txt`.
+- **Next:** B7 (provided-buffer ring + multishot) is the next library item and is conditional
+  on a measurement need; B8/M4 QoS remains conditional; B9 API stability/docs later. Still
+  open from earlier sessions: M1 write matrix (Step A), DS-M / host-root representativeness
+  (Step D), publishing decisions (Step E), optional VT-throughput re-benchmark and the N=2 M3
+  re-run.
+
+## 0.1 M3 status — eighth session (2026-11-15)
 
 **M3 (L2 multi-shard scaling + metrics) is SIGNED OFF: PASS.** All five frozen bars pass on the
 official campaign; every rep kept, no trimming. Deliverables: [`docs/m3-design.md`](m3-design.md)
@@ -63,7 +140,7 @@ driver `bench/shard/run-m3-campaign.sh` + analyzer `bench/shard/analyze_m3.py` (
   VT-throughput re-benchmark, DS-M / host-root representativeness (Step D); optional
   re-run of the N=2 cell on a different day to firm bar (a)'s narrowest margin.
 
-## 0.1 B5 status — seventh session (2026-11-14)
+## 0.2 B5 status — seventh session (2026-11-14)
 
 **B5 (observability, L2) is DELIVERED, tested and independently verified (PASS) — but M3 is
 still NOT signed off**: the full R=5 W17–W20 campaign (incl. a seastar `--smp N` runner and
@@ -145,7 +222,7 @@ the restated M3 scaling bars) remains. Deliverables: [`docs/b5-design.md`](b5-de
   Earlier-session work still open: M1 write matrix (Step A), B6 buffered durability. The
   optional B4 follow-up (VT-throughput re-benchmark) is unchanged.
 
-## 0.2 B4 status — sixth session (2026-11-14)
+## 0.3 B4 status — sixth session (2026-11-14)
 
 **B4 (multi-ring / shard runtime, L2) is DELIVERED, tested and independently verified
 (PASS) — but M3 is NOT signed off**: B5 (observability) and the full W17–W20 campaign
@@ -234,7 +311,7 @@ the restated M3 scaling bars) remains. Deliverables: [`docs/b5-design.md`](b5-de
   move `JUringBlocking`'s slot protocol onto the generic task loop only if a VT-throughput
   re-benchmark justifies the dedup.
 
-## 0.3 M2 + B3 status — fifth session (2026-11-14)
+## 0.4 M2 + B3 status — fifth session (2026-11-14)
 
 **M2 (L1 stream parity) is SIGNED OFF: PASS.** Deliverable `docs/m2-report.md`; raw session
 `bench/results/m2-final/` (gitignored; 60/60 invocations `status=ok`, 0 errors; 4 cells ×
@@ -327,7 +404,7 @@ violation. The Lead independently re-ran the full suite and the stress acceptanc
   `posix_fadvise`, durability modes, group commit) and the optional state-controlled strict
   write rerun / DS-M W22 for a stronger M2 write claim.
 
-## 0.4 B2 status — fourth session addendum (2026-11-13 evening)
+## 0.5 B2 status — fourth session addendum (2026-11-13 evening)
 
 **B2 buffered stream layer is DONE, tested and verified** (working tree; commit follows this
 handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contract:
@@ -363,7 +440,7 @@ handover). Detailed evidence: [`docs/b2-report.md`](b2-report.md); frozen contra
 - **Next: M2** (full W21/W22 campaign + report), then the write matrix (Step A, still
   pending) and B3/B6.
 
-## 0.5 B1 status — third session addendum (2026-11-13 evening)
+## 0.6 B1 status — third session addendum (2026-11-13 evening)
 
 **B1 `JuringFile` is DONE, tested and committed** in this session (commit
 `feat(api): add JuringFile async file handle abstraction (B1)`, branch `kafka-engine`).
@@ -432,14 +509,14 @@ contract is [`docs/b1-design.md`](b1-design.md).
 - **B3 — request lifecycle hardening: DONE 2026-11-14, suite green + acceptance stress
   PASS** (frozen contract `docs/b3-design.md`; `IORING_OP_LINK_TIMEOUT` linked timeouts,
   deterministic cancellation contract, bounded `close(timeout)` with no hang, use-after-close
-  hardening; 238 tests green, 50 %-cancel and 10k-in-flight stress PASS — see §0.3).
+  hardening; 238 tests green, 50 %-cancel and 10k-in-flight stress PASS — see §0.4).
 - **B4 — multi-ring / shard runtime: DELIVERED + INDEPENDENTLY VERIFIED PASS 2026-11-14**
   (`docs/b4-report.md`, frozen contract `docs/b4-design.md`): `IoShard`/`RingGroup` with
   ring-per-thread affinity, RR/hash distribution, MPSC+eventfd cross-thread completion
   handoff, batched poll loop, bounded shutdown, per-shard stats; `JUringBlocking` re-homed
   on shards (zero-GC kept) with `RingGroup` ctor + bounded close (B3 §4.5 fixed);
   309 tests green; verifier 105/105 modes PASS after fixing one verifier-found
-  completion-table wedge (F1) before delivery; **M3 NOT signed at B4 time** — see §0.2.
+  completion-table wedge (F1) before delivery; **M3 NOT signed at B4 time** — see §0.3.
 - **B5 — observability: DELIVERED + INDEPENDENTLY VERIFIED PASS 2026-11-14**
   (`docs/b5-report.md`, frozen contract `docs/b5-design.md` + A1/A2/A3): per-ring
   `RingMetrics` (`JUring.ringMetrics()`), dependency-free `LatencyHistogram`/
@@ -447,12 +524,12 @@ contract is [`docs/b1-design.md`](b1-design.md).
   `GroupMetrics`, JMX MXBeans (`MetricsJmx`), benchmark JSON schema 1.1 with measured-phase
   ring series (queue depth + p99), official overhead A/B **PASS** (mean paired ratios
   1.019/1.011/1.007; <1 % bar met); 349 tests green (309 B4 + 40 new); verifier 60/60 modes
-  PASS (one contract-wording finding resolved by A3) — see §0.1.
+  PASS (one contract-wording finding resolved by A3) — see §0.2.
 - **M3 — L2 multi-shard scaling + metrics: SIGNED OFF PASS 2026-11-15** (`docs/m3-report.md`,
   frozen bars/protocol `docs/m3-design.md`): full W17–W20 campaign (12 cells × R=5 = 60/60
   invocations ok, 300 s rests) with `juring-group` + `fio` + the new seastar `--smp N` runner;
   JUring N=8 = 103.2 % of `fio numjobs=8` (one-sided 95 % LB 0.987) and 101.5 % of seastar
-  io_uring; per-shard min/mean 0.963 (LB 0.947); bars (a)–(e) all PASS — see §0.0.
+  io_uring; per-shard min/mean 0.963 (LB 0.947); bars (a)–(e) all PASS — see §0.1.
 - **Repo changes:** prior sessions were additive (`SEASTAR-PLAN.md`, `docs/`, `bench/`,
   `.gitignore`); session 5 changed `src/main/java/.../api/` (B3) and session 6 adds the B4
   runtime (`IoShard`, `RingGroup`, shard support, `JUringBlocking` integration) plus
@@ -460,7 +537,7 @@ contract is [`docs/b1-design.md`](b1-design.md).
   this session (`159d60f`); `SeaStarRef/`, `.tools/`, `.sysroot/` are gitignored.
 - **Milestone order:** B0 harness, B1 `JuringFile`, B2 streams, **M2 stream parity**, B3
   lifecycle, B4 runtime and B5 observability all done; M1 write matrix (Step A) and B6
-  remain; M3 campaign is the next milestone. See §0.0/§0.3 and §7.
+  remain; M3 campaign is the next milestone. See §0.1/§0.4 and §7.
 
 ## 2. Repo map (what exists now)
 
@@ -740,17 +817,17 @@ within 1–3 % in a separate run.
   perf gate for W1/W3** (fail on >10 % regression), and retire the legacy JMH numbers
   from the docs. Accept: one command reproduces the tables from raw JSON; a stored
   baseline is compared per commit.
-- **B1 (`JuringFile`) — DONE 2026-11-13** (third session; see §0.5 and
+- **B1 (`JuringFile`) — DONE 2026-11-13** (third session; see §0.6 and
   `docs/b1-report.md`): open with flags/options, offset read/write (plain + fixed-buffer
   fast path), length/truncate/allocate/discard/fsync/fdatasync, close-with-drain
   (bounded, never hangs), typed `-errno` errors, short-IO/EAGAIN policy, registration
   lifecycle (unregister, add/remove at runtime). Evidence: 142 tests green
   (conformance seq/rand/EOF/short-IO/close-with-inflight), **L0 W1/W3 unchanged** (pre/post
   M1 harness inside the §7 band), zero-allocation hot path strict 0 bytes. Deviations and
-  open decisions: see §0.5 above and `docs/b1-report.md` §4 (statx tracking workaround;
+  open decisions: see §0.6 above and `docs/b1-report.md` §4 (statx tracking workaround;
   non-throwing `close()` vs guarded `await`; caller-managed timeout timespec; buffer
   replace-or-unregister scope; mixed error taxonomy; ring-wide registration).
-- **B2 (streams) — DONE 2026-11-13** (see §0.4 and `docs/b2-report.md`): `JuringInputStream`
+- **B2 (streams) — DONE 2026-11-13** (see §0.5 and `docs/b2-report.md`): `JuringInputStream`
   /`JuringOutputStream` with readahead/write-behind/flush, bounded memory, 42 new tests,
   L0 unchanged, preliminary W21/W22 (36/36 cells ok) with point-estimate stream ratios
   0.940/0.905/1.098 and state-matched 1.055/0.998; strict M2 bound needs the full campaign.
@@ -760,7 +837,8 @@ within 1–3 % in a separate run.
   established due to the drive's burst→steady write state, position-matched 0.98–1.38×).
   Still open from the intended full protocol: separated read/write sessions, DS-M W22,
   D1 preconditioning, D2 1 s series; a state-controlled strict write rerun is optional.
-  Next library items: **B3** (in progress this session), then **B6**. The M1 write matrix
+  Next library items: **B3 and B6 are DONE** (B6 delivered 2026-11-15, see §0.0); the next
+  library item is **B7** (conditional). The M1 write matrix
   (Step A) is still open.
 
 ### Step C — the M3 campaign — **DONE 2026-11-15 (M3 PASS, signed)**
