@@ -298,11 +298,24 @@ rows cross-checked as µs).
 
 ## 7. Independent verification
 
-`scratch/stepa-verify/VERDICT.md` (session-11 verifier) — see the verdict there; the
-verification checks the frozen design sha1s, protocol adherence from the raw session state
-(run counts/reps/rests/preconditioning/order/read-file stat), independent recomputation of
-the gate statistics and D2 cliff detection from the raw JSON/series, and that every number
-in this report regenerates from the aggregate.
+A fresh verifier (read-only, no device I/O; `scratch/stepa-verify/VERDICT.md`, 322 lines)
+independently reproduced every gate number and the protocol accounting from the raw
+JSON/series with its own stdlib script (not the analyzer): gate ratios/LBs exactly as §5
+(W7 matchedbatch 0.9628 / 1s95 LB 0.9502, n=2; W7 matched 0.9591 / 0.8937; W8 matchedbatch
+0.9420 / 0.8441, n=2; W8 matched 0.9463, n=1 → INCONCLUSIVE), 136/136/136 order/runs/cells
+alignment with 130 ok + 6 disclosed failed-init, rests/preconditioning/series/units/read-file
+stat correct, 36/130 cliffs and burst/steady 0.14–3.85×, a fresh analyzer run byte-identical
+to the committed aggregate and this report's tables row-for-row identical, harness dry-runs
+and legacy/read regressions pass, and adversarial checks (perturbed raw JSON changes the
+gate ratio; a fabricated rep is caught by the ledger; zero-IOPS failures excluded).
+**Verdict: PASS-WITH-CONCERNS** — the concerns were documentation-only (C1–C4/N1–N7:
+write-amplification range copy, D7-vs-CV count wording, W5 stability wording, "all 36"
+wording, stale lines). All were corrected (commits `fda0b8f`, `e0b7693`) and re-checked in
+`scratch/stepa-verify/ADDENDUM.md` → **final PASS**, no blocking finding, no re-measurement.
+One verifier process incident is disclosed in VERDICT §I: a gitignored raw JSON was
+accidentally overwritten through a symlink and restored byte-equivalently (re-validated by a
+fresh analyzer run byte-identical to the committed aggregate; only the file mtime differs) —
+no tracked file was touched and it has no bearing on the verified claims.
 
 ## 8. Deviations, amendments and failures (all disclosed)
 

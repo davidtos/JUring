@@ -78,8 +78,27 @@ three blocks — no measurement was lost.
 **Docs updated in this session:** `docs/m1-write-report.md` (new deliverable),
 `docs/m1-write-design.md` (frozen + A1), `docs/m1-report.md` (session-11 cross-links and the
 write-half status in the status line/§13/§14/§15), `SEASTAR-PLAN.md` v1.8 (Step A done,
-decision D9), `bench/write/README.md` (campaign executed + results pointer). Independent
-verification: `scratch/stepa-verify/VERDICT.md`.
+decision D9), `bench/write/README.md` (campaign executed + results pointer).
+
+**Independent verification — final PASS.** `scratch/stepa-verify/VERDICT.md` (322 lines) =
+**PASS-WITH-CONCERNS** with no blocking finding: every gate number, the protocol accounting
+(136 order/runs/cells rows = 130 ok + 6 disclosed failed-init; 9 precondition bursts all
+target-reached; reps/rests/series/units/read-file stat), the D2 cliff statistics (36/130),
+the report tables (row-for-row vs a fresh analyzer run) and the harness regressions were
+independently reproduced, and adversarial checks showed the gate consumes the raw data (a
+perturbed JSON changes the ratio; a fabricated rep is caught by the ledger). The concerns
+were documentation-only (C1–C4/N1–N7); all were corrected in `fda0b8f` + `e0b7693` and
+re-checked in `scratch/stepa-verify/ADDENDUM.md` → **final PASS**, no re-measurement. One
+verifier process incident is disclosed in VERDICT §I: a gitignored raw JSON was accidentally
+overwritten through a symlink, restored byte-equivalently and re-validated (fresh analyzer
+run byte-identical to the committed aggregate; only the file mtime differs); no tracked file
+was touched.
+
+**Session-11 commits:** `9c87532` harness · `dc12e10` analyzer · `f747f49` frozen design
+(main-campaign tree) · `5e27e20` Amendment A1 + `regfile` · `24120e7` write report/plan/
+handover · `308ad45` read-path status-line clarification · `fda0b8f` + `e0b7693` verifier
+corrections; the final docs commit records these ids. Worktree clean; `scratch/` evidence
+(`stepa-lead/`, `stepa-harness/`, `stepa-analyzer/`, `stepa-verify/`) is gitignored.
 
 **What remains after Step A:** **Step D** (host-root/representativeness: hugetlbfs,
 drop_caches, thermal counters) and **Step E** (publishing decisions) — see §7. For the write
