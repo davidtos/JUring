@@ -132,9 +132,8 @@ engine JSON in µs; `!`/unstable = CV > 10 % → "unstable, no ranking" per meth
 **Reading the table.** W5 is the most stable cell (3 of its 4 engine rows are stable; fio
 `matched` is mixed-state, slow reps r2/r3); every QD16/QD64/QD128 4K cell has at least one
 unstable engine cell, and most are unstable/unranked. The 1M seqwrite cells are tighter at QD32 (juring and fio ≈964–965 MiB/s) and for fio at
-QD1/QD8 (≈965–971 MiB/s); juring's QD1/QD8 1M cells are unstable (W12 851 MiB/s, W13 840 —
-arena-unregistered buffers under the 8 MiB memlock limit) and seastar's QD32 cell shows
-slow reps.
+QD1/QD8 (≈965–971 MiB/s); juring's QD1/QD8 1M cells are unstable (W12 851 MiB/s, registered-fixed; W13 840,
+arena-unregistered under the 8 MiB memlock limit) and seastar's QD32 cell shows slow reps.
 
 ## 4. Results — paired ratios
 
@@ -228,7 +227,7 @@ Frozen decision rule (design §6): PASS iff the one-sided 95 % LB ≥ 0.95 again
 - W8 is INCONCLUSIVE against both comparators (matchedbatch fast-subset 0.9420, LB 0.8441,
   n=2; matched n=1, no CI). W8 is where the drive's write-state transitions are strongest
   (all five cells unstable, CV 17–42 %).
-- D7 applies: 21 of 34 cells have CV > 10 %, so the correct reading of these cells is
+- D7 applies: 21 of 34 cells are unstable (17 with CV > 10 %), so the correct reading of these cells is
   "unstable, no ranking". The fast-subset numbers above are disclosed for completeness, not
   as a parity claim (they select burst-state reps and their CIs include 0.95 in every case
   except W7-primary, which has only 2 pairs).
