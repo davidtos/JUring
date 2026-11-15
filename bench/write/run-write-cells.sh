@@ -116,8 +116,8 @@ Selection:
   --cells LIST           comma/space list from W5,W6,W7,W8,W12,W13,W14
                          (default all, monotonic order preserved)
   --engines LIST         subset of juring,fio,seastar (default juring,fio)
-  --fio-variants LIST    subset of default,matched,matchedbatch,batch1,batch8,
-                         batch16,batch32,sqpoll,libaio (default default,matched;
+  --fio-variants LIST    subset of default,matched,regfile,matchedbatch,batch1,
+                         batch8,batch16,batch32,sqpoll,libaio (default default,matched;
                          the batching sweep batch1/batch8/batch16/batch32 is added
                          for W7 unless --no-w7-sweep, and matchedbatch is added
                          for W7/W8 as the M1 gate comparator)
@@ -297,7 +297,7 @@ if [[ " $ENGINES " == *" seastar "* ]] && (( ! ALLOW_SEASTAR_WRITE )); then
     die "seastar write path is unvalidated: pass --allow-seastar-write to opt in explicitly"
 fi
 for v in $FIO_VARIANTS; do
-    case "$v" in default|matched|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
+    case "$v" in default|matched|regfile|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
 done
 
 # --reps-by-cell W7=5,W8=5 (a cell not listed falls back to --reps)
@@ -519,6 +519,7 @@ build_engine_cmd() { # kind variant workload bs_label qd warmup stem out_json
             case "$variant" in
                 default) : ;;
                 matched)      CMD+=(--registerfiles=1 --fixedbufs=1) ;;
+                regfile)      CMD+=(--registerfiles=1) ;;  # 1 MiB cells: fixedbufs > RLIMIT_MEMLOCK (Amendment A1)
                 matchedbatch) CMD+=(--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit="$qd") ;;
                 batch1)  CMD+=(--iodepth_batch_submit=1) ;;
                 batch8)  CMD+=(--iodepth_batch_submit=8) ;;

@@ -105,6 +105,9 @@ keep the methodology R=3 (descriptive cells, no gate). This is deviation §11-D4
   Variants (all disclosed; no configuration is hidden):
   * `default` — no registration/batching flags (F0 default bracket);
   * `matched` — `--registerfiles=1 --fixedbufs=1` (read-gate comparator, `docs/m1-report.md`);
+  * `regfile` — `--registerfiles=1` only (no fixed buffers). **Amendment A1 (below):** this is
+    the registration-matched fio configuration for the 1 MiB cells W13/W14, where
+    `iodepth × 1 MiB` fixed buffers exceed this session's 8 MiB `RLIMIT_MEMLOCK`;
   * `matchedbatch` — `matched` + `--iodepth_batch_submit=<qd>` (batching-matched);
   * `batch1`, `batch8`, `batch16`, `batch32` — W7-only batching sweep
     (`--iodepth_batch_submit=1/8/16/32`, unregistered), methodology W7 row.
@@ -302,3 +305,34 @@ Step A acceptance; M1 CPU gate was the read QD64 cell).
   (reviewed dry-run, including the two 300 s between-block rests; real run expected
   ≈ 9–9.5 h), cells/reps/order, rests, preconditioning, comparators, and the rule-1
   verdict table.
+
+---
+
+## Amendment A1 — pre-registered 2026-11-15 20:56 CET (before the affected re-measurement)
+
+**Trigger.** During block 3, the fio `matched` configuration (`--registerfiles=1
+--fixedbufs=1`) for the 1 MiB cells at QD8 (W13) and QD32 (W14) fails at fio init
+(rc=1, 12 errors, 0 bytes, ~1 s): fixed buffers need `iodepth × bs` = 8 MiB (W13) /
+32 MiB (W14) of locked memory, above this session's 8 MiB `ulimit -l` (memlock
+8192 KiB recorded in every manifest; no CAP_IPC_LOCK). The affected rows are the
+descriptive fio-matched rows of W13/W14 only — **no gated cell is affected**
+(W7/W8 are 4K; W5/W6 are 4K; W12 is 1 MiB at QD1 → 1 MiB of fixed buffers, which
+succeeds).
+
+**Change (frozen here, before the re-measurement).** For the 1 MiB cells W13/W14 the
+registration-matched fio configuration is **`regfile` = `--registerfiles=1` without
+`--fixedbufs=1`** — the same precedent the M1 read path used for its 1 MiB cells
+(`docs/m1-report.md` §14: "regfile (--registerfiles=1, no fixed buffers) for the 1 MiB
+cells"). The change is an execution-feasibility correction for a non-gated descriptive
+comparator; no gate comparator, cell, rep count or analysis rule changes.
+
+**Execution (pre-registered).** After the main campaign ends, the W13/W14 `regfile`
+rows are measured by a separate driver invocation into the SAME session dir (same cells,
+same R=3, same protocol/rests/preconditioning; new sequence numbers, precondition
+generations and `state/invocations.tsv` row are recorded). The six failed `matched`
+attempts stay in `state/runs.tsv` and `logs/` and are disclosed, never hidden or
+reported as data points. W12's successful `matched` rows stand.
+
+**Analysis.** For W13/W14 the `regfile` row is the registration-matched fio comparator
+(the analyzer already lists `regfile` among `MATCHED_FIO_VARIANTS`, per the read-path
+precedent). The failed `matched` attempts contribute no zero-IOPS statistics.
