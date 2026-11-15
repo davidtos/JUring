@@ -120,7 +120,8 @@ with `IoShard`/`RingGroup`, use OS-level I/O controls, apply caller backpressure
 
 - Base commit `b75515e` (B6 delivered; M3 signed). Session feature commit **`9de5867`**
   (`docs(api): complete public Javadoc with doclint enforcement and runnable examples (B9)`);
-  the session-10 docs commit (this file, report, decision docs, plan v1.7, README) follows.
+  session-10 docs commit **`ac332ab`** (this file, B9 report, decision docs, plan v1.7,
+  README); a final docs commit records these ids (`scratch/b9-lead/commit-ids.txt`).
 - Frozen content hashes and acceptance evidence: `scratch/b9-lead/FREEZE.md`;
   contracts: `docs/b9-design.md` `595b8488…`, `docs/b7-gate.md` `36a19a8c…`.
 - Worktree is clean after the commits; `scratch/` is gitignored (evidence only).
