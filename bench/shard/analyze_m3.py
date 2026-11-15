@@ -260,10 +260,14 @@ def load_session(results_dir):
     recs = []
     for m in meta:
         engine = m.get("engine", "?")
-        path = os.path.join(results_dir, "cells", m.get("cell", "") + ".json")
+        # cell-meta.tsv `cell` is "N<n>"; the raw file is
+        # cells/N<n>__<engine>__r<rep>.json (same convention as the driver).
+        raw_name = "%s__%s__r%s.json" % (m.get("cell", ""), engine, m.get("rep", ""))
+        path = os.path.join(results_dir, "cells", raw_name)
         raw = load_json(path)
         rec = normalize(engine, raw, m)
-        rec["cell"] = m.get("cell", "")
+        rec["cell"] = raw_name[:-5] if raw is not None else m.get("cell", "")
+        rec["raw_path"] = path
         recs.append(rec)
     return recs
 
@@ -517,8 +521,10 @@ def analyze(results_dir):
     else:
         verdict = "PASS"
 
+    missing_raw = [r["raw_path"] for r in recs if not r["raw_ok"]]
     return {
         "results_dir": results_dir,
+        "missing_raw": missing_raw,
         "engines": engines,
         "n_values": ns,
         "reps_seen": rep_range,
@@ -615,6 +621,9 @@ def render_markdown(session, analysis):
     man = analysis.get("manifest") or {}
     a(f"- invocations in meta: **{analysis['invocations']}**; statuses: "
       + ", ".join(f"`{k}`={v}" for k, v in analysis["statuses"].items()))
+    if analysis.get("missing_raw"):
+        a(f"- **WARNING: {len(analysis['missing_raw'])} raw JSON file(s) missing/unparseable**; "
+          "bars needing raw fields (c/e) are INCONCLUSIVE. " + ", ".join(analysis["missing_raw"][:5]))
     a(f"- design sha1: `{man.get('design_sha1', 'n/a')}`; frozen commit: `{man.get('design_commit', 'n/a')}`")
     a(f"- src/main sha1: `{man.get('src_main_sha1', 'n/a')}`; src/test sha1: `{man.get('src_test_sha1', 'n/a')}`")
     a(f"- git HEAD at session: `{man.get('head', 'n/a')}`")
