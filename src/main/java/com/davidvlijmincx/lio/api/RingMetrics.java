@@ -39,6 +39,8 @@ package com.davidvlijmincx.lio.api;
  * @param cqReady          snapshot: CQEs available to reap (live read)
  * @param cqEntries        effective CQ ring depth
  * @param cqOverflowEvents snapshot: kernel {@code cq.koverflow} (u32; best effort)
+ * @param cqFlushEnters    non-blocking {@code enter(GETEVENTS, min_complete=0)} flushes issued to
+ *                         drain the kernel CQ-overflow list and run deferred task work
  */
 public record RingMetrics(
         long sqesPrepared,
@@ -58,5 +60,6 @@ public record RingMetrics(
         int sqEntries,
         long cqReady,
         int cqEntries,
-        long cqOverflowEvents) {
+        long cqOverflowEvents,
+        long cqFlushEnters) {
 }

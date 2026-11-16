@@ -85,7 +85,7 @@ public final class IoShard implements AutoCloseable {
     private static final RingMetrics ZERO_RING_METRICS = new RingMetrics(
             0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L,   // sqesPrepared .. inFlight
             0L, 0L, 0L, 0L, 0L, 0L,           // enters .. sqQueued
-            0, 0L, 0, 0L);                    // sqEntries, cqReady, cqEntries, cqOverflowEvents
+            0, 0L, 0, 0L, 0L);                // sqEntries, cqReady, cqEntries, cqOverflowEvents, cqFlushEnters
 
     private static final int EFD_CLOEXEC = LibCDispatcher.EFD_CLOEXEC;
     private static final int EFD_NONBLOCK = LibCDispatcher.EFD_NONBLOCK;
