@@ -51,8 +51,8 @@ guarantee.
 | **B6** | buffered I/O parity + durability | `DurabilityMode`, `FadviseAdvice` (+ `JuringFile.fadvise`), durability-aware stream `flush`/`close`, `GroupCommit`/`GroupCommitOptions`/`GroupCommitStats` | additive |
 | **D12** | scope enforcement (library-first) | removed the pre-release prototype package `com.davidvlijmincx.lio.blackpanda` (8 public types; no compatibility guarantee) | **pre-release removal** — no supported `lio.api` API changed |
 
-For the design/evidence record of each step see `docs/b1-report.md`, `docs/b2-report.md`,
-`docs/b3-design.md`, `docs/b4-report.md`, `docs/b5-report.md` and `docs/b6-report.md`.
+For the design/evidence record of each step see `docs/internal/b1-report.md`, `docs/internal/b2-report.md`,
+`docs/internal/b3-design.md`, `docs/internal/b4-report.md`, `docs/internal/b5-report.md` and `docs/internal/b6-report.md`.
 
 ## 2a. 0.1.0 release-readiness changes (unreleased)
 

@@ -24,10 +24,10 @@ touch benchmark/publishing claims.
 
 | id | deliverable | file(s) |
 |---|---|---|
-| D1 | written compatibility/versioning policy (Tier 1/Tier 2/internal surface, SemVer for `0.y.z`/post-1.0, source+binary promise, deprecation policy, explicit non-guarantees, JMX note) | [`docs/api-stability.md`](api-stability.md) |
+| D1 | written compatibility/versioning policy (Tier 1/Tier 2/internal surface, SemVer for `0.y.z`/post-1.0, source+binary promise, deprecation policy, explicit non-guarantees, JMX note) | [`docs/api-stability.md`](../api-stability.md) |
 | D2 | complete Javadoc on the exported API + build enforcement + package docs | `src/main/java/**` (comments only), 2 × `package-info.java`, comment-only `module-info.java` doc, `pom.xml` `maven-javadoc-plugin` block |
-| D3 | four runnable, self-checking examples mapped to seastar use-cases + mapping doc | `src/test/java/com/davidvlijmincx/lio/examples/{DirectFile,StreamCopy,ManyFiles,VirtualThreads}ExampleTest.java`, [`docs/examples.md`](examples.md), README pointer |
-| D4 | upgrade notes (status, versioning summary, additive capability history, deprecations, migration statement, future template) | [`docs/UPGRADING.md`](UPGRADING.md) |
+| D3 | four runnable, self-checking examples mapped to seastar use-cases + mapping doc | `src/test/java/com/davidvlijmincx/lio/examples/{DirectFile,StreamCopy,ManyFiles,VirtualThreads}ExampleTest.java`, [`docs/examples.md`](../examples.md), README pointer |
+| D4 | upgrade notes (status, versioning summary, additive capability history, deprecations, migration statement, future template) | [`docs/UPGRADING.md`](../UPGRADING.md) |
 | D5 | discoverability | README additions only (QoS scope note, examples pointer + section, compatibility/upgrading section); `docs/m4-decision.md` link |
 
 ## 2. D1 — compatibility policy

@@ -2,9 +2,9 @@
 
 **Status:** closed by documented decision, session 10 (2026-11-15). This is the plan's own
 alternative acceptance path for milestone **M4**: *"shares honoured ±10 % with ≤5 % overhead,
-no starvation — **or** a documented decision to keep QoS out of v1"* (`SEASTAR-PLAN.md` §5),
+no starvation — **or** a documented decision to keep QoS out of v1"* (`docs/internal/SEASTAR-PLAN.md` §5),
 and the B8 instruction *"Otherwise document 'bring your own scheduler' and keep it out of
-v1"* (`SEASTAR-PLAN.md` §4 B8).
+v1"* (`docs/internal/SEASTAR-PLAN.md` §4 B8).
 
 **Decision:** JUring v1 ships **no QoS, fair-queuing, weighted-share scheduler, rate limiter
 or intent/cancel-on-drop layer**. B8 is not implemented; M4 is closed by this decision, not
@@ -16,7 +16,7 @@ scheduler**: partition work into separate rings/shards, or use OS-level I/O cont
 > inherited by streams/`GroupCommit`; read/write opcodes only; `0` means "no override at
 > that level", so the ring default or the thread's `ionice` applies). This does **not** reopen M4: there is still no scheduler, fair queuing, weights,
 > rate limiting or intent layer inside JUring, and the hint is inert on `none`-scheduled
-> NVMe. See [`docs/b10-design.md`](b10-design.md).
+> NVMe. See [`docs/internal/b10-design.md`](internal/b10-design.md).
 
 ## 1. Why (evidence)
 
@@ -24,7 +24,7 @@ scheduler**: partition work into separate rings/shards, or use OS-level I/O cont
 
 - **D1 (locked 2026-11-13):** *"JUring is library-first. The seastar alternative being built
   on it is a separate flagship project... No futures/coroutines runtime, no network stack,
-  no application layer in JUring"* (`SEASTAR-PLAN.md` §Decisions D1).
+  no application layer in JUring"* (`docs/internal/SEASTAR-PLAN.md` §Decisions D1).
 - The **scope note** at the end of §4: *"the framework supplies the scheduler, network stack,
   application model and QoS. That boundary is why the roadmap stops at B9."*
 - **§3.6 item 5:** *"QoS/backpressure is out of 'basics' scope (B8 conditional); do not
@@ -34,7 +34,7 @@ scheduler**: partition work into separate rings/shards, or use OS-level I/O cont
 QoS in seastar is **not** an io_uring capability — it is reactor-layer scheduling. The
 seastar inventory shows it living in the reactor's `io_queue`/`fair_queue`: scheduling
 groups with `shares`/`class`, fair-queue token-bucket accounting, starvation accounting and
-per-class metrics (`docs/seastar-inventory.md` §C; `SeaStarRef/src/core/io_queue.cc`
+per-class metrics (`docs/internal/seastar-inventory.md` §C; `SeaStarRef/src/core/io_queue.cc`
 `priority_class_data`/`_tb.replenish`/`_starvation_time`, ~`:150-335,:991-1023,:1147-1190`;
 `include/seastar/core/fair_queue.hh:150-230`). Building that inside JUring would pull the
 library toward "a worse seastar" — the exact outcome D1/D2 rule out.
@@ -47,7 +47,7 @@ library toward "a worse seastar" — the exact outcome D1/D2 rule out.
 - Before B10b (the historical state this decision was made on; see the update above) JUring's
   public API could not express a class/priority: the native SQE `ioprio` field accessor existed
   (`Sqe.java:18,36,90-96`) but was **never set by any public API** —
-  `docs/juring-inventory.md` §SQE: *"Struct accessor exists but is never set by a public API
+  `docs/internal/juring-inventory.md` §SQE: *"Struct accessor exists but is never set by a public API
   -> no priorities"*, and G3: *"Absent: no public ioprio setter ... no scheduler,
   shares/weights, or intent cancellation"*. The decision below still stands because a hint is
   not a scheduler.
@@ -94,7 +94,7 @@ mistake the absence of QoS for an unfinished feature.
 - No source/test/bench change for B8; the public API is unchanged.
 - M1 (read path), M2 (L1 streams), M3 (L2 scaling/metrics) sign-offs are unaffected; M4 was
   the only milestone with QoS content.
-- The B7 decision (`docs/b7-decision.md`) is independent; the B9 work (stability/docs/
+- The B7 decision (`docs/internal/b7-decision.md`) is independent; the B9 work (stability/docs/
   examples) is independent.
 - The comparison programme gains no new cross-engine claim: seastar's QoS is documented as a
   framework-layer capability difference (fair-queue/scheduling groups) and remains **not

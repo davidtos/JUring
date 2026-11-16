@@ -1,7 +1,7 @@
 # B10 design — shared-ring completion multiplexing (`B10a`) + block-layer I/O priority (`B10b`)
 
 **Status:** frozen and implemented 2026-11-16 (session 14). Supersedes the corresponding parts of
-[`FINAL-PLAN.md`](../FINAL-PLAN.md) where the implementation found a constraint the plan did not
+[`FINAL-PLAN.md`](FINAL-PLAN.md) where the implementation found a constraint the plan did not
 know about (documented in §4). No benchmark campaign is part of this design.
 
 ---

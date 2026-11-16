@@ -134,7 +134,7 @@ This is the complete inventory: no other `@Deprecated` exists in `src/main`.
 ## 6. What is not covered (explicit non-guarantees)
 
 - **Performance and benchmark numbers are not part of the API contract.** The figures in
-  `README.md` and `BENCHMARK.md` are measurements on one host at one time, not promises about
+  `docs/internal/README.md` and `BENCHMARK.md` are measurements on one host at one time, not promises about
   future speed, latency or regression behaviour. A release may change performance; only
   documented semantics are covered.
 - **Internal implementation details** — the package-private types of §2, class layouts, the
@@ -200,4 +200,4 @@ Checked against the 0.1.0 tree:
 | 37 public types in `lio.api` | source inspection of top-level `public` type declarations |
 | internal type list | source inspection of top-level package-private type declarations |
 | exactly one `@Deprecated` | source grep of `src/main/java`: only `JUring.prepareCancel(long)` |
-| no hosted CI | no `.github/` or other CI configuration in the repo (`docs/b9-design.md` §7) |
+| no hosted CI | no `.github/` or other CI configuration in the repo (`docs/internal/b9-design.md` §7) |

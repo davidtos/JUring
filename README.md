@@ -42,7 +42,7 @@ for the full envelope and the `java.nio` fallback guidance.
 
 Measured on AMD Ryzen 9 3950X (16C/32T, governor `performance`), Linux `7.0.12-201.fc44.x86_64`, GIGABYTE GP-ASM2NE6100TTTD 1 TB NVMe (`ext4`), OpenJDK `26.0.2`, `fio 3.40`, and Seastar `25.05.0-1392-g04b1c04d` (release build). Every cell runs one fresh process per repetition (`R=5`, 10 s warmup + 30 s measured; 120 s for latency cells) on a shared aged 10 GiB file (`O_DIRECT`), with engines interleaved per rep. `±` denotes the two-sided 95 % Student-$t$ confidence interval of the mean (`df = n - 1`). Full reports, raw JSON paths, and reproduction commands are in [BENCHMARK.md](BENCHMARK.md) and `docs/m*-report.md`.
 
-### L0 — Single-Shard `io_uring` Engine Parity ([`docs/m1-report.md`](docs/m1-report.md))
+### L0 — Single-Shard `io_uring` Engine Parity ([`docs/internal/m1-report.md`](docs/internal/m1-report.md))
 
 JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files (`IOSQE_FIXED_FILE`) and pre-registered fixed buffers. `fio-matched` enables `--registerfiles=1 --fixedbufs=1`. Seastar runs its stock `io_uring` reactor backend (200-entry ring, no `SINGLE_ISSUER`/`DEFER_TASKRUN`, no registered files/buffers — reported as an architectural bracket, not a pass/fail gate).
 
@@ -57,13 +57,13 @@ JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files
 | **W11** — 1 MiB seqread² | 32 | 4,727 ± 128 (4.62 GiB/s) | 4,727 ± 127 | 4,713 ± 135 | 1.0005 [0.9573, 1.0437] | 1.0029 [1.0009, 1.0049] | Device PCIe/NVMe ceiling (~4.62 GiB/s) |
 
 ¹ In W4, both JUring (`r5`) and `fio-matched` (`r3`) had one host slow-state rep; the pre-registered fast-state subset (`n=3` paired) gives `JUring / fio-matched = 1.2542 [1.2139, 1.2946]`.
-² W10/W11 rows show the best-config `unlimited` memlock runs (`registered-fixed` / `--fixedbufs=1`, [`docs/stepd-report.md` §4](docs/stepd-report.md)); under the default 8 MiB `ulimit -l` ([`docs/m1-report.md` §6](docs/m1-report.md)), both engines fall back to unregistered buffers (`regfile`) and achieve the same ~4.65–4.76 GiB/s ceiling (`JUring/fio = 0.9788` at QD8, `1.0161` at QD32).
+² W10/W11 rows show the best-config `unlimited` memlock runs (`registered-fixed` / `--fixedbufs=1`, [`docs/internal/stepd-report.md` §4](docs/internal/stepd-report.md)); under the default 8 MiB `ulimit -l` ([`docs/internal/m1-report.md` §6](docs/internal/m1-report.md)), both engines fall back to unregistered buffers (`regfile`) and achieve the same ~4.65–4.76 GiB/s ceiling (`JUring/fio = 0.9788` at QD8, `1.0161` at QD32).
 
-- **CPU & syscall efficiency (`perf stat`, 4 KiB randread QD64, `R=3`, [`docs/m1-report.md` §8](docs/m1-report.md)):** JUring spends **11,335 ± 121 cycles/op** (`0.330` syscalls/op) vs `fio-matched` **15,227 ± 604 cycles/op** (`1.012` syscalls/op) and Seastar **13,859 ± 158 cycles/op** (`0.186` syscalls/op) — **25.6 % fewer CPU cycles/op than `fio-matched`**. (At QD1, JUring uses `27,254 ± 188` vs `fio-matched` `32,424 ± 229` cycles/op, while Seastar busy-polls its reactor at `383,329 ± 170` cycles/op.)
-- **Tail latency (`W15` QD1 / `W16` QD64, 120 s measured, `R=5`, [`docs/m1-report.md` §7](docs/m1-report.md)):** At QD64 (`W16`), `p99` is at parity (`481.5 µs` JUring vs `478.8 µs` `fio` vs `504.9 µs` Seastar) and `p999` is `660.5 µs` (JUring) vs `1,881.2 µs` (Seastar). At QD1 (`W15`), `p50`/`p99` match closely (`83.6`/`107.8 µs` JUring vs `81.9`/`98.9 µs` Seastar), while `p999` reflects JVM safepoint/GC tails (`630.9 µs` JUring vs `140.5 µs` Seastar).
-- **Write path (`W5`–`W8`, `W12`–`W14`, [`docs/m1-write-report.md`](docs/m1-write-report.md)):** **Verdict: `INCONCLUSIVE` (no write-parity ranking claimed for v1).** Across both the 130-run full write matrix (Step A) and the 42-run pre-registered state-controlled generation campaign (Session 12, [`docs/m1-write-report.md` §12](docs/m1-write-report.md)), this consumer NVMe exhibits SLC-burst to TLC-folding write cliffs (`~195k → 40k–90k` IOPS; `36/130` runs in Step A, and only `2/5` valid homogeneous generations `< 4` in Session 12). Inside the valid single-state continuous generations (`w1a-continuous`, `w2-g1`, `w2-g3`), JUring sustained `188.1k–188.6k` IOPS (~735 MiB/s) at 4 KiB QD64 vs `fio` `196.4k–199.6k` IOPS (`0.946–0.957×`).
+- **CPU & syscall efficiency (`perf stat`, 4 KiB randread QD64, `R=3`, [`docs/internal/m1-report.md` §8](docs/internal/m1-report.md)):** JUring spends **11,335 ± 121 cycles/op** (`0.330` syscalls/op) vs `fio-matched` **15,227 ± 604 cycles/op** (`1.012` syscalls/op) and Seastar **13,859 ± 158 cycles/op** (`0.186` syscalls/op) — **25.6 % fewer CPU cycles/op than `fio-matched`**. (At QD1, JUring uses `27,254 ± 188` vs `fio-matched` `32,424 ± 229` cycles/op, while Seastar busy-polls its reactor at `383,329 ± 170` cycles/op.)
+- **Tail latency (`W15` QD1 / `W16` QD64, 120 s measured, `R=5`, [`docs/internal/m1-report.md` §7](docs/internal/m1-report.md)):** At QD64 (`W16`), `p99` is at parity (`481.5 µs` JUring vs `478.8 µs` `fio` vs `504.9 µs` Seastar) and `p999` is `660.5 µs` (JUring) vs `1,881.2 µs` (Seastar). At QD1 (`W15`), `p50`/`p99` match closely (`83.6`/`107.8 µs` JUring vs `81.9`/`98.9 µs` Seastar), while `p999` reflects JVM safepoint/GC tails (`630.9 µs` JUring vs `140.5 µs` Seastar).
+- **Write path (`W5`–`W8`, `W12`–`W14`, [`docs/internal/m1-write-report.md`](docs/internal/m1-write-report.md)):** **Verdict: `INCONCLUSIVE` (no write-parity ranking claimed for v1).** Across both the 130-run full write matrix (Step A) and the 42-run pre-registered state-controlled generation campaign (Session 12, [`docs/internal/m1-write-report.md` §12](docs/internal/m1-write-report.md)), this consumer NVMe exhibits SLC-burst to TLC-folding write cliffs (`~195k → 40k–90k` IOPS; `36/130` runs in Step A, and only `2/5` valid homogeneous generations `< 4` in Session 12). Inside the valid single-state continuous generations (`w1a-continuous`, `w2-g1`, `w2-g3`), JUring sustained `188.1k–188.6k` IOPS (~735 MiB/s) at 4 KiB QD64 vs `fio` `196.4k–199.6k` IOPS (`0.946–0.957×`).
 
-### L1 — Buffered Streams (`JuringInputStream` / `JuringOutputStream`) & Durability ([`docs/m2-report.md`](docs/m2-report.md), [`docs/b6-report.md`](docs/b6-report.md))
+### L1 — Buffered Streams (`JuringInputStream` / `JuringOutputStream`) & Durability ([`docs/internal/m2-report.md`](docs/internal/m2-report.md), [`docs/internal/b6-report.md`](docs/internal/b6-report.md))
 
 | Benchmark / Workload | Metric | JUring | Seastar (`fstream`) | Ratio / Result |
 |---|---|---|---|---|
@@ -72,9 +72,9 @@ JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files
 | **W21-128k / W21-1M** — sequential stream write (`R=5`, 60 s) | Position-matched ratio | 128k: `610.0 ± 402.8` MiB/s; 1M: `569.5 ± 386.7` MiB/s | 128k: `438.6 ± 359.8` MiB/s; 1M: `355.7 ± 300.1` MiB/s | **0.98–1.38×** position-matched (pooled `1.25×` / `1.14×`; drive state-confounded, M2 durability-asymmetric³) |
 | **W25** — `GroupCommit` durable 4 KiB writes (`FDATASYNC`, `R=3`) | Batch `1 → 8 → 32 → 128` | `5.9 → 47.0 → 184.5 → 720.7 MiB/s` (`1,522 → 184,497` writes/s) | — | **`fsyncs_per_group == 1.000000`**, fresh-process restart verification **PASS** |
 
-³ In M2 W21, Seastar `fstream` ran `durable=true` (2 `fdatasync`/pass) while JUring ran `syncOnClose=false` (0/pass); B6 ([`docs/b6-report.md` §6–§7](docs/b6-report.md)) added matched `DurabilityMode` (`WRITEBACK`/`FDATASYNC`/`FSYNC`/`DSYNC`) and verified identical sync accounting (`MiB/sync ≈ 3.99` on W24).
+³ In M2 W21, Seastar `fstream` ran `durable=true` (2 `fdatasync`/pass) while JUring ran `syncOnClose=false` (0/pass); B6 ([`docs/internal/b6-report.md` §6–§7](docs/internal/b6-report.md)) added matched `DurabilityMode` (`WRITEBACK`/`FDATASYNC`/`FSYNC`/`DSYNC`) and verified identical sync accounting (`MiB/sync ≈ 3.99` on W24).
 
-### L2 — Multi-Shard Runtime (`IoShard` / `RingGroup`) & Observability ([`docs/m3-report.md`](docs/m3-report.md), [`docs/b5-report.md`](docs/b5-report.md))
+### L2 — Multi-Shard Runtime (`IoShard` / `RingGroup`) & Observability ([`docs/internal/m3-report.md`](docs/internal/m3-report.md), [`docs/internal/b5-report.md`](docs/internal/b5-report.md))
 
 4 KiB random read, `QD=64` per shard/worker (`R=5`, 10 s warmup + 30 s measured, 300 s rests, all reps kept), with B5 per-ring metrics and latency histograms enabled (`< 1 %` measured overhead: paired B5/B4 ratios `1.019 / 1.011 / 1.007`):
 
@@ -87,7 +87,7 @@ JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files
 
 Seastar/JUring ratios are paired per-rep means at each `N`; the signed M3 bar (d) is defined at `N=8` only. `JUring/fio` and the N=8 per-shard `min/mean` are the signed M3 values.
 
-**Host representativeness ([`docs/stepd-report.md`](docs/stepd-report.md)):** Re-testing Seastar with 2 MiB `hugetlbfs` (`--hugepages /mnt/hugepages-juring`) vs THP showed no material difference across `W3`, `W4`, `W10`, `W11`, and `M3 N=8` (`huge/THP` mean ratios `0.9836–1.0389`, e.g. `M3 N=8` `467,341` vs `461,800` IOPS, `1.0123 [0.9589, 1.0657]`). Root `nvme smart-log` before/mid/after confirmed `0` thermal throttle transitions (`T1=0, T2=0`) and `0` media errors.
+**Host representativeness ([`docs/internal/stepd-report.md`](docs/internal/stepd-report.md)):** Re-testing Seastar with 2 MiB `hugetlbfs` (`--hugepages /mnt/hugepages-juring`) vs THP showed no material difference across `W3`, `W4`, `W10`, `W11`, and `M3 N=8` (`huge/THP` mean ratios `0.9836–1.0389`, e.g. `M3 N=8` `467,341` vs `461,800` IOPS, `1.0123 [0.9589, 1.0657]`). Root `nvme smart-log` before/mid/after confirmed `0` thermal throttle transitions (`T1=0, T2=0`) and `0` media errors.
 
 ## Virtual Thread Performance (`JUringBlocking` vs `FileChannel`)
 
@@ -337,6 +337,7 @@ See [docs/examples.md](docs/examples.md) for the mapping table, the run instruct
 - [docs/api-stability.md](docs/api-stability.md) — the public API surface (`com.davidvlijmincx.lio.api`), SemVer rules, and the compatibility and deprecation policy.
 - [docs/UPGRADING.md](docs/UPGRADING.md) — capability history and migration notes.
 - [CHANGELOG.md](CHANGELOG.md) — release notes.
+- [DATA-AVAILABILITY.md](DATA-AVAILABILITY.md) — what benchmark data is committed, the release data archive, and the caveats for citing the numbers.
 
 ## License
 

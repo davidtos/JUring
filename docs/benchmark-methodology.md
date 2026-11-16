@@ -3,8 +3,8 @@
 **Status:** design frozen 2026-11-13. This document is the measurement contract for M1/M2 and for the
 harness under `bench/`. **Repos:** JUring `4526338` (branch `kafka-engine`) and seastar
 `04b1c04d` (`seastar-25.05.0-1392-g04b1c04d`, read-only clone at `/home/david/projects/seastar`).
-**Companions:** `SEASTAR-PLAN.md` (milestones §5), `docs/seastar-inventory.md`,
-`docs/juring-inventory.md`, `docs/baseline-2026-11-13.md` (today's numbers).
+**Companions:** `docs/internal/SEASTAR-PLAN.md` (milestones §5), `docs/internal/seastar-inventory.md`,
+`docs/internal/juring-inventory.md`, `docs/internal/baseline-2026-11-13.md` (today's numbers).
 **Host:** AMD Ryzen 9 3950X, 16C/32T, 62 GiB, Fedora 44, kernel 7.0.12-201, GIGABYTE
 GP-ASM2NE6100TTTD 1 TB NVMe (`nvme1n1`, ext4) at `/mnt/TestData`, 10 GiB preallocated
 `read_files/single_file_bench.bin` (10,737,418,240 B, fully allocated, mtime 2026-11-03).
@@ -305,7 +305,7 @@ confidence interval includes 0**, and never claim "parity" from two overlapping 
 - anything between → "no measurable difference at this power", with the achieved CI half-width quoted.
 
 **Milestone mapping (read this first).** The task brief labels *M1 = single-shard engine parity* and
-*M2 = multi-shard/framework parity*; the Lead's `SEASTAR-PLAN.md` §5 labels *M1 = L0 parity report*,
+*M2 = multi-shard/framework parity*; the Lead's `docs/internal/SEASTAR-PLAN.md` §5 labels *M1 = L0 parity report*,
 *M2 = L1 file/stream parity*, *M3 = L2 scaling*. The two schemes are reconciled here: **task-M1 =
 plan-M1** (plus the L1 latency part of the L0 report); **task-M2 = plan-M3**; **plan-M2 (stream
 parity) is W21-W22 and conditional** on JUring stream basics landing (plan items B1/B2/B6). Pass/fail
@@ -425,7 +425,7 @@ the reproducibility gate in §8.
 | write scaling "2.6×, 1.6×, 1.0×, 1.0×, 0.9×" (BENCHMARK.md:67-71) | **Not supported.** e.g. 2T 209,755 ± 162,797 (78 % spread); 0.9× at 16T with JUring ±147,764. These are overlapping-noise ratios, not measurements. | BENCHMARK.md:67-71,74 |
 | VT: "1-2 threads = 34.91× vs 4 threads = 10.50×" (README.md:53-56, BENCHMARK.md:125-132) | **Over-precise.** JUringBlocking at 1-2T = 399,109 ± 89,552 vs 4T = 452,193 ± 1,263; the two means overlap within 1 CI, so the "1-2T" point is not distinguishable from 4T. | README.md:53-56; BENCHMARK.md:110-132 |
 | no seastar baseline anywhere | **Confirmed gap.** Zero occurrences of "seastar" in `*.md`. | `grep -in seastar *.md` → none |
-| "L0 measured; JUring at or above fio parity" (`SEASTAR-PLAN.md` §0, from `docs/baseline-2026-11-13.md`) | **Provisional, must be re-stated under this protocol.** The baseline is 3×10 s runs reported as mean ± stdev, not the matched-batching/registration comparison with CIs required by §7; cite it as "provisional" until W3/W4 pass rules 1-3. | `SEASTAR-PLAN.md` §0; §7 here |
+| "L0 measured; JUring at or above fio parity" (`docs/internal/SEASTAR-PLAN.md` §0, from `docs/internal/baseline-2026-11-13.md`) | **Provisional, must be re-stated under this protocol.** The baseline is 3×10 s runs reported as mean ± stdev, not the matched-batching/registration comparison with CIs required by §7; cite it as "provisional" until W3/W4 pass rules 1-3. | `docs/internal/SEASTAR-PLAN.md` §0; §7 here |
 | JMH harness = fio workload | **Partly false.** JUring JMH uses registered files + fixed buffers (`DirectReadBenchmark.java:106-112`); fio "default" does not. That is exactly the L0 asymmetry being measured, so the comparison conflates engine and buffer registration. | README.md:27-30 vs `DirectReadBenchmark.java:106-112` |
 | "5 forks × 3 iterations × 3 s" (BENCHMARK.md:19,49,63,78) | **Unverifiable.** Annotations say `@Fork(1)` (`DirectReadBenchmark.java:26-28`); CLI overrides are not recorded. | BENCHMARK.md:19; Source file |
 

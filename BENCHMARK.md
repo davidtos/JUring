@@ -1,5 +1,7 @@
 # JUring Benchmarks
 
+Raw campaign artifacts are not committed (they are host-specific and large); the release data archive and reproduction/citation caveats are documented in [DATA-AVAILABILITY.md](DATA-AVAILABILITY.md).
+
 This document is organized in two parts:
 
 1. **Part I — Reproducible L0 / L1 / L2 Benchmark Programme (`bench/`, vs `fio` and Seastar):** The authoritative, pre-registered benchmark campaigns with recorded manifests, raw per-rep JSON artifacts, 95 % confidence intervals, device-state gating, CPU/syscall profiling, and one-command reproduction scripts.
@@ -24,17 +26,17 @@ All Part I campaigns follow [`docs/benchmark-methodology.md`](docs/benchmark-met
 
 | Report | Scope | Status / Verdict |
 |---|---|---|
-| [`docs/m1-report.md`](docs/m1-report.md) | **M1 (L0 read path)** — single-shard 4 KiB randread (`W1–W4`), 1 MiB seqread (`W9–W11`), tail latency (`W15/W16`), `perf` CPU/syscalls, `fio` brackets | **PASS (signed)** |
-| [`docs/m1-write-report.md`](docs/m1-write-report.md) | **M1 (L0 write path)** — Step A full write matrix (`W5–W8`, `W12–W14`, 130 runs) + Session 12 state-controlled write protocol (`W0/W1-A/W2`, 42 runs) | **`INCONCLUSIVE` — no ranking / no write-parity claim** (device write-state cliffs) |
-| [`docs/m2-report.md`](docs/m2-report.md) | **M2 (L1 buffered streams)** — `JuringInputStream` / `JuringOutputStream` vs Seastar `fstream` (`W21/W22`, 60 runs) | **PASS (signed)** |
-| [`docs/b6-report.md`](docs/b6-report.md) | **B6 (L1 durability & group commit)** — `FadviseAdvice`, `DurabilityMode` (`W24`), `GroupCommit` batching proof (`W25`) | **DELIVERED & VERIFIED** (`fsyncs_per_group == 1.000000`) |
-| [`docs/m3-report.md`](docs/m3-report.md) | **M3 (L2 multi-shard scaling & metrics)** — `IoShard` / `RingGroup` (`W17–W20`, `N=1,2,4,8`, 60 runs) + B5 per-ring metrics (`docs/b5-report.md`) | **PASS (signed)** |
-| [`docs/stepd-report.md`](docs/stepd-report.md) | **Step D (host representativeness)** — Seastar `hugetlbfs` vs THP bracket (Block A), `unlimited` memlock 1 MiB seqread (Block B), root `nvme smart-log` & `drop_caches` | **COMPLETE** (75/75 `ok`; no signed conclusion changes) |
-| [`docs/b7-decision.md`](docs/b7-decision.md) / [`docs/m4-decision.md`](docs/m4-decision.md) | **B7** (provided buffers + multishot) & **B8/M4** (I/O QoS scheduler) | **B7 DEFERRED** by measured gate; **M4 CLOSED** by documented scope decision |
+| [`docs/internal/m1-report.md`](docs/internal/m1-report.md) | **M1 (L0 read path)** — single-shard 4 KiB randread (`W1–W4`), 1 MiB seqread (`W9–W11`), tail latency (`W15/W16`), `perf` CPU/syscalls, `fio` brackets | **PASS (signed)** |
+| [`docs/internal/m1-write-report.md`](docs/internal/m1-write-report.md) | **M1 (L0 write path)** — Step A full write matrix (`W5–W8`, `W12–W14`, 130 runs) + Session 12 state-controlled write protocol (`W0/W1-A/W2`, 42 runs) | **`INCONCLUSIVE` — no ranking / no write-parity claim** (device write-state cliffs) |
+| [`docs/internal/m2-report.md`](docs/internal/m2-report.md) | **M2 (L1 buffered streams)** — `JuringInputStream` / `JuringOutputStream` vs Seastar `fstream` (`W21/W22`, 60 runs) | **PASS (signed)** |
+| [`docs/internal/b6-report.md`](docs/internal/b6-report.md) | **B6 (L1 durability & group commit)** — `FadviseAdvice`, `DurabilityMode` (`W24`), `GroupCommit` batching proof (`W25`) | **DELIVERED & VERIFIED** (`fsyncs_per_group == 1.000000`) |
+| [`docs/internal/m3-report.md`](docs/internal/m3-report.md) | **M3 (L2 multi-shard scaling & metrics)** — `IoShard` / `RingGroup` (`W17–W20`, `N=1,2,4,8`, 60 runs) + B5 per-ring metrics (`docs/internal/b5-report.md`) | **PASS (signed)** |
+| [`docs/internal/stepd-report.md`](docs/internal/stepd-report.md) | **Step D (host representativeness)** — Seastar `hugetlbfs` vs THP bracket (Block A), `unlimited` memlock 1 MiB seqread (Block B), root `nvme smart-log` & `drop_caches` | **COMPLETE** (75/75 `ok`; no signed conclusion changes) |
+| [`docs/internal/b7-decision.md`](docs/internal/b7-decision.md) / [`docs/m4-decision.md`](docs/m4-decision.md) | **B7** (provided buffers + multishot) & **B8/M4** (I/O QoS scheduler) | **B7 DEFERRED** by measured gate; **M4 CLOSED** by documented scope decision |
 
 ---
 
-### 2. L0 — Single-Shard `io_uring` Read Parity (`M1 PASS`, [`docs/m1-report.md`](docs/m1-report.md))
+### 2. L0 — Single-Shard `io_uring` Read Parity (`M1 PASS`, [`docs/internal/m1-report.md`](docs/internal/m1-report.md))
 
 #### 2.1 Throughput (`W1–W4` 4 KiB randread, `W9–W11` 1 MiB seqread, `R=5`, 10 s warmup + 30 s measured, CPU 2)
 
@@ -111,19 +113,19 @@ JUring and `seastar_file_bench` timestamp before submission to completion (unifo
 
 ---
 
-### 3. L0 — Write Matrix & State-Controlled Protocol (`INCONCLUSIVE`, [`docs/m1-write-report.md`](docs/m1-write-report.md))
+### 3. L0 — Write Matrix & State-Controlled Protocol (`INCONCLUSIVE`, [`docs/internal/m1-write-report.md`](docs/internal/m1-write-report.md))
 
 **No write-parity ranking is claimed for v1.** Two pre-registered campaigns were executed to test write parity on `nvme1n1`:
 
-1. **Step A full write matrix ([`docs/m1-write-report.md` §1–§11](docs/m1-write-report.md), 130 completed runs, 8 h 47 m):** Measured `W5`–`W8` (4 KiB randwrite QD1/16/64/128) and `W12`–`W14` (1 MiB seqwrite QD1/8/32) with per-cell D1 preconditioning (8 × 4 GiB chunks = 34.36 GB + 600 s rest), 300 s inter-rep rests, and 1 s device IOPS series. Result: **36 of 130 runs experienced an in-run SLC-burst → steady-state write cliff** (within-run burst/steady ratios `0.14×` to `3.85×`, e.g. `195k → 59k` IOPS), leaving **21 of 34 cells unstable (`17` with `CV > 10 %`)** under methodology rule D7 ("unstable, no ranking"). At W7 (4 KiB QD64, `R=5`), JUring was stable (`188,704 ± 1,983` IOPS, `CV = 0.8 %`), whereas `fio/matched` (`158,570 ± 50,427`, `CV = 25.6 %`), `fio/matchedbatch` (`170,543 ± 42,826`, `CV = 20.2 %`), and Seastar (`167,073 ± 43,672`, `CV = 21.1 %`) randomly sampled post-cliff states across reps.
-2. **Session 12 pre-registered state-controlled generation campaign ([`docs/m1-write-report.md` §12](docs/m1-write-report.md), 7 generations = 42 runs, 2 h 22 m):** Tested whether running `juring/std`, `fio/matched`, and `fio/matchedbatch` back-to-back inside a single preconditioned generation yields single-state, homogeneous comparisons (`max/min ≤ 1.25` per cell):
+1. **Step A full write matrix ([`docs/internal/m1-write-report.md` §1–§11](docs/internal/m1-write-report.md), 130 completed runs, 8 h 47 m):** Measured `W5`–`W8` (4 KiB randwrite QD1/16/64/128) and `W12`–`W14` (1 MiB seqwrite QD1/8/32) with per-cell D1 preconditioning (8 × 4 GiB chunks = 34.36 GB + 600 s rest), 300 s inter-rep rests, and 1 s device IOPS series. Result: **36 of 130 runs experienced an in-run SLC-burst → steady-state write cliff** (within-run burst/steady ratios `0.14×` to `3.85×`, e.g. `195k → 59k` IOPS), leaving **21 of 34 cells unstable (`17` with `CV > 10 %`)** under methodology rule D7 ("unstable, no ranking"). At W7 (4 KiB QD64, `R=5`), JUring was stable (`188,704 ± 1,983` IOPS, `CV = 0.8 %`), whereas `fio/matched` (`158,570 ± 50,427`, `CV = 25.6 %`), `fio/matchedbatch` (`170,543 ± 42,826`, `CV = 20.2 %`), and Seastar (`167,073 ± 43,672`, `CV = 21.1 %`) randomly sampled post-cliff states across reps.
+2. **Session 12 pre-registered state-controlled generation campaign ([`docs/internal/m1-write-report.md` §12](docs/internal/m1-write-report.md), 7 generations = 42 runs, 2 h 22 m):** Tested whether running `juring/std`, `fio/matched`, and `fio/matchedbatch` back-to-back inside a single preconditioned generation yields single-state, homogeneous comparisons (`max/min ≤ 1.25` per cell):
    - Pilot `w0-control` (600 s post-preconditioning rest, 0 s inter-run rest) **failed** (`W7 max/min = 2.0921`: `191,497 / 167,671 / 91,534` IOPS), proving that a 600 s rest partially rebuilds SLC burst capacity that exhausts mid-generation.
    - Pilot `w1a-continuous` (0 s post-preconditioning rest, 0 s inter-run rest) **passed** (`W7`: `188,070 / 197,148 / 196,440` IOPS, `max/min = 1.0483`; `W8`: `185,943 / 196,802 / 196,719` IOPS, `max/min = 1.0584`).
    - In the 5-generation `W2` gate campaign (`w2-g1`..`w2-g5` with `continuous`), **2 generations (`w2-g1`, `w2-g3`) were valid** and **3 (`w2-g2`, `w2-g4`, `w2-g5`) failed homogeneity** because one or more `fio` arms entered a deep GC state (`39.7k–84.8k` IOPS) during their 120 s warmup. With `n_valid = 2 < 4`, the frozen gate verdict is **`INCONCLUSIVE`**. On the 2 valid W2 generations, paired `JUring / fio` ratios are `0.9459 [0.9316, 0.9602]` (`W7 matched`), `0.9531 [0.9369, 0.9693]` (`W7 matchedbatch`), `0.9533 [0.9244, 0.9821]` (`W8 matched`), and `0.9835 [0.6333, 1.3336]` (`W8 matchedbatch`).
 
 ---
 
-### 4. L1 — Buffered Streams & Durability (`M2 PASS` + `B6`, [`docs/m2-report.md`](docs/m2-report.md), [`docs/b6-report.md`](docs/b6-report.md))
+### 4. L1 — Buffered Streams & Durability (`M2 PASS` + `B6`, [`docs/internal/m2-report.md`](docs/internal/m2-report.md), [`docs/internal/b6-report.md`](docs/internal/b6-report.md))
 
 #### 4.1 `JuringInputStream` / `JuringOutputStream` vs Seastar `fstream` (`M2`, `R=5`, 10 s warmup + 60 s measured, 300 s rests)
 
@@ -134,9 +136,9 @@ JUring and `seastar_file_bench` timestamp before submission to completion (unifo
 | **W21-128k** | Seq stream write | 128 KiB | `writeBehind = 8` | 610.0 ± 402.8 | 438.6 ± 359.8 | 1.3908 | Position-matched: `1.232×` fast / `0.984×` slow (pooled `1.250×`) | **PASS** (point estimate; drive state-confounded¹) |
 | **W21-1M** | Seq stream write | 1 MiB | `writeBehind = 4` | 569.5 ± 386.7 | 355.7 ± 300.1 | 1.6011 | Position-matched: `1.269×` fast / `1.384×` slow (pooled `1.142×`) | **PASS** (point estimate; drive state-confounded¹) |
 
-¹ **M2 W21 disclosures:** (a) On writes, the first engine after a 300 s rest ran in the drive's fast state (`~600–850 MiB/s`) and the second in the slow state (`~107–572 MiB/s`), so position-matched strata are reported rather than paired-rep speedups; (b) in M2 W21, Seastar ran `durable=true` (2 `fdatasync`/pass at `flush()` + `close()`) while JUring ran `syncOnClose=false` (0/pass). B6 ([`docs/b6-report.md` §6–§7](docs/b6-report.md)) added explicit `DurabilityMode` (`WRITEBACK`, `FDATASYNC`, `FSYNC`, `DSYNC`) and verified matched durability accounting (`MiB/sync ≈ 3.99` for both engines in `W24`).
+¹ **M2 W21 disclosures:** (a) On writes, the first engine after a 300 s rest ran in the drive's fast state (`~600–850 MiB/s`) and the second in the slow state (`~107–572 MiB/s`), so position-matched strata are reported rather than paired-rep speedups; (b) in M2 W21, Seastar ran `durable=true` (2 `fdatasync`/pass at `flush()` + `close()`) while JUring ran `syncOnClose=false` (0/pass). B6 ([`docs/internal/b6-report.md` §6–§7](docs/internal/b6-report.md)) added explicit `DurabilityMode` (`WRITEBACK`, `FDATASYNC`, `FSYNC`, `DSYNC`) and verified matched durability accounting (`MiB/sync ≈ 3.99` for both engines in `W24`).
 
-#### 4.2 `GroupCommit` Batching Proof (`W25`, [`docs/b6-report.md` §8](docs/b6-report.md))
+#### 4.2 `GroupCommit` Batching Proof (`W25`, [`docs/internal/b6-report.md` §8](docs/internal/b6-report.md))
 
 4 KiB `O_DIRECT` writes with `DurabilityMode.FDATASYNC`, `2,048` committed writes per run (`8 MiB`), `R=3`, followed by a fresh-process reopen and byte-by-byte verification:
 
@@ -149,7 +151,7 @@ JUring and `seastar_file_bench` timestamp before submission to completion (unifo
 
 ---
 
-### 5. L2 — Multi-Shard Scaling & Observability (`M3 PASS` + `B5`, [`docs/m3-report.md`](docs/m3-report.md), [`docs/b5-report.md`](docs/b5-report.md))
+### 5. L2 — Multi-Shard Scaling & Observability (`M3 PASS` + `B5`, [`docs/internal/m3-report.md`](docs/internal/m3-report.md), [`docs/internal/b5-report.md`](docs/internal/b5-report.md))
 
 #### 5.1 `W17–W20` Multi-Shard Scaling (`N ∈ {1, 2, 4, 8}`, 4 KiB randread, `QD=64`/shard, `R=5`, 10 s warmup + 30 s measured, 300 s rests)
 
@@ -166,7 +168,7 @@ Seastar/JUring ratios are paired per-rep means (the signed M3 bar (d) is defined
 
 All five frozen M3 bars (`(a)` throughput vs `fio ≥ 0.85`, `(b)` same-`N` scaling efficiency & `p99` reporting, `(c)` `N=8` per-shard `min/mean ≥ 0.85`, `(d)` `N=8` `Seastar/JUring ≥ 0.90`, and `(e)` B5 per-ring queue depth `62–65` + runtime completion `p99` with `0` failed/cancelled/timedOut ops across all 75 ring rows) **PASS**.
 
-#### 5.2 B5 Observability Overhead A/B ([`docs/b5-report.md` §6](docs/b5-report.md))
+#### 5.2 B5 Observability Overhead A/B ([`docs/internal/b5-report.md` §6](docs/internal/b5-report.md))
 
 Paired A/B comparison (`R=5`, 4 KiB randread QD64) of B5 (`RingMetrics` + `LatencyHistogram` with `latencySampleEvery = 1` + 1 Hz `ring_series` enabled) vs the uninstrumented B4 baseline (`6cc1a75`):
 - `shard N=1`: paired `B5 / B4 = 1.0190` (`1s95 LB = 0.991`)
@@ -176,7 +178,7 @@ Paired A/B comparison (`R=5`, 4 KiB randread QD64) of B5 (`RingMetrics` + `Laten
 
 ---
 
-### 6. Step D — Host Representativeness ([`docs/stepd-report.md`](docs/stepd-report.md))
+### 6. Step D — Host Representativeness ([`docs/internal/stepd-report.md`](docs/internal/stepd-report.md))
 
 Executed on the host (`bench/results/unattended-2026-11-16/stepd/`, 75/75 runs `status=ok`, 0 failures):
 
@@ -186,7 +188,7 @@ Executed on the host (`bench/results/unattended-2026-11-16/stepd/`, 75/75 runs `
    - `W10` (1M QD8): `huge/THP = 0.9836 [0.9105, 1.0567]` (`4,677` vs `4,754` IOPS; CI spans 1)
    - `W11` (1M QD32): `huge/THP = 1.0389 [0.8721, 1.2057]` (`4,765` vs `4,599` IOPS; CI spans 1)
    - `M3N8` (4K QD64 × 8 shards): `huge/THP = 1.0123 [0.9589, 1.0657]` (`467,341` vs `461,800` IOPS; CI spans 1)
-   - *Amendment A1 / Path B disclosure:* `run-stepd.sh` sampled `/proc/meminfo` `HugePages_Free` before spawning `seastar_file_bench` and after process exit; because `seastar::memory::configure` (`SeaStarRef/src/core/memory.cc:2016-2025`) maps an unlinked `file_desc::temporary` in `/mnt/hugepages-juring` with `MAP_SHARED | MAP_POPULATE` (and throws on failure), pages are freed on process exit before `hp1` is read (`hp0 = 4608 → hp1 = 4608`, 15 warnings disclosed in `docs/stepd-report.md` §3.2).
+   - *Amendment A1 / Path B disclosure:* `run-stepd.sh` sampled `/proc/meminfo` `HugePages_Free` before spawning `seastar_file_bench` and after process exit; because `seastar::memory::configure` (`SeaStarRef/src/core/memory.cc:2016-2025`) maps an unlinked `file_desc::temporary` in `/mnt/hugepages-juring` with `MAP_SHARED | MAP_POPULATE` (and throws on failure), pages are freed on process exit before `hp1` is read (`hp0 = 4608 → hp1 = 4608`, 15 warnings disclosed in `docs/internal/stepd-report.md` §3.2).
 2. **Block B — `unlimited` memlock (`prlimit --memlock=unlimited:unlimited`, `R=5` paired):** All 15 JUring runs used `io_buffer_mode = registered-fixed` and all 15 `fio` runs used `fixedbufs = 1, registerfiles = 1`. Paired `JUring / fio-matched` means: **W9** `1.0138 [0.9825, 1.0451]`, **W10** `1.0108 [0.9582, 1.0635]`, **W11** `1.0005 [0.9573, 1.0437]`.
 3. **Host SMART & cold-cache controls:** Root `nvme smart-log` before/mid/after confirmed `Thermal Management T1/T2 Trans Count = 0`, `critical_warning = 0`, `media_errors = 0`; root `drop_caches` verified functional (`F11`; primary cells are `O_DIRECT`).
 
@@ -210,7 +212,7 @@ python3 bench/stepd/write_state_analysis.py \
     --out bench/results/unattended-2026-11-16/write-state/analysis
 ```
 
-Full campaign execution commands are documented in [`docs/HANDOVER.md` §4](docs/HANDOVER.md) and each `bench/*/README.md`.
+Full campaign execution commands are documented in [`docs/internal/HANDOVER.md` §4](docs/internal/HANDOVER.md) and each `bench/*/README.md`.
 
 ---
 
