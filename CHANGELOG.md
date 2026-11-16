@@ -44,13 +44,15 @@ Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact
   deep in-flight counts. Waiting for more completions than the CQ can hold now throws
   `IllegalArgumentException` instead of blocking forever.
 - **Stream close could hang forever**: `JuringInputStream.close()` and `JuringOutputStream.close()`
-  no longer fall back to an unbounded wait when in-flight I/O does not drain. The close is bounded
-  by 2 s + 250 ms grace; a request that misses the deadline is abandoned (its buffer is kept
-  alive — a bounded leak, never a use-after-free), `close()` throws `ETIMEDOUT` and the count is
-  reported by `abandonedAtClose()`.
+  no longer fall back to an unbounded wait. The in-flight drain, the final truncate and the
+  durability sync share one 2 s + 250 ms grace deadline; a write that misses it is abandoned
+  (its buffer is kept alive — a bounded leak, never a use-after-free), `close()` throws
+  `ETIMEDOUT` and the count is reported by `abandonedAtClose()`. A truncate/sync-only timeout
+  also throws `ETIMEDOUT` but releases the buffers.
 - **Waits with nothing in flight blocked forever**: `waitForResult`/`waitForResult(target)` and
   `waitForBatchResult*` with `minComplete > 0` now throw `IllegalStateException` when no
-  operation is prepared and unreaped, instead of waiting for a completion that cannot arrive.
+  completion can arrive: nothing is prepared and unreaped, or fewer operations are submitted
+  than the wait requires (prepared SQEs are only published by `submit()`).
 - **Attached rings lost optional-opcode support**: `getSharedWorkerRing` now probes the new ring,
   so timeouts/statx/fallocate/ftruncate work there instead of throwing
   `UnsupportedOperationException`.

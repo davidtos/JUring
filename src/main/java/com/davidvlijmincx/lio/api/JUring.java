@@ -1408,8 +1408,10 @@ public class JUring implements AutoCloseable {
     /**
      * B10 F1 fix: prepares a non-fixed read whose {@code user_data} is a unique operation id
      * instead of the buffer address, so concurrent reads into the same segment are
-     * distinguishable. Used by {@link JuringFile}; the raw public {@code prepareRead}
-     * overloads keep the address payload for {@link Result#validBuffer()} compatibility.
+     * distinguishable. Used by {@link JuringFile} and by the public
+     * {@link #prepareReadUnique(FileDescriptor, MemorySegment, long)} overloads; the other
+     * raw {@code prepareRead} overloads keep the address payload for
+     * {@link Result#validBuffer()} compatibility.
      */
     long prepareReadNoBuffer(FileDescriptor fd, MemorySegment buffer, int readSize, long offset) {
         return prepareReadNoBuffer(fd, buffer, readSize, offset, (byte) 0);
@@ -2514,8 +2516,9 @@ public class JUring implements AutoCloseable {
      *
      * @param batchSize maximum number of completions to reap
      * @return the reaped results
-     * @throws IllegalStateException when no operations are in flight (the wait would block
-     *                               forever because no completion can arrive)
+     * @throws IllegalStateException when no completion can arrive: nothing is in flight, or
+     *                               fewer operations are submitted than the wait requires
+     *                               (prepared SQEs are only published by {@code submit()})
      */
     public List<Result> waitForBatchResult(int batchSize) {
         ensureOpenAndOwner();
@@ -2532,8 +2535,10 @@ public class JUring implements AutoCloseable {
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
      * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
-     * @throws IllegalStateException    when {@code minComplete > 0} and no operations are in
-     *                                  flight (the wait would block forever)
+     * @throws IllegalStateException    when {@code minComplete > 0} and no completion can
+     *                                  arrive: nothing is in flight, or fewer operations are
+     *                                  submitted than {@code minComplete} (prepared SQEs are
+     *                                  only published by {@code submit()})
      */
     public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
         ensureOpenAndOwner();
@@ -2551,8 +2556,10 @@ public class JUring implements AutoCloseable {
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
      * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
-     * @throws IllegalStateException    when {@code minComplete > 0} and no operations are in
-     *                                  flight (the wait would block forever)
+     * @throws IllegalStateException    when {@code minComplete > 0} and no completion can
+     *                                  arrive: nothing is in flight, or fewer operations are
+     *                                  submitted than {@code minComplete} (prepared SQEs are
+     *                                  only published by {@code submit()})
      */
     public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         ensureOpenAndOwner();
@@ -2566,8 +2573,9 @@ public class JUring implements AutoCloseable {
      * it carries.
      *
      * @return the reaped completion
-     * @throws IllegalStateException when no operations are in flight (the wait would block
-     *                               forever because no completion can arrive)
+     * @throws IllegalStateException when no completion can arrive: nothing is in flight, or
+     *                               fewer operations are submitted than the wait requires
+     *                               (prepared SQEs are only published by {@code submit()})
      */
     public Result waitForResult() {
         ensureOpenAndOwner();
@@ -2579,8 +2587,9 @@ public class JUring implements AutoCloseable {
      *
      * @param target result instance to reuse; returns the same instance
      * @return the populated {@code target}
-     * @throws IllegalStateException when no operations are in flight (the wait would block
-     *                               forever because no completion can arrive)
+     * @throws IllegalStateException when no completion can arrive: nothing is in flight, or
+     *                               fewer operations are submitted than the wait requires
+     *                               (prepared SQEs are only published by {@code submit()})
      */
     public Result waitForResult(Result target) {
         ensureOpenAndOwner();

@@ -879,14 +879,26 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     /**
-     * Rejects a blocking wait when nothing is prepared and unreaped, because no completion can
-     * arrive and the wait would block forever. {@code inFlightCount} is owner-thread state, so
-     * the check is race-free under the single-owner contract.
+     * Rejects a blocking wait when no completion can possibly arrive: nothing is prepared and
+     * unreaped, or fewer submitted operations are outstanding than the wait requires (prepared
+     * SQEs count as in flight but are not published until {@link #submit()}). Owner-thread state,
+     * so the check is race-free under the single-owner contract.
+     *
+     * @param operation name used in the exception message
+     * @param needed    number of completions the caller is about to wait for
      */
-    private void ensurePendingWork(String operation) {
+    private void ensurePendingWork(String operation, int needed) {
         if (inFlightCount <= 0) {
             throw new IllegalStateException(operation + ": no operations are in flight; prepare an "
                     + "operation and call submit() before waiting for a completion");
+        }
+        int unsubmitted = sqeTail - sqeHead;
+        int submittedOutstanding = inFlightCount - unsubmitted;
+        if (submittedOutstanding < needed) {
+            throw new IllegalStateException(operation + ": only " + submittedOutstanding
+                    + " submitted operation(s) are outstanding but " + needed + " completion(s) are"
+                    + " required; call submit() for prepared operations (or prepare and submit more"
+                    + " work) before waiting");
         }
     }
 
@@ -988,7 +1000,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     int waitCqe(MemorySegment cqePtr) {
-        ensurePendingWork("waitForResult");
+        ensurePendingWork("waitForResult", 1);
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1032,7 +1044,7 @@ final class IoUringDispatcher implements AutoCloseable {
     int waitCqeNr(int waitNr) {
         checkMinComplete(waitNr);
         if (waitNr > 0) {
-            ensurePendingWork("waitForBatchResult");
+            ensurePendingWork("waitForBatchResult", waitNr);
         }
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
@@ -1656,7 +1668,7 @@ final class IoUringDispatcher implements AutoCloseable {
     int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         checkMinComplete(minComplete);
         if (minComplete > 0) {
-            ensurePendingWork("waitForBatchResult");
+            ensurePendingWork("waitForBatchResult", minComplete);
         }
         while (true) {
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
@@ -1847,9 +1859,10 @@ final class IoUringDispatcher implements AutoCloseable {
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case UserData.INTERNAL_READ_EXT_TYPE -> {
-                // B10 F1 fix: JuringFile non-fixed read carrying a unique op id instead of the
-                // buffer address, so concurrent same-buffer reads stay distinguishable. No
-                // Result.validBuffer (the caller owns the buffer); reported as READ_EXT.
+                // B10 F1 fix: unique-id non-fixed read (JuringFile / prepareReadUnique)
+                // carrying an op id instead of the buffer address, so concurrent same-buffer
+                // reads stay distinguishable. No Result.validBuffer (the caller owns the
+                // buffer); reported as READ_EXT.
                 target.set(userData, result, OperationType.READ_EXT, 0L, null, -1, null, cqeFlags);
             }
             case 1 /* WRITE */ -> {

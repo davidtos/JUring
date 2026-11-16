@@ -306,10 +306,11 @@ public final class JuringInputStream implements AutoCloseable {
     /**
      * Returns the number of bytes of native buffer memory held by this stream.
      *
-     * @return the bounded buffer memory in bytes ({@code 0} after {@link #close()})
+     * @return the bounded buffer memory in bytes ({@code 0} after a normal {@link #close()};
+     *         the retained size after an abandoned close, where the buffers stay alive)
      */
     public long bufferMemoryBytes() {
-        return closed ? 0L : (long) buffers.length * bufferCapacity;
+        return (!closed || abandonedAtClose > 0) ? (long) buffers.length * bufferCapacity : 0L;
     }
 
     /**
@@ -675,9 +676,14 @@ public final class JuringInputStream implements AutoCloseable {
                 if (remainingNanos <= 0) {
                     safeToRelease = false;
                     abandonedAtClose += pendingSlotsInFifo();
-                    firstError = new JuringException(JuringException.ETIMEDOUT, "close",
-                            "close deadline expired while draining input stream reads ("
+                    JuringException timeout = new JuringException(JuringException.ETIMEDOUT,
+                            "close", "close deadline expired while draining input stream reads ("
                                     + pendingSlotsInFifo() + " read(s) abandoned)");
+                    if (firstError == null) {
+                        firstError = timeout;
+                    } else {
+                        firstError.addSuppressed(timeout);
+                    }
                     break;
                 }
                 try {
@@ -691,6 +697,8 @@ public final class JuringInputStream implements AutoCloseable {
                         abandonedAtClose += pendingSlotsInFifo();
                         if (firstError == null) {
                             firstError = e;
+                        } else {
+                            firstError.addSuppressed(e);
                         }
                         break;
                     }
@@ -736,10 +744,11 @@ public final class JuringInputStream implements AutoCloseable {
 
     /**
      * Number of reads abandoned by {@link #close()} because the bounded close deadline
-     * expired. Non-zero only after an abnormal close; the abandoned buffers are intentionally
-     * not freed (a bounded leak is safer than a use-after-free).
+     * expired (or because ring-ownership misuse left the read un-reapable). Non-zero only
+     * after an abnormal close that retains buffers; they are intentionally not freed (a
+     * bounded leak is safer than a use-after-free).
      *
-     * @return abandoned read count ({@code 0} for a normal close)
+     * @return retained/abandoned read-buffer count ({@code 0} for a normal close)
      */
     public long abandonedAtClose() {
         return abandonedAtClose;

@@ -8,11 +8,13 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import static com.davidvlijmincx.lio.api.LinuxOpenOptions.READ;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -61,6 +63,55 @@ class RawReadUniqueHandleTest {
                 assertEquals(MemorySegment.NULL, r2.validBuffer(),
                         "a unique-id read must not claim buffer ownership");
             }
+        }
+    }
+
+    @Test
+    void cancelByHandleTargetsExactlyOneOfTwoUniqueReads() throws Exception {
+        Path fifo = FifoTools.createFifo(tempDir, "cancel.fifo");
+        Thread writer = FifoTools.holdWriteEndOpen(fifo);
+        try (Arena arena = Arena.ofConfined();
+             JUring ring = new JUring(16);
+             FileDescriptor fd = new FileDescriptor(fifo, READ)) {
+            MemorySegment segment = arena.allocate(8192, 4096);
+            long first = ring.prepareReadUnique(fd, segment, 0);
+            long second = ring.prepareReadUnique(fd, segment, 4096);
+            assertNotEquals(first, second, "same-segment reads must get distinct handles");
+            ring.submit(); // both reads block: the pipe has no data
+
+            long firstCancel = ring.prepareCancelByUserData(first);
+            ring.submit();
+            Set<Long> seen = new HashSet<>();
+            long firstResult = 1L;
+            for (int i = 0; i < 2; i++) {
+                try (Result result = ring.waitForResult()) {
+                    seen.add(result.id());
+                    if (result.id() == first) {
+                        firstResult = result.result();
+                        assertEquals(MemorySegment.NULL, result.validBuffer(),
+                                "a unique-id read must not claim buffer ownership");
+                    }
+                }
+            }
+            assertEquals(-JuringException.ECANCELED, firstResult,
+                    "cancel must deliver -ECANCELED for the targeted handle");
+            assertTrue(seen.contains(firstCancel), "the cancel request's own completion must be reaped");
+            assertFalse(seen.contains(second), "the other same-segment read must stay outstanding");
+
+            ring.prepareCancelByUserData(second);
+            ring.submit();
+            long secondResult = 1L;
+            for (int i = 0; i < 2; i++) {
+                try (Result result = ring.waitForResult()) {
+                    if (result.id() == second) {
+                        secondResult = result.result();
+                    }
+                }
+            }
+            assertEquals(-JuringException.ECANCELED, secondResult);
+            assertEquals(0, ring.inFlightCount(), "all requests and cancels must be reconciled");
+        } finally {
+            FifoTools.stop(writer);
         }
     }
 

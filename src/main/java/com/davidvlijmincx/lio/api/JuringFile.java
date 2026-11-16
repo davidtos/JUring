@@ -1446,6 +1446,49 @@ public final class JuringFile implements AutoCloseable {
         await(handle);
     }
 
+    /**
+     * Bounded {@code ftruncate} for the stream shutdown path: submits the request and waits at
+     * most until {@code deadlineNanos}. On expiry the request stays in flight (the caller must
+     * keep this handle alive until it settles) and {@code ETIMEDOUT} is thrown.
+     *
+     * @param newLength     the new length
+     * @param deadlineNanos absolute {@link System#nanoTime()} deadline
+     * @throws JuringException on failure or deadline expiry
+     */
+    boolean truncateBounded(long newLength, long deadlineNanos) throws JuringException {
+        long handle = prepareTruncate(newLength);
+        ring().submit();
+        awaitWithin(handle, deadlineNanos, "ftruncate");
+        return true;
+    }
+
+    /**
+     * Bounded {@code fsync}/{@code fdatasync} for the stream shutdown path: submits the request
+     * and waits at most until {@code deadlineNanos}. On expiry the request stays in flight and
+     * {@code ETIMEDOUT} is thrown.
+     *
+     * @param dataOnly      {@code true} for {@code fdatasync}, {@code false} for {@code fsync}
+     * @param deadlineNanos absolute {@link System#nanoTime()} deadline
+     * @throws JuringException on failure or deadline expiry
+     */
+    boolean syncBounded(boolean dataOnly, long deadlineNanos) throws JuringException {
+        long handle = prepareFsync(dataOnly);
+        ring().submit();
+        awaitWithin(handle, deadlineNanos, dataOnly ? "fdatasync" : "fsync");
+        return true;
+    }
+
+    /** Bounded await for a just-submitted close-path request. */
+    private void awaitWithin(long handle, long deadlineNanos, String operation) throws JuringException {
+        long remainingNanos = deadlineNanos - System.nanoTime();
+        if (remainingNanos <= 0) {
+            throw new JuringException(JuringException.ETIMEDOUT, "close",
+                    "close deadline expired before " + operation
+                            + " could be awaited (the request is still in flight)");
+        }
+        await(handle, Math.max(1L, remainingNanos / 1_000_000L));
+    }
+
     // ------------------------------------------------------------------
     // counters
     // ------------------------------------------------------------------

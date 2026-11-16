@@ -7,9 +7,11 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
 
 1. **Fixed before 0.1.0: stream close is hard-bounded.**
    `JuringInputStream.close()` / `JuringOutputStream.close()` no longer fall back to an
-   unbounded `file.await(handle)`. Both spend at most 2 s + 250 ms grace, abandon a request
-   that misses the deadline with its buffer kept alive (bounded leak, never a UAF), throw
-   `ETIMEDOUT`, and report the count via `abandonedAtClose()`.
+   unbounded `file.await(handle)`. The drain, the final truncate and the durability sync all
+   share a 2 s + 250 ms grace deadline; a request that misses it is abandoned with its
+   buffer kept alive (bounded leak, never a UAF), `ETIMEDOUT` is thrown, and the count is
+   reported via `abandonedAtClose()`. `flush()` remains a deliberately unbounded durability
+   point.
 2. **CQ-overflow observability is partial.**
    `RingMetrics.cqOverflowEvents` reads the kernel `cq.koverflow`, which was observed to stay 0
    while completions were parked in the overflow list. `cqFlushEnters` now counts the flushes we
@@ -22,9 +24,11 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
    `IllegalArgumentException` (previously an unbounded hang). If callers genuinely need
    "wait for at least N total completions across calls", expose an explicit helper instead of
    overloading the CQ-wait primitive.
-5. **Fixed before 0.1.0: zero-in-flight waits throw.** `waitForResult`/`waitForResult(target)`
-   and `waitForBatchResult*` with `minComplete > 0` now throw `IllegalStateException` when
-   nothing is prepared and unreaped, instead of waiting for a completion that cannot arrive.
+5. **Fixed before 0.1.0: no-completion waits throw.** `waitForResult`/`waitForResult(target)`
+   and `waitForBatchResult*` with `minComplete > 0` now throw `IllegalStateException` when no
+   completion can arrive: nothing is prepared and unreaped, or fewer submitted operations
+   are outstanding than the wait requires (prepared SQEs are only published by `submit()`, so
+   prepare-then-wait now fails fast instead of hanging).
 6. **Non-Linux error paths outside the entry points.** `isSupported()` and the `JUring`
    constructor are gated before the native layer, but other public types (`FileDescriptor`,
    `IoShard`, `JUringBlocking`) still touch `NativeDispatcher.C` and would fail class init on a
