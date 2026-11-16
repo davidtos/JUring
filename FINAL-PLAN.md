@@ -110,6 +110,14 @@ The raw `JUring.prepare*`/reap path is untouched (M1 W1–W4 read parity cannot 
 
 ## 4. B10b — Linux block-layer I/O priority (`ioprio`)
 
+**Design rationale — why `ioprio` and not a scheduler.** JUring stays lean (D1) and does not model fairness, shares, or token buckets (M4 closed, [`docs/m4-decision.md`](docs/m4-decision.md)). The application running on top knows its I/O pattern (foreground vs compaction vs bulk copy) far better than a generic library can infer; the block layer already has a standard place to express that intent — the SQE `ioprio` class/level. So B10b **exposes the kernel hint and stops there**:
+
+- **Expression, not enforcement.** `ioprio` is intent; ordering/enforcement is the kernel scheduler's job (BFQ / mq-deadline honour it; the host's `none` accepts but ignores it) or the OS's job (cgroup v2 `io.weight`/`io.max`, `ionice`, separate rings/shards). The library documents the split instead of reimplementing it.
+- **No library-side scheduling state.** One 16-bit field per request: no queues, no fairness algorithm, no scheduler thread, no scheduling allocations; the hot-path cost is a single store.
+- **Composable.** Ring-wide default, per-handle (`JuringFile.withIoPriority`, inherited by `JuringInputStream`/`JuringOutputStream`/`GroupCommit`), and per-request raw override (`ring.setLastSqeIoprio`) coexist; `0` always means "kernel default".
+- **Known limits.** Coarse (4 classes × 8 levels), `RT` may need privileges, and there is no *cross-request* fairness inside JUring. Workloads needing guaranteed shares/isolation use OS controls or shard separation — that remains the documented answer.
+- **Validation matches the claim.** Because the effect is scheduler-dependent, tests assert encoding, SQE wiring, and kernel acceptance — never a latency/throughput outcome (§4.5).
+
 ### 4.1 Goal
 
 Let callers express a per-request block-layer priority via the `io_uring_sqe.ioprio` field that already exists in the layout ([`Sqe.java:18`](src/main/java/com/davidvlijmincx/lio/api/Sqe.java#L18), setter [`Sqe.setIoprio`](src/main/java/com/davidvlijmincx/lio/api/Sqe.java#L94)) — ring-wide default, per-SQE for raw users, and per-handle for `JuringFile`/streams/`GroupCommit` — with zero hot-path allocation.
@@ -137,7 +145,7 @@ Let callers express a per-request block-layer priority via the `io_uring_sqe.iop
 
 - **Effect is a hint for the block layer, not QoS.** It only changes ordering/latency whenever the active I/O scheduler is priority-aware. On this host `nvme1n1` runs `[none] mq-deadline kyber bfq` — under `none` the kernel accepts the value but **nothing observable changes**. Verification must therefore assert encoding + kernel acceptance, never a throughput effect, unless the scheduler is switched (a host change, out of scope). Seastar itself never sets `ioprio` (§2b), so this is an additive kernel passthrough, not a parity feature.
 - `IOPRIO_CLASS_RT` may require privileges on some kernels (`CAP_SYS_ADMIN` / `CAP_SYS_NICE` depending on version) — document that failures surface as request errors and that `BE`/`IDLE` are the unprivileged classes.
-- This does not reopen M4: no scheduler, no fair queuing, no weights; isolation guidance stays "separate rings/shards or OS-level controls" ([`docs/m4-decision.md`](docs/m4-decision.md)).
+- This does not reopen M4: no scheduler, no fair queuing, no weights; isolation guidance stays "separate rings/shards or OS-level I/O controls" such as cgroup v2 `io.weight`/`io.max` and `ionice` ([`docs/m4-decision.md`](docs/m4-decision.md)).
 - Relevant docs to touch: README/`docs/examples.md` note, `JuringFile` Javadoc, `docs/api-stability.md` (a note, as the API is additive and pre-1.0).
 
 ### 4.5 Tests / acceptance (`IoPriorityTest`, new)
@@ -167,5 +175,6 @@ Let callers express a per-request block-layer priority via the `io_uring_sqe.iop
 - **B10a registry:** explicit that attach allocates only at open (not a hot-path structure), and that the threading contract is unchanged (one owner thread).
 - **B10b timed ops:** priority is written to the target SQE **before** the `LINK_TIMEOUT` companion is prepared (v1's "apply on the last prepared SQE" would have tagged the companion).
 - **B10b honesty:** added the `[none]` scheduler caveat (effect not observable on this host), RT privilege caveat, and an SQE-level test hook as the real verification instead of a claimed performance effect.
+- **B10b rationale recorded (review feedback):** why the lean library exposes the kernel's `ioprio` hint rather than an in-library scheduler — the app knows its I/O pattern, enforcement belongs to the kernel/OS, and M4 remains closed; tests validate encoding/wiring/acceptance, not outcomes.
 - **Coverage:** tests now include `GroupCommit`, cross-file timed pairs, foreign-raw-work guard, and zero-allocation dispatcher checks.
 - **Seastar cross-check (§2b):** B10a matches Seastar's one-ring-many-files architecture; Seastar's O(1) per-request `user_data` routing is recorded as follow-up Option B/C, with Option A kept for v1. Seastar cancels per `io_intent` (supports the per-handle cancel scope) and closes files by refcount. Seastar has **zero** `ioprio` usage, so B10b is explicitly framed as an additive kernel passthrough, **not** a Seastar-parity feature.
