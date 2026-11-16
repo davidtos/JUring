@@ -1611,6 +1611,9 @@ final class IoUringDispatcher implements AutoCloseable {
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return ret;
