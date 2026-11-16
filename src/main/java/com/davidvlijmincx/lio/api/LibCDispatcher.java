@@ -166,17 +166,39 @@ final class LibCDispatcher {
                 Linker.Option.critical(false)
         );
 
-        MH_SCHED_GETCPU = linker.downcallHandle(
-                lookup.findOrThrow("sched_getcpu"),
-                FunctionDescriptor.of(JAVA_INT)
-        );
+        // Optional libc symbols: sched_getcpu(3) (affinity telemetry) and posix_fadvise(2)
+        // (advisory cache hint) are not available on every libc (e.g. some musl builds). They
+        // are resolved lazily/optionally so class initialization cannot fail on a platform that
+        // simply does not offer them; the feature throws only when actually used.
+        MH_SCHED_GETCPU = lookup.find("sched_getcpu")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT)))
+                .orElse(null);
 
         // B6: advisory page-cache hint; returns errno directly (no -1/errno convention, no
         // captureCallState) and needs no arena (all arguments are scalars).
-        MH_POSIX_FADVISE = linker.downcallHandle(
-                lookup.findOrThrow("posix_fadvise"),
-                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_INT)
-        );
+        MH_POSIX_FADVISE = lookup.find("posix_fadvise")
+                .map(sym -> linker.downcallHandle(sym,
+                        FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_INT)))
+                .orElse(null);
+    }
+
+    /**
+     * Reports whether this process runs on a platform JUring can drive: Linux on x86-64 or
+     * aarch64 (the two architectures whose io_uring syscall numbers and mmap constants are
+     * assumed by this implementation). Checked before any native call so a non-Linux JVM gets a
+     * clear {@link UnsupportedOperationException} instead of a link error.
+     */
+    static boolean isSupportedPlatform() {
+        String os = System.getProperty("os.name", "");
+        if (!"Linux".equals(os)) {
+            return false;
+        }
+        String arch = System.getProperty("os.arch", "");
+        return "amd64".equals(arch) || "x86_64".equals(arch) || "aarch64".equals(arch);
+    }
+
+    static String platformDescription() {
+        return System.getProperty("os.name", "?") + "/" + System.getProperty("os.arch", "?");
     }
 
     private static final LibCDispatcher INSTANCE = new LibCDispatcher();
@@ -384,8 +406,13 @@ final class LibCDispatcher {
      * not a ring request.
      */
     int posixFadvise(int fd, long offset, long length, int advice) {
+        MethodHandle fadvise = MH_POSIX_FADVISE;
+        if (fadvise == null) {
+            // libc does not expose posix_fadvise; report ENOSYS like a kernel without it.
+            return 38;
+        }
         try {
-            return (int) MH_POSIX_FADVISE.invokeExact(fd, offset, length, advice);
+            return (int) fadvise.invokeExact(fd, offset, length, advice);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
@@ -420,9 +447,15 @@ final class LibCDispatcher {
     }
 
     /** {@code sched_getcpu(3)}: the CPU the calling thread is running on, {@code -1} on failure. */
+    /** {@code sched_getcpu(3)}: the CPU the calling thread is running on, {@code -1} on failure. */
     int schedGetCpu() {
+        MethodHandle getcpu = MH_SCHED_GETCPU;
+        if (getcpu == null) {
+            // Optional libc symbol (some musl builds omit it); affinity telemetry is best effort.
+            return -1;
+        }
         try {
-            return (int) MH_SCHED_GETCPU.invokeExact();
+            return (int) getcpu.invokeExact();
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }

@@ -348,6 +348,7 @@ final class IoUringDispatcher implements AutoCloseable {
         IoUringDispatcher dispatcher = getDispatcher(queueDepth);
 
         int combinedFlags = IoUringOptions.combineOptions(ioUringOptions);
+        validateSetupFlags(combinedFlags);
         int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, combinedFlags);
         if (ret < 0) {
             dispatcher.close();
@@ -371,6 +372,38 @@ final class IoUringDispatcher implements AutoCloseable {
         return dispatcher;
     }
 
+    /**
+     * Validates the public setup-flag surface before the kernel sees it, and rejects combinations
+     * or flags this implementation cannot honour. The enum intentionally mirrors the kernel's
+     * flag set, but exposing a flag that is silently ignored or only produces a cryptic
+     * {@code EINVAL} from {@code io_uring_setup} is worse than a clear error.
+     */
+    private static void validateSetupFlags(int flags) {
+        if ((flags & IoUringOptions.IORING_SETUP_DEFER_TASKRUN.value) != 0
+                && (flags & IoUringOptions.IORING_SETUP_SINGLE_ISSUER.value) == 0) {
+            throw new IllegalArgumentException(
+                    "IORING_SETUP_DEFER_TASKRUN requires IORING_SETUP_SINGLE_ISSUER");
+        }
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_SQ_AFF,
+                "SQPOLL CPU pinning has no setter in this API yet");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_CQSIZE,
+                "an explicit cq_entries value has no setter in this API yet");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_NO_MMAP,
+                "application-provided ring memory is not supported");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_REGISTERED_FD_ONLY,
+                "a registered-fd-only ring has no usable mapping");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_HYBRID_IOPOLL,
+                "hybrid IOPOLL is not implemented");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_IOPOLL,
+                "IOPOLL is not supported/tested in 0.1.0");
+    }
+
+    private static void rejectFlag(int flags, IoUringOptions option, String reason) {
+        if ((flags & option.value) != 0) {
+            throw new IllegalArgumentException("Unsupported io_uring setup flag " + option.name() + ": " + reason);
+        }
+    }
+
     private static IoUringDispatcher getDispatcher(int queueDepth) {
         Arena arena = Arena.ofShared();
         MemorySegment callState = arena.allocate(LibCDispatcher.CAPTURE_STATE_LAYOUT);
@@ -382,12 +415,16 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     public IoUringDispatcher getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
+        int result = IoUringOptions.combineOptions(ioUringOptions);
+        validateSetupFlags(result);
+        if ((result & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0) {
+            throw new IllegalArgumentException(
+                    "IORING_SETUP_SQPOLL cannot be combined with IORING_SETUP_ATTACH_WQ on a shared-worker ring");
+        }
         IoUringDispatcher dispatcher = getDispatcher(queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
         try {
             int ring_fd = this.ringFd;
-
-            var result = IoUringOptions.combineOptions(ioUringOptions);
 
             io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
             io_uring_params.wq_fd(params, ring_fd);

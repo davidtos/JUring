@@ -41,6 +41,23 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  */
 public class JUring implements AutoCloseable {
 
+    /**
+     * Tests whether this JVM can create an {@code io_uring}: Linux on x86-64 (amd64) or aarch64,
+     * with io_uring enabled for the process. The first call performs a minimal
+     * {@code io_uring_setup} probe and caches the result; later calls are free.
+     *
+     * <p>Returns {@code false} instead of throwing for unsupported platforms and for
+     * environments whose security policy denies io_uring (Docker's default seccomp profile,
+     * {@code kernel.io_uring_disabled}, AppArmor). Libraries should use this to fall back to
+     * {@code java.nio} instead of failing at startup; {@code new JUring(...)} still throws an
+     * {@link UnsupportedOperationException} on such platforms with the errno-free reason.
+     *
+     * @return whether a ring can be created in this process
+     */
+    public static boolean isSupported() {
+        return NativeDispatcher.isSupported();
+    }
+
     /** {@code IORING_FSYNC_DATASYNC}: {@code fsync} flag requesting {@code fdatasync} (data only). */
     public static final int IORING_FSYNC_DATASYNC = 1;
 
