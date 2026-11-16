@@ -1,12 +1,17 @@
-# bench/stepd/ — Step D host representativeness harness
+# bench/stepd/ — Step D host representativeness harness + state-controlled write chain
 
-Frozen protocol: [`docs/stepd-design.md`](../../docs/stepd-design.md) v1.0 (2026-11-15).
-Host-prep evidence: `scratch/stepd-host/` (audit + preflight outputs, gitignored).
+**Status: EXECUTED 2026-11-16 (`bench/results/unattended-2026-11-16/`, `exit=0`).**
+- **Step D deliverable:** [`docs/stepd-report.md`](../../docs/stepd-report.md) (`75/75` runs `status=ok`, frozen [`docs/stepd-design.md`](../../docs/stepd-design.md) v1.0 + Amendment A1 / Path B).
+- **Write-state follow-up deliverable:** [`docs/m1-write-report.md` §12](../../docs/m1-write-report.md) (`7` generations = `42/42` runs `status=ok`, frozen [`docs/m1-write-state-design.md`](../../docs/m1-write-state-design.md) v1.0; verdict `INCONCLUSIVE` — `2/5` valid W2 generations `< 4`).
+- Host-prep evidence: `scratch/stepd-host/` (audit + preflight outputs, gitignored); independent verification: `scratch/stepd-verify/VERDICT.md` (422 assertions, PASS).
 
 | file | purpose |
 |---|---|
 | `run-stepd.sh` | campaign runner: **Block A** seastar THP vs hugetlbfs (W3/W4/W10/W11/M3N8, R=3) + **Block B** memlock best-config read cells (W9/W10/W11, juring/fio-matched/seastar, R=5) |
 | `analyze_stepd.py` | reads `<results>/cell-meta.tsv`, writes `analysis/stepd-summary.md` + `analysis/stepd.ratios.csv` (paired ratios + 95% CIs; disclosure only) |
+| `run-write-chain.sh` | pre-registered state-controlled write chain (`W0 → W1-A/B → W2 × 5`) |
+| `write_state_analysis.py` | frozen classifier (`steady` 10 s-median cliff detector + `max/min ≤ 1.25` generation homogeneity + W2 gate analysis) |
+| `run-unattended.sh` | one-command unattended root driver (Phase 0 prep → Phase 1 Step D → Phase 2 write chain → Phase 3 cleanup & summary) |
 
 ## Run it (host terminal, as user `david`)
 

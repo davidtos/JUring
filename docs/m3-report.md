@@ -276,7 +276,10 @@ python3 bench/shard/analyze_m3.py --session m3-2026-11-15   # -> aggregate/m3.{m
    per-job spread is `n/a`; bar (c) is evaluated on `juring-group` shards only.
 7. **Scope:** read path only (no writes), no CPU/op or syscalls/op; the optional
    `juring-manual` reference was run only as post-campaign disclosure (§3.7, never a bar);
-   no host-root/DS-M/hugetlbfs runs, no VT re-benchmark. B5 per-ring
+   no per-shard-file DS-M layout, no VT re-benchmark. **Step D ([`docs/stepd-report.md` §3](stepd-report.md))
+   subsequently measured the N=8 seastar `hugetlbfs` vs THP bracket (R=3 paired: `huge/THP = 1.0123`
+   `[0.9589, 1.0657]`, 467,341 vs 461,800 IOPS; signed M3 verdict unchanged) and verified root
+   `nvme smart-log` (`T1=0, T2=0` throttle transitions).** B5 per-ring
    metrics include runtime-internal wakeup/cancel ops and snapshots are best-effort (B5 §8);
    per-ring qd/p99 here are evidence of the runtime path, not SLO numbers.
 8. **Pilot note:** 2 s pilot cells under-report `juring-group` N=8 (240 k, JIT/warmup

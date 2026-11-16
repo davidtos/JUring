@@ -107,3 +107,24 @@ and proposes, but does not take, a plan amendment.
 - runner sha256: `2a8f05269be4ca9c410eccba4d4afc64857477bb044a8b53108137109c76416d`
 - analyzer sha256: `dfdb877d3931d066b0ec4d2736ba213fdb04d7031776105162746dfaacd472ad`
 - freeze record: `scratch/stepd-lead/FREEZE.md`
+
+---
+
+## Amendment A1 (post-campaign, 2026-11-16 — Path B: `HugePages_Free` pre/post-process sampling vs unlinked temporary file backing)
+
+**Recorded:** 2026-11-16 (after the unattended campaign `bench/results/unattended-2026-11-16/` completed with `exit=0`).
+
+- **What happened:** In `bench/stepd/run-stepd.sh` (`run_cell`, lines 160–173), `hp0=$(huge_free)` is read **before** spawning `seastar_file_bench` and `hp1=$(huge_free)` is read **after** `seastar_file_bench` exits (plus a 2 s post-run sleep). Because `seastar::memory::configure` (`SeaStarRef/src/core/memory.cc:2016-2025`, `1360-1385`) backs `--hugepages <path>` with an **unlinked temporary file** (`file_desc::temporary(*hugetlbfs_path)`) mapped via `MAP_SHARED | MAP_POPULATE` (`allocate_hugetlbfs_memory`), the kernel releases all allocated hugepages on process termination before `hp1` is sampled. Consequently `hp0` and `hp1` both read `4608` (`hp_used = 0`) on all 15 `huge` runs, and `run-stepd.sh` emitted 15 warnings to `logs/warnings.log`.
+- **Why hugetlbfs backing was active during the runs:** (1) Every `huge` run's recorded JSON `argv` passes `--hugepages /mnt/hugepages-juring`; (2) Phase 0 verified `/mnt/hugepages-juring` mounted `rw,relatime,seclabel,gid=1000,mode=1770,pagesize=2M` with `HugePages_Free = 4608` (9 GiB) and `run-stepd.sh` `preflight()` verified write access by user `david` before Block A; (3) in `seastar::memory::configure`, `file_desc::temporary` + `fd.truncate` + `fd.map(MAP_SHARED | MAP_POPULATE)` has no silent fallback to anonymous THP — any failure throws an exception and aborts reactor startup before the benchmark runs.
+- **Path B disposition (no benchmark reruns):** Consistent with the frozen `bench/stepd/analyze_stepd.py` behavior (which keeps all `status=ok` rows and reports the warning count at the top of `stepd-summary.md`), all 15 `huge` runs are retained in the Block A bracket comparison in `docs/stepd-report.md`, and the pre/post-process `HugePages_Free` sampling limitation is explicitly disclosed alongside the table. No benchmark rerun is performed.
+
+
+---
+
+## Amendment A2 (post-campaign, 2026-11-16 — F14 per-run load gate implemented only at session preflight)
+
+**Recorded:** 2026-11-16, after independent verification of the campaign.
+
+- **What happened:** §2 pins "F14: abort the run if loadavg(1m) ≥ 1.6". `bench/stepd/run-stepd.sh` implements this as a **session-start preflight** check only; it does not re-check loadavg before each cell. Observed `loadavg_start(1m)` therefore reached `6.01` at the start of Block B (residual from the preceding, already-exited own M3N8 8-shard cell) and `0.81–4.47` at M3N8 starts (`3.97–6.27` at ends).
+- **Why the numbers remain valid:** the high values are the 1-minute exponentially weighted average of **our own just-exited** benchmark processes (no foreign process was observed; Block B single-shard engines were pinned to CPU 2), and the Block B `JUring/fio-matched` results are within 1–3 % of the signed M1 numbers. No rep is trimmed or re-classified after the fact.
+- **Disposition (Path B, no reruns):** all 75 Step D runs are kept; the discrepancy is disclosed in `docs/stepd-report.md` §5.2; future Step D-style runs must implement the per-run gate (or record it explicitly as session-only) before measurement.
