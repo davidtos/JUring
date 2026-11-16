@@ -27,19 +27,17 @@ starts from a documented contract instead of an implicit one.
 
 ## 2. What counts as the public API
 
-JUring is a Java module named `JUring`, which exports exactly two packages
-(`src/main/java/module-info.java`): `com.davidvlijmincx.lio.api` and
-`com.davidvlijmincx.lio.blackpanda`. The public API surface is defined by those exports, in
-three tiers.
+JUring is a library-first Java module named `JUring`, which exports a single supported package
+(`src/main/java/module-info.java`): `com.davidvlijmincx.lio.api`.
 
-### Tier 1 — supported: `com.davidvlijmincx.lio.api`
+### Supported public API — `com.davidvlijmincx.lio.api`
 
 **All public and protected types and their public/protected members in the exported package
 `com.davidvlijmincx.lio.api`.** This includes types nested inside them (for example
-`JuringFile.CancelStatus`, `MetricsJmx.Handle`). Tier 1 is what the compatibility promise in
-§4 covers.
+`JuringFile.CancelStatus`, `MetricsJmx.Handle`). This surface is what the compatibility promise
+in §4 covers.
 
-At the 0.1-SNAPSHOT baseline (`b75515e`) this package has **36 public top-level types**:
+In the 0.1-SNAPSHOT line this package has **36 public top-level types**:
 
 - **Entry points and core values** — `JUring`, `JUringBlocking`, `JuringFile`,
   `JuringInputStream`, `JuringOutputStream`, `FileDescriptor`, `Result`, `ResultConsumer`,
@@ -53,15 +51,8 @@ At the 0.1-SNAPSHOT baseline (`b75515e`) this package has **36 public top-level 
 - **Metrics / JMX** — `MetricsJmx`, `IoShardMetricsMXBean`, `RingGroupMetricsMXBean`.
 - **Errors** — `JuringException` (a checked `IOException` subtype).
 
-### Tier 2 — experimental: `com.davidvlijmincx.lio.blackpanda`
-
-**All public types and members in the exported package
-`com.davidvlijmincx.lio.blackpanda`.** These types are publicly visible so the package can be
-exercised, but they are **experimental**: there is **no compatibility guarantee**. They may
-change, be deprecated or be removed in a MINOR release, provided the change is described in
-`docs/UPGRADING.md`. At the 0.1-SNAPSHOT baseline the package has 7 public top-level types
-(`PartitionTailBuffer`, `RecordBatch`, `UringHistoricReader`, `UringLogSegment`,
-`UringPartitionLog`, `UringPartitionManager`, `UringSparseIndex`).
+*(Note: an earlier pre-release prototype package, `com.davidvlijmincx.lio.blackpanda`, was
+removed from the repository in 2026-11-16 to keep JUring strictly library-first.)*
 
 ### Internal — no guarantee
 
@@ -89,16 +80,14 @@ Additional rules:
   option additions are compatible and may appear in any MINOR release.
 - **Behavioural changes to documented semantics are MINOR changes**, even when every
   signature stays the same: if the docs promise a behaviour, changing it is not a PATCH.
-- **`1.0.0` freezes the Tier 1 surface.** After `1.0.0`, breaking changes to Tier 1 are only
-  allowed in a MAJOR release under standard SemVer.
-- **Tier 2 is exempt** from the compatibility rules; changes to it still get an
-  `UPGRADING.md` note in a MINOR release.
+- **`1.0.0` freezes the `com.davidvlijmincx.lio.api` surface.** After `1.0.0`, breaking changes
+  to the exported API are only allowed in a MAJOR release under standard SemVer.
 
 ## 4. Source and binary compatibility promise
 
-For Tier 1 (`com.davidvlijmincx.lio.api`):
+For the exported API (`com.davidvlijmincx.lio.api`):
 
-- **Source compatibility within a MINOR line:** code that compiles against a `0.y.z` Tier 1
+- **Source compatibility within a MINOR line:** code that compiles against a `0.y.z` public
   API compiles against a later `0.y.z'` release, **except** for documented deprecations
   (which remain for at least one MINOR release — see §5).
 - **Binary compatibility within a PATCH line:** a JAR built against `0.y.z` continues to run
@@ -108,12 +97,12 @@ For Tier 1 (`com.davidvlijmincx.lio.api`):
 - **Breaking changes require a MINOR (pre-1.0) or MAJOR (post-1.0) release** and, pre-1.0,
   an `UPGRADING.md` entry and, where feasible, a deprecation cycle.
 
-The promise applies to the **API surface**. It does not apply to the internal types of §2,
-to the Tier 2 package, or to any of the items in §6.
+The promise applies to the **exported API surface**. It does not apply to the internal types
+of §2 or to any of the items in §6.
 
 ## 5. Deprecation policy
 
-- Deprecated Tier 1 API is marked with `@Deprecated` **and** carries a Javadoc
+- Deprecated exported API is marked with `@Deprecated` **and** carries a Javadoc
   `@deprecated` paragraph that names the replacement and the release in which the API may be
   removed.
 - A deprecated API is kept for **at least one MINOR release** before removal.
@@ -142,8 +131,6 @@ This is the complete inventory: no other `@Deprecated` exists in `src/main`.
 - **Internal implementation details** — the package-private types of §2, class layouts, the
   native-layout structures, thread names, log formats, internal buffer sizes and ring-layout
   choices — may change at any time.
-- **Tier 2 (`com.davidvlijmincx.lio.blackpanda`)** has no compatibility guarantee beyond the
-  `UPGRADING.md` notice requirement in MINOR releases.
 - **JMX registration details** beyond what is explicitly documented are not promised; see
   §8.
 - **Undocumented behaviour in general** is not promised: only what the Javadoc and these docs
@@ -174,9 +161,9 @@ documented `IllegalStateException` where the type guards against it.
 
 The MXBean interfaces [`IoShardMetricsMXBean`](../src/main/java/com/davidvlijmincx/lio/api/IoShardMetricsMXBean.java)
 and [`RingGroupMetricsMXBean`](../src/main/java/com/davidvlijmincx/lio/api/RingGroupMetricsMXBean.java)
-are **Tier 1**: their Java-visible interfaces and documented attribute semantics follow this
+are part of the **exported API**: their Java-visible interfaces and documented attribute semantics follow this
 policy. [`MetricsJmx`](../src/main/java/com/davidvlijmincx/lio/api/MetricsJmx.java) is also
-Tier 1, and its Javadoc **explicitly documents** the `ObjectName` scheme and registration
+the exported API, and its Javadoc **explicitly documents** the `ObjectName` scheme and registration
 semantics as frozen; because they are explicitly documented, that documented scheme is
 covered. JMX details that are **not** explicitly documented (for example which `MBeanServer`
 an application uses, how a console presents the attributes, or attach/agent configuration)
@@ -184,7 +171,7 @@ are **not** part of the promise.
 
 ## 9. Reporting a compatibility problem
 
-If a release breaks a Tier 1 source, binary or documented-behaviour promise of this policy,
+If a release breaks an exported-API source, binary or documented-behaviour promise of this policy,
 report it at [github.com/davidtos/JUring](https://github.com/davidtos/JUring) with the JUring
 version, the affected type/member, and a minimal reproduction. The fix or correction is
 recorded in `docs/UPGRADING.md`.
@@ -198,9 +185,8 @@ Checked against the tree at `b75515e` (0.1-SNAPSHOT, before B9 changes):
 | version `0.1-SNAPSHOT` | `pom.xml`: `<version>0.1-SNAPSHOT</version>` |
 | no releases / no tags | `git tag` prints nothing; no release artifacts in the repo |
 | repository URL | `git remote -v` → `https://github.com/davidtos/JUring.git` |
-| exported packages | `src/main/java/module-info.java` exports `com.davidvlijmincx.lio.api` and `com.davidvlijmincx.lio.blackpanda` |
+| exported packages | `src/main/java/module-info.java` exports `com.davidvlijmincx.lio.api` |
 | 36 public types in `lio.api` | source inspection of top-level `public` type declarations |
-| 7 public types in `lio.blackpanda` | source inspection of top-level `public` type declarations |
 | internal type list | source inspection of top-level package-private type declarations |
 | exactly one `@Deprecated` | source grep of `src/main/java`: only `JUring.prepareCancel(long)` |
 | no hosted CI | no `.github/` or other CI configuration in the repo (`docs/b9-design.md` §7) |

@@ -30,15 +30,17 @@ version.
 | `MINOR` | additions; breaking changes only if unavoidable, with a deprecation cycle where feasible | new backward-compatible functionality | **yes for breaking changes/deprecations** |
 | `MAJOR` | reserved for `1.0.0` (API freeze) | breaking changes only here | **yes** |
 
-Tier 1 is `com.davidvlijmincx.lio.api` (all public/protected types and members); Tier 2 is
-the experimental `com.davidvlijmincx.lio.blackpanda` package, which has no compatibility
-guarantee but is still noted here when it changes; package-private internals are not part of
-the API at all.
+The supported public API is `com.davidvlijmincx.lio.api` (all public/protected types and
+members); package-private internals are not part of the API at all. (An earlier pre-release
+prototype package, `com.davidvlijmincx.lio.blackpanda`, was removed from the repository in
+2026-11-16 to keep JUring strictly library-first.)
 
-## 2. Capability history (all additive — no public API has been removed)
+## 2. Capability history (additive; one pre-release prototype package removed)
 
-The 0.1-SNAPSHOT line grew by adding capabilities. Each step below added Tier 1 surface and
-**removed none**; no existing signature was changed incompatibly.
+The 0.1-SNAPSHOT line grew additively. Each capability step below added surface and none
+changed an existing signature incompatibly; the only removal is the pre-release prototype
+package `com.davidvlijmincx.lio.blackpanda` (D12, 2026-11-16), which carried no compatibility
+guarantee.
 
 | step | capability added | notable public API | compatibility |
 |---|---|---|---|
@@ -48,6 +50,7 @@ The 0.1-SNAPSHOT line grew by adding capabilities. Each step below added Tier 1 
 | **B4** | multi-ring / shard runtime (L2 basics) | `IoShard`, `RingGroup`, `ShardOptions`, `ShardTask`, `ShardContext`, `CompletionHandler`, `ShardStats`; `JUringBlocking` can adopt a `RingGroup` | additive |
 | **B5** | observability | `JUring.ringMetrics()` + `RingMetrics`, `LatencyHistogram`/`LatencySnapshot`, `IoShard.metrics()`/`RingGroup.metrics()` + `ShardMetrics`/`GroupMetrics`, JMX (`MetricsJmx`, `IoShardMetricsMXBean`, `RingGroupMetricsMXBean`), benchmark JSON 1.1 | additive |
 | **B6** | buffered I/O parity + durability | `DurabilityMode`, `FadviseAdvice` (+ `JuringFile.fadvise`), durability-aware stream `flush`/`close`, `GroupCommit`/`GroupCommitOptions`/`GroupCommitStats` | additive |
+| **D12** | scope enforcement (library-first) | removed the pre-release prototype package `com.davidvlijmincx.lio.blackpanda` (8 public types; no compatibility guarantee) | **pre-release removal** — no supported `lio.api` API changed |
 
 For the design/evidence record of each step see `docs/b1-report.md`, `docs/b2-report.md`,
 `docs/b3-design.md`, `docs/b4-report.md`, `docs/b5-report.md` and `docs/b6-report.md`.
@@ -82,7 +85,7 @@ No public API has been removed from the 0.1-SNAPSHOT line so far.
 - **From the pre-rewrite JUring API** (the older socket operations and primitives that were
   removed before the current library focus): that API was **never released**, so there is no
   supported migration path to document. If you have code against an old unreleased snapshot,
-  port it to the current Tier 1 API and treat it as a rewrite, not an upgrade.
+  port it to the current public API and treat it as a rewrite, not an upgrade.
 
 ## 5. Template for future entries
 
@@ -122,11 +125,7 @@ After:
 
 ### Additions
 
-- <new Tier 1 API> — <what it is for>
-
-### Tier 2 (experimental) changes
-
-- <blackpanda change; no compatibility guarantee, listed for visibility>
+- <new public API> — <what it is for>
 ````
 
 ## 6. Reporting
