@@ -189,16 +189,11 @@ final class LibCDispatcher {
      * clear {@link UnsupportedOperationException} instead of a link error.
      */
     static boolean isSupportedPlatform() {
-        String os = System.getProperty("os.name", "");
-        if (!"Linux".equals(os)) {
-            return false;
-        }
-        String arch = System.getProperty("os.arch", "");
-        return "amd64".equals(arch) || "x86_64".equals(arch) || "aarch64".equals(arch);
+        return PlatformSupport.isSupportedPlatform();
     }
 
     static String platformDescription() {
-        return System.getProperty("os.name", "?") + "/" + System.getProperty("os.arch", "?");
+        return PlatformSupport.description();
     }
 
     private static final LibCDispatcher INSTANCE = new LibCDispatcher();

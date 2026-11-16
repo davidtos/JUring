@@ -91,6 +91,33 @@ class IoUringOverflowTest {
     }
 
     @Test
+    void deepOverflowNeedsRepeatedFlushesAndIsFullyDrained() {
+        // 100 completions on a depth-8 ring = 16 CQ slots + 84 overflow-list entries. A single
+        // flush exposes only one CQ-worth of entries, so the risk condition must stay true while
+        // outstanding work exceeds the CQ depth; otherwise a non-blocking consumer stops at 32.
+        try (JUring ring = new JUring(QUEUE_DEPTH)) {
+            int total = 100;
+            int prepared = 0;
+            while (prepared < total) {
+                ring.prepareNop();
+                prepared++;
+                if (prepared % QUEUE_DEPTH == 0) {
+                    ring.submit();
+                }
+            }
+            ring.submit();
+
+            int reaped = 0;
+            for (int pass = 0; pass < 200 && ring.ringMetrics().inFlight() > 0; pass++) {
+                reaped += ring.forEachBatchResult(1024, result -> { });
+            }
+
+            assertEquals(total, reaped, "deep overflow must be drained by repeated non-blocking peeks");
+            assertEquals(0L, ring.ringMetrics().inFlight());
+        }
+    }
+
+    @Test
     void minCompleteBeyondCqSizeIsRejectedInsteadOfHanging() {
         try (JUring ring = new JUring(QUEUE_DEPTH)) {
             int tooMany = QUEUE_DEPTH * 2 + 1;

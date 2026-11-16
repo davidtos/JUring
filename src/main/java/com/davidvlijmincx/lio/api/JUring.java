@@ -55,6 +55,9 @@ public class JUring implements AutoCloseable {
      * @return whether a ring can be created in this process
      */
     public static boolean isSupported() {
+        if (!PlatformSupport.isSupportedPlatform()) {
+            return false;
+        }
         return NativeDispatcher.isSupported();
     }
 
@@ -155,6 +158,7 @@ public class JUring implements AutoCloseable {
      * @throws RuntimeException when {@code io_uring_setup} fails
      */
     public JUring(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringFlags) {
+        PlatformSupport.requireSupportedPlatform();
         ioUring = NativeDispatcher.getUringInstance(queueDepth, sqThreadIdleMs, ioUringFlags);
         this.ownerThread = Thread.currentThread();
         registeredBuffers = new ArrayList<>();

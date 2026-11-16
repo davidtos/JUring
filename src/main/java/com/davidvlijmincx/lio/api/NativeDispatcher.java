@@ -26,10 +26,7 @@ final class NativeDispatcher {
      * syscall number.
      */
     private static void requireSupportedPlatform() {
-        if (!LibCDispatcher.isSupportedPlatform()) {
-            throw new UnsupportedOperationException("JUring requires Linux on x86-64 (amd64) or aarch64; running on "
-                    + LibCDispatcher.platformDescription());
-        }
+        PlatformSupport.requireSupportedPlatform();
     }
 
     /**
@@ -40,7 +37,7 @@ final class NativeDispatcher {
      * @return whether a minimal {@code io_uring_setup} probe succeeded
      */
     static boolean isSupported() {
-        if (!LibCDispatcher.isSupportedPlatform()) {
+        if (!PlatformSupport.isSupportedPlatform()) {
             return false;
         }
         Boolean cached = ioUringSupported;

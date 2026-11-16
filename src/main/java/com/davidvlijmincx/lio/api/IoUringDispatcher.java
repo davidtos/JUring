@@ -197,9 +197,10 @@ final class IoUringDispatcher implements AutoCloseable {
     private int sqeTail;
     private int inFlightCount;
     /**
-     * Set when more SQEs are prepared than the CQ ring can hold, i.e. when the kernel may park
-     * completions in its CQ overflow list. Cleared after a non-blocking GETEVENTS flush. Used to
-     * keep the empty-poll fast path syscall-free while still draining overflow completions.
+     * Sticky "the kernel may be holding completions in its CQ-overflow list" flag. Set when
+     * more requests are outstanding than the CQ can hold, or when a full CQ is observed; cleared
+     * only when a non-blocking flush finds nothing left or all in-flight work is reaped. It must
+     * not be cleared after a single flush: deep overflow needs one flush per CQ-worth of entries.
      */
     private boolean overflowRisk;
 
@@ -345,10 +346,9 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     static IoUringDispatcher create(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringOptions) {
-        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
-
         int combinedFlags = IoUringOptions.combineOptions(ioUringOptions);
         validateSetupFlags(combinedFlags);
+        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
         int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, combinedFlags);
         if (ret < 0) {
             dispatcher.close();
@@ -396,6 +396,10 @@ final class IoUringDispatcher implements AutoCloseable {
                 "hybrid IOPOLL is not implemented");
         rejectFlag(flags, IoUringOptions.IORING_SETUP_IOPOLL,
                 "IOPOLL is not supported/tested in 0.1.0");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_R_DISABLED,
+                "a disabled ring has no enable API in this library");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_ATTACH_WQ,
+                "use getSharedWorkerRing(); ATTACH_WQ is set internally by that API");
     }
 
     private static void rejectFlag(int flags, IoUringOptions option, String reason) {
@@ -473,9 +477,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         sqeTail = tail + 1;
         inFlightCount++;
-        if (inFlightCount >= cqRingEntries) {
-            // More outstanding requests than CQ slots: the kernel may park completions in
-            // the CQ overflow list, so the next empty reap must flush it explicitly.
+        if (inFlightCount > cqRingEntries) {
             overflowRisk = true;
         }
         counters.inc(RingCounters.SQES_PREPARED);
@@ -901,7 +903,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return available;
             }
 
-            if (overflowRisk && available < waitNr) {
+            if (hasOverflowRisk() && available < waitNr) {
                 pollCq();
                 cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                 cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -984,7 +986,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            if (overflowRisk) {
+            if (hasOverflowRisk()) {
                 // Completions may be parked in the kernel overflow list; drain it with a
                 // non-blocking GETEVENTS enter before committing to a blocking wait.
                 pollCq();
@@ -1007,6 +1009,9 @@ final class IoUringDispatcher implements AutoCloseable {
     void cqAdvance(int count) {
         if (count <= 0) return;
         inFlightCount -= count;
+        if (inFlightCount <= 0) {
+            overflowRisk = false;
+        }
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
     }
@@ -1021,7 +1026,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            if (overflowRisk) {
+            if (hasOverflowRisk()) {
                 pollCq();
                 continue;
             }
@@ -1450,6 +1455,10 @@ final class IoUringDispatcher implements AutoCloseable {
      * @return number of completions actually reaped
      */
     private int reapAvailable(int head, int available, int maxReap, ResultConsumer consumer) {
+        if (available >= cqRingEntries && cqRingEntries > 0) {
+            // The CQ was full: the kernel may have parked further completions in its overflow list.
+            overflowRisk = true;
+        }
         if (available <= 0) {
             return 0;
         }
@@ -1473,6 +1482,9 @@ final class IoUringDispatcher implements AutoCloseable {
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -1482,7 +1494,7 @@ final class IoUringDispatcher implements AutoCloseable {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         int reaped = reapAvailable(head, tail - head, batchSize, consumer);
-        if (reaped == 0 && inFlightCount > 0 && overflowRisk) {
+        if (reaped == 0 && inFlightCount > 0 && hasOverflowRisk()) {
             // Empty visible CQ but outstanding work may have overflowed; drain the kernel
             // overflow list with a non-blocking GETEVENTS enter and retry once.
             if (pollCq() > 0) {
@@ -1545,6 +1557,9 @@ final class IoUringDispatcher implements AutoCloseable {
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -1554,7 +1569,7 @@ final class IoUringDispatcher implements AutoCloseable {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         int available = tail - head;
-        if (available <= 0 && inFlightCount > 0 && overflowRisk) {
+        if (available <= 0 && inFlightCount > 0 && hasOverflowRisk()) {
             if (pollCq() > 0) {
                 head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                 tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1620,7 +1635,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            if (overflowRisk) {
+            if (hasOverflowRisk()) {
                 // Outstanding work exceeds the visible CQ: drain the kernel overflow list
                 // before blocking, otherwise a wait with min_complete > 0 can hang forever.
                 pollCq();
@@ -1670,7 +1685,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            if (overflowRisk && available < minComplete) {
+            if (hasOverflowRisk() && available < minComplete) {
                 // Drain overflow/deferred completions with a non-blocking enter before a
                 // blocking wait, so min_complete can always be satisfied.
                 pollCq();
@@ -2027,20 +2042,35 @@ final class IoUringDispatcher implements AutoCloseable {
             return 0;
         }
         counters.inc(RingCounters.CQ_FLUSH_ENTERS);
+        boolean entered = false;
         try {
             if (enterObserved(enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase) < 0L) {
                 counters.inc(RingCounters.SUBMIT_ERRORS);
             } else {
-                // The kernel flushed any CQ-overflow list entries during this enter; the
-                // risk flag can be cleared until in-flight work again exceeds the CQ depth.
-                overflowRisk = false;
+                entered = true;
             }
         } catch (Throwable ignored) {
             // A disabled/broken ring is force-closed by the caller; polling is best effort.
         }
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-        return tail - head;
+        int available = tail - head;
+        if (entered && available <= 0) {
+            // A successful flush with room in the CQ that exposes nothing means the overflow
+            // list was empty; only then is it safe to drop the sticky overflow-risk flag.
+            overflowRisk = false;
+        }
+        return available;
+    }
+
+    /**
+     * Whether the kernel may be holding completions in its CQ-overflow list: completions become
+     * unreapable without an explicit flush when more requests are outstanding than the CQ can
+     * hold. This is computed, not a one-shot flag, because a single flush may expose only one
+     * CQ-worth of entries and deep overflow (more than one CQ size) needs repeated flushes.
+     */
+    private boolean hasOverflowRisk() {
+        return overflowRisk;
     }
 
     private final ResultConsumer closeResultConsumer = result -> {        if ((int) result.result() == -ECANCELED) {

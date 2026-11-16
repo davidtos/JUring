@@ -43,6 +43,8 @@ class IoUringSetupFlagsTest {
         assertRejected(IORING_SETUP_REGISTERED_FD_ONLY, "IORING_SETUP_REGISTERED_FD_ONLY");
         assertRejected(IORING_SETUP_HYBRID_IOPOLL, "IORING_SETUP_HYBRID_IOPOLL");
         assertRejected(IORING_SETUP_IOPOLL, "IORING_SETUP_IOPOLL");
+        assertRejected(IORING_SETUP_R_DISABLED, "IORING_SETUP_R_DISABLED");
+        assertRejected(IORING_SETUP_ATTACH_WQ, "IORING_SETUP_ATTACH_WQ");
     }
 
     @Test
@@ -75,6 +77,12 @@ class IoUringSetupFlagsTest {
             assertThrows(IllegalArgumentException.class,
                     () -> parent.getSharedWorkerRing(8, IORING_SETUP_NO_MMAP));
         }
+    }
+
+    @Test
+    void platformGateIsSafeBeforeNativeLoading() {
+        assertTrue(PlatformSupport.isSupportedPlatform(), "tests run on a supported Linux host");
+        assertTrue(PlatformSupport.description().contains("Linux"));
     }
 
     @Test
