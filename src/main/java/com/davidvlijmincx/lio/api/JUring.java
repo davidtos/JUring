@@ -76,7 +76,11 @@ public class JUring implements AutoCloseable {
     public static final int IORING_LINK_TIMEOUT_UPDATE = 1 << 4;
     /** {@code IORING_TIMEOUT_ETIME_SUCCESS}: an expired timeout completes with {@code 0} instead of {@code -ETIME}. */
     public static final int IORING_TIMEOUT_ETIME_SUCCESS = 1 << 5;
-    /** {@code IORING_TIMEOUT_MULTISHOT}: the timeout re-arms and can complete more than once. */
+    /**
+     * {@code IORING_TIMEOUT_MULTISHOT}: the timeout re-arms and can complete more than once.
+     * <b>Not supported in 0.1.0</b>; {@link #prepareTimeout(MemorySegment, int, int)} rejects it
+     * because the completion ledger models exactly one CQE per SQE.
+     */
     public static final int IORING_TIMEOUT_MULTISHOT = 1 << 6;
 
     /** {@code IORING_ASYNC_CANCEL_ALL}: cancel every matching request, not just one. */
@@ -2113,6 +2117,14 @@ public class JUring implements AutoCloseable {
         }
         if (count < 0) {
             throw new IllegalArgumentException("Invalid timeout count: " + count);
+        }
+        if ((flags & IORING_TIMEOUT_MULTISHOT) != 0) {
+            // A multishot timeout posts one completion per expiration for a single SQE; the
+            // library's one-SQE/one-CQE in-flight ledger and completion routing cannot represent
+            // that in 0.1.0, and unmodelled extra CQEs would be lost. Reject it rather than
+            // silently corrupting accounting.
+            throw new IllegalArgumentException("IORING_TIMEOUT_MULTISHOT is not supported in 0.1.0 "
+                    + "(a multishot timeout posts multiple completions for one SQE; the completion ledger is one-SQE/one-CQE)");
         }
         long sqe = getSqe(sqeFlags, false);
         long opId = opSeq++;

@@ -88,7 +88,9 @@ Unprivileged `io_uring` is a security-sensitive interface and many environments 
 - Some hardened/gVisor/Android/ChromeOS environments disable io_uring entirely.
 
 Libraries should call `JUring.isSupported()` and fall back to `java.nio` when it returns
-`false`; do not assume io_uring availability in a portable server binary.
+`false`; do not assume io_uring availability in a portable server binary. (`isSupported()` and
+the `JUring` constructor are gated before the native layer loads; other public types are
+Linux-only and must only be reached after that check.)
 
 ## O_DIRECT, alignment and memory locking
 

@@ -22,7 +22,18 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
    `IllegalArgumentException` (previously an unbounded hang). If callers genuinely need
    "wait for at least N total completions across calls", expose an explicit helper instead of
    overloading the CQ-wait primitive.
-5. **Raw-read user_data collision.** The raw `JUring.prepareRead(..., MemorySegment)` path still
+5. **Zero-in-flight waits block.** `waitForResult`/`waitForBatchResult(min>0)` with no requests
+   in flight wait for a completion that cannot arrive. This is arguably correct "wait for the
+   next completion" semantics, but a short-circuit or documented misuse error would be kinder.
+6. **Non-Linux error paths outside the entry points.** `isSupported()` and the `JUring`
+   constructor are gated before the native layer, but other public types (`FileDescriptor`,
+   `IoShard`, `JUringBlocking`) still touch `NativeDispatcher.C` and would fail class init on a
+   non-Linux JVM. Acceptable for a Linux-only library that documents "check isSupported() first";
+   revisit if multi-platform probing is ever needed.
+7. **Multishot timeouts.** `IORING_TIMEOUT_MULTISHOT` is rejected in 0.1.0 because one SQE can
+   post multiple CQEs and the completion ledger is one-SQE/one-CQE. Implement a multi-completion
+   ledger slot before enabling it (same modelling issue as provided buffers/multishot, B7).
+8. **Raw-read user_data collision.** The raw `JUring.prepareRead(..., MemorySegment)` path still
    uses the buffer address in `user_data`, so two concurrent non-fixed reads into the same
    segment collide (B3 F1, fixed for `JuringFile` in B10 but documented for the raw API). Give
    the raw path unique op ids plus a side table.

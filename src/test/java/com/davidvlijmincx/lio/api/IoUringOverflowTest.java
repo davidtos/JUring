@@ -146,15 +146,35 @@ class IoUringOverflowTest {
 
             long cpuBefore = bean.getCurrentThreadCpuTime();
             long start = System.nanoTime();
-            int reaped = ring.waitForBatchResult(16, result -> { });
+            // Deliberately the List overload: it is the waitCqeNr path that busy-spun. The
+            // consumer overload uses waitForBatchResult(min, consumer) and would not guard it.
+            java.util.List<Result> results = ring.waitForBatchResult(16);
             long wallNanos = System.nanoTime() - start;
             long cpuNanos = bean.getCurrentThreadCpuTime() - cpuBefore;
 
-            assertEquals(16, reaped);
+            assertEquals(16, results.size());
+            for (Result result : results) {
+                result.close();
+            }
             assertTrue(wallNanos >= 1_200_000_000L, "the wait must actually block for the timeouts");
             assertTrue(cpuNanos < 600_000_000L,
                     () -> "blocking wait burned CPU (busy-spin): cpu=" + (cpuNanos / 1_000_000) + " ms, wall="
                             + (wallNanos / 1_000_000) + " ms");
+        }
+    }
+
+    @Test
+    void multishotTimeoutIsRejectedBeforeConsumingAnSqe() {
+        try (JUring ring = new JUring(QUEUE_DEPTH);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment timespec = arena.allocate(JUring.TIMESPEC_BYTES, 8);
+            timespec.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0L, 1L);
+            timespec.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8L, 1_000_000L);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareTimeout(timespec, 1, JUring.IORING_TIMEOUT_MULTISHOT));
+            assertEquals(0L, ring.ringMetrics().inFlight(),
+                    "a rejected multishot timeout must not consume an SQE/in-flight slot");
         }
     }
 
