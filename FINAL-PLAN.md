@@ -1,6 +1,6 @@
 # JUring Foundation Plan v2 — Ring-Level Completion Multiplexing (`B10a`) + Block-Layer I/O Priority (`B10b`)
 
-**Status:** reviewed and re-scoped 2026-11-16 (session 14) against HEAD `f7c9fbc`. This plan now contains **only the two capabilities requested**: **B10a** ring-level completion multiplexing and **B10b** `ioprio`. The previous draft's Part 3 (developer-focused `README.md` overhaul, `B10c`) is **removed from scope**; `README.md`/`BENCHMARK.md` stay exactly as published in Step E.
+**Status:** reviewed and re-scoped 2026-11-16 (session 14) against HEAD `f7c9fbc`, and **cross-checked against the in-repo Seastar reference** (`SeaStarRef/` @ `04b1c04d`, §2b). This plan now contains **only the two capabilities requested**: **B10a** ring-level completion multiplexing and **B10b** `ioprio`. The previous draft's Part 3 (developer-focused `README.md` overhaul, `B10c`) is **removed from scope**; `README.md`/`BENCHMARK.md` stay exactly as published in Step E.
 
 ---
 
@@ -36,6 +36,25 @@
 
 ---
 
+## 2b. Cross-check against the Seastar reference (`SeaStarRef/` @ `04b1c04d`)
+
+*Added on review feedback: both features were checked against the in-repo Seastar checkout, the project's comparison baseline. Paths below are gitignored local checkout paths, quoted as evidence (not links).*
+
+| Question | Seastar (evidence) | JUring today | Consequence for this plan |
+|---|---|---|---|
+| Many file handles on one ring | **Yes, by design.** One ring per reactor/shard (`SeaStarRef/src/core/reactor_backend.cc:1432`, `:1835`) and every `posix_file_impl` in that shard submits through the shard's `io_queue` (`SeaStarRef/src/core/file.cc:149`, `:601`). | **No** — `checkRingOwnership` rejects it ([`JuringFile.java:1615`](src/main/java/com/davidvlijmincx/lio/api/JuringFile.java#L1615-L1622)). | B10a closes a real architectural gap vs Seastar; the target semantics are not invented. |
+| Completion routing with many files | Per-request owner identity: SQE `user_data` is a `kernel_completion*`; the CQE is dispatched straight to it (`SeaStarRef/src/core/reactor_backend.cc:1358`, `:1703`) — O(1), no scan. | Encoded `user_data` (8-bit type + 56-bit payload; fixed ops: 16-bit buffer index + 40-bit op id — [`UserData.java:8-25`](src/main/java/com/davidvlijmincx/lio/api/UserData.java#L8-L25)), then a per-file ledger scan of up to 1024 slots ([`JuringFile.java:1725`](src/main/java/com/davidvlijmincx/lio/api/JuringFile.java#L1725-L1766)). | v1 routing = per-handle consumer + attached-file scan (**Option A**: no user_data wire-format change, no raw-user break). Seastar's design is the end state: **Option B** (reserve owner bits in `user_data`) or **Option C** (ring-level handle→owner table) only if an M2 stream-copy profile shows the scan matters — not in v1. |
+| Cancellation granularity | Per `io_intent`: cancel stops the requests pinned to that intent (`SeaStarRef/include/seastar/core/io_intent.hh:31-39`, `SeaStarRef/src/core/io_queue.cc:373-437`); no ring-wide "cancel everything". | `cancelAll` uses ring-wide `prepareCancelAny()` because the ring is exclusive ([`JuringFile.java:973`](src/main/java/com/davidvlijmincx/lio/api/JuringFile.java#L973)). | Plan keeps `cancelAny` only while the ring is exclusive, per-handle cancels otherwise — same granularity intent as Seastar. |
+| Closing one handle | `posix_file_impl::close()` refcounts the fd and closes only after outstanding ops (`SeaStarRef/src/core/file.cc:420-432`); it never touches other files' requests. | `close()` abandons its own work when the ring carries more in-flight ([`JuringFile.java:1492`](src/main/java/com/davidvlijmincx/lio/api/JuringFile.java#L1492-L1505)). | Plan: drain/cancel own only, never siblings. The bounded deadline differs from Seastar's wait-for-refcount — document it. |
+| Priority / QoS | **No `ioprio` usage at all** — 0 hits across `SeaStarRef/src/`, `SeaStarRef/include/`, `SeaStarRef/apps/`. Priority is user-space: per-class shares/token buckets in `io_queue` (`SeaStarRef/include/seastar/core/io_queue.hh:72-73`, `:129`) plus `io_intent` cancellation. | `ioprio` SQE field writable but never set ([`Sqe.java:18`](src/main/java/com/davidvlijmincx/lio/api/Sqe.java#L18), [`Sqe.java:94`](src/main/java/com/davidvlijmincx/lio/api/Sqe.java#L94)). | **B10b is not a Seastar-parity feature**: it is a lower-level block-layer hint that Seastar does not use. The comparable Seastar capability is M4 (`io_priority_class`/`io_queue`), which stays closed. Do not present B10b in the comparison matrix as "matches Seastar". |
+| Threading model | One reactor thread owns the ring; files are shard-local. | One owner thread per ring (unchanged). | B10a adds no synchronization; consistent. |
+
+**Direct answers to "did you cross-check with Seastar?"** — yes, after the original review:
+1. **B10a** does match Seastar's file/ring architecture (one ring, many files), and the plan now records Seastar's O(1) per-request routing as the eventual end state while keeping the minimal-change Option A for v1.
+2. **B10b has no Seastar precedent** — Seastar never touches `ioprio`; its priority mechanism is in-reactor `io_queue` scheduling (M4, closed). B10b must therefore be justified and documented as a raw-kernel passthrough, not as parity.
+
+---
+
 ## 3. B10a — Ring-level completion multiplexing
 
 ### 3.1 Goal
@@ -54,7 +73,7 @@ Allow any number of `JuringFile`-based handles on one `JUring` in its owner thre
    - **sibling path** — scan the other attached files and deliver to the owner's ledger (`onCompletion`), decrementing *that* file's `inFlight` and counters;
    - **stray timers** — `TIMEOUT`/`LINK_TIMEOUT` completions that match no ledger stay ignored, as today ([`onCompletion` `:1757-L1763`](src/main/java/com/davidvlijmincx/lio/api/JuringFile.java#L1757-L1763));
    - **raw foreign work** — anything else increments the **caller's** `foreignCompletions`, so the existing guard and error text still fire.
-   - *Correction to v1:* `ring.sharedFileCompletionConsumer()` as drafted has no caller identity, which is needed both for the fast path and for foreign attribution. Use the per-file consumer above (allocated once, zero allocation per reap).
+   - *Correction to v1:* `ring.sharedFileCompletionConsumer()` as drafted has no caller identity, which is needed both for the fast path and for foreign attribution. Use the per-file consumer above (allocated once, zero allocation per reap). *Cross-check (§2b):* Seastar routes each CQE straight to a per-request `io_completion*` in `user_data`; v1 deliberately takes Option A (registry scan) so the `user_data` wire format that raw `JUring.prepare*` users rely on does not change.
 
 3. **Ownership guard.** `checkRingOwnership` compares `ring.inFlightCount()` with `ring.attachedFilesInFlightCount()` instead of `this.inFlight`; update the exception message to say "un-reaped raw ring work" rather than "another handle". Raw `prepareNop`/`prepare*` work remains guarded.
 
@@ -116,7 +135,7 @@ Let callers express a per-request block-layer priority via the `io_uring_sqe.iop
 
 ### 4.4 Semantics caveats (must be documented, not glossed over)
 
-- **Effect is a hint for the block layer, not QoS.** It only changes ordering/latency whenever the active I/O scheduler is priority-aware. On this host `nvme1n1` runs `[none] mq-deadline kyber bfq` — under `none` the kernel accepts the value but **nothing observable changes**. Verification must therefore assert encoding + kernel acceptance, never a throughput effect, unless the scheduler is switched (a host change, out of scope).
+- **Effect is a hint for the block layer, not QoS.** It only changes ordering/latency whenever the active I/O scheduler is priority-aware. On this host `nvme1n1` runs `[none] mq-deadline kyber bfq` — under `none` the kernel accepts the value but **nothing observable changes**. Verification must therefore assert encoding + kernel acceptance, never a throughput effect, unless the scheduler is switched (a host change, out of scope). Seastar itself never sets `ioprio` (§2b), so this is an additive kernel passthrough, not a parity feature.
 - `IOPRIO_CLASS_RT` may require privileges on some kernels (`CAP_SYS_ADMIN` / `CAP_SYS_NICE` depending on version) — document that failures surface as request errors and that `BE`/`IDLE` are the unprivileged classes.
 - This does not reopen M4: no scheduler, no fair queuing, no weights; isolation guidance stays "separate rings/shards or OS-level controls" ([`docs/m4-decision.md`](docs/m4-decision.md)).
 - Relevant docs to touch: README/`docs/examples.md` note, `JuringFile` Javadoc, `docs/api-stability.md` (a note, as the API is additive and pre-1.0).
@@ -149,3 +168,4 @@ Let callers express a per-request block-layer priority via the `io_uring_sqe.iop
 - **B10b timed ops:** priority is written to the target SQE **before** the `LINK_TIMEOUT` companion is prepared (v1's "apply on the last prepared SQE" would have tagged the companion).
 - **B10b honesty:** added the `[none]` scheduler caveat (effect not observable on this host), RT privilege caveat, and an SQE-level test hook as the real verification instead of a claimed performance effect.
 - **Coverage:** tests now include `GroupCommit`, cross-file timed pairs, foreign-raw-work guard, and zero-allocation dispatcher checks.
+- **Seastar cross-check (§2b):** B10a matches Seastar's one-ring-many-files architecture; Seastar's O(1) per-request `user_data` routing is recorded as follow-up Option B/C, with Option A kept for v1. Seastar cancels per `io_intent` (supports the per-handle cancel scope) and closes files by refcount. Seastar has **zero** `ioprio` usage, so B10b is explicitly framed as an additive kernel passthrough, **not** a Seastar-parity feature.
