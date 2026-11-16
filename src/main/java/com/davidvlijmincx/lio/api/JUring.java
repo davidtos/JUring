@@ -359,6 +359,11 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Invalid read buffer pool configuration: bufferSize=" + bufferSize + ", capacity=" + capacity);
         }
         if (readBufferPool != null) {
+            int outstanding = readBufferPool.outstanding();
+            if (outstanding > 0) {
+                throw new IllegalStateException("Cannot replace the read buffer pool while "
+                        + outstanding + " pooled buffer(s) are still checked out");
+            }
             readBufferPool.close();
         }
         readBufferPool = new ReadBufferPool(capacity, bufferSize);
@@ -1347,8 +1352,16 @@ public class JUring implements AutoCloseable {
         if (readSize < 0 || readSize > readBufferPool.bufferSize()) {
             throw new IllegalArgumentException("Read size " + readSize + " out of range (0.." + readBufferPool.bufferSize() + ")");
         }
-        long sqe = getRwSqe(flags, fixedFile);
+        // Check the buffer out before taking an SQE: an exhausted pool must not consume a
+        // submission-queue slot (or an in-flight ledger slot) that is never submitted.
         long address = readBufferPool.checkOut();
+        long sqe;
+        try {
+            sqe = getRwSqe(flags, fixedFile);
+        } catch (RuntimeException e) {
+            readBufferPool.checkIn(address);
+            throw e;
+        }
         long userData = UserData.encode(OperationType.READ_POOLED, address);
 
         ioUring.prepareRead(sqe, fdOrIndex, address, readSize, offset);

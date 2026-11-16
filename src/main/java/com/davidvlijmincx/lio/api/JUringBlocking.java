@@ -10,6 +10,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
@@ -84,6 +85,12 @@ public class JUringBlocking implements AutoCloseable {
     private volatile int registeredBufMask;
     private volatile int[] freeBufBuffer;
     private volatile long[] freeBufSeq;
+    /**
+     * Per-index ownership ledger for the registered-buffer pool (1 = checked out). Prevents a
+     * double check-in from duplicating an index in the free queue and handing the same buffer
+     * to two concurrent callers.
+     */
+    private volatile AtomicIntegerArray bufferInUse;
     @SuppressWarnings("unused")
     private volatile long freeBufHead;
     @SuppressWarnings("unused")
@@ -1194,6 +1201,15 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalStateException when this instance is closed
      */
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
+        if (size <= 0 || nrOfBuffers <= 0) {
+            throw new IllegalArgumentException("Invalid registered buffer configuration: size=" + size + ", nrOfBuffers=" + nrOfBuffers);
+        }
+        if (registeredBuffers != null) {
+            throw new IllegalStateException("Buffers are already registered on this JUringBlocking instance");
+        }
+        if (closed) {
+            throw new IllegalStateException("JUringBlocking is closed");
+        }
         var iovecStructure = workers[0].runOnPoller(() -> workers[0].dispatcher.allocateAndRegisterBuffers(size, nrOfBuffers));
         for (int i = 1; i < workers.length; i++) {
             Worker w = workers[i];
@@ -1226,6 +1242,7 @@ public class JUringBlocking implements AutoCloseable {
         this.registeredBufMask = poolCap - 1;
         this.freeBufBuffer = bufArr;
         this.freeBufSeq = seqArr;
+        this.bufferInUse = new AtomicIntegerArray(nrOfBuffers);
         this.freeBufHead = 0L;
         this.freeBufTail = nrOfBuffers;
         return buffers;
@@ -1270,6 +1287,10 @@ public class JUringBlocking implements AutoCloseable {
                 if (VH_FREE_BUF_HEAD.compareAndSet(this, pos, pos + 1)) {
                     int bufIdx = bufArr[idx];
                     VH_LONG_ARRAY.setRelease(seqArr, idx, pos + cap);
+                    AtomicIntegerArray inUse = this.bufferInUse;
+                    if (inUse == null || !inUse.compareAndSet(bufIdx, 0, 1)) {
+                        throw new IllegalStateException("Registered buffer " + bufIdx + " is already checked out");
+                    }
                     return bufIdx;
                 }
             } else if (dif < 0) {
@@ -1299,32 +1320,47 @@ public class JUringBlocking implements AutoCloseable {
         if (bufferIndex < 0 || bufferIndex >= totalBuffers) {
             throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
+        final AtomicIntegerArray inUse = this.bufferInUse;
+        if (inUse == null) {
+            throw new IllegalStateException("Buffers have not been registered");
+        }
+        if (!inUse.compareAndSet(bufferIndex, 1, 0)) {
+            throw new IllegalStateException("Buffer index " + bufferIndex
+                    + " is not checked out (double or foreign check-in)");
+        }
         final int mask = this.registeredBufMask;
         int spins = 0;
-        while (true) {
-            long pos = (long) VH_FREE_BUF_TAIL.getVolatile(this);
-            long head = (long) VH_FREE_BUF_HEAD.getVolatile(this);
-            if (pos - head >= totalBuffers) {
-                throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
-            }
-            int idx = (int) (pos & mask);
-            long seq = (long) VH_LONG_ARRAY.getAcquire(seqArr, idx);
-            long dif = seq - pos;
-            if (dif == 0) {
-                if (VH_FREE_BUF_TAIL.compareAndSet(this, pos, pos + 1)) {
-                    bufArr[idx] = bufferIndex;
-                    VH_LONG_ARRAY.setRelease(seqArr, idx, pos + 1);
-                    return;
-                }
-            } else if (dif < 0) {
-                long currentHead = (long) VH_FREE_BUF_HEAD.getVolatile(this);
-                if (pos - currentHead >= totalBuffers) {
+        try {
+            while (true) {
+                long pos = (long) VH_FREE_BUF_TAIL.getVolatile(this);
+                long head = (long) VH_FREE_BUF_HEAD.getVolatile(this);
+                if (pos - head >= totalBuffers) {
                     throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
                 }
-                spins = onContendedSpin(spins);
-            } else {
-                spins = onContendedSpin(spins);
+                int idx = (int) (pos & mask);
+                long seq = (long) VH_LONG_ARRAY.getAcquire(seqArr, idx);
+                long dif = seq - pos;
+                if (dif == 0) {
+                    if (VH_FREE_BUF_TAIL.compareAndSet(this, pos, pos + 1)) {
+                        bufArr[idx] = bufferIndex;
+                        VH_LONG_ARRAY.setRelease(seqArr, idx, pos + 1);
+                        return;
+                    }
+                } else if (dif < 0) {
+                    long currentHead = (long) VH_FREE_BUF_HEAD.getVolatile(this);
+                    if (pos - currentHead >= totalBuffers) {
+                        throw new IllegalStateException("Buffer pool is full: cannot check in buffer " + bufferIndex);
+                    }
+                    spins = onContendedSpin(spins);
+                } else {
+                    spins = onContendedSpin(spins);
+                }
             }
+        } catch (RuntimeException e) {
+            // The index was not actually returned to the queue: restore the ledger so a retry
+            // (or a later failure report) sees the true ownership state.
+            inUse.set(bufferIndex, 1);
+            throw e;
         }
     }
 
