@@ -26,6 +26,11 @@ Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact
 - Observability: `RingMetrics`, `ShardMetrics`, `GroupMetrics`, latency histograms, JMX
   MXBeans, and machine-readable benchmark JSON.
 - `JUring.isSupported()`: cached `io_uring_setup` probe for `java.nio` fallback decisions.
+- `JuringInputStream.abandonedAtClose()` / `JuringOutputStream.abandonedAtClose()`: count the
+  reads/writes abandoned by the hard-bounded stream close (`0` for a normal close).
+- `JUring.prepareReadUnique(...)`: raw read variant whose handle stays unique even when the same
+  `MemorySegment` is used by concurrent in-flight reads (the reaped `Result` carries no buffer;
+  `validBuffer()` is `NULL`).
 - `docs/platforms.md`: OS/arch/JDK/kernel floors, native-access flags, container/seccomp and
   `kernel.io_uring_disabled` caveats, O_DIRECT/memlock guidance.
 - Reproducible benchmark programme under `bench/` (fio-matched and Seastar brackets, raw
@@ -38,6 +43,14 @@ Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact
   now drained with a non-blocking `enter(GETEVENTS)`; `waitForBatchResult(1)` no longer hangs at
   deep in-flight counts. Waiting for more completions than the CQ can hold now throws
   `IllegalArgumentException` instead of blocking forever.
+- **Stream close could hang forever**: `JuringInputStream.close()` and `JuringOutputStream.close()`
+  no longer fall back to an unbounded wait when in-flight I/O does not drain. The close is bounded
+  by 2 s + 250 ms grace; a request that misses the deadline is abandoned (its buffer is kept
+  alive — a bounded leak, never a use-after-free), `close()` throws `ETIMEDOUT` and the count is
+  reported by `abandonedAtClose()`.
+- **Waits with nothing in flight blocked forever**: `waitForResult`/`waitForResult(target)` and
+  `waitForBatchResult*` with `minComplete > 0` now throw `IllegalStateException` when no
+  operation is prepared and unreaped, instead of waiting for a completion that cannot arrive.
 - **Attached rings lost optional-opcode support**: `getSharedWorkerRing` now probes the new ring,
   so timeouts/statx/fallocate/ftruncate work there instead of throwing
   `UnsupportedOperationException`.

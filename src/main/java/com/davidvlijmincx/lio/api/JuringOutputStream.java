@@ -51,12 +51,14 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  *
  * <h2>Lifecycle</h2>
  * <p>{@link #close()} performs one flush (hence at most one mode sync), optionally calls
- * the B2 {@code fdatasync}-on-close, releases the buffers and is idempotent. It does
- * <strong>not</strong> close the underlying {@link JuringFile}. Writing after
- * {@code close()} throws {@link IllegalStateException}. The stream is
- * <strong>not thread-safe</strong> and inherits the B10a ring-ownership rule: it may share
- * its {@link JUring} with sibling handles on the same thread; only raw un-reaped ring work is
- * rejected.
+ * the B2 {@code fdatasync}-on-close, releases the buffers and is idempotent, all within a
+ * hard deadline; a write that cannot be drained in time is abandoned with its buffer kept
+ * alive (a bounded leak, never a use-after-free) and counted by
+ * {@link #abandonedAtClose()}. It does <strong>not</strong> close the underlying
+ * {@link JuringFile}. Writing after {@code close()} throws {@link IllegalStateException}.
+ * The stream is <strong>not thread-safe</strong> and inherits the B10a ring-ownership rule:
+ * it may share its {@link JUring} with sibling handles on the same thread; only raw
+ * un-reaped ring work is rejected.
  */
 public final class JuringOutputStream implements AutoCloseable {
 
@@ -64,6 +66,9 @@ public final class JuringOutputStream implements AutoCloseable {
     public static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 2000L;
 
     private static final int MAX_SHORT_WRITE_RETRIES = 8;
+
+    /** Fixed grace on top of the close deadline before an in-flight write is abandoned. */
+    private static final long CLOSE_GRACE_NANOS = 250_000_000L;
 
     private final JuringFile file;
     private final OutputStreamOptions options;
@@ -95,6 +100,10 @@ public final class JuringOutputStream implements AutoCloseable {
     private boolean closed;
     private boolean unalignedRestart;
     private JuringException failure;
+    /** Hard deadline for the current bounded {@link #close()}, or {@code -1} outside close. */
+    private long boundedCloseDeadlineNanos = -1L;
+    /** Writes abandoned by {@link #close()} because the bounded deadline expired. */
+    private long abandonedAtClose;
 
     private JuringOutputStream(JuringFile file, OutputStreamOptions options) {
         this.file = file;
@@ -424,6 +433,15 @@ public final class JuringOutputStream implements AutoCloseable {
      * Flushes, optionally {@code fdatasync}s, releases the buffers and marks the stream
      * closed. Idempotent; does not close the backing {@link JuringFile}.
      *
+     * <p>The close is hard-bounded: it spends at most
+     * {@link #DEFAULT_CLOSE_TIMEOUT_MILLIS} ms (+250 ms grace) draining in-flight writes and
+     * never falls back to an unbounded wait. A write that has not completed by the hard
+     * deadline is abandoned: its buffer is kept alive (a bounded leak, never a
+     * use-after-free), the request is left for the backing {@link JuringFile}/{@link JUring}
+     * shutdown to cancel or drop, and this method throws a {@link JuringException} with
+     * {@code ETIMEDOUT}. The final truncate/sync and the buffer release are skipped in that
+     * case. Abandoned writes are counted by {@link #abandonedAtClose()}.
+     *
      * <p>If a write failed, the first failure is rethrown after the stream has been closed
      * and its buffers released. If an in-flight operation could not be drained (ring
      * ownership misuse), the buffers are intentionally <em>not</em> freed: they stay alive
@@ -439,6 +457,7 @@ public final class JuringOutputStream implements AutoCloseable {
         closed = true;
         JuringException first = failure;
         boolean safeToRelease = true;
+        boolean abandoned = false;
 
         // Hand the pending partial buffer to the write-behind pipeline first.
         boolean padded = false;
@@ -455,26 +474,23 @@ public final class JuringOutputStream implements AutoCloseable {
             fillPos = 0;
             padded = true;
         }
-        // Drain what is already in flight. drainOldest() pops an entry even when its
-        // completion failed, so keep draining the rest while recording the first failure.
+        boolean paddedEnqueued = false;
+        long hardDeadline = System.nanoTime()
+                + DEFAULT_CLOSE_TIMEOUT_MILLIS * 1_000_000L + CLOSE_GRACE_NANOS;
+        boundedCloseDeadlineNanos = hardDeadline;
         try {
-            drainAll();
-        } catch (JuringException e) {
-            if (first == null) {
-                first = e;
-            }
-        } catch (RuntimeException e) {
-            safeToRelease = false;
-            if (first == null) {
-                first = new JuringException(0, "close",
-                        "could not drain output stream write: " + e.getMessage(), e);
-            }
-        }
-        while (safeToRelease && outstandingSize > 0) {
+            // Drain what is already in flight. drainOldest() pops an entry even when its
+            // completion failed, so keep draining the rest while recording the first failure.
             try {
-                drainOldest();
+                drainAll();
             } catch (JuringException e) {
-                if (first == null) {
+                if (e.isTimedOut()) {
+                    abandoned = true;
+                    safeToRelease = false;
+                    if (first == null) {
+                        first = e;
+                    }
+                } else if (first == null) {
                     first = e;
                 }
             } catch (RuntimeException e) {
@@ -484,65 +500,107 @@ public final class JuringOutputStream implements AutoCloseable {
                             "could not drain output stream write: " + e.getMessage(), e);
                 }
             }
-        }
-        if (padded && safeToRelease) {
-            try {
-                enqueueWrite(partialBuffer, partialOffset);
-                drainAll();
-            } catch (JuringException e) {
-                if (first == null) {
-                    first = e;
-                }
-            } catch (RuntimeException e) {
-                safeToRelease = false;
-                if (first == null) {
-                    first = new JuringException(0, "close",
-                            "could not write the final partial buffer: " + e.getMessage(), e);
-                }
-            }
-        }
-        if (padded && safeToRelease) {
-            try {
-                file.truncate(position);
-            } catch (JuringException e) {
-                if (first == null) {
-                    first = e;
-                }
-                if (failure == null) {
-                    failure = e;
+            while (!abandoned && safeToRelease && outstandingSize > 0) {
+                try {
+                    drainOldest();
+                } catch (JuringException e) {
+                    if (e.isTimedOut()) {
+                        abandoned = true;
+                        safeToRelease = false;
+                    }
+                    if (first == null) {
+                        first = e;
+                    }
+                } catch (RuntimeException e) {
+                    safeToRelease = false;
+                    if (first == null) {
+                        first = new JuringException(0, "close",
+                                "could not drain output stream write: " + e.getMessage(), e);
+                    }
                 }
             }
-        }
-        // Exactly one close durability point (B6 §3.2): FDATASYNC/FSYNC issue one mode sync
-        // (syncOnClose is then redundant and never adds a second one), DSYNC none, and
-        // WRITEBACK keeps the frozen B2 fdatasync-on-close shortcut.
-        boolean closeSync = false;
-        if (durability == DurabilityMode.FDATASYNC) {
-            closeSync = true;
-        } else if (durability == DurabilityMode.FSYNC) {
-            closeSync = true;
-        } else if (durability == DurabilityMode.WRITEBACK && options.syncOnClose()) {
-            closeSync = true;
-        }
-        if (closeSync) {
-            try {
-                issueSync(durability == DurabilityMode.FSYNC);
-            } catch (JuringException e) {
-                if (first == null) {
-                    first = e;
-                }
-                if (failure == null) {
-                    failure = e;
+            if (padded && safeToRelease && !abandoned) {
+                try {
+                    enqueueWrite(partialBuffer, partialOffset);
+                    paddedEnqueued = true;
+                    drainAll();
+                } catch (JuringException e) {
+                    if (e.isTimedOut()) {
+                        abandoned = true;
+                        safeToRelease = false;
+                    }
+                    if (first == null) {
+                        first = e;
+                    }
+                } catch (RuntimeException e) {
+                    safeToRelease = false;
+                    if (first == null) {
+                        first = new JuringException(0, "close",
+                                "could not write the final partial buffer: " + e.getMessage(), e);
+                    }
                 }
             }
+            if (padded && safeToRelease && !abandoned) {
+                try {
+                    file.truncate(position);
+                } catch (JuringException e) {
+                    if (first == null) {
+                        first = e;
+                    }
+                    if (failure == null) {
+                        failure = e;
+                    }
+                }
+            }
+            // Exactly one close durability point (B6 §3.2): FDATASYNC/FSYNC issue one mode sync
+            // (syncOnClose is then redundant and never adds a second one), DSYNC none, and
+            // WRITEBACK keeps the frozen B2 fdatasync-on-close shortcut.
+            boolean closeSync = false;
+            if (durability == DurabilityMode.FDATASYNC) {
+                closeSync = true;
+            } else if (durability == DurabilityMode.FSYNC) {
+                closeSync = true;
+            } else if (durability == DurabilityMode.WRITEBACK && options.syncOnClose()) {
+                closeSync = true;
+            }
+            if (closeSync && safeToRelease && !abandoned) {
+                try {
+                    issueSync(durability == DurabilityMode.FSYNC);
+                } catch (JuringException e) {
+                    if (first == null) {
+                        first = e;
+                    }
+                    if (failure == null) {
+                        failure = e;
+                    }
+                }
+            }
+            if (safeToRelease) {
+                releaseBuffers();
+                arena.close();
+            }
+            if (first != null) {
+                throw first;
+            }
+        } finally {
+            boundedCloseDeadlineNanos = -1L;
+            if (abandoned) {
+                // Un-drained writes keep their buffers; a partial buffer that never reached
+                // the write-behind FIFO counts as one more abandoned buffer.
+                abandonedAtClose = outstandingSize + ((padded && !paddedEnqueued) ? 1 : 0);
+            }
         }
-        if (safeToRelease) {
-            releaseBuffers();
-            arena.close();
-        }
-        if (first != null) {
-            throw first;
-        }
+    }
+
+    /**
+     * Number of writes abandoned by {@link #close()} because the bounded close deadline
+     * expired. Non-zero only after an abnormal close; the abandoned buffers are intentionally
+     * not freed (a bounded leak is safer than a use-after-free).
+     *
+     * @return abandoned write count ({@code 0} for a normal close)
+     */
+    public long abandonedAtClose() {
+        return abandonedAtClose;
     }
 
     // ------------------------------------------------------------------
@@ -591,7 +649,8 @@ public final class JuringOutputStream implements AutoCloseable {
      * Drives the oldest write-behind entry to completion. On a short write the remainder is
      * re-issued from the last alignment boundary (rewriting aligned bytes is idempotent).
      * On a completion error the buffer is released (the operation is finished) and the
-     * failure is latched and thrown.
+     * failure is latched and thrown. During a bounded {@link #close()}, a deadline expiry is
+     * rethrown <em>without</em> releasing the buffer, because the kernel may still write into it.
      */
     private void drainOldest() throws JuringException {
         if (outstandingSize == 0) {
@@ -607,8 +666,21 @@ public final class JuringOutputStream implements AutoCloseable {
         while (true) {
             int result;
             try {
-                result = file.await(handle);
+                if (boundedCloseDeadlineNanos >= 0) {
+                    long remainingNanos = boundedCloseDeadlineNanos - System.nanoTime();
+                    if (remainingNanos <= 0) {
+                        throw closeDeadlineExpired(offset);
+                    }
+                    result = file.await(handle, Math.max(1L, remainingNanos / 1_000_000L));
+                } else {
+                    result = file.await(handle);
+                }
             } catch (JuringException e) {
+                if (boundedCloseDeadlineNanos >= 0 && e.isTimedOut()) {
+                    // Bounded close: the write may still be in flight, so its buffer and FIFO
+                    // entry must stay alive. Do not pop or free anything (bounded leak).
+                    throw e;
+                }
                 error = e;
                 break;
             } catch (RuntimeException e) {
@@ -656,6 +728,13 @@ public final class JuringOutputStream implements AutoCloseable {
         while (outstandingSize > 0) {
             drainOldest();
         }
+    }
+
+    /** Builds the typed timeout thrown when a bounded close cannot drain a write in time. */
+    private static JuringException closeDeadlineExpired(long offset) {
+        return new JuringException(JuringException.ETIMEDOUT, "close",
+                "close deadline expired while draining a write at offset " + offset
+                        + " (write abandoned; buffer kept alive)");
     }
 
     // ------------------------------------------------------------------

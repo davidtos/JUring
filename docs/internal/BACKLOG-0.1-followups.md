@@ -5,11 +5,11 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
 
 ## Correctness / robustness follow-ups
 
-1. **Stream close timeout fallback is unbounded.**
-   `JuringInputStream.close()` / `JuringOutputStream.close()` fall back to
-   `file.await(handle)` (no deadline) after the bounded wait times out, so a stuck read can hang
-   shutdown. Decide between: keep the deadline and abandon/leak the buffers (JuringFile does
-   this), or document the unbounded fallback explicitly with a counter.
+1. **Fixed before 0.1.0: stream close is hard-bounded.**
+   `JuringInputStream.close()` / `JuringOutputStream.close()` no longer fall back to an
+   unbounded `file.await(handle)`. Both spend at most 2 s + 250 ms grace, abandon a request
+   that misses the deadline with its buffer kept alive (bounded leak, never a UAF), throw
+   `ETIMEDOUT`, and report the count via `abandonedAtClose()`.
 2. **CQ-overflow observability is partial.**
    `RingMetrics.cqOverflowEvents` reads the kernel `cq.koverflow`, which was observed to stay 0
    while completions were parked in the overflow list. `cqFlushEnters` now counts the flushes we
@@ -22,9 +22,9 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
    `IllegalArgumentException` (previously an unbounded hang). If callers genuinely need
    "wait for at least N total completions across calls", expose an explicit helper instead of
    overloading the CQ-wait primitive.
-5. **Zero-in-flight waits block.** `waitForResult`/`waitForBatchResult(min>0)` with no requests
-   in flight wait for a completion that cannot arrive. This is arguably correct "wait for the
-   next completion" semantics, but a short-circuit or documented misuse error would be kinder.
+5. **Fixed before 0.1.0: zero-in-flight waits throw.** `waitForResult`/`waitForResult(target)`
+   and `waitForBatchResult*` with `minComplete > 0` now throw `IllegalStateException` when
+   nothing is prepared and unreaped, instead of waiting for a completion that cannot arrive.
 6. **Non-Linux error paths outside the entry points.** `isSupported()` and the `JUring`
    constructor are gated before the native layer, but other public types (`FileDescriptor`,
    `IoShard`, `JUringBlocking`) still touch `NativeDispatcher.C` and would fail class init on a
@@ -35,8 +35,11 @@ fixed in the release. They are engineering backlog, not user-facing documentatio
    ledger slot before enabling it (same modelling issue as provided buffers/multishot, B7).
 8. **Raw-read user_data collision.** The raw `JUring.prepareRead(..., MemorySegment)` path still
    uses the buffer address in `user_data`, so two concurrent non-fixed reads into the same
-   segment collide (B3 F1, fixed for `JuringFile` in B10 but documented for the raw API). Give
-   the raw path unique op ids plus a side table.
+   segment collide (B3 F1, fixed for `JuringFile` in B10). The limitation is documented on the
+   `prepareRead` overloads, and `prepareReadUnique(...)` is an opt-in escape hatch (unique
+   handle, but `Result.validBuffer()` is `NULL`). Removing the limitation from the default
+   overloads needs unique op ids plus a side table (or tagged payload), which is why it is
+   deferred.
 
 ## Portability / platform
 

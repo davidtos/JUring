@@ -44,15 +44,20 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * un-reaped ring work on the shared ring is rejected (B10a).
  *
  * <h2>Lifecycle</h2>
- * <p>{@link #close()} drains/cancels the stream's own in-flight reads, releases the
- * buffers and is idempotent. It does <strong>not</strong> close the underlying
- * {@link JuringFile} (callers own the file). Using the stream after {@code close()}
- * throws {@link IllegalStateException}.
+ * <p>{@link #close()} drains the stream's own in-flight reads within a hard deadline,
+ * releases the buffers and is idempotent. It does <strong>not</strong> close the underlying
+ * {@link JuringFile} (callers own the file). A read that cannot be drained by the deadline is
+ * abandoned with its buffer kept alive (a bounded leak, never a use-after-free) and counted
+ * by {@link #abandonedAtClose()}. Using the stream after {@code close()} throws
+ * {@link IllegalStateException}.
  */
 public final class JuringInputStream implements AutoCloseable {
 
     /** Default deadline used when draining in-flight reads at {@link #close()}. */
     public static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 2000L;
+
+    /** Fixed grace on top of the close deadline before a read is abandoned. */
+    private static final long CLOSE_GRACE_NANOS = 250_000_000L;
 
     /** Readahead adaptation window size (matches seastar's {@code fstream.cc}). */
     private static final long WINDOW_SIZE = 4L * 1024 * 1024;
@@ -122,6 +127,8 @@ public final class JuringInputStream implements AutoCloseable {
     /** True EOF observed on the file (short/zero read), as opposed to a consumed window. */
     private boolean fileEof;
     private boolean closed;
+    /** Reads abandoned by {@link #close()} because the bounded deadline expired. */
+    private long abandonedAtClose;
 
     private JuringInputStream(JuringFile file, InputStreamOptions options, long offset, long length) {
         this.file = file;
@@ -638,7 +645,15 @@ public final class JuringInputStream implements AutoCloseable {
      * Drains the stream's in-flight reads, releases its buffers and marks it closed.
      * Idempotent; does not close the backing {@link JuringFile}.
      *
-     * @throws JuringException if a drained read failed
+     * <p>The close is hard-bounded: it spends at most {@link #DEFAULT_CLOSE_TIMEOUT_MILLIS} ms
+     * (+250 ms grace) draining in-flight reads and never falls back to an unbounded wait. A
+     * read that has not completed by the hard deadline is abandoned: its buffer is kept alive
+     * (a bounded leak, never a use-after-free), the request is left for the backing
+     * {@link JuringFile}/{@link JUring} shutdown to cancel or drop, and this method throws a
+     * {@link JuringException} with {@code ETIMEDOUT}. Abandoned reads are counted by
+     * {@link #abandonedAtClose()}.
+     *
+     * @throws JuringException if a drained read failed or the close deadline expired
      */
     @Override
     public void close() throws JuringException {
@@ -651,29 +666,42 @@ public final class JuringInputStream implements AutoCloseable {
         JuringException firstError = null;
         boolean safeToRelease = true;
         releaseHeld();
+        long hardDeadline = System.nanoTime()
+                + closeTimeoutMillis * 1_000_000L + CLOSE_GRACE_NANOS;
         while (fifoSize > 0) {
             int slot = fifo[fifoHead];
             if (state[slot] == PENDING) {
+                long remainingNanos = hardDeadline - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    safeToRelease = false;
+                    abandonedAtClose += pendingSlotsInFifo();
+                    firstError = new JuringException(JuringException.ETIMEDOUT, "close",
+                            "close deadline expired while draining input stream reads ("
+                                    + pendingSlotsInFifo() + " read(s) abandoned)");
+                    break;
+                }
                 try {
-                    results[slot] = file.await(handles[slot], closeTimeoutMillis);
+                    results[slot] = file.await(handles[slot],
+                            Math.max(1L, remainingNanos / 1_000_000L));
                 } catch (JuringException e) {
                     if (e.isTimedOut()) {
-                        // Bounded close: fall back to an unbounded wait so the kernel is
-                        // never left reading into buffers we are about to free.
-                        try {
-                            results[slot] = file.await(handles[slot]);
-                        } catch (JuringException e2) {
-                            if (firstError == null) {
-                                firstError = e2;
-                            }
+                        // Bounded close: abandon instead of falling back to an unbounded wait.
+                        // The kernel may still read into the buffer, so the arena is not freed.
+                        safeToRelease = false;
+                        abandonedAtClose += pendingSlotsInFifo();
+                        if (firstError == null) {
+                            firstError = e;
                         }
-                    } else if (firstError == null) {
+                        break;
+                    }
+                    if (firstError == null) {
                         firstError = e;
                     }
                 } catch (RuntimeException e) {
                     // Ring ownership misuse: our read may still be in flight, so the
                     // buffers must stay alive (leaked, bounded) rather than be freed.
                     safeToRelease = false;
+                    abandonedAtClose += pendingSlotsInFifo();
                     if (firstError == null) {
                         firstError = new JuringException(0, "close",
                                 "could not drain input stream read: " + e.getMessage(), e);
@@ -693,6 +721,28 @@ public final class JuringInputStream implements AutoCloseable {
         if (firstError != null) {
             throw firstError;
         }
+    }
+
+    /** Number of reads currently queued in the prefetch FIFO that are still pending. */
+    private int pendingSlotsInFifo() {
+        int pending = 0;
+        for (int i = 0; i < fifoSize; i++) {
+            if (state[fifo[(fifoHead + i) % maxInFlight]] == PENDING) {
+                pending++;
+            }
+        }
+        return pending;
+    }
+
+    /**
+     * Number of reads abandoned by {@link #close()} because the bounded close deadline
+     * expired. Non-zero only after an abnormal close; the abandoned buffers are intentionally
+     * not freed (a bounded leak is safer than a use-after-free).
+     *
+     * @return abandoned read count ({@code 0} for a normal close)
+     */
+    public long abandonedAtClose() {
+        return abandonedAtClose;
     }
 
     // ------------------------------------------------------------------

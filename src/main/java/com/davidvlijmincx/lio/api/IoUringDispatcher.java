@@ -878,6 +878,18 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Rejects a blocking wait when nothing is prepared and unreaped, because no completion can
+     * arrive and the wait would block forever. {@code inFlightCount} is owner-thread state, so
+     * the check is race-free under the single-owner contract.
+     */
+    private void ensurePendingWork(String operation) {
+        if (inFlightCount <= 0) {
+            throw new IllegalStateException(operation + ": no operations are in flight; prepare an "
+                    + "operation and call submit() before waiting for a completion");
+        }
+    }
+
     int submitAndWait(int waitNr) {
         checkMinComplete(waitNr);
         int tail = sqeTail;
@@ -976,6 +988,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     int waitCqe(MemorySegment cqePtr) {
+        ensurePendingWork("waitForResult");
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1018,6 +1031,9 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int waitCqeNr(int waitNr) {
         checkMinComplete(waitNr);
+        if (waitNr > 0) {
+            ensurePendingWork("waitForBatchResult");
+        }
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1639,6 +1655,9 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         checkMinComplete(minComplete);
+        if (minComplete > 0) {
+            ensurePendingWork("waitForBatchResult");
+        }
         while (true) {
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);

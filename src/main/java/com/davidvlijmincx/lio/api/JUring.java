@@ -234,6 +234,13 @@ public class JUring implements AutoCloseable {
      * <p>The buffer must be native, alive and accessible by the calling thread, and must
      * stay valid until the completion is reaped.
      *
+     * <p>Limitation: the returned handle is derived from {@code buffer.address()}, so two
+     * concurrent (un-reaped) reads into the <em>same</em> segment produce the same handle and
+     * indistinguishable completions, and {@code prepareCancel(handle)} cannot single one out.
+     * Keep at most one in-flight read per segment, or use
+     * {@link #prepareReadUnique(FileDescriptor, MemorySegment, long)} (unique handle, no
+     * {@link Result#validBuffer()}) or {@link JuringFile} reads (unique operation ids).
+     *
      * @param fd     file to read
      * @param buffer destination buffer; its size determines the read size
      * @param offset file offset in bytes
@@ -250,11 +257,14 @@ public class JUring implements AutoCloseable {
      * Prepares a read into the whole of {@code buffer} at {@code offset}, with explicit SQE
      * flags.
      *
-     * @param fd         file to read
-     * @param buffer     destination buffer; its size determines the read size
-     * @param offset     file offset in bytes
-     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @param fd          file to read
+     * @param buffer      destination buffer; its size determines the read size
+     * @param offset      file offset in bytes
+     * @param sqeOptions  SQE flags, combined with bitwise OR
      * @return the operation handle ({@code user_data})
+     * @see #prepareRead(FileDescriptor, MemorySegment, long) for the one-in-flight-read-per-segment limitation
+     * @see #prepareReadUnique(FileDescriptor, MemorySegment, long) for a unique-handle variant that
+     *      does not populate Result.validBuffer()
      */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), buffer, Math.toIntExact(buffer.byteSize()), offset, SqeOptions.combineOptions(sqeOptions), false);
@@ -263,6 +273,9 @@ public class JUring implements AutoCloseable {
     /**
      * Prepares a read of at most {@code readSize} bytes into the start of {@code buffer} at
      * file offset {@code offset}.
+     *
+     * <p>Limitation: the handle is derived from {@code buffer.address()}, so keep at most one
+     * in-flight read per segment (see {@link #prepareRead(FileDescriptor, MemorySegment, long)}).
      *
      * @param fd       file to read
      * @param buffer   destination buffer
@@ -285,9 +298,60 @@ public class JUring implements AutoCloseable {
      * @param offset     file offset in bytes
      * @param sqeOptions SQE flags, combined with bitwise OR
      * @return the operation handle ({@code user_data})
+     * @see #prepareRead(FileDescriptor, MemorySegment, long) for the one-in-flight-read-per-segment limitation
+     * @see #prepareReadUnique(FileDescriptor, MemorySegment, long) for a unique-handle variant that
+     *      does not populate Result.validBuffer()
      */
     public long prepareRead(FileDescriptor fd, MemorySegment buffer, int readSize, long offset, SqeOptions... sqeOptions) {
         return prepareReadInternal(fd.getFd(), buffer, readSize, offset, SqeOptions.combineOptions(sqeOptions), false);
+    }
+
+    /**
+     * Prepares a read whose operation handle stays unique even when the same
+     * {@link MemorySegment} is used by other in-flight reads.
+     *
+     * <p>The address-keyed {@code prepareRead(FileDescriptor, MemorySegment, ...)} overloads
+     * derive the handle from {@code buffer.address()}, so two concurrent reads into the same
+     * segment share a handle: completions are indistinguishable and {@code prepareCancel(handle)}
+     * cannot single one out. This variant uses a unique operation id instead, so each completion
+     * is distinguishable and cancellation targets exactly one request. The reaped
+     * {@link Result} carries no buffer ({@link Result#validBuffer()} is
+     * {@link MemorySegment#NULL}), because the caller already owns the segment.
+     *
+     * <p>Overlapping reads into the same memory still write the same bytes: the caller owns
+     * that data race.
+     *
+     * @param fd     file to read
+     * @param buffer destination buffer; its size determines the read size
+     * @param offset file offset in bytes
+     * @return a unique operation handle ({@code user_data})
+     * @throws IllegalArgumentException when the segment is not native writeable memory
+     * @throws IllegalStateException    when the ring is closed or the segment scope is closed
+     * @throws WrongThreadException     when the segment is confined to another thread
+     */
+    public long prepareReadUnique(FileDescriptor fd, MemorySegment buffer, long offset) {
+        Objects.requireNonNull(fd, "fd");
+        Objects.requireNonNull(buffer, "buffer");
+        return prepareReadNoBuffer(fd, buffer, Math.toIntExact(buffer.byteSize()), offset);
+    }
+
+    /**
+     * Prepares a read of at most {@code readSize} bytes whose operation handle stays unique even
+     * when the same {@link MemorySegment} is used by other in-flight reads.
+     *
+     * @param fd       file to read
+     * @param buffer   destination buffer
+     * @param readSize maximum number of bytes to read; must not exceed the buffer size
+     * @param offset   file offset in bytes
+     * @return a unique operation handle ({@code user_data})
+     * @throws IllegalArgumentException when {@code readSize} is negative or larger than the
+     *                                  buffer, or the segment is not native writeable memory
+     * @see #prepareReadUnique(FileDescriptor, MemorySegment, long)
+     */
+    public long prepareReadUnique(FileDescriptor fd, MemorySegment buffer, int readSize, long offset) {
+        Objects.requireNonNull(fd, "fd");
+        Objects.requireNonNull(buffer, "buffer");
+        return prepareReadNoBuffer(fd, buffer, readSize, offset);
     }
 
     /**
@@ -2450,6 +2514,8 @@ public class JUring implements AutoCloseable {
      *
      * @param batchSize maximum number of completions to reap
      * @return the reaped results
+     * @throws IllegalStateException when no operations are in flight (the wait would block
+     *                               forever because no completion can arrive)
      */
     public List<Result> waitForBatchResult(int batchSize) {
         ensureOpenAndOwner();
@@ -2466,6 +2532,8 @@ public class JUring implements AutoCloseable {
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
      * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
+     * @throws IllegalStateException    when {@code minComplete > 0} and no operations are in
+     *                                  flight (the wait would block forever)
      */
     public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
         ensureOpenAndOwner();
@@ -2483,6 +2551,8 @@ public class JUring implements AutoCloseable {
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
      * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
+     * @throws IllegalStateException    when {@code minComplete > 0} and no operations are in
+     *                                  flight (the wait would block forever)
      */
     public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         ensureOpenAndOwner();
@@ -2496,6 +2566,8 @@ public class JUring implements AutoCloseable {
      * it carries.
      *
      * @return the reaped completion
+     * @throws IllegalStateException when no operations are in flight (the wait would block
+     *                               forever because no completion can arrive)
      */
     public Result waitForResult() {
         ensureOpenAndOwner();
@@ -2507,6 +2579,8 @@ public class JUring implements AutoCloseable {
      *
      * @param target result instance to reuse; returns the same instance
      * @return the populated {@code target}
+     * @throws IllegalStateException when no operations are in flight (the wait would block
+     *                               forever because no completion can arrive)
      */
     public Result waitForResult(Result target) {
         ensureOpenAndOwner();
