@@ -10,10 +10,12 @@ Java's file APIs are synchronous. A thread issues one request and waits for it. 
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
 > [!NOTE]
-> - JUring is a focused Linux `io_uring` file-I/O library (x86_64, Java FFM API): raw ring operations (`JUring`), async file handles (`JuringFile`), buffered readahead/write-behind streams (`JuringInputStream`/`JuringOutputStream`), explicit durability and group commit (`DurabilityMode`, `GroupCommit`), a multi-ring shard runtime (`IoShard`/`RingGroup`), per-ring observability (`RingMetrics`, `ShardMetrics`, `MetricsJmx`), and virtual-thread blocking (`JUringBlocking`).
+> - JUring is a focused Linux `io_uring` file-I/O library (x86_64, Java FFM API): raw ring operations (`JUring`), async file handles (`JuringFile`), buffered readahead/write-behind streams (`JuringInputStream`/`JuringOutputStream`), explicit durability and group commit (`DurabilityMode`, `GroupCommit`), a multi-ring shard runtime (`IoShard`/`RingGroup`), per-ring observability (`RingMetrics`, `ShardMetrics`, `MetricsJmx`), and virtual-thread blocking (`JUringBlocking`). Several file/stream/`GroupCommit` handles can share one ring, with completions routed per handle (B10a).
 > - All headline benchmarks below come from the pre-registered, reproducible harness in [`bench/`](bench/README.md) ([methodology](docs/benchmark-methodology.md)) against registration-matched `fio` (`--ioengine=io_uring --registerfiles=1 --fixedbufs=1`, neutral referee) and [Seastar](https://seastar.io/) (`--reactor-backend=io_uring`, opponent bracket).
 
 JUring does not do QoS, fair queuing or priorities between workload classes in v1 by design. Isolate classes with separate rings or shards (`IoShard`/`RingGroup`), or with OS-level I/O controls such as cgroup v2 `io.weight`/`io.max` and `ionice`; see [docs/m4-decision.md](docs/m4-decision.md).
+
+A per-request block-layer `ioprio` **hint** is exposed (`IoPriority` with `JUring.defaultIoprio`, `JUring.setLastSqeIoprio` for raw operations, and `JuringFile.withIoPriority`, inherited by streams and `GroupCommit`; read/write operations). It is scheduler-dependent (`bfq`/`mq-deadline` act on it, `none`/`kyber` ignore it) and is not a QoS or fair-queuing mechanism; `0` inherits the thread's `ionice`/nice priority. See [docs/b10-design.md](docs/b10-design.md).
 
 ## Benchmark Results
 

@@ -11,6 +11,13 @@ or intent/cancel-on-drop layer**. B8 is not implemented; M4 is closed by this de
 by a shares experiment. The supported answer to "I need priorities" is **bring your own
 scheduler**: partition work into separate rings/shards, or use OS-level I/O controls.
 
+> **Update 2026-11-16 (B10b).** A *low-level* `ioprio` **hint** is now exposed
+> (`IoPriority`, `JUring.defaultIoprio`/`setLastSqeIoprio`, `JuringFile.withIoPriority`,
+> inherited by streams/`GroupCommit`; read/write opcodes only, `0` inherits the thread's
+> `ionice`). This does **not** reopen M4: there is still no scheduler, fair queuing, weights,
+> rate limiting or intent layer inside JUring, and the hint is inert on `none`-scheduled
+> NVMe. See [`docs/b10-design.md`](b10-design.md).
+
 ## 1. Why (evidence)
 
 ### 1.1 The locked scope puts QoS in the framework, not the library
@@ -37,11 +44,13 @@ library toward "a worse seastar" — the exact outcome D1/D2 rule out.
 - B8's own gate is *"only if real users (e.g. a future framework's compaction vs foreground)
   need it"*. The framework that would supply those workload classes **does not exist yet**
   (D1; plan §0/§3) and no such consumer exists in the repo.
-- JUring's public API cannot express a class/priority today: the native SQE `ioprio` field
-  accessor exists (`Sqe.java:18,36,90-96`) but is **never set by any public API** —
+- Before B10b (the historical state this decision was made on; see the update above) JUring's
+  public API could not express a class/priority: the native SQE `ioprio` field accessor existed
+  (`Sqe.java:18,36,90-96`) but was **never set by any public API** —
   `docs/juring-inventory.md` §SQE: *"Struct accessor exists but is never set by a public API
   -> no priorities"*, and G3: *"Absent: no public ioprio setter ... no scheduler,
-  shares/weights, or intent cancellation"*.
+  shares/weights, or intent cancellation"*. The decision below still stands because a hint is
+  not a scheduler.
 - No QoS experiment, benchmark cell, report section or user story in the project history
   requires a scheduler. Pre-existing mentions of QoS/shares are only (a) the plan/inventory
   and report/methodology deferral or limitation text, and (b) descriptions of *seastar's*
