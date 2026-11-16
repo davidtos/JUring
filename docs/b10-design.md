@@ -107,10 +107,11 @@ interleaved runs of 320k reads each): raw path paired `fixed/baseline` mean rati
 with 95 % CI **[0.9816, 1.0046]** (includes 1; raw decode is unchanged), `JuringFile`
 non-fixed path median ratio **1.006** (5 pairs) — no measurable regression.
 
-Verified by `JuringFileMultiplexingTest#concurrentNonFixedReadsIntoSameBufferGetDistinctHandles`,
-`ProbeM2` (two handles and one handle, same buffer, both orders) and a raw-path regression
-probe; the raw API keeps its B3 F1 rule (do not reuse one buffer for concurrent non-fixed
-**raw** reads).
+Verified by `JuringFileMultiplexingTest#concurrentNonFixedReadsIntoSameBufferGetDistinctHandles`
+(unregistered) and `#concurrentNonFixedReadsOnRegisteredFilesGetDistinctHandles` (registered
+handles, timed read included), by independent verifier probes (two handles / one handle /
+8-read stress / raw-path invariance) and by the raw-path regression probe; the raw API keeps
+its B3 F1 rule (do not reuse one buffer for concurrent non-fixed **raw** reads).
 
 ---
 
@@ -211,3 +212,10 @@ default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field s
   - two doc-only concerns remained and are corrected after re-verification: **C9** — only
     non-fixed *reads* share `user_data` (fixed above), and **C10** — the `0` wording, section
     order and test counts in this document/`docs/m4-decision.md`/`JuringFile` field comment.
+  - **F1 follow-up then required two more rounds:** C8 was disclose-only, so the `JuringFile`
+    non-fixed read path was fixed with an internal unique-id `user_data` type (`a47ed88`);
+    re-verification then found the fix missed the **registered-file** branch (C11), which was
+    fixed in `d4109fa`; re-verification also corrected two text nits (C12/C13). The final
+    independent verification at `d4109fa` is **PASS** with no blocking or non-blocking
+    correctness findings, 419 tests / 0 failures / 0 errors / 1 skipped, Javadoc 0 warnings,
+    no public API change, and no measurable performance change on the raw benchmark path.
