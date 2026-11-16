@@ -71,20 +71,6 @@ the ring is raw un-reaped `JUring.prepare*` work, and the blocking helpers still
   active is legal. `ring.close()` does not need to detach anything; handles closed afterwards
   detach against the closed ring safely.
 
-### 2.6 Inherited B3 §11.9 / F1 limitation (duplicate `user_data`)
-
-Non-fixed `JuringFile` reads/writes encode the **buffer address** as the SQE `user_data`
-(B3 F1). Two concurrent non-fixed operations on the **same** `MemorySegment` therefore share
-one handle: with B10a this can happen across two attached handles, and the dispatcher cannot
-tell them apart — the second completion is treated as a duplicate and one ledger entry is
-stranded. On this host the `JuringFile` form was also observed to corrupt the JVM native heap
-(a **pre-existing** B3 `READ_EXT` limitation: the same probe crashes the pre-B10 baseline
-`b117667`, while the raw-ring equivalent reaps both completions cleanly). The supported rule
-is unchanged and now applies per ring: **do not reuse one buffer for concurrent non-fixed
-operations**; use distinct buffers or the registered fixed-buffer path. B10 does not fix this;
-it only makes the cross-handle form reachable, so it is documented here and in the
-`JuringFile.prepareRead`/`prepareWrite` Javadoc.
-
 ### 2.5 Performance / allocation
 
 - The raw `JUring.prepare*`/reap path is untouched (M1 W1–W4 cannot move).
@@ -92,6 +78,27 @@ it only makes the cross-handle form reachable, so it is documented here and in t
   per-handle ledger scan already existed). Registry memory is allocated at `open`, never per I/O.
 - `JuringFileZeroAllocationTest#testTwoFileMultiplexedHotPathZeroAllocations` proves 0 heap bytes
   on the multiplexed hot path (registered files + fixed buffers, both await orders).
+
+### 2.6 Inherited B3 §11.9 / F1 limitation (only non-fixed **reads** share `user_data`)
+
+Non-fixed **reads** (the `MemorySegment` overload, `READ_EXT`) encode the **buffer address**
+as the SQE `user_data` (B3 F1). Two concurrent non-fixed reads into the **same**
+`MemorySegment` therefore share one handle: with B10a this can happen across two attached
+handles, and the dispatcher cannot tell them apart — the second completion is treated as a
+duplicate and one ledger entry is stranded. On this host the `JuringFile` form was also
+observed to corrupt the JVM native heap (a **pre-existing** B3 `READ_EXT` limitation: the
+same probe crashes the pre-B10 baseline `b117667`, while the raw-ring equivalent reaps both
+completions cleanly).
+
+Non-fixed **writes** are not affected: `WRITE_EXT` uses a unique operation id as `user_data`
+(`JUring.prepareWriteInternal`), so two concurrent non-fixed writes from the same segment get
+distinct handles and both complete (the usual buffer-lifetime rule still applies: the caller
+must not modify the bytes until the completion is reaped).
+
+The supported rule is unchanged: **do not reuse one buffer for concurrent non-fixed reads**;
+use distinct buffers or the registered fixed-buffer path. B10 does not fix this; it only makes
+the cross-handle form reachable, so it is documented here and in the `JuringFile.prepareRead`
+Javadoc.
 
 ---
 
@@ -140,7 +147,9 @@ field on one raw SQE, overriding the ring default for that request.
 
 No performance/effect claim is made: tests assert encoding, SQE wiring and kernel acceptance
 (completion, or `-EPERM` for an unprivileged `RT` request). Javadoc and `docs/examples.md` state
-that this is a hint, not QoS, and that `0` inherits `ionice`.
+that this is a hint, not QoS, and that `0` means "no override at that level" (a non-zero ring
+default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field so the thread's
+`ionice` is inherited).
 
 ---
 
@@ -168,10 +177,25 @@ that this is a hint, not QoS, and that `0` inherits `ionice`.
 - `JuringFileMultiplexingTest` (8 tests): interleaved two-file awaits, interleaved read/write,
   stream copy on one ring, group commit with a sibling read, scoped `cancel`/`cancelAll`/`close`,
   and the surviving raw-work guard.
-- `IoPriorityTest` (9 tests): encoding/validation, ring-default and raw-SQE wiring, per-handle
+- `IoPriorityTest` (11 tests): encoding/validation, ring-default and raw-SQE wiring, per-handle
   coverage of prepare sites, timed target/companion split, `RT` capability behaviour, and
   end-to-end read/write/sync acceptance. No non-read/write opcode is tagged.
 - `JuringFileZeroAllocationTest`: new two-file multiplexed hot-path test stays at exactly
   0 allocated bytes.
-- `mvn -o test` (full suite) and `mvn -o javadoc:javadoc` (doclint=all, 0 warnings) are the gates
-  recorded in the session handover; no benchmark campaign is run or re-opened.
+- `mvn -o clean test` (full suite, after the verification fixes) = **417 tests, 0 failures,
+  0 errors, 1 skipped**; `mvn -o javadoc:javadoc` (doclint=all) = **BUILD SUCCESS, 0 warnings**.
+  No benchmark campaign is run or re-opened.
+- **Independent verification** (separate agent, own probes; reports in the gitignored
+  `scratch/b10-verify/VERDICT.md` and `REVERDICT.md`):
+  - first pass **FAIL** on one blocking safety defect (C1): the new priority setters did not
+    `ensureOpen()`, so a call after `ring.close()` SIGSEGV'd on the unmapped SQE mapping.
+    Fixed in commit `5590afe` (`ensureOpen()` in both setters; `close()` clears
+    `lastSqeAddress`/`previousSqeAddress`; two regression tests).
+  - re-verification at `5590afe` = **PASS-WITH-CONCERNS, no blocking finding**: C1
+    independently reproduced as fixed (both settlement paths throw
+    `IllegalStateException: JUring is closed`, addresses cleared, process survives, including a
+    probe with a submitted timed read + timer in flight at close); C2–C8 confirmed fixed;
+    additive-API check confirmed; no public regression.
+  - two doc-only concerns remained and are corrected after re-verification: **C9** — only
+    non-fixed *reads* share `user_data` (fixed above), and **C10** — the `0` wording, section
+    order and test counts in this document/`docs/m4-decision.md`/`JuringFile` field comment.

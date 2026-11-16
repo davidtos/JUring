@@ -122,7 +122,7 @@ public final class JuringFile implements AutoCloseable {
     private final FileDescriptor fileDescriptor;
     private final int openFlags;
     private final ResultConsumer completionConsumer;
-    /** B10b: per-handle block-layer I/O priority ({@code 0} = inherit the thread's). */
+    /** B10b: per-handle block-layer I/O priority ({@code 0} = no handle override). */
     private short ioPriority;
 
     private IoPolicy policy = IoPolicy.defaults();
@@ -562,12 +562,6 @@ public final class JuringFile implements AutoCloseable {
     /**
      * Prepares an asynchronous offset write from {@code buffer} ({@code WRITE} or
      * {@code WRITE_EXT}). Does not submit and does not retry.
-     *
-     * <p><b>Non-fixed buffers (B3 F1):</b> like
-     * {@link #prepareRead(long, int, MemorySegment)}, the buffer address becomes the ring
-     * {@code user_data}; do not have two concurrent non-fixed writes into the same segment.
-     * Use distinct buffers or {@link #prepareWriteFixed(long, int, int)} for concurrent
-     * writes.
      *
      * @param offset file offset
      * @param buffer native memory segment containing the bytes to write

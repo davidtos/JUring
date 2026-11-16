@@ -13,8 +13,8 @@ scheduler**: partition work into separate rings/shards, or use OS-level I/O cont
 
 > **Update 2026-11-16 (B10b).** A *low-level* `ioprio` **hint** is now exposed
 > (`IoPriority`, `JUring.defaultIoprio`/`setLastSqeIoprio`, `JuringFile.withIoPriority`,
-> inherited by streams/`GroupCommit`; read/write opcodes only, `0` inherits the thread's
-> `ionice`). This does **not** reopen M4: there is still no scheduler, fair queuing, weights,
+> inherited by streams/`GroupCommit`; read/write opcodes only; `0` means "no override at
+> that level", so the ring default or the thread's `ionice` applies). This does **not** reopen M4: there is still no scheduler, fair queuing, weights,
 > rate limiting or intent layer inside JUring, and the hint is inert on `none`-scheduled
 > NVMe. See [`docs/b10-design.md`](b10-design.md).
 
