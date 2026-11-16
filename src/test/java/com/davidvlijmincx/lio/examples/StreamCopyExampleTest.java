@@ -38,11 +38,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the bytes it copied into the caller's buffer and drives the prefetch pipeline itself,
  * while {@code write} copies into internal buffers and may leave write-behind operations
  * in flight until {@code flush()}. Each stream owns a fixed, option-bounded native buffer
- * set and never closes the underlying {@link JuringFile}. Unlike seastar's single
- * reactor, a {@code JuringFile}'s blocking helpers require every in-flight operation on
- * their ring to belong to that file (B1 ownership rule), so a read-ahead reader and a
- * write-behind writer running at the same time need one ring each. That is why this
- * example opens one ring per direction instead of one shared ring.
+ * set and never closes the underlying {@link JuringFile}. Like seastar's single reactor,
+ * several file-based handles can share one ring: since B10a the reader and writer are
+ * multiplexed on the same {@link JUring}, with each completion routed to the handle that
+ * issued it, so this example opens one ring for both directions.
  *
  * <p>The test copies a 128 KiB pattern file and asserts: the destination is byte-identical
  * to the source, the stream metadata reports the configured options, the native buffer
@@ -66,10 +65,9 @@ class StreamCopyExampleTest {
         byte[] expected = pattern(SIZE);
         Files.write(source, expected);
 
-        try (JUring readRing = new JUring(64);
-             JUring writeRing = new JUring(64);
-             JuringFile sourceFile = JuringFile.open(readRing, source, READ, DIRECT);
-             JuringFile targetFile = JuringFile.open(writeRing, target, 0644, RDWR, DIRECT, CREATE, TRUNCATE)) {
+        try (JUring ring = new JUring(64);
+             JuringFile sourceFile = JuringFile.open(ring, source, READ, DIRECT);
+             JuringFile targetFile = JuringFile.open(ring, target, 0644, RDWR, DIRECT, CREATE, TRUNCATE)) {
 
             InputStreamOptions inputOptions = InputStreamOptions.defaults()
                     .withBufferSize(BUFFER)

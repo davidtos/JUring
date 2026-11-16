@@ -38,9 +38,10 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  *
  * <h2>Threading and ring ownership</h2>
  * <p>The stream is <strong>not thread-safe</strong> (one owner thread, like
- * {@link JuringFile}). It uses {@link JuringFile}'s blocking helpers, so the B1 ring
- * ownership rule applies: the ring must not carry foreign in-flight work while the stream
- * is used.
+ * {@link JuringFile}). It uses {@link JuringFile}'s blocking helpers, so it may share one
+ * {@link JUring} with other {@link JuringFile}-based handles (files, output streams, group
+ * commits) on the same thread; completions are routed to their issuing handle. Only raw
+ * un-reaped ring work on the shared ring is rejected (B10a).
  *
  * <h2>Lifecycle</h2>
  * <p>{@link #close()} drains/cancels the stream's own in-flight reads, releases the

@@ -37,11 +37,11 @@ JUring is a library-first Java module named `JUring`, which exports a single sup
 `JuringFile.CancelStatus`, `MetricsJmx.Handle`). This surface is what the compatibility promise
 in §4 covers.
 
-In the 0.1-SNAPSHOT line this package has **36 public top-level types**:
+In the 0.1-SNAPSHOT line this package has **37 public top-level types**:
 
 - **Entry points and core values** — `JUring`, `JUringBlocking`, `JuringFile`,
   `JuringInputStream`, `JuringOutputStream`, `FileDescriptor`, `Result`, `ResultConsumer`,
-  `CompletionHandler`, `OperationType`.
+  `CompletionHandler`, `OperationType`, `IoPriority`.
 - **Options and policy enums** — `IoUringOptions`, `SqeOptions`, `LinuxOpenOptions`,
   `InputStreamOptions`, `OutputStreamOptions`, `DurabilityMode`, `FadviseAdvice`, `IoPolicy`,
   `ShardOptions`, `GroupCommitOptions`.
@@ -53,6 +53,12 @@ In the 0.1-SNAPSHOT line this package has **36 public top-level types**:
 
 *(Note: an earlier pre-release prototype package, `com.davidvlijmincx.lio.blackpanda`, was
 removed from the repository in 2026-11-16 to keep JUring strictly library-first.)*
+
+The 2026-11-16 B10 additions are purely additive: `IoPriority` is new, and
+`JUring.defaultIoprio()`/`setDefaultIoprio(short)`/`setLastSqeIoprio(short)` plus
+`JuringFile.withIoPriority(short)`/`ioPriority()` add members without changing any existing
+signature. The only behaviour change is a relaxation: blocking `JuringFile` helpers now
+accept sibling `JuringFile`-based handles on the same ring (B10a).
 
 ### Internal — no guarantee
 
@@ -186,7 +192,7 @@ Checked against the tree at `b75515e` (0.1-SNAPSHOT, before B9 changes):
 | no releases / no tags | `git tag` prints nothing; no release artifacts in the repo |
 | repository URL | `git remote -v` → `https://github.com/davidtos/JUring.git` |
 | exported packages | `src/main/java/module-info.java` exports `com.davidvlijmincx.lio.api` |
-| 36 public types in `lio.api` | source inspection of top-level `public` type declarations |
+| 37 public types in `lio.api` | source inspection of top-level `public` type declarations |
 | internal type list | source inspection of top-level package-private type declarations |
 | exactly one `@Deprecated` | source grep of `src/main/java`: only `JUring.prepareCancel(long)` |
 | no hosted CI | no `.github/` or other CI configuration in the repo (`docs/b9-design.md` §7) |

@@ -60,11 +60,12 @@ that after `flush()` the file length equals the logical stream position, i.e. th
 write-behind queue was drained. The 128 KiB size is a multiple of the alignment so the copy
 works on the `O_DIRECT` path.
 
-Note on the ring setup: each stream owns its own ring in this example. `JuringFile`'s
-blocking helpers require every in-flight operation on their ring to belong to that one file
-(the B1 ownership rule), so a read-ahead reader and a write-behind writer that are active at
-the same time cannot share a ring; seastar can do both on one reactor because the reactor
-owns the ring and every file object participates in it.
+Note on the ring setup: both streams share **one** `JUring` in this example (since B10a).
+The blocking helpers route every completion to the handle that issued it, so a read-ahead
+reader and a write-behind writer can be active at the same time on the same ring, like
+seastar's single reactor where every file object participates in the reactor's ring.
+Only raw un-reaped `JUring.prepare*` work on that ring still makes the blocking helpers
+fail with `IllegalStateException`.
 
 ### E3 — one ring, many files
 
@@ -72,10 +73,11 @@ owns the ring and every file object participates in it.
 as a fixed-file slot, and issues 16 writes (two offsets per file) in a single batched
 submission, followed by 16 reads in a single batch. Every file has its own deterministic
 content, so per-file offsets and independent completion are checked, not just aggregate
-byte counts. Because `JuringFile` blocking helpers are single-owner by contract, the batch is
-prepared with the raw `JUring.prepare*` methods using each handle's `registeredSlot()` and
-reaped at ring level — the multi-file pattern is a ring-level batch in JUring, whereas
-seastar expresses it as many file objects multiplexed by one reactor.
+byte counts. This example deliberately stays at the raw ring level (the files are not
+`JuringFile` handles), but since B10a `JuringFile` handles can also share one ring: their
+blocking helpers multiplex completions without the `JuringFileMultiplexingTest`-era
+`IllegalStateException`, while raw un-reaped ring work remains guarded. seastar expresses
+the same multi-file pattern as many file objects multiplexed by one reactor.
 
 ### E4 — eight virtual threads on one blocking ring
 

@@ -54,7 +54,9 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * the B2 {@code fdatasync}-on-close, releases the buffers and is idempotent. It does
  * <strong>not</strong> close the underlying {@link JuringFile}. Writing after
  * {@code close()} throws {@link IllegalStateException}. The stream is
- * <strong>not thread-safe</strong> and inherits the B1 ring-ownership rule.
+ * <strong>not thread-safe</strong> and inherits the B10a ring-ownership rule: it may share
+ * its {@link JUring} with sibling handles on the same thread; only raw un-reaped ring work is
+ * rejected.
  */
 public final class JuringOutputStream implements AutoCloseable {
 

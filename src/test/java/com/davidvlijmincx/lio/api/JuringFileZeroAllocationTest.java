@@ -52,6 +52,7 @@ class JuringFileZeroAllocationTest {
 
     private JUring ring;
     private JuringFile file;
+    private JuringFile secondFile;
 
     @BeforeEach
     void setUp() {
@@ -63,6 +64,10 @@ class JuringFileZeroAllocationTest {
 
     @AfterEach
     void tearDown() {
+        if (secondFile != null) {
+            secondFile.close();
+            secondFile = null;
+        }
         if (file != null) {
             file.close();
             file = null;
@@ -209,4 +214,66 @@ class JuringFileZeroAllocationTest {
         }
         return bytes;
     }
+    @Test
+    void testTwoFileMultiplexedHotPathZeroAllocations(@TempDir Path dir) throws Exception {
+        Path pathA = dir.resolve("juringfile_two_file_a.bin");
+        Path pathB = dir.resolve("juringfile_two_file_b.bin");
+        Files.write(pathA, expected(0, FILE_BLOCKS * BLOCK_SIZE));
+        Files.write(pathB, expected(0, FILE_BLOCKS * BLOCK_SIZE));
+
+        ring.registerBuffers(BLOCK_SIZE, 16);
+        file = JuringFile.open(ring, pathA, READ);
+        secondFile = JuringFile.open(ring, pathB, READ);
+        assertTrue(file.register() >= 0, "register() must provide the fixed-file fast path");
+        assertTrue(secondFile.register() >= 0, "register() must provide the fixed-file fast path");
+
+        long threadId = Thread.currentThread().threadId();
+        int zeroCount = 0;
+        for (int w = 0; w < 30; w++) {
+            long before = getThreadAllocatedBytes(threadId);
+            runMultiplexedReads(WARMUP_OPS / 10);
+            long after = getThreadAllocatedBytes(threadId);
+            if (after - before == 0L) {
+                if (++zeroCount >= 3) {
+                    break;
+                }
+            } else {
+                zeroCount = 0;
+            }
+        }
+        assertTrue(zeroCount >= 3, "warmup must reach 3 consecutive 0-allocation rounds before measuring");
+
+        long bytesBefore = getThreadAllocatedBytes(threadId);
+        long bytesRead = runMultiplexedReads(MEASURED_OPS / 2);
+        long bytesAfter = getThreadAllocatedBytes(threadId);
+        long allocated = bytesAfter - bytesBefore;
+
+        assertEquals(0L, allocated,
+                "multiplexed two-file dispatch hot path allocated " + allocated + " bytes");
+        assertEquals(2L * (MEASURED_OPS / 2) * BLOCK_SIZE, bytesRead);
+    }
+
+    /**
+     * Two registered files alternate fixed-buffer reads on one ring, awaiting in opposite
+     * orders so that each reaping path has to route a sibling's completion. Returns total
+     * bytes read.
+     */
+    private long runMultiplexedReads(int rounds) throws JuringException {
+        long total = 0;
+        for (int i = 0; i < rounds; i++) {
+            long offsetA = (long) (i % FILE_BLOCKS) * BLOCK_SIZE;
+            long offsetB = (long) ((i + 3) % FILE_BLOCKS) * BLOCK_SIZE;
+            long handleA = file.prepareReadFixed(offsetA, BLOCK_SIZE, 0);
+            long handleB = secondFile.prepareReadFixed(offsetB, BLOCK_SIZE, 1);
+            if ((i & 1) == 0) {
+                total += secondFile.await(handleB);
+                total += file.await(handleA);
+            } else {
+                total += file.await(handleA);
+                total += secondFile.await(handleB);
+            }
+        }
+        return total;
+    }
+
 }

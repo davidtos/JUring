@@ -93,6 +93,12 @@ public class JUring implements AutoCloseable {
     private int[] registeredFileTable = new int[0];
 
     private long opSeq = 1;
+    private short defaultIoprio;
+    private long lastSqeAddress;
+    private long previousSqeAddress;
+    /** B10: {@code JuringFile} handles attached to this ring (grows at open, shrinks at close). */
+    private JuringFile[] attachedFiles = new JuringFile[0];
+    private int attachedFileCount;
     private boolean closed;
     private long cancelledAtClose;
     private int abandonedAtClose;
@@ -803,7 +809,7 @@ public class JUring implements AutoCloseable {
      * @return the operation handle ({@code user_data})
      */
     public long prepareWriteFixed(FileDescriptor fd, long bufferAddress, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long sqe = getSqe(SqeOptions.combineOptions(sqeOptions), false);
+        long sqe = getRwSqe(SqeOptions.combineOptions(sqeOptions), false);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
         ioUring.prepareWriteFixed(sqe, fd.getFd(), bufferAddress, writeSize, offset, bufferIndex);
@@ -897,7 +903,7 @@ public class JUring implements AutoCloseable {
             }
         }
 
-        long sqe = getSqe(flags, false);
+        long sqe = getRwSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         IovecBlock.setCount(blockAddr, nrVecs);
 
@@ -953,7 +959,7 @@ public class JUring implements AutoCloseable {
             }
         }
 
-        long sqe = getSqe(flags, false);
+        long sqe = getRwSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         IovecBlock.setCount(blockAddr, nrVecs);
 
@@ -1020,7 +1026,7 @@ public class JUring implements AutoCloseable {
             }
         }
 
-        long sqe = getSqe(flags, false);
+        long sqe = getRwSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         IovecBlock.setCount(blockAddr, nrVecs);
 
@@ -1076,7 +1082,7 @@ public class JUring implements AutoCloseable {
             }
         }
 
-        long sqe = getSqe(flags, false);
+        long sqe = getRwSqe(flags, false);
         long blockAddr = ioUring.allocateIovecBlock();
         IovecBlock.setCount(blockAddr, nrVecs);
 
@@ -1281,7 +1287,7 @@ public class JUring implements AutoCloseable {
         if (readSize < 0) {
             throw new IllegalArgumentException("Invalid readSize: " + readSize);
         }
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long address = NativeDispatcher.C.mallocAddress(Math.max(1L, readSize));
         long userData = UserData.encode(OperationType.READ, address);
 
@@ -1296,7 +1302,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Invalid readSize: " + readSize);
         }
         validateNativeSegment(buffer, true);
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long userData = UserData.encode(OperationType.READ_EXT, buffer.address());
 
         ioUring.prepareRead(sqe, fdOrIndex, buffer.address(), readSize, offset);
@@ -1312,7 +1318,7 @@ public class JUring implements AutoCloseable {
         if (readSize < 0 || readSize > readBufferPool.bufferSize()) {
             throw new IllegalArgumentException("Read size " + readSize + " out of range (0.." + readBufferPool.bufferSize() + ")");
         }
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long address = readBufferPool.checkOut();
         long userData = UserData.encode(OperationType.READ_POOLED, address);
 
@@ -1339,7 +1345,7 @@ public class JUring implements AutoCloseable {
 
     private long prepareWriteInternal(int fdOrIndex, MemorySegment bytes, long offset, byte flags, boolean fixedFile) {
         validateNativeSegment(bytes, false);
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = UserData.encode(OperationType.WRITE_EXT, opId);
 
@@ -1351,7 +1357,7 @@ public class JUring implements AutoCloseable {
 
     private long prepareWriteInternal(int fdOrIndex, byte[] bytes, long offset, byte flags, boolean fixedFile) {
         Objects.requireNonNull(bytes, "bytes");
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         MemorySegment buff = NativeDispatcher.C.alloc(bytes.length);
         MemorySegment.copy(bytes, 0, buff, JAVA_BYTE, 0, bytes.length);
 
@@ -1372,7 +1378,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Read size exceeds registered buffer size");
         }
 
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.READ_FIXED, bufferIndex, opId);
 
@@ -1391,7 +1397,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], JAVA_BYTE, 0, bytes.length);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
@@ -1419,7 +1425,7 @@ public class JUring implements AutoCloseable {
             throw new WrongThreadException("Segment is confined to another thread");
         }
 
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long targetAddr = registeredBufferAddresses[bufferIndex];
         if (!bytes.isNative() || bytes.address() != targetAddr) {
             MemorySegment.copy(bytes, 0, registeredBuffersArray[bufferIndex], 0, byteSize);
@@ -1442,7 +1448,7 @@ public class JUring implements AutoCloseable {
             throw new IllegalArgumentException("Write size exceeds registered buffer size");
         }
 
-        long sqe = getSqe(flags, fixedFile);
+        long sqe = getRwSqe(flags, fixedFile);
         long opId = opSeq++;
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
@@ -1644,7 +1650,7 @@ public class JUring implements AutoCloseable {
         if (buffer.byteSize() < 8L) {
             throw new IllegalArgumentException("wakeup read buffer must be at least 8 bytes: " + buffer.byteSize());
         }
-        long sqe = getSqe((byte) 0, false);
+        long sqe = getRwSqe((byte) 0, false);
         ioUring.prepareRead(sqe, fd, buffer.address(), 8L, 0L);
         ioUring.setUserData(sqe, userData);
         return userData;
@@ -2177,11 +2183,37 @@ public class JUring implements AutoCloseable {
         if (sqe == 0L) {
             throw new IllegalStateException("Submission queue ring is full; call submit() before preparing more operations");
         }
+        previousSqeAddress = lastSqeAddress;
+        lastSqeAddress = sqe;
         if (fixedFile) flags |= SqeOptions.IOSQE_FIXED_FILE.value;
         if (flags != 0) {
             ioUring.setSqeFlag(sqe, flags);
         }
         return sqe;
+    }
+
+    /**
+     * B10b: {@link #getSqe} for the read/write opcode family, where {@code sqe->ioprio}
+     * carries the block-layer priority. Other opcodes reject a non-zero {@code ioprio} on
+     * current kernels (verified: {@code -EINVAL} for NOP/FSYNC/STATX), so the ring default is
+     * applied only here.
+     */
+    private long getRwSqe(byte flags, boolean fixedFile) {
+        long sqe = getSqe(flags, fixedFile);
+        if (defaultIoprio != 0) {
+            Sqe.setIoprio(sqe, defaultIoprio);
+        }
+        return sqe;
+    }
+
+    /** Whether {@code sqe->ioprio} carries a block-layer priority for this opcode. */
+    private static boolean supportsIoprio(byte opcode) {
+        return opcode == IoUringDispatcher.IORING_OP_READ
+                || opcode == IoUringDispatcher.IORING_OP_WRITE
+                || opcode == IoUringDispatcher.IORING_OP_READV
+                || opcode == IoUringDispatcher.IORING_OP_WRITEV
+                || opcode == IoUringDispatcher.IORING_OP_READ_FIXED
+                || opcode == IoUringDispatcher.IORING_OP_WRITE_FIXED;
     }
 
     /**
@@ -2659,6 +2691,151 @@ public class JUring implements AutoCloseable {
             registeredBuffers.set(index, buffers[i]);
         }
         ioUring.setRegisteredBuffers(registeredBuffersArray);
+    }
+
+    // ------------------------------------------------------------------
+    // B10: shared file multiplexing and block-layer I/O priority
+    // ------------------------------------------------------------------
+
+    /**
+     * Returns the ring-wide default block-layer I/O priority.
+     *
+     * <p>The default is applied to every SQE prepared by this ring; a handle-level
+     * {@link JuringFile#withIoPriority(short)} or {@link #setLastSqeIoprio(short)} overrides
+     * it per operation. The returned value is the encoded {@code ioprio} field, where
+     * {@code 0} means "inherit the submitting thread's priority".
+     *
+     * @return the default {@code ioprio} value
+     */
+    public short defaultIoprio() {
+        return defaultIoprio;
+    }
+
+    /**
+     * Sets the ring-wide default block-layer I/O priority applied to every prepared SQE.
+     *
+     * <p>This is a <b>hint</b> for the block layer: it only changes ordering when the active
+     * I/O scheduler supports priorities ({@code bfq}/{@code mq-deadline}); {@code none} and
+     * {@code kyber} ignore it. Build values with {@link IoPriority}; {@code 0} keeps
+     * inheriting the submitting thread's priority (for example from {@code ionice}).
+     *
+     * @param ioprio the encoded {@code ioprio} value ({@code 0} = inherit)
+     * @throws IllegalArgumentException when the value is not a valid encoding
+     */
+    public void setDefaultIoprio(short ioprio) {
+        if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
+            throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
+        }
+        this.defaultIoprio = ioprio;
+    }
+
+    /**
+     * Applies an I/O priority to the SQE most recently prepared by a {@code prepare*} method.
+     *
+     * <p>This is the raw per-request escape hatch for callers that use the low-level
+     * {@code prepare*}/{@link #submit()} API; it must be called on the owner thread after the
+     * prepare call and before {@link #submit()}. {@code 0} leaves the field unset (the kernel
+     * then inherits the thread's priority).
+     *
+     * <p>Only the read/write opcode family ({@code READ}, {@code WRITE}, {@code READV},
+     * {@code WRITEV}, {@code READ_FIXED}, {@code WRITE_FIXED}) accepts {@code ioprio}: the
+     * kernel rejects the request with {@code EINVAL} for other opcodes (verified for
+     * {@code NOP}, {@code FSYNC} and {@code STATX}), so those are rejected here client-side.
+     *
+     * @param ioprio the encoded {@code ioprio} value ({@code 0} = inherit)
+     * @throws IllegalArgumentException when the value is not a valid encoding, or when the
+     *                                  most recently prepared SQE is not a read/write operation
+     * @throws IllegalStateException    when no SQE has been prepared yet
+     */
+    public void setLastSqeIoprio(short ioprio) {
+        if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
+            throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
+        }
+        if (lastSqeAddress == 0L) {
+            throw new IllegalStateException("setLastSqeIoprio: no SQE has been prepared by this ring yet");
+        }
+        byte opcode = Sqe.getOpcode(lastSqeAddress);
+        if (!supportsIoprio(opcode)) {
+            throw new IllegalArgumentException("setLastSqeIoprio: opcode " + opcode
+                    + " does not carry a block-layer I/O priority; only read/write operations accept ioprio");
+        }
+        Sqe.setIoprio(lastSqeAddress, ioprio);
+    }
+
+    /** Address of the most recently prepared SQE ({@code 0} when none); package-private for tests. */
+    long lastPreparedSqeAddress() {
+        return lastSqeAddress;
+    }
+
+    /** Address of the previous SQE before the last one; package-private for tests. */
+    long previousPreparedSqeAddress() {
+        return previousSqeAddress;
+    }
+
+    /**
+     * Attaches a {@link JuringFile} handle so its completions are routed to its own ledger
+     * when any handle on this ring reaps (B10a). Called by {@code JuringFile.open} on the
+     * owner thread; allocates only when the registry grows (open-time, never per request).
+     */
+    void attachFile(JuringFile file) {
+        ensureOpen();
+        if (attachedFileCount == attachedFiles.length) {
+            int newLength = attachedFiles.length == 0 ? 4 : attachedFiles.length << 1;
+            attachedFiles = Arrays.copyOf(attachedFiles, newLength);
+        }
+        attachedFiles[attachedFileCount++] = file;
+    }
+
+    /** Detaches a closing {@link JuringFile}; safe after {@link #close()} of the ring. */
+    void detachFile(JuringFile file) {
+        for (int i = 0; i < attachedFileCount; i++) {
+            if (attachedFiles[i] == file) {
+                int last = --attachedFileCount;
+                attachedFiles[i] = attachedFiles[last];
+                attachedFiles[last] = null;
+                return;
+            }
+        }
+    }
+
+    /** Sum of the in-flight ring requests owned by all attached {@link JuringFile} handles. */
+    int attachedFilesInFlightCount() {
+        int total = 0;
+        for (int i = 0; i < attachedFileCount; i++) {
+            total += attachedFiles[i].inFlightOperations();
+        }
+        return total;
+    }
+
+    /**
+     * Routes one reaped completion to the attached {@link JuringFile} that issued it (B10a).
+     *
+     * <p>The reaping file is tried first (single-file fast path); siblings are scanned only
+     * when the handle is not in the caller's ledger. A completion that matches no handle is
+     * either a stray timer (ignored, as before) or raw un-reaped ring work, which is counted
+     * on the reaping file so the existing ownership guard still rejects blocking helpers.
+     *
+     * @param result      the reaped completion
+     * @param reapingFile the handle whose reaping path delivered the completion
+     */
+    void dispatchFileCompletion(Result result, JuringFile reapingFile) {
+        if (reapingFile != null && reapingFile.deliverCompletion(result)) {
+            return;
+        }
+        for (int i = 0; i < attachedFileCount; i++) {
+            JuringFile file = attachedFiles[i];
+            if (file != reapingFile && file.deliverCompletion(result)) {
+                return;
+            }
+        }
+        OperationType type = result.type();
+        if (type == OperationType.TIMEOUT || type == OperationType.LINK_TIMEOUT) {
+            // Stray timer completions carry no file operation and are ignored (B1 behaviour).
+            return;
+        }
+        if (reapingFile != null) {
+            reapingFile.noteForeignCompletion();
+        }
     }
 
     /** Number of queued-but-not-yet-completed operations on the underlying ring. */

@@ -55,9 +55,10 @@ import java.util.Objects;
  * latched.
  *
  * <h2>Threading / ownership</h2>
- * <p>Not thread-safe: exactly like {@link JuringFile}, one owner thread per handle and ring
- * (B1 rule). A batch can leave up to {@code maxBatchSize} operations in flight on the file's
- * ring, so a group commit must not be mixed with other blocking users of the same ring.
+ * <p>Not thread-safe: exactly like {@link JuringFile}, one owner thread per handle and ring.
+ * A batch can leave up to {@code maxBatchSize} operations in flight on the file's ring; since
+ * B10a that ring may be shared with sibling {@code JuringFile}-based handles, whose
+ * completions are routed to their own ledgers. Only raw un-reaped ring work is rejected.
  * This is a caller-driven batch, not a daemon.
  *
  * <h2>Lifecycle</h2>

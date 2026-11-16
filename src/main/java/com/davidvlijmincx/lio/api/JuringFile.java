@@ -27,13 +27,14 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * helpers interact with a shard loop).
  *
  * <h2>Ring ownership</h2>
- * <p>The blocking helpers ({@link #await}, {@link #drain}, {@link #close} and the
- * convenience methods) reap completions from the ring. They therefore require that all
- * operations currently in flight on the ring belong to this handle; otherwise they fail
- * with {@link IllegalStateException} instead of silently losing another owner's
- * completions. Raw ring operations can be issued in parallel with a {@code JuringFile}
- * as long as the caller reaps those completions itself before calling a blocking file
- * helper. A ring-level completion dispatcher arrives in a later milestone (B3).
+ * <p>Several {@code JuringFile}-based handles (files, streams, group commits) may share one
+ * {@link JUring} on its owner thread: each completion is routed to the ledger of the handle
+ * that issued it, so a blocking helper only waits for its own operations and closing or
+ * cancelling one handle never affects a sibling. The one remaining restriction is raw ring
+ * work: if the caller prepares operations directly on the {@link JUring} and leaves them
+ * un-reaped, the blocking helpers still fail with {@link IllegalStateException} instead of
+ * silently losing those completions — reap the raw work first (or drive everything through
+ * the raw {@code prepare*}/{@code submit()} API).
  *
  * <h2>Fast path</h2>
  * <p>Register the file once ({@link #register()}) and use
@@ -120,7 +121,9 @@ public final class JuringFile implements AutoCloseable {
     private final Path path;
     private final FileDescriptor fileDescriptor;
     private final int openFlags;
-    private final ResultConsumer completionConsumer = this::onCompletion;
+    private final ResultConsumer completionConsumer;
+    /** B10b: per-handle block-layer I/O priority ({@code 0} = inherit the thread's). */
+    private short ioPriority;
 
     private IoPolicy policy = IoPolicy.defaults();
     private long closeTimeoutMillis = DEFAULT_CLOSE_TIMEOUT_MILLIS;
@@ -160,6 +163,7 @@ public final class JuringFile implements AutoCloseable {
         this.path = path;
         this.fileDescriptor = fileDescriptor;
         this.openFlags = openFlags;
+        this.completionConsumer = result -> ring.dispatchFileCompletion(result, this);
     }
 
     // ------------------------------------------------------------------
@@ -204,7 +208,16 @@ public final class JuringFile implements AutoCloseable {
         if (fd < 0) {
             throw JuringException.fromResult(fd, "open", path.toString());
         }
-        return new JuringFile(ring, path, new FileDescriptor(fd), flags);
+        JuringFile file = new JuringFile(ring, path, new FileDescriptor(fd), flags);
+        try {
+            ring.attachFile(file);
+        } catch (RuntimeException e) {
+            // Release the descriptor instead of leaking it when the ring cannot register
+            // the handle (for example an allocation failure while growing the registry).
+            file.close();
+            throw e;
+        }
+        return file;
     }
 
     /**
@@ -259,6 +272,50 @@ public final class JuringFile implements AutoCloseable {
      */
     public boolean isRegistered() {
         return registeredSlot >= 0;
+    }
+
+    /**
+     * Sets the block-layer I/O priority applied to every request this handle prepares.
+     *
+     * <p>The value is written into the {@code io_uring_sqe.ioprio} field of every read/write
+     * request this handle prepares, including the target of a timed operation (but not its
+     * linked-timeout companion). Opcodes that do not carry {@code ioprio} — {@code fsync},
+     * {@code ftruncate}, {@code fallocate}, {@code statx}, timers and cancels — are left
+     * untouched, because the kernel rejects a non-zero {@code ioprio} on them ({@code EINVAL}).
+     * {@link JuringInputStream}, {@link JuringOutputStream} and {@link GroupCommit} inherit
+     * the setting because they prepare through this handle. It is a <b>hint</b>: only
+     * priority-aware schedulers ({@code bfq}/{@code mq-deadline}) act on it, and {@code 0}
+     * keeps inheriting the thread's priority ({@code ionice}/nice).
+     *
+     * @param ioprio the encoded {@code ioprio} value, built with {@link IoPriority};
+     *               {@code 0} means inherit the submitting thread's priority
+     * @return this handle, for chaining
+     * @throws IllegalArgumentException when the value is not a valid encoding
+     * @throws IllegalStateException    when the handle is closed
+     */
+    public JuringFile withIoPriority(short ioprio) {
+        ensureOpen("withIoPriority");
+        if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
+            throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
+        }
+        this.ioPriority = ioprio;
+        return this;
+    }
+
+    /**
+     * Returns the block-layer I/O priority applied to requests prepared through this handle.
+     *
+     * @return the encoded {@code ioprio} value ({@code 0} = inherit the thread's priority)
+     */
+    public short ioPriority() {
+        return ioPriority;
+    }
+
+    /** B10b: applies the handle priority to the SQE most recently prepared by the ring. */
+    private void applyIoPriority() {
+        if (ioPriority != 0) {
+            ring.setLastSqeIoprio(ioPriority);
+        }
     }
 
     /**
@@ -458,6 +515,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareRead(registeredSlot, buffer, length, offset)
                 : ring.prepareRead(fileDescriptor, buffer, length, offset);
+        applyIoPriority();
         track(handle);
         return handle;
     }
@@ -484,6 +542,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareReadFixed(registeredSlot, length, offset, bufferIndex)
                 : ring.prepareReadFixed(fileDescriptor, length, offset, bufferIndex);
+        applyIoPriority();
         track(handle);
         return handle;
     }
@@ -508,6 +567,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareWrite(registeredSlot, buffer, offset)
                 : ring.prepareWrite(fileDescriptor, buffer, offset);
+        applyIoPriority();
         track(handle);
         return handle;
     }
@@ -533,6 +593,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareWriteFixed(registeredSlot, length, offset, bufferIndex)
                 : ring.prepareWriteFixed(fileDescriptor, length, offset, bufferIndex);
+        applyIoPriority();
         track(handle);
         return handle;
     }
@@ -552,6 +613,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareFsync(registeredSlot, flags)
                 : ring.prepareFsync(fileDescriptor, flags);
+        // fsync does not carry ioprio (the kernel rejects it), so no applyIoPriority() here.
         track(handle);
         // B6: count only OperationType.FSYNC requests prepared through this handle.
         syncOperations++;
@@ -581,6 +643,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareFtruncate(registeredSlot, newLength)
                 : ring.prepareFtruncate(fileDescriptor, newLength);
+        // ftruncate does not carry ioprio; no applyIoPriority() here.
         track(handle);
         return handle;
     }
@@ -610,6 +673,7 @@ public final class JuringFile implements AutoCloseable {
         long handle = registeredSlot >= 0
                 ? ring.prepareFallocate(registeredSlot, mode, offset, length)
                 : ring.prepareFallocate(fileDescriptor, mode, offset, length);
+        // fallocate does not carry ioprio; no applyIoPriority() here.
         track(handle);
         return handle;
     }
@@ -666,6 +730,7 @@ public final class JuringFile implements AutoCloseable {
             NativeDispatcher.C.free(timespecAddress);
             throw e;
         }
+        // a pure timer does not carry ioprio; no applyIoPriority() here.
         track(handle, 0L, timespecAddress, ROLE_TIMEOUT);
         return handle;
     }
@@ -718,6 +783,9 @@ public final class JuringFile implements AutoCloseable {
                     ? ring.prepareRead(registeredSlot, buffer, length, offset, SqeOptions.IOSQE_IO_LINK)
                     : ring.prepareRead(fileDescriptor, buffer, length, offset, SqeOptions.IOSQE_IO_LINK);
             targetPrepared = true;
+            // B10b: tag the target SQE now, before the linked-timeout companion becomes the
+            // most recently prepared SQE.
+            applyIoPriority();
             long companion = ring.prepareLinkTimeout(timespecSegment(timespecAddress), 0);
             track(target, companion, timespecAddress, ROLE_NORMAL);
             trackCompanion(companion);
@@ -763,6 +831,8 @@ public final class JuringFile implements AutoCloseable {
                     ? ring.prepareWrite(registeredSlot, buffer, offset, SqeOptions.IOSQE_IO_LINK)
                     : ring.prepareWrite(fileDescriptor, buffer, offset, SqeOptions.IOSQE_IO_LINK);
             targetPrepared = true;
+            // B10b: tag the target SQE before preparing the LINK_TIMEOUT companion.
+            applyIoPriority();
             long companion = ring.prepareLinkTimeout(timespecSegment(timespecAddress), 0);
             track(target, companion, timespecAddress, ROLE_NORMAL);
             trackCompanion(companion);
@@ -944,18 +1014,60 @@ public final class JuringFile implements AutoCloseable {
     }
 
     /**
-     * Issues the cancel requests for every pending user-visible request. The caller must hold
-     * the ownership guard ({@code ring.inFlightCount() == inFlight}), which means every
-     * in-flight request on the ring belongs to this handle; therefore a single ring-wide
-     * {@code IORING_OP_ASYNC_CANCEL} with {@code ALL|ANY} is exact, safe and O(1) even with
-     * tens of thousands of pending requests (verified: cancelling 10k timers takes a single
-     * request). Requests that the kernel already finished race normally and still produce
-     * exactly one terminal completion each.
+     * Issues cancels for every pending user-visible request. When this handle owns everything
+     * in flight on the ring, the O(1) ring-wide cancel is exact and safe; otherwise only this
+     * handle's requests are cancelled by {@code user_data}, never a sibling's.
+     *
+     * @return {@code false} when the deadline expires before the cancels could be submitted
+     */
+    private boolean issueCancelsBatched(long deadlineNanos) {
+        if (inFlight == ring.inFlightCount()) {
+            return issueRingWideCancel(deadlineNanos);
+        }
+        return issuePerHandleCancels(deadlineNanos);
+    }
+
+    /**
+     * Issues the cancels for the shared-ring case: one {@code IORING_OP_ASYNC_CANCEL} with
+     * {@code CANCEL_BY_USER_DATA} per own pending request (targets and standalone timers
+     * only — a cancelled target disarms its linked timeout), then the caller drains.
+     */
+    private boolean issuePerHandleCancels(long deadlineNanos) {
+        int pending = 0;
+        for (int i = 0; i < ledgerCapacity; i++) {
+            if (states[i] == PENDING && (roles[i] == ROLE_NORMAL || roles[i] == ROLE_TIMEOUT)) {
+                pending++;
+            }
+        }
+        if (pending == 0) {
+            ring.submit();
+            return true;
+        }
+        if (freeTop < pending) {
+            // Every control request needs a ledger slot of its own; a full ledger cannot be
+            // cancelled without dropping the await() handles the caller still owns.
+            throw new IllegalStateException("JuringFile.cancelAll: in-flight capacity exhausted ("
+                    + ledgerCapacity + " slots, " + pending + " cancel request(s) needed);"
+                    + " await completions or raise withInFlightCapacity");
+        }
+        for (int i = 0; i < ledgerCapacity; i++) {
+            if (states[i] == PENDING && (roles[i] == ROLE_NORMAL || roles[i] == ROLE_TIMEOUT)) {
+                issueCancelControl(handles[i]);
+            }
+        }
+        ring.submit();
+        return drainUntilIdle(deadlineNanos);
+    }
+
+    /**
+     * Issues one ring-wide {@code IORING_OP_ASYNC_CANCEL} with {@code ALL|ANY}; exact and
+     * O(1) because every in-flight request on the ring belongs to this handle. Used when
+     * {@code inFlight == ring.inFlightCount()} (no sibling handle has anything in flight).
      *
      * @return {@code false} when the deadline expires before the cancel request could be
      *         submitted
      */
-    private boolean issueCancelsBatched(long deadlineNanos) {
+    private boolean issueRingWideCancel(long deadlineNanos) {
         while (true) {
             boolean anyPending = false;
             for (int i = 0; i < ledgerCapacity; i++) {
@@ -1248,6 +1360,7 @@ public final class JuringFile implements AutoCloseable {
             long handle = registeredSlot >= 0
                     ? ring.prepareStatx(registeredSlot, statxBuffer)
                     : ring.prepareStatx(fileDescriptor, statxBuffer);
+            // statx does not carry ioprio (the kernel rejects it); no applyIoPriority() here.
             track(handle);
             await(handle);
             return statxBuffer.get(JAVA_LONG, STATX_SIZE_OFFSET);
@@ -1479,6 +1592,8 @@ public final class JuringFile implements AutoCloseable {
                 fdClosed = true;
                 fileDescriptor.close();
             }
+            // B10a: a closed handle must stop receiving routed sibling completions.
+            ring.detachFile(this);
         }
     }
 
@@ -1490,17 +1605,12 @@ public final class JuringFile implements AutoCloseable {
         // timeoutMillis + GRACE_NANOS. The shutdown path never waits past it.
         long hardDeadline = System.nanoTime() + Math.max(0L, timeoutMillis) * 1_000_000L + GRACE_NANOS;
         int ringInFlight = ring.inFlightCount();
-        if (ringInFlight > inFlight) {
-            // Foreign in-flight work on the ring: reaping would steal another owner's
-            // completions, and cancelling would create cancel CQEs we cannot reap (they would
-            // grow the ring in-flight counter forever). Count our own requests as abandoned
-            // and leave their completions to the ring's owner (B1 foreign-work rule).
-            abandonRemaining();
-            return;
-        }
-        if (ringInFlight < inFlight) {
-            // Some completions were reaped outside this handle; the ledger can no longer be
-            // reconciled, so count the remainder as abandoned rather than hang.
+        int attachedInFlight = ring.attachedFilesInFlightCount();
+        if (ringInFlight != attachedInFlight) {
+            // Raw un-reaped ring work (or completions reaped outside the attached handles):
+            // reaping would steal/miss completions, and cancelling would create cancel CQEs
+            // that cannot be reconciled. Count our own requests as abandoned and leave their
+            // completions to the ring's owner (B1 foreign-work rule).
             abandonRemaining();
             return;
         }
@@ -1614,11 +1724,13 @@ public final class JuringFile implements AutoCloseable {
 
     private void checkRingOwnership(String operation) {
         int ringInFlight = ring.inFlightCount();
-        if (ringInFlight != inFlight) {
+        int attachedInFlight = ring.attachedFilesInFlightCount();
+        if (ringInFlight != attachedInFlight) {
             throw new IllegalStateException("JuringFile." + operation + ": ring has " + ringInFlight
-                    + " in-flight operation(s) but this handle owns " + inFlight
-                    + "; blocking file helpers require that every in-flight operation on the ring belongs to this handle"
-                    + " (await the foreign work first, or use raw prepare* + ring reaping)");
+                    + " in-flight operation(s) but the attached JuringFile handles own " + attachedInFlight
+                    + "; blocking file helpers require that every in-flight operation on the ring is"
+                    + " tracked by an attached handle (await/reap the raw ring work first, or use raw"
+                    + " prepare* + ring reaping)");
         }
     }
 
@@ -1722,7 +1834,18 @@ public final class JuringFile implements AutoCloseable {
         }
     }
 
-    private void onCompletion(Result result) {
+    /**
+     * Delivers a reaped completion into this handle's ledger (B10a shared-ring dispatch).
+     *
+     * @return {@code true} when the completion's handle belongs to this ledger (including
+     *         already-recorded duplicate completions); {@code false} when it does not, in
+     *         which case the ring dispatcher decides whether it is a stray timer or
+     *         un-reaped raw ring work
+     */
+    boolean deliverCompletion(Result result) {
+        if (handles == null) {
+            return false;
+        }
         long handle = result.id();
         int value = (int) result.result();
         byte kind = (byte) result.type().getIndex();
@@ -1731,7 +1854,7 @@ public final class JuringFile implements AutoCloseable {
                 continue;
             }
             if (states[i] == DONE) {
-                return; // duplicate completion for an already-recorded request: ignore
+                return true; // duplicate completion for an already-recorded request: ignore
             }
             states[i] = DONE;
             results[i] = value;
@@ -1739,7 +1862,7 @@ public final class JuringFile implements AutoCloseable {
             inFlight--;
             if (roles[i] == ROLE_CONTROL) {
                 controlCompletions++;
-                return;
+                return true;
             }
             completedOperations++;
             if (kind == FSYNC_KIND) {
@@ -1755,13 +1878,13 @@ public final class JuringFile implements AutoCloseable {
                     cancelledOperations++;
                 }
             }
-            return;
+            return true;
         }
-        // Stray timer completions (e.g. from a shared/foreign ring) carry no file operation and
-        // are ignored instead of being counted as foreign work (B1 behaviour preserved).
-        if (result.type() == OperationType.TIMEOUT || result.type() == OperationType.LINK_TIMEOUT) {
-            return;
-        }
+        return false;
+    }
+
+    /** Records a completion that belongs to no attached handle (raw un-reaped ring work). */
+    void noteForeignCompletion() {
         foreignCompletions++;
     }
 
