@@ -1297,6 +1297,30 @@ public class JUring implements AutoCloseable {
         return userData;
     }
 
+    /**
+     * B10 F1 fix: prepares a non-fixed read whose {@code user_data} is a unique operation id
+     * instead of the buffer address, so concurrent reads into the same segment are
+     * distinguishable. Used by {@link JuringFile}; the raw public {@code prepareRead}
+     * overloads keep the address payload for {@link Result#validBuffer()} compatibility.
+     */
+    long prepareReadNoBuffer(FileDescriptor fd, MemorySegment buffer, int readSize, long offset) {
+        return prepareReadNoBuffer(fd, buffer, readSize, offset, (byte) 0);
+    }
+
+    long prepareReadNoBuffer(FileDescriptor fd, MemorySegment buffer, int readSize, long offset, byte flags) {
+        Objects.requireNonNull(fd, "fd");
+        Objects.requireNonNull(buffer, "buffer");
+        if (readSize < 0 || readSize > buffer.byteSize()) {
+            throw new IllegalArgumentException("readSize " + readSize + " out of range (0.." + buffer.byteSize() + ")");
+        }
+        validateNativeSegment(buffer, true);
+        long sqe = getRwSqe(flags, false);
+        long userData = UserData.encodeInternalReadExt(opSeq++);
+        ioUring.prepareRead(sqe, fd.getFd(), buffer.address(), readSize, offset);
+        ioUring.setUserData(sqe, userData);
+        return userData;
+    }
+
     private long prepareReadInternal(int fdOrIndex, MemorySegment buffer, int readSize, long offset, byte flags, boolean fixedFile) {
         if (readSize < 0 || readSize > buffer.byteSize()) {
             throw new IllegalArgumentException("Invalid readSize: " + readSize);

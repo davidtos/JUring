@@ -507,11 +507,14 @@ public final class JuringFile implements AutoCloseable {
      * Prepares an asynchronous offset read into {@code buffer} ({@code READ} or
      * {@code READ_EXT}; fixed-file when registered). Does not submit and does not retry.
      *
-     * <p><b>Non-fixed buffers (B3 F1):</b> this overload encodes the buffer address as the
-     * ring {@code user_data}, so two concurrent non-fixed operations on the same
-     * {@code MemorySegment} share one handle and cannot be routed to their own ledgers (this
-     * can corrupt the JVM; the limitation predates B10a). Use distinct buffers, or
-     * {@link #prepareReadFixed(long, int, int)} for concurrent reads.
+     * <p><b>Non-fixed buffers:</b> a {@code JuringFile} read uses a unique internal operation
+     * id as the ring {@code user_data}, so concurrent reads into the same
+     * {@code MemorySegment} get distinct handles and are routed independently (the B3 F1
+     * duplicate-{@code user_data} limitation is fixed for this path). Overlapping reads still
+     * write the same memory, so the caller owns the resulting data race. The raw
+     * {@link JUring#prepareRead(FileDescriptor, MemorySegment, long)} API keeps the buffer
+     * address as {@code user_data} (for {@link Result#validBuffer()}) and therefore still
+     * requires distinct buffers for concurrent reads.
      *
      * @param offset file offset
      * @param length number of bytes to read, {@code 0 <= length <= buffer.byteSize()}
@@ -526,7 +529,7 @@ public final class JuringFile implements AutoCloseable {
         ensureCapacity();
         long handle = registeredSlot >= 0
                 ? ring.prepareRead(registeredSlot, buffer, length, offset)
-                : ring.prepareRead(fileDescriptor, buffer, length, offset);
+                : ring.prepareReadNoBuffer(fileDescriptor, buffer, length, offset);
         applyIoPriority();
         track(handle);
         return handle;
@@ -793,7 +796,8 @@ public final class JuringFile implements AutoCloseable {
         try {
             target = registeredSlot >= 0
                     ? ring.prepareRead(registeredSlot, buffer, length, offset, SqeOptions.IOSQE_IO_LINK)
-                    : ring.prepareRead(fileDescriptor, buffer, length, offset, SqeOptions.IOSQE_IO_LINK);
+                    : ring.prepareReadNoBuffer(fileDescriptor, buffer, length, offset,
+                            SqeOptions.IOSQE_IO_LINK.value);
             targetPrepared = true;
             // B10b: tag the target SQE now, before the linked-timeout companion becomes the
             // most recently prepared SQE.

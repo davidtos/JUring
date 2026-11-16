@@ -79,26 +79,37 @@ the ring is raw un-reaped `JUring.prepare*` work, and the blocking helpers still
 - `JuringFileZeroAllocationTest#testTwoFileMultiplexedHotPathZeroAllocations` proves 0 heap bytes
   on the multiplexed hot path (registered files + fixed buffers, both await orders).
 
-### 2.6 Inherited B3 §11.9 / F1 limitation (only non-fixed **reads** share `user_data`)
+### 2.6 B3 §11.9 / F1 duplicate `user_data` — fixed for `JuringFile`, raw API unchanged
 
-Non-fixed **reads** (the `MemorySegment` overload, `READ_EXT`) encode the **buffer address**
-as the SQE `user_data` (B3 F1). Two concurrent non-fixed reads into the **same**
-`MemorySegment` therefore share one handle: with B10a this can happen across two attached
-handles, and the dispatcher cannot tell them apart — the second completion is treated as a
-duplicate and one ledger entry is stranded. On this host the `JuringFile` form was also
-observed to corrupt the JVM native heap (a **pre-existing** B3 `READ_EXT` limitation: the
-same probe crashes the pre-B10 baseline `b117667`, while the raw-ring equivalent reaps both
-completions cleanly).
+Non-fixed **reads** on the raw `JUring` API (`prepareRead(..., MemorySegment, ...)`,
+`READ_EXT`) encode the **buffer address** as the SQE `user_data` so that
+`Result.validBuffer()` can be reconstructed without a side table (B3 F1). Two concurrent raw
+reads into the **same** `MemorySegment` therefore still share one handle; that raw-API rule —
+do not reuse one buffer for concurrent non-fixed raw reads — is unchanged and documented in
+[`docs/b3-design.md`](b3-design.md) §11.9.
 
-Non-fixed **writes** are not affected: `WRITE_EXT` uses a unique operation id as `user_data`
-(`JUring.prepareWriteInternal`), so two concurrent non-fixed writes from the same segment get
-distinct handles and both complete (the usual buffer-lifetime rule still applies: the caller
-must not modify the bytes until the completion is reaped).
+**Fixed for `JuringFile` (the path B10a made reachable):** `JuringFile.prepareRead` now uses
+an **internal `user_data` type** (`UserData.INTERNAL_READ_EXT_TYPE = 21`, unused by
+`OperationType` and by the B4 shard's reserved `0xFF` wakeup reads) with a unique 56-bit
+operation id as payload, instead of the buffer address, so:
+- concurrent non-fixed reads into the same `MemorySegment` get **distinct handles**, are
+  routed to their own ledgers, and both complete (no stranded entry, no JVM crash);
+- the dispatcher decodes the internal type back to `OperationType.READ_EXT` with **no**
+  `Result.validBuffer` (the caller already owns the buffer; `JuringFile` never needed it);
+- the raw `READ_EXT` decode arm is byte-for-byte the pre-fix code, so the raw benchmark path
+  gains no per-completion work beyond one more (unreachable for raw handles) switch arm.
 
-The supported rule is unchanged: **do not reuse one buffer for concurrent non-fixed reads**;
-use distinct buffers or the registered fixed-buffer path. B10 does not fix this; it only makes
-the cross-handle form reachable, so it is documented here and in the `JuringFile.prepareRead`
-Javadoc.
+Cost is confined to the `JuringFile` non-fixed read path: one `opSeq++` at prepare (no
+allocation, no table, no extra syscall) and the internal-type decode at completion. A/B
+measurement on the data NVMe (4 KiB random O_DIRECT reads, QD64, pinned CPU2, 9 paired
+interleaved runs of 320k reads each): raw path paired `fixed/baseline` mean ratio **0.9931**
+with 95 % CI **[0.9816, 1.0046]** (includes 1; raw decode is unchanged), `JuringFile`
+non-fixed path median ratio **1.006** (5 pairs) — no measurable regression.
+
+Verified by `JuringFileMultiplexingTest#concurrentNonFixedReadsIntoSameBufferGetDistinctHandles`,
+`ProbeM2` (two handles and one handle, same buffer, both orders) and a raw-path regression
+probe; the raw API keeps its B3 F1 rule (do not reuse one buffer for concurrent non-fixed
+**raw** reads).
 
 ---
 
@@ -174,7 +185,7 @@ default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field s
 
 ## 5. Verification evidence
 
-- `JuringFileMultiplexingTest` (8 tests): interleaved two-file awaits, interleaved read/write,
+- `JuringFileMultiplexingTest` (9 tests): interleaved two-file awaits, interleaved read/write,
   stream copy on one ring, group commit with a sibling read, scoped `cancel`/`cancelAll`/`close`,
   and the surviving raw-work guard.
 - `IoPriorityTest` (11 tests): encoding/validation, ring-default and raw-SQE wiring, per-handle
@@ -182,7 +193,7 @@ default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field s
   end-to-end read/write/sync acceptance. No non-read/write opcode is tagged.
 - `JuringFileZeroAllocationTest`: new two-file multiplexed hot-path test stays at exactly
   0 allocated bytes.
-- `mvn -o clean test` (full suite, after the verification fixes) = **417 tests, 0 failures,
+- `mvn -o clean test` (full suite, after the verification fixes) = **418 tests, 0 failures,
   0 errors, 1 skipped**; `mvn -o javadoc:javadoc` (doclint=all) = **BUILD SUCCESS, 0 warnings**.
   No benchmark campaign is run or re-opened.
 - **Independent verification** (separate agent, own probes; reports in the gitignored

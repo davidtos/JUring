@@ -1646,6 +1646,12 @@ final class IoUringDispatcher implements AutoCloseable {
                 long bufferAddr = UserData.getPayload(userData);
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
+            case UserData.INTERNAL_READ_EXT_TYPE -> {
+                // B10 F1 fix: JuringFile non-fixed read carrying a unique op id instead of the
+                // buffer address, so concurrent same-buffer reads stay distinguishable. No
+                // Result.validBuffer (the caller owns the buffer); reported as READ_EXT.
+                target.set(userData, result, OperationType.READ_EXT, 0L, null, -1, null, cqeFlags);
+            }
             case 1 /* WRITE */ -> {
                 long buffAddr = UserData.getPayload(userData);
                 if (buffAddr != 0L) {

@@ -19,6 +19,7 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.TRUNCATE;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -158,6 +159,40 @@ class JuringFileMultiplexingTest {
             assertEquals(BLOCK, sourceFile.await(readHandle));
             assertEquals(9, readBuffer.get(JAVA_BYTE, 0));
             assertArrayEquals(bytesOf(batch), Files.readAllBytes(targetPath));
+        }
+    }
+
+    @Test
+    void concurrentNonFixedReadsIntoSameBufferGetDistinctHandles(@TempDir Path dir) throws Exception {
+        Path sourcePath = patternFile(dir.resolve("same-buffer.bin"), 2 * BLOCK, 7);
+
+        // two handles, one ring, one shared caller buffer: JuringFile reads use a unique
+        // internal op id, so the completions stay distinguishable (B3 F1 fixed for this path)
+        try (JuringFile fileA = JuringFile.open(ring, sourcePath, READ);
+             JuringFile fileB = JuringFile.open(ring, sourcePath, READ);
+             Arena arena = Arena.ofConfined()) {
+            MemorySegment shared = arena.allocate(BLOCK);
+            long handleA = fileA.prepareRead(0, BLOCK, shared);
+            long handleB = fileB.prepareRead(BLOCK, BLOCK, shared);
+            assertNotEquals(handleA, handleB, "handles must be unique even for the same buffer");
+            ring.submit();
+            assertEquals(BLOCK, fileA.await(handleA));
+            assertEquals(BLOCK, fileB.await(handleB));
+            assertEquals(0, fileA.inFlightOperations());
+            assertEquals(0, fileB.inFlightOperations());
+        }
+
+        // same handle, two concurrent reads into the same buffer
+        try (JuringFile file = JuringFile.open(ring, sourcePath, READ);
+             Arena arena = Arena.ofConfined()) {
+            MemorySegment shared = arena.allocate(BLOCK);
+            long first = file.prepareRead(0, BLOCK, shared);
+            long second = file.prepareRead(BLOCK, BLOCK, shared);
+            assertNotEquals(first, second, "handles must be unique even for the same buffer");
+            ring.submit();
+            assertEquals(BLOCK, file.await(second));
+            assertEquals(BLOCK, file.await(first));
+            assertEquals(0, file.inFlightOperations());
         }
     }
 
