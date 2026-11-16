@@ -374,12 +374,17 @@ public class JUring implements AutoCloseable {
      * Configures the read-buffer pool used by {@link #prepareReadPooled}.
      *
      * <p>The pool holds {@code capacity} off-heap buffers of {@code bufferSize} bytes each.
-     * Calling this method again replaces and closes the previous pool.
+     * Calling this method again replaces and closes the previous pool; replacing a pool that
+     * still has checked-out buffers is rejected so those buffers cannot be freed underneath a
+     * caller. An exhausted pool makes {@link #prepareReadPooled} throw (it never allocates
+     * outside its configured capacity).
      *
      * @param bufferSize size of one pooled buffer in bytes
      * @param capacity   number of buffers in the pool
      * @throws IllegalArgumentException when {@code bufferSize} is not positive or
      *                                  {@code capacity} is negative
+     * @throws IllegalStateException    when the ring is closed or the previous pool still has
+     *                                  checked-out buffers
      */
     public void setupReadBufferPool(int bufferSize, int capacity) {
         ensureOpenAndOwner();
@@ -408,7 +413,8 @@ public class JUring implements AutoCloseable {
      * @param readSize maximum number of bytes to read
      * @param offset   file offset in bytes
      * @return the operation handle ({@code user_data})
-     * @throws IllegalStateException    when no read-buffer pool was configured
+     * @throws IllegalStateException    when no read-buffer pool was configured, the ring is
+     *                                  closed, or every pooled buffer is currently checked out
      * @throws IllegalArgumentException when {@code readSize} is out of the pool buffer range
      */
     public long prepareReadPooled(FileDescriptor fd, int readSize, long offset) {

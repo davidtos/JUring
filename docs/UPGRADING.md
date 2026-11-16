@@ -65,7 +65,7 @@ recorded here for the first release's upgrade history; they do not affect any pu
 |---|---|
 | 16 exact-arity `JUringBlocking` read/write/`*Fixed` overloads | no-option variants that avoid the varargs `SqeOptions[]` allocation; the varargs forms remain for explicit flags |
 | `JUring.isSupported()` | cached `io_uring_setup` probe; intended for `java.nio` fallback decisions in libraries |
-| `RingMetrics.cqFlushEnters()` | count of non-blocking `enter(GETEVENTS)` flushes issued to drain the kernel CQ-overflow list / run deferred task work |
+| `RingMetrics.cqFlushEnters()` | count of non-blocking `enter(GETEVENTS)` flushes issued to drain the kernel CQ-overflow list / run deferred task work. Note: adding a record component changes `RingMetrics`'s canonical constructor; users should not construct `RingMetrics` directly (the library creates these snapshots), so this is additive for normal use but not source/binary compatible for direct constructor calls. |
 
 **Behaviour changes (all part of the unreleased 0.1.0 line)**
 

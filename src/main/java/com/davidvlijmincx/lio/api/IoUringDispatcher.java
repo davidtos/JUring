@@ -1027,8 +1027,17 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             if (hasOverflowRisk()) {
+                // Flush the overflow list, then either return if enough completions became
+                // visible or fall through to the blocking enter. Do NOT `continue` here: when
+                // pollCq leaves the CQ non-empty but below waitNr, a continue would busy-spin
+                // issuing non-blocking enters instead of blocking.
                 pollCq();
-                continue;
+                head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+                tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = tail - head;
+                if (available >= waitNr) {
+                    return 0;
+                }
             }
 
             long res = enterObserved(enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase);

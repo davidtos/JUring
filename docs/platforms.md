@@ -63,6 +63,8 @@ flags it cannot honour instead of passing a broken configuration to the kernel. 
 | `IORING_SETUP_REGISTERED_FD_ONLY` | A registered-fd-only ring has no usable mapping |
 | `IORING_SETUP_HYBRID_IOPOLL` | Not implemented |
 | `IORING_SETUP_IOPOLL` | Not supported/tested in 0.1.0 |
+| `IORING_SETUP_R_DISABLED` | No enable API exists in this library |
+| `IORING_SETUP_ATTACH_WQ` (user-supplied) | Use `getSharedWorkerRing()`; ATTACH_WQ is set internally there |
 | `IORING_SETUP_DEFER_TASKRUN` alone | Requires `IORING_SETUP_SINGLE_ISSUER` (kernel rule) |
 | `IORING_SETUP_SQPOLL` on `getSharedWorkerRing` | `ATTACH_WQ` and `SQPOLL` cannot be combined |
 

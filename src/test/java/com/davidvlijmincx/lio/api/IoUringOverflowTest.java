@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.lang.management.ManagementFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -114,6 +115,46 @@ class IoUringOverflowTest {
 
             assertEquals(total, reaped, "deep overflow must be drained by repeated non-blocking peeks");
             assertEquals(0L, ring.ringMetrics().inFlight());
+        }
+    }
+
+    @Test
+    void blockingWaitDoesNotBusySpinWhenOverflowRiskIsSticky() {
+        // 5 immediately-completing NOPs + 12 x 1.5 s timeouts = 17 in flight on a CQ of 16,
+        // so overflow risk is latched while only 5 completions are visible. waitForBatchResult
+        // must block in enter(GETEVENTS) and not busy-spin issuing non-blocking flushes.
+        var bean = (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
+        try (JUring ring = new JUring(QUEUE_DEPTH);
+             java.lang.foreign.Arena arena = java.lang.foreign.Arena.ofConfined()) {
+            java.lang.foreign.MemorySegment timespec = arena.allocate(JUring.TIMESPEC_BYTES, 8);
+            timespec.set(java.lang.foreign.ValueLayout.JAVA_LONG, 0L, 1L);
+            timespec.set(java.lang.foreign.ValueLayout.JAVA_LONG, 8L, 1_500_000_000L);
+            // SQ depth is 8, so submit in batches; 17 requests total puts us above the CQ's 16.
+            for (int i = 0; i < 5; i++) {
+                ring.prepareNop();
+            }
+            for (int i = 0; i < 3; i++) {
+                ring.prepareTimeout(timespec);
+            }
+            ring.submit();
+            for (int i = 0; i < 8; i++) {
+                ring.prepareTimeout(timespec);
+            }
+            ring.submit();
+            ring.prepareTimeout(timespec);
+            ring.submit();
+
+            long cpuBefore = bean.getCurrentThreadCpuTime();
+            long start = System.nanoTime();
+            int reaped = ring.waitForBatchResult(16, result -> { });
+            long wallNanos = System.nanoTime() - start;
+            long cpuNanos = bean.getCurrentThreadCpuTime() - cpuBefore;
+
+            assertEquals(16, reaped);
+            assertTrue(wallNanos >= 1_200_000_000L, "the wait must actually block for the timeouts");
+            assertTrue(cpuNanos < 600_000_000L,
+                    () -> "blocking wait burned CPU (busy-spin): cpu=" + (cpuNanos / 1_000_000) + " ms, wall="
+                            + (wallNanos / 1_000_000) + " ms");
         }
     }
 
