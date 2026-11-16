@@ -165,7 +165,7 @@ Let callers express a per-request block-layer priority via the `io_uring_sqe.iop
 
 ## 5. Verification plan (both items)
 
-1. **Unit/integration:** `mvn -o test` — full suite (415 tests at delivery: 397 pre-B10 + the new tests below, 0 failures/0 errors, 1 skipped); the zero-allocation tests must stay strict 0 bytes.
+1. **Unit/integration:** `mvn -o test` — full suite (419 tests at delivery: 397 pre-B10 + the new tests below, 0 failures/0 errors, 1 skipped); the zero-allocation tests must stay strict 0 bytes.
 2. **Javadoc gate:** `mvn -o javadoc:javadoc` must end at **0 warnings** (`doclint=all`).
 3. **Docs:** links resolve; `JuringFile`/streams/`GroupCommit` threading contract and the `ioprio` caveats documented.
 4. **Independent verification pass** (repository convention): re-derive the tests/behaviour from the frozen design, check no public signature break, and record the verdict before calling B10a/B10b delivered.

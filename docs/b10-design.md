@@ -88,7 +88,8 @@ reads into the **same** `MemorySegment` therefore still share one handle; that r
 do not reuse one buffer for concurrent non-fixed raw reads — is unchanged and documented in
 [`docs/b3-design.md`](b3-design.md) §11.9.
 
-**Fixed for `JuringFile` (the path B10a made reachable):** `JuringFile.prepareRead` now uses
+**Fixed for `JuringFile` (the path B10a made reachable), for both its registered-file and
+unregistered branches:** `JuringFile.prepareRead` now uses
 an **internal `user_data` type** (`UserData.INTERNAL_READ_EXT_TYPE = 21`, unused by
 `OperationType` and by the B4 shard's reserved `0xFF` wakeup reads) with a unique 56-bit
 operation id as payload, instead of the buffer address, so:
@@ -185,7 +186,7 @@ default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field s
 
 ## 5. Verification evidence
 
-- `JuringFileMultiplexingTest` (9 tests): interleaved two-file awaits, interleaved read/write,
+- `JuringFileMultiplexingTest` (10 tests): interleaved two-file awaits, interleaved read/write,
   stream copy on one ring, group commit with a sibling read, scoped `cancel`/`cancelAll`/`close`,
   and the surviving raw-work guard.
 - `IoPriorityTest` (11 tests): encoding/validation, ring-default and raw-SQE wiring, per-handle
@@ -193,7 +194,7 @@ default still applies to handles; a raw `setLastSqeIoprio(0)` clears the field s
   end-to-end read/write/sync acceptance. No non-read/write opcode is tagged.
 - `JuringFileZeroAllocationTest`: new two-file multiplexed hot-path test stays at exactly
   0 allocated bytes.
-- `mvn -o clean test` (full suite, after the verification fixes) = **418 tests, 0 failures,
+- `mvn -o clean test` (full suite, after the verification fixes) = **419 tests, 0 failures,
   0 errors, 1 skipped**; `mvn -o javadoc:javadoc` (doclint=all) = **BUILD SUCCESS, 0 warnings**.
   No benchmark campaign is run or re-opened.
 - **Independent verification** (separate agent, own probes; reports in the gitignored

@@ -1309,14 +1309,19 @@ public class JUring implements AutoCloseable {
 
     long prepareReadNoBuffer(FileDescriptor fd, MemorySegment buffer, int readSize, long offset, byte flags) {
         Objects.requireNonNull(fd, "fd");
+        return prepareReadNoBuffer(fd.getFd(), buffer, readSize, offset, flags, false);
+    }
+
+    long prepareReadNoBuffer(int fdOrIndex, MemorySegment buffer, int readSize, long offset,
+            byte flags, boolean fixedFile) {
         Objects.requireNonNull(buffer, "buffer");
         if (readSize < 0 || readSize > buffer.byteSize()) {
             throw new IllegalArgumentException("readSize " + readSize + " out of range (0.." + buffer.byteSize() + ")");
         }
         validateNativeSegment(buffer, true);
-        long sqe = getRwSqe(flags, false);
+        long sqe = getRwSqe(flags, fixedFile);
         long userData = UserData.encodeInternalReadExt(opSeq++);
-        ioUring.prepareRead(sqe, fd.getFd(), buffer.address(), readSize, offset);
+        ioUring.prepareRead(sqe, fdOrIndex, buffer.address(), readSize, offset);
         ioUring.setUserData(sqe, userData);
         return userData;
     }

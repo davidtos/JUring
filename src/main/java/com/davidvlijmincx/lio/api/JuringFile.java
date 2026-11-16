@@ -528,7 +528,7 @@ public final class JuringFile implements AutoCloseable {
         validateReadArguments(offset, length, buffer);
         ensureCapacity();
         long handle = registeredSlot >= 0
-                ? ring.prepareRead(registeredSlot, buffer, length, offset)
+                ? ring.prepareReadNoBuffer(registeredSlot, buffer, length, offset, (byte) 0, true)
                 : ring.prepareReadNoBuffer(fileDescriptor, buffer, length, offset);
         applyIoPriority();
         track(handle);
@@ -795,7 +795,8 @@ public final class JuringFile implements AutoCloseable {
         boolean targetPrepared = false;
         try {
             target = registeredSlot >= 0
-                    ? ring.prepareRead(registeredSlot, buffer, length, offset, SqeOptions.IOSQE_IO_LINK)
+                    ? ring.prepareReadNoBuffer(registeredSlot, buffer, length, offset,
+                            SqeOptions.IOSQE_IO_LINK.value, true)
                     : ring.prepareReadNoBuffer(fileDescriptor, buffer, length, offset,
                             SqeOptions.IOSQE_IO_LINK.value);
             targetPrepared = true;

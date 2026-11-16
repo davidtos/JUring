@@ -606,11 +606,13 @@ Runtime budget: every deterministic test uses small counts (≤256) and ≤1 s d
    not reuse one buffer for concurrent non-fixed reads on a handle/ring; B4 may encode an
    op-id and carry the address in a side table (as `READ_FIXED` does). Reproducer:
    `scratch/b3-verify` `P2fTaxonomy duplicate-userdata`.
-   **(Update 2026-11-16, B10.)** The `JuringFile` form is fixed: non-fixed `JuringFile` reads
-   now use a unique internal op id as `user_data` (payload marker bit 55) instead of the
-   buffer address, so distinct handles/ledgers; see `docs/b10-design.md` §2.6. The raw
-   `JUring.prepareRead(..., MemorySegment, ...)` form keeps the address payload for
-   `Result.validBuffer()`, so this B3 rule still applies to the raw API.
+   **(Update 2026-11-16, B10.)** The `JuringFile` form is fixed, for both registered-file
+   and unregistered branches: non-fixed `JuringFile` reads use the internal `user_data` type
+   index 21 (bits 56-63; unused by `OperationType`) with a unique 56-bit operation id as the
+   payload instead of the buffer address, so distinct handles/ledgers; see
+   `docs/b10-design.md` §2.6. The raw `JUring.prepareRead(..., MemorySegment, ...)` form keeps
+   the address payload (`READ_EXT` type 14) for `Result.validBuffer()`, so this B3 rule still
+   applies to the raw API.
 10. **Control-ledger headroom (verifier finding F2).** `JuringFile.cancel`/`cancelAll` track
    the internal cancel request in the in-flight ledger, so they need at least one free slot
    (two for a timed pair); a *saturated* ledger makes them throw

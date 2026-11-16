@@ -196,6 +196,53 @@ class JuringFileMultiplexingTest {
         }
     }
 
+    @Test
+    void concurrentNonFixedReadsOnRegisteredFilesGetDistinctHandles(@TempDir Path dir) throws Exception {
+        Path pathA = patternFile(dir.resolve("registered-a.bin"), 2 * BLOCK, 21);
+        Path pathB = patternFile(dir.resolve("registered-b.bin"), 2 * BLOCK, 22);
+
+        // registered-file branch: reads still use a caller buffer; handles must stay unique
+        try (JuringFile fileA = JuringFile.open(ring, pathA, READ);
+             JuringFile fileB = JuringFile.open(ring, pathB, READ);
+             Arena arena = Arena.ofConfined()) {
+            assertTrue(fileA.register() >= 0);
+            assertTrue(fileB.register() >= 0);
+            MemorySegment shared = arena.allocate(BLOCK);
+            long handleA = fileA.prepareRead(0, BLOCK, shared);
+            long handleB = fileB.prepareRead(BLOCK, BLOCK, shared);
+            assertNotEquals(handleA, handleB, "registered-file reads must also get unique handles");
+            ring.submit();
+            assertEquals(BLOCK, fileA.await(handleA));
+            assertEquals(BLOCK, fileB.await(handleB));
+            assertEquals(0, fileA.inFlightOperations());
+            assertEquals(0, fileB.inFlightOperations());
+        }
+
+        // one registered handle, two concurrent reads into the same segment
+        try (JuringFile file = JuringFile.open(ring, pathA, READ);
+             Arena arena = Arena.ofConfined()) {
+            assertTrue(file.register() >= 0);
+            MemorySegment shared = arena.allocate(BLOCK);
+            long first = file.prepareRead(0, BLOCK, shared);
+            long second = file.prepareRead(BLOCK, BLOCK, shared);
+            assertNotEquals(first, second, "registered-file reads must also get unique handles");
+            ring.submit();
+            assertEquals(BLOCK, file.await(second));
+            assertEquals(BLOCK, file.await(first));
+            assertEquals(0, file.inFlightOperations());
+        }
+
+        // timed read on a registered handle uses the same internal id (target + LINK_TIMEOUT)
+        try (JuringFile file = JuringFile.open(ring, pathA, READ);
+             Arena arena = Arena.ofConfined()) {
+            assertTrue(file.register() >= 0);
+            MemorySegment shared = arena.allocate(BLOCK);
+            long timed = file.prepareRead(0, BLOCK, shared, 1_000);
+            assertEquals(BLOCK, file.await(timed));
+            assertEquals(0, file.inFlightOperations());
+        }
+    }
+
     // ------------------------------------------------------------------
     // scoped cancellation / close
     // ------------------------------------------------------------------
