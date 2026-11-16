@@ -13,7 +13,7 @@ Java's file APIs are synchronous. A thread issues one request and waits for it. 
 
 > [!NOTE]
 > - JUring is a focused Linux `io_uring` file-I/O library (x86-64 and aarch64, Java FFM API): raw ring operations (`JUring`), async file handles (`JuringFile`), buffered readahead/write-behind streams (`JuringInputStream`/`JuringOutputStream`), explicit durability and group commit (`DurabilityMode`, `GroupCommit`), a multi-ring shard runtime (`IoShard`/`RingGroup`), per-ring observability (`RingMetrics`, `ShardMetrics`, `MetricsJmx`), and virtual-thread blocking (`JUringBlocking`). Several file/stream/`GroupCommit` handles can share one ring, with completions routed per handle (B10a).
-> - All headline benchmarks below come from the pre-registered, reproducible harness in [`bench/`](bench/README.md) ([methodology](docs/benchmark-methodology.md)) against registration-matched `fio` (`--ioengine=io_uring --registerfiles=1 --fixedbufs=1`, neutral referee) and [Seastar](https://seastar.io/) (`--reactor-backend=io_uring`, opponent bracket).
+> - All headline benchmarks below come from the frozen-protocol, reproducible harness in [`bench/`](bench/README.md) ([methodology](docs/benchmark-methodology.md)) against registration-matched `fio` (`--ioengine=io_uring --registerfiles=1 --fixedbufs=1`; fio's default submit batching — it cannot set `SINGLE_ISSUER`/`COOP_TASKRUN`/`DEFER_TASKRUN`) and [Seastar](https://seastar.io/) (`--reactor-backend=io_uring`, opponent bracket). The 0.1.0 claims rerun adds a batching-and-registration-matched fio reference and rotated engine order; see [BENCHMARK.md](BENCHMARK.md).
 
 JUring does not do QoS, fair queuing or priorities between workload classes in v1 by design. Isolate classes with separate rings or shards (`IoShard`/`RingGroup`), or with OS-level I/O controls such as cgroup v2 `io.weight`/`io.max` and `ionice`; see [docs/m4-decision.md](docs/m4-decision.md).
 
@@ -44,22 +44,22 @@ Measured on AMD Ryzen 9 3950X (16C/32T, governor `performance`), Linux `7.0.12-2
 
 ### L0 — Single-Shard `io_uring` Engine Parity ([`docs/internal/m1-report.md`](docs/internal/m1-report.md))
 
-JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files (`IOSQE_FIXED_FILE`) and pre-registered fixed buffers. `fio-matched` enables `--registerfiles=1 --fixedbufs=1`. Seastar runs its stock `io_uring` reactor backend (200-entry ring, no `SINGLE_ISSUER`/`DEFER_TASKRUN`, no registered files/buffers — reported as an architectural bracket, not a pass/fail gate).
+JUring runs `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN` with registered files (`IOSQE_FIXED_FILE`) and kernel-registered fixed buffers. "fio registration-matched" enables `--registerfiles=1 --fixedbufs=1` with fio's default submit batching; this is a *best-config* comparison, not equal config — fio cannot set JUring's ring flags or fused submit batching. Seastar runs its stock `io_uring` reactor backend (200-entry ring, no `SINGLE_ISSUER`/`DEFER_TASKRUN`, no registered files/buffers — reported as an architectural bracket, not a pass/fail gate).
 
-| Cell / Workload | QD | JUring IOPS (± 95% CI) | `fio-matched` IOPS (± 95% CI) | Seastar IOPS (± 95% CI) | Paired `JUring / fio` [95% CI] | Paired `JUring / Seastar` [95% CI] | Reading |
+| Cell / Workload | QD | JUring IOPS (± 95% CI) | fio reg-matched IOPS (± 95% CI) | Seastar IOPS (± 95% CI) | Paired `JUring / fio` [95% CI] | Paired `JUring / Seastar` [95% CI] | Reading |
 |---|---|---|---|---|---|---|---|
 | **W1** — 4 KiB randread | 1 | 10,969 ± 557 | 10,748 ± 664 | 11,558 ± 31 | 1.0234 [0.9248, 1.1220] | 0.9491 [0.9002, 0.9979] | Parity vs `fio` (CI spans 1); Seastar +5.4% at QD1 |
 | **W2** — 4 KiB randread | 16 | 144,235 ± 4,248 | 142,818 ± 4,994 | 145,575 ± 262 | 1.0108 [0.9556, 1.0660] | 0.9908 [0.9612, 1.0204] | Parity within ±2% across all three engines |
-| **W3** — 4 KiB randread | 64 | **327,371 ± 280** | 304,064 ± 8,038 | 318,317 ± 437 | **1.0771 [1.0477, 1.1064]** | **1.0284 [1.0276, 1.0292]** | **JUring +7.7% vs `fio-matched`, +2.8% vs Seastar** |
-| **W4** — 4 KiB randread | 128 | **411,136 ± 19,180** | 332,133 ± 13,601 | 389,967 ± 9,419 | **1.2388 [1.1669, 1.3108]**¹ | **1.0543 [1.0138, 1.0947]** | **JUring +23.9% (+25.4% fast-subset) vs `fio`, +5.4% vs Seastar** |
+| **W3** — 4 KiB randread | 64 | **327,371 ± 280** | 304,064 ± 8,038 | 318,317 ± 437 | **1.0771 [1.0477, 1.1064]** | **1.0284 [1.0276, 1.0292]** | **+7.7% vs registration-matched `fio` (best-config: JUring-only ring flags/fused submit), +2.8% vs Seastar** |
+| **W4** — 4 KiB randread | 128 | **411,136 ± 19,180** | 332,133 ± 13,601 | 389,967 ± 9,419 | **1.2388 [1.1669, 1.3108]**¹ | **1.0543 [1.0138, 1.0947]** | **+23.9% (+25.4% fast-subset) vs registration-matched `fio` (best-config), +5.4% vs Seastar** |
 | **W9** — 1 MiB seqread | 1 | 1,729 ± 54 (1.69 GiB/s) | 1,725 ± 108 | 1,748 ± 105 | 1.0046 [0.9181, 1.0911] | 0.9916 [0.9049, 1.0783] | Device ceiling (~1.69 GiB/s at QD1) |
 | **W10** — 1 MiB seqread² | 8 | 4,712 ± 129 (4.60 GiB/s) | 4,665 ± 156 | 4,752 ± 18 | 1.0108 [0.9582, 1.0635] | 0.9917 [0.9665, 1.0169] | Device PCIe/NVMe ceiling (~4.60 GiB/s) |
 | **W11** — 1 MiB seqread² | 32 | 4,727 ± 128 (4.62 GiB/s) | 4,727 ± 127 | 4,713 ± 135 | 1.0005 [0.9573, 1.0437] | 1.0029 [1.0009, 1.0049] | Device PCIe/NVMe ceiling (~4.62 GiB/s) |
 
-¹ In W4, both JUring (`r5`) and `fio-matched` (`r3`) had one host slow-state rep; the pre-registered fast-state subset (`n=3` paired) gives `JUring / fio-matched = 1.2542 [1.2139, 1.2946]`.
+¹ In W4, both JUring (`r5`) and the fio reference (`r3`) had one host slow-state rep; the post-hoc calibrated fast-state subset (`n=3` paired; report §4) gives `JUring / fio = 1.2542 [1.2139, 1.2946]`. The gate is calibrated, not pre-registered.
 ² W10/W11 rows show the best-config `unlimited` memlock runs (`registered-fixed` / `--fixedbufs=1`, [`docs/internal/stepd-report.md` §4](docs/internal/stepd-report.md)); under the default 8 MiB `ulimit -l` ([`docs/internal/m1-report.md` §6](docs/internal/m1-report.md)), both engines fall back to unregistered buffers (`regfile`) and achieve the same ~4.65–4.76 GiB/s ceiling (`JUring/fio = 0.9788` at QD8, `1.0161` at QD32).
 
-- **CPU & syscall efficiency (`perf stat`, 4 KiB randread QD64, `R=3`, [`docs/internal/m1-report.md` §8](docs/internal/m1-report.md)):** JUring spends **11,335 ± 121 cycles/op** (`0.330` syscalls/op) vs `fio-matched` **15,227 ± 604 cycles/op** (`1.012` syscalls/op) and Seastar **13,859 ± 158 cycles/op** (`0.186` syscalls/op) — **25.6 % fewer CPU cycles/op than `fio-matched`**. (At QD1, JUring uses `27,254 ± 188` vs `fio-matched` `32,424 ± 229` cycles/op, while Seastar busy-polls its reactor at `383,329 ± 170` cycles/op.)
+- **CPU & syscall cost (`perf stat`, 4 KiB randread QD64, `R=3`, [`docs/internal/m1-report.md` §8](docs/internal/m1-report.md)):** JUring spends **11,335 ± 121 cycles/op** (`0.330` syscalls/op) vs registration-matched `fio` **15,227 ± 604 cycles/op** (`1.012` syscalls/op) and Seastar **13,859 ± 158 cycles/op** (`0.186` syscalls/op) — **25.6 % fewer attributed CPU cycles/op than fio as configured**. This is process-tree `perf` attribution, not a causal claim about any single ring flag: JUring submits in fused batches (hence fewer syscalls/op), and fio cannot set the same ring flags. (At QD1, JUring uses `27,254 ± 188` vs fio `32,424 ± 229` cycles/op, while Seastar busy-polls its reactor at `383,329 ± 170` cycles/op.)
 - **Tail latency (`W15` QD1 / `W16` QD64, 120 s measured, `R=5`, [`docs/internal/m1-report.md` §7](docs/internal/m1-report.md)):** At QD64 (`W16`), `p99` is at parity (`481.5 µs` JUring vs `478.8 µs` `fio` vs `504.9 µs` Seastar) and `p999` is `660.5 µs` (JUring) vs `1,881.2 µs` (Seastar). At QD1 (`W15`), `p50`/`p99` match closely (`83.6`/`107.8 µs` JUring vs `81.9`/`98.9 µs` Seastar), while `p999` reflects JVM safepoint/GC tails (`630.9 µs` JUring vs `140.5 µs` Seastar).
 - **Write path (`W5`–`W8`, `W12`–`W14`, [`docs/internal/m1-write-report.md`](docs/internal/m1-write-report.md)):** **Verdict: `INCONCLUSIVE` (no write-parity ranking claimed for v1).** Across both the 130-run full write matrix (Step A) and the 42-run pre-registered state-controlled generation campaign (Session 12, [`docs/internal/m1-write-report.md` §12](docs/internal/m1-write-report.md)), this consumer NVMe exhibits SLC-burst to TLC-folding write cliffs (`~195k → 40k–90k` IOPS; `36/130` runs in Step A, and only `2/5` valid homogeneous generations `< 4` in Session 12). Inside the valid single-state continuous generations (`w1a-continuous`, `w2-g1`, `w2-g3`), JUring sustained `188.1k–188.6k` IOPS (~735 MiB/s) at 4 KiB QD64 vs `fio` `196.4k–199.6k` IOPS (`0.946–0.957×`).
 
@@ -89,13 +89,16 @@ Seastar/JUring ratios are paired per-rep means at each `N`; the signed M3 bar (d
 
 **Host representativeness ([`docs/internal/stepd-report.md`](docs/internal/stepd-report.md)):** Re-testing Seastar with 2 MiB `hugetlbfs` (`--hugepages /mnt/hugepages-juring`) vs THP showed no material difference across `W3`, `W4`, `W10`, `W11`, and `M3 N=8` (`huge/THP` mean ratios `0.9836–1.0389`, e.g. `M3 N=8` `467,341` vs `461,800` IOPS, `1.0123 [0.9589, 1.0657]`). Root `nvme smart-log` before/mid/after confirmed `0` thermal throttle transitions (`T1=0, T2=0`) and `0` media errors.
 
-## Virtual Thread Performance (`JUringBlocking` vs `FileChannel`)
+## Virtual Thread Performance (`JUringBlocking` vs `FileChannel`) — historical JMH
+
+> [!IMPORTANT]
+> The table below is historical JMH evidence, **not rerun for 0.1.0**. Its `JUringBlocking` confidence intervals are wide and the 1–2T and 4T intervals overlap, so it is **not a statistically separated ranking**. The defensible statement is the thread-efficiency one: at Loom defaults (uncapped carrier pool), `FileChannel` and `JUringBlocking` reach **parity**; under a fixed platform-thread budget, `JUringBlocking` keeps the device busy with a few poller threads instead of hundreds of carriers. See [BENCHMARK.md](BENCHMARK.md) Part II §3 for the full caveats and the parity-at-defaults data.
 
 When a virtual thread performs direct I/O with `FileChannel`, the carrier thread blocks and additional carrier threads can be created to prevent a performance degradation (up to 256 by default). To compare both approaches under a constrained thread pool, both are given an equal budget of platform threads. `JUringBlocking` runs dedicated `IoShard`-hosted poller threads that submit requests and wake virtual threads via `LockSupport.unpark()` when completions arrive.
 
-The following JMH results run 1,000 virtual threads under a fixed platform thread budget (`±` = JMH 99.9 % CI across iterations; note that the 1–2T and 4T `JUringBlocking` intervals overlap, see [BENCHMARK.md](BENCHMARK.md)):
+The following historical JMH results run 1,000 virtual threads under a fixed platform thread budget (`±` = JMH 99.9 % CI across iterations; the intervals overlap — see [BENCHMARK.md](BENCHMARK.md) Part II §3):
 
-| Platform Thread Budget | Engine         | Thread Breakdown          | Throughput (ops/s)    | Bandwidth            | Speedup  |
+| Platform Thread Budget | Engine         | Thread Breakdown          | Throughput (ops/s)    | Bandwidth            | Historical ratio |
 |------------------------|----------------|---------------------------|-----------------------|----------------------|----------|
 | 1–2 Threads (Min)      | FileChannel    | 1 carrier                 | 11,433.8 ± 31.5       | 44.7 ± 0.1 MB/s      | baseline |
 | 1–2 Threads (Min)      | JUringBlocking | 1 carrier + 1 poller (2T) | 399,108.7 ± 89,551.6  | 1,559.0 ± 349.8 MB/s | 34.91x   |
@@ -106,7 +109,7 @@ The following JMH results run 1,000 virtual threads under a fixed platform threa
 | 16 Threads             | FileChannel    | 16 carriers               | 137,326.1 ± 32,534.5  | 536.4 ± 127.1 MB/s   | baseline |
 | 16 Threads             | JUringBlocking | 8 carriers + 8 pollers    | 443,592.3 ± 40,401.8  | 1,732.8 ± 157.8 MB/s | 3.23x    |
 
-`JUringBlocking` uses dedicated poller threads to submit queue entries and wake parked virtual threads when operations complete. Full details and multiple workload datasets are documented in [BENCHMARK.md](BENCHMARK.md).
+`JUringBlocking` uses dedicated poller threads to submit queue entries and wake parked virtual threads when operations complete. The ratios above are point estimates from a historical run with overlapping intervals; they are kept for context, not as a 0.1.0 ranking. Full details and the parity-at-Loom-defaults dataset are in [BENCHMARK.md](BENCHMARK.md) Part II §3.
 
 ## Examples
 

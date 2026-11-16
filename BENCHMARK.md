@@ -253,6 +253,15 @@ Because `FileChannel` operations are synchronous, a single thread can only issue
 
 ### 3. Virtual Threads (`JUringBlocking` vs `FileChannel` at 1,000 Virtual Threads)
 
+> [!IMPORTANT]
+> This whole subsection is **historical JMH evidence** from before the 0.1.0 release-readiness
+> pass. It was not rerun for 0.1.0: the benchmark harness does not record a committed CLI/JVM
+> flag string, several confidence intervals overlap, and the "equal total platform thread
+> budget" framing measures thread efficiency rather than a per-operation engine difference.
+> It is kept for transparency and context, not as a 0.1.0 ranking. The defensible result is
+> **parity at Loom defaults** (uncapped carrier pool, §3.2) plus "same device throughput with
+> 2–4 poller threads instead of hundreds of carriers" under a fixed budget.
+
 When `FileChannel` blocks a virtual thread in kernel I/O, the virtual thread remains pinned/mounted to its carrier thread, forcing the ForkJoinPool scheduler to compensate by spawning up to `maxPoolSize` (default 256) carrier threads. `JUringBlocking` unmounts the virtual thread via `LockSupport.park()` while its `IoShard`-backed poller threads drive `io_uring`.
 
 #### 3.1 Equal Total Platform Thread Budget (`1–2, 4, 8, 16` Platform Threads, 1,000 VTs)

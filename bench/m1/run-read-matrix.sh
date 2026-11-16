@@ -4,8 +4,10 @@
 #
 # Protocol (docs/benchmark-methodology.md §2/§4/§7): 10 s warmup + 30 s measured
 # per cell, R=5, one fresh process per rep, every engine pinned to CPU 2.
-# Engine order is interleaved per rep (juring, seastar, fio) so host-state drift
-# is common-mode (D6).
+# Engine order is interleaved per rep so host-state drift is common-mode (D6).
+# Set ROTATE_ENGINES=1 to rotate the order by (rep-1) instead of using the fixed
+# ENGINES order; the 0.1.0 claims rerun uses rotation (a fixed order can bias a
+# persistent first-engine advantage).
 #
 # Engine configurations (F0: best documented configuration for each):
 #   juring          registered files + qd fixed buffers, SINGLE_ISSUER|COOP_TASKRUN|
@@ -15,7 +17,7 @@
 #                   ("matched" = matches JUring's registration; see run-fio-brackets.sh
 #                   for the unmatched/registration-free bracket)
 #
-# Env overrides: WARMUP DURATION REPS QDS ENGINES FIO_VARIANT M1_RESULTS M1_CPU
+# Env overrides: WARMUP DURATION REPS QDS ENGINES FIO_VARIANT ROTATE_ENGINES M1_RESULTS M1_CPU
 #
 # Output: bench/results/m1-2026-11-13/{cells,logs}/<id>.json|.log + cell-meta.tsv
 set -euo pipefail
@@ -30,6 +32,7 @@ REPS=${REPS:-5}
 QDS=${QDS:-"1 16 64 128"}
 ENGINES=${ENGINES:-"juring seastar fio-io_uring"}
 FIO_VARIANT=${FIO_VARIANT:-matched}
+ROTATE_ENGINES=${ROTATE_ENGINES:-0}
 
 case_for_qd() {
     case $1 in
@@ -56,9 +59,20 @@ preflight
 init_meta
 echo "read matrix W1-W4: warmup=${WARMUP}s measured=${DURATION}s reps=${REPS} qds='${QDS}'"
 echo "engines='${ENGINES}' fio_variant=${FIO_VARIANT} cpu=${M1_CPU} started=$(now_utc)"
+read -r -a ENGINE_ARRAY <<< "$ENGINES"
+ENGINE_COUNT=${#ENGINE_ARRAY[@]}
 for rep in $(seq 1 "$REPS"); do
     for qd in $QDS; do
-        for engine in $ENGINES; do
+        if [[ $ROTATE_ENGINES == 1 && $rep -gt 1 ]]; then
+            shift_by=$(( (rep - 1) % ENGINE_COUNT ))
+            order=()
+            for ((k = 0; k < ENGINE_COUNT; k++)); do
+                order+=("${ENGINE_ARRAY[$(((k + shift_by) % ENGINE_COUNT))]}")
+            done
+        else
+            order=("${ENGINE_ARRAY[@]}")
+        fi
+        for engine in "${order[@]}"; do
             run_one "$engine" "$qd" "$rep" ||
                 echo "warn: cell failed and was recorded (engine=$engine qd=$qd rep=$rep)" >&2
         done

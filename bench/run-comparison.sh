@@ -223,7 +223,9 @@ run_fio() {
     local file
     if [[ "$rw" == "randread" || "$rw" == "read" ]]; then file="$JURING_FILE"; else file="$JURING_WRITE_FILE"; fi
     if [[ ! -r "$file" ]]; then warn "fio $case: file not readable: $file"; SKIPS=$((SKIPS+1)); return; fi
+    # Registration-matched fio reference (same fixed-file/fixed-buffer config as JUring).
     local -a cmd=("$FIO_BIN" --name="$case" --filename="$file" --ioengine=io_uring --direct=1
+        --registerfiles=1 --fixedbufs=1
         --rw="$rw" --bs="$bs" --iodepth="$qd" --numjobs="$thr"
         --runtime="$FIO_SECONDS" --time_based --group_reporting
         --percentile_list=50:90:95:99:99.9

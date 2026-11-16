@@ -315,6 +315,17 @@ report) is made.
 **M1 — single-shard engine parity (task-M1 = plan-M1).** Pass iff, for all read throughput cells
 (W1-W4, W9-W11) and steady-state write cells (W5-W8, W12-W14), against fio-uring with **matched
 batching and registration**:
+
+> **0.1.0 disclosure / correction.** The signed M1 read-path report used fio with registration
+> (`--registerfiles=1 --fixedbufs=1`) but **default submit batching**, because fio cannot set
+> JUring's `SINGLE_ISSUER`/`COOP_TASKRUN`/`DEFER_TASKRUN` flags or fuse submits the same way.
+> The read cells are therefore a **best-config capability comparison**, not the equal-config gate
+> written above. The device-state gate and fast-state subset were calibrated after the first
+> session (report §4), not pre-registered. The 0.1.0 claims rerun
+> (`bench/m1/run-claims-0.1.sh`) adds fio `matchedbatch` (`--registerfiles=1 --fixedbufs=1
+> --iodepth_batch_submit=qd`) and rotated engine order for W3/W4; its results are reported
+> separately in BENCHMARK.md. The write cells follow the original gate and remain
+> `INCONCLUSIVE`.
 1. **Plan gate:** at the saturation QDs (W3/W4, W7/W8) `IOPS_JUring ≥ IOPS_fio − 5 %` (plan-M1
    criterion), equivalently a one-sided 95 % lower bound of the ratio ≥ 0.95;
 2. **CPU gate:** `cycles/op` (user+kernel) within 15 % of fio at the same QD (plan-M1 criterion);
@@ -423,7 +434,7 @@ the reproducibility gate in §8.
 | "4 threads+ JUring saturates NVMe at ~478,000 ops/s" (BENCHMARK.md:59) | **Weak.** 4T 474,169 ± 9,109; 8T 436,041 ± 66,223; 16T 477,680 ± 1,338 — non-monotonic, and no fio multi-job reference is provided, so "saturation" cannot be attributed to the device. | BENCHMARK.md:55-57,59 |
 | same 1T/QD64/4K/single-file cell appears as three different means: 330,196 ± 361 (line 26), 330,089 ± 748 (line 45), 319,847 ± 40,984 (line 53) | **Internal inconsistency** (3 % spread in means, 100× spread in spreads) across three benchmarks in one document. Any one cannot be quoted as "the" baseline. | BENCHMARK.md:26,45,53 |
 | write scaling "2.6×, 1.6×, 1.0×, 1.0×, 0.9×" (BENCHMARK.md:67-71) | **Not supported.** e.g. 2T 209,755 ± 162,797 (78 % spread); 0.9× at 16T with JUring ±147,764. These are overlapping-noise ratios, not measurements. | BENCHMARK.md:67-71,74 |
-| VT: "1-2 threads = 34.91× vs 4 threads = 10.50×" (README.md:53-56, BENCHMARK.md:125-132) | **Over-precise.** JUringBlocking at 1-2T = 399,109 ± 89,552 vs 4T = 452,193 ± 1,263; the two means overlap within 1 CI, so the "1-2T" point is not distinguishable from 4T. | README.md:53-56; BENCHMARK.md:110-132 |
+| VT: "1-2 threads = 34.91× vs 4 threads = 10.50×" (historical README/BENCHMARK) | **Over-precise / resolved in 0.1.0.** JUringBlocking at 1-2T = 399,109 ± 89,552 vs 4T = 452,193 ± 1,263; the means overlap within 1 CI. The 0.1.0 docs label the VT table as historical JMH, not a ranking, and state the defensible result (parity at Loom defaults; thread efficiency under a fixed budget). | README.md §Virtual Thread Performance; BENCHMARK.md Part II §3 |
 | no seastar baseline anywhere | **Confirmed gap.** Zero occurrences of "seastar" in `*.md`. | `grep -in seastar *.md` → none |
 | "L0 measured; JUring at or above fio parity" (`docs/internal/SEASTAR-PLAN.md` §0, from `docs/internal/baseline-2026-11-13.md`) | **Provisional, must be re-stated under this protocol.** The baseline is 3×10 s runs reported as mean ± stdev, not the matched-batching/registration comparison with CIs required by §7; cite it as "provisional" until W3/W4 pass rules 1-3. | `docs/internal/SEASTAR-PLAN.md` §0; §7 here |
 | JMH harness = fio workload | **Partly false.** JUring JMH uses registered files + fixed buffers (`DirectReadBenchmark.java:106-112`); fio "default" does not. That is exactly the L0 asymmetry being measured, so the comparison conflates engine and buffer registration. | README.md:27-30 vs `DirectReadBenchmark.java:106-112` |

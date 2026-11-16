@@ -13,7 +13,7 @@
 # Cell identity: <case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>
 #   case    W1..W4 throughput, W5..W8 randwrite, W9..W11 seqread, W15/W16 latency
 #   engine  juring | seastar | fio-io_uring | fio-libaio | seastar-io_tester
-#   variant std | matched | default | batch8 | batch16 | batch32 | sqpoll | perf
+#   variant std | matched | matchedbatch | default | batch8 | batch16 | batch32 | sqpoll | perf
 #
 # Every cell leaves cells/<id>.json, logs/<id>.log, and one row in cell-meta.tsv.
 # All engine processes are pinned with `taskset -c $M1_CPU` (default CPU 2; F3/F4).
@@ -127,6 +127,7 @@ build_engine_cmd() {
             if ((readonly)); then M1_CMD+=(--readonly); fi
             case $variant in
                 matched) M1_CMD+=(--registerfiles=1 --fixedbufs=1) ;;
+                matchedbatch) M1_CMD+=(--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit="$qd") ;;
                 regfile) M1_CMD+=(--registerfiles=1) ;;
                 default | std | none) ;;
                 batch8) M1_CMD+=(--iodepth_batch_submit=8) ;;
