@@ -323,9 +323,10 @@ batching and registration**:
 > written above. The device-state gate and fast-state subset were calibrated after the first
 > session (report §4), not pre-registered. The 0.1.0 claims rerun
 > (`bench/m1/run-claims-0.1.sh`) adds fio `matchedbatch` (`--registerfiles=1 --fixedbufs=1
-> --iodepth_batch_submit=qd`) and rotated engine order for W3/W4; its results are reported
-> separately in BENCHMARK.md. The write cells follow the original gate and remain
-> `INCONCLUSIVE`.
+> --iodepth_batch_submit=qd`) and rotated engine order for W3/W4. Until that control run is
+> published, read comparisons against fio are **best-config**, not equal-config; run the script
+> on an idle benchmark host and publish the rows together with the historical reference. The
+> write cells follow the original gate and remain `INCONCLUSIVE`.
 1. **Plan gate:** at the saturation QDs (W3/W4, W7/W8) `IOPS_JUring ≥ IOPS_fio − 5 %` (plan-M1
    criterion), equivalently a one-sided 95 % lower bound of the ratio ≥ 0.95;
 2. **CPU gate:** `cycles/op` (user+kernel) within 15 % of fio at the same QD (plan-M1 criterion);
