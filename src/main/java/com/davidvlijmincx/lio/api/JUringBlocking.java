@@ -20,7 +20,11 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 /**
- * Zero-GC, Virtual Thread friendly blocking wrapper over {@code io_uring}.
+ * Virtual-thread friendly blocking wrapper over {@code io_uring}.
+ *
+ * <p>The no-option {@code read}/{@code write}/{@code *Fixed} overloads are allocation-free on
+ * the calling thread after setup; passing {@link SqeOptions} explicitly allocates the varargs
+ * array at the call site. This is a hot-path property, not a general "zero-GC" guarantee.
  *
  * <p>An instance owns a {@link RingGroup} of poller shards (one platform thread and one
  * {@code io_uring} per worker). A blocking call picks the worker bound to the calling thread,
@@ -1526,6 +1530,223 @@ public class JUringBlocking implements AutoCloseable {
         validateRegisteredBuffer(bufferIndex, bytes.length);
         MemorySegment.copy(bytes, 0, this.registeredBuffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
         return writeFixed(indexFD, bytes.length, offset, bufferIndex, sqeOptions);
+    }
+
+    // ------------------------------------------------------------------
+    // Allocation-free hot-path overloads
+    //
+    // The varargs forms above allocate an empty SqeOptions[] at every call site, even when
+    // no flags are supplied. These exact-arity overloads delegate with a shared empty array
+    // so the common blocking call is allocation-free on the caller thread after setup.
+    // ------------------------------------------------------------------
+
+    /**
+     * Allocation-free overload: reads into the whole of {@code buffer}.
+     *
+     * @param fd     file to read
+     * @param buffer native destination buffer; its size determines the read size
+     * @param offset file offset in bytes
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the segment is not native writeable memory
+     * @throws IllegalStateException    when this instance is closed
+     */
+    public long read(FileDescriptor fd, MemorySegment buffer, long offset) {
+        return read(fd, buffer, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: reads at most {@code length} bytes into {@code buffer}.
+     *
+     * @param fd     file to read
+     * @param buffer native destination buffer
+     * @param length maximum number of bytes to read
+     * @param offset file offset in bytes
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the length exceeds the buffer or a segment check fails
+     */
+    public long read(FileDescriptor fd, MemorySegment buffer, int length, long offset) {
+        return read(fd, buffer, length, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: reads into the whole of {@code buffer} from a registered-file
+     * slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param buffer  native destination buffer; its size determines the read size
+     * @param offset  file offset in bytes
+     * @return the number of bytes read, or the negative errno
+     */
+    public long read(int indexFD, MemorySegment buffer, long offset) {
+        return read(indexFD, buffer, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: reads at most {@code length} bytes from a registered-file slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param buffer  native destination buffer
+     * @param length  maximum number of bytes to read
+     * @param offset  file offset in bytes
+     * @return the number of bytes read, or the negative errno
+     */
+    public long read(int indexFD, MemorySegment buffer, int length, long offset) {
+        return read(indexFD, buffer, length, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes the whole of {@code buffer}.
+     *
+     * @param fd     file to write
+     * @param buffer native source buffer; its size determines the write size
+     * @param offset file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(FileDescriptor fd, MemorySegment buffer, long offset) {
+        return write(fd, buffer, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes at most {@code length} bytes from {@code buffer}.
+     *
+     * @param fd     file to write
+     * @param buffer native source buffer
+     * @param length number of bytes to write
+     * @param offset file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(FileDescriptor fd, MemorySegment buffer, int length, long offset) {
+        return write(fd, buffer, length, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes a heap array.
+     *
+     * @param fd     file to write
+     * @param bytes  bytes to write
+     * @param offset file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(FileDescriptor fd, byte[] bytes, long offset) {
+        return write(fd, bytes, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes the whole of {@code buffer} to a registered-file slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param buffer  native source buffer; its size determines the write size
+     * @param offset  file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(int indexFD, MemorySegment buffer, long offset) {
+        return write(indexFD, buffer, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes at most {@code length} bytes to a registered-file slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param buffer  native source buffer
+     * @param length  number of bytes to write
+     * @param offset  file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(int indexFD, MemorySegment buffer, int length, long offset) {
+        return write(indexFD, buffer, length, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes a heap array to a registered-file slot.
+     *
+     * @param indexFD registered-file slot number
+     * @param bytes   bytes to write
+     * @param offset  file offset in bytes
+     * @return the number of bytes written, or the negative errno
+     */
+    public long write(int indexFD, byte[] bytes, long offset) {
+        return write(indexFD, bytes, offset, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: reads into a registered fixed buffer.
+     *
+     * @param fd          file to read
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @return the number of bytes read, or the negative errno
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
+    public long readFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex) {
+        return readFixed(fd, readSize, offset, bufferIndex, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: reads from a registered-file slot into a fixed buffer.
+     *
+     * @param indexFD     registered-file slot number
+     * @param readSize    maximum number of bytes to read
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered destination buffer
+     * @return the number of bytes read, or the negative errno
+     */
+    public long readFixed(int indexFD, int readSize, long offset, int bufferIndex) {
+        return readFixed(indexFD, readSize, offset, bufferIndex, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes from a registered fixed buffer.
+     *
+     * @param fd          file to write
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the number of bytes written, or the negative errno
+     * @throws IllegalArgumentException when the index or size is out of range
+     */
+    public long writeFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex) {
+        return writeFixed(fd, writeSize, offset, bufferIndex, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: writes from a fixed buffer to a registered-file slot.
+     *
+     * @param indexFD     registered-file slot number
+     * @param writeSize   number of bytes to write from the buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the number of bytes written, or the negative errno
+     */
+    public long writeFixed(int indexFD, int writeSize, long offset, int bufferIndex) {
+        return writeFixed(indexFD, writeSize, offset, bufferIndex, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: copies a heap array into a fixed buffer and writes it.
+     *
+     * @param fd          file to write
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the number of bytes written, or the negative errno
+     */
+    public long writeFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex) {
+        return writeFixed(fd, bytes, offset, bufferIndex, SqeOptions.NO_OPTIONS);
+    }
+
+    /**
+     * Allocation-free overload: copies a heap array into a fixed buffer and writes it to a
+     * registered-file slot.
+     *
+     * @param indexFD     registered-file slot number
+     * @param bytes       bytes to write; copied into the registered buffer
+     * @param offset      file offset in bytes
+     * @param bufferIndex index of the registered source buffer
+     * @return the number of bytes written, or the negative errno
+     */
+    public long writeFixed(int indexFD, byte[] bytes, long offset, int bufferIndex) {
+        return writeFixed(indexFD, bytes, offset, bufferIndex, SqeOptions.NO_OPTIONS);
     }
 
     /**

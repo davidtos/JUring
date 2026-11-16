@@ -22,6 +22,12 @@ public enum SqeOptions {
 
     final byte value;
 
+    /**
+     * Shared empty options array used by the exact-arity overloads so a call without explicit
+     * flags does not allocate a fresh {@code SqeOptions[]} at the call site.
+     */
+    static final SqeOptions[] NO_OPTIONS = new SqeOptions[0];
+
     SqeOptions(byte value) {
         this.value = value;
     }

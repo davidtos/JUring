@@ -5,7 +5,7 @@ JUring lets Java submit file I/O to Linux `io_uring` directly, using the Foreign
 Java's file APIs are synchronous. A thread issues one request and waits for it. To keep storage busy you need many requests in flight, meaning lots of platform threads are needed. Virtual threads don't change this for file I/O. A virtual thread blocked in a file read stays mounted on its carrier thread, and the scheduler makes up for it by temporarily adding carrier threads (up to 256 by default). From a single thread, JUring can keep many requests in flight by submitting and collecting completions in batches.
 
 - Only Java FFM downcalls and VarHandles.
-- Zero heap alloc on the hot path after setup.
+- Zero heap allocation on the raw-ring hot path after setup, and on `JUringBlocking`'s no-option blocking overloads (passing `SqeOptions` explicitly allocates the varargs array at the call site).
 - Virtual thread support with JUringBlocking.
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
