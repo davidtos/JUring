@@ -19,7 +19,10 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * their completions are <em>reaped</em> as {@link Result} objects. A ring is confined to a
  * single owner thread: it is not thread-safe, and the owner thread must prepare, submit
  * and reap. Use one ring per thread, or {@link IoShard}/{@link RingGroup} for a managed
- * multi-ring layout.
+ * multi-ring layout. The ownership contract is enforced: data-plane and registration methods
+ * called from a foreign thread throw {@link WrongThreadException}, and {@link #close(long)}
+ * may only be called by the owner while the ring is open. {@link #ringMetrics()} (and the
+ * post-close counters) remain readable from any thread.
  *
  * <p>Registrations are explicit and lifecycle-bound to the ring: registered buffers
  * ({@link #registerBuffers(int, int)}), the sparse registered-file table
@@ -99,7 +102,8 @@ public class JUring implements AutoCloseable {
     /** B10: {@code JuringFile} handles attached to this ring (grows at open, shrinks at close). */
     private JuringFile[] attachedFiles = new JuringFile[0];
     private int attachedFileCount;
-    private boolean closed;
+    private volatile Thread ownerThread;
+    private volatile boolean closed;
     private long cancelledAtClose;
     private int abandonedAtClose;
     /** B5: final frozen ring-metrics snapshot captured on close (design §2.1 after-close rule). */
@@ -135,6 +139,7 @@ public class JUring implements AutoCloseable {
      */
     public JUring(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringFlags) {
         ioUring = NativeDispatcher.getUringInstance(queueDepth, sqThreadIdleMs, ioUringFlags);
+        this.ownerThread = Thread.currentThread();
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];
         freeBufferTop = 0;
@@ -142,6 +147,7 @@ public class JUring implements AutoCloseable {
 
     private JUring(IoUringDispatcher ioUring) {
         this.ioUring = ioUring;
+        this.ownerThread = Thread.currentThread();
         registeredBuffers = new ArrayList<>();
         freeBufferStack = new int[0];
         freeBufferTop = 0;
@@ -160,7 +166,7 @@ public class JUring implements AutoCloseable {
      * @throws RuntimeException when the attached ring cannot be created
      */
     public JUring getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
-        ensureOpen();
+        ensureOpenAndOwner();
         var ring = this.ioUring.getSharedWorkerRing(queueDepth, ioUringOptions);
         return new JUring(ring);
     }
@@ -355,6 +361,7 @@ public class JUring implements AutoCloseable {
      *                                  {@code capacity} is negative
      */
     public void setupReadBufferPool(int bufferSize, int capacity) {
+        ensureOpenAndOwner();
         if (bufferSize <= 0 || capacity < 0) {
             throw new IllegalArgumentException("Invalid read buffer pool configuration: bufferSize=" + bufferSize + ", capacity=" + capacity);
         }
@@ -436,6 +443,7 @@ public class JUring implements AutoCloseable {
      *                                  {@link OperationType#READ_POOLED} completion
      */
     public void checkInReadBuffer(Result result) {
+        ensureOpenAndOwner();
         if (result == null) {
             throw new IllegalArgumentException("Result cannot be null");
         }
@@ -861,7 +869,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException    when the ring is closed
      */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (bufferIndex < 0 || bufferIndex >= registeredBuffersArray.length) {
             throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
         }
@@ -1686,7 +1694,7 @@ public class JUring implements AutoCloseable {
      * @return {@code userData}
      */
     long prepareWakeupRead(int fd, MemorySegment buffer, long userData) {
-        ensureOpen();
+        ensureOpenAndOwner();
         Objects.requireNonNull(buffer, "buffer");
         validateNativeSegment(buffer, true);
         if (buffer.byteSize() < 8L) {
@@ -1706,7 +1714,7 @@ public class JUring implements AutoCloseable {
      * @return {@code userData}
      */
     long prepareCancelAnyInternal(long userData) {
-        ensureOpen();
+        ensureOpenAndOwner();
         requireOpcodeSupported(IoUringDispatcher.IORING_OP_ASYNC_CANCEL, "IORING_OP_ASYNC_CANCEL");
         long sqe = getSqe((byte) 0, false);
         ioUring.prepareCancelAny(sqe);
@@ -1716,7 +1724,7 @@ public class JUring implements AutoCloseable {
 
     /** Number of SQEs prepared but not yet handed to the kernel ({@code sqeTail - sqHead}). */
     int pendingSqes() {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.pendingSqes();
     }
 
@@ -2165,7 +2173,7 @@ public class JUring implements AutoCloseable {
             | IORING_TIMEOUT_REALTIME | IORING_TIMEOUT_ETIME_SUCCESS;
 
     private long prepareLinkTimeoutInternal(MemorySegment timespec, int flags, byte sqeFlags) {
-        ensureOpen();
+        ensureOpenAndOwner();
         requireOpcodeSupported(IoUringDispatcher.IORING_OP_LINK_TIMEOUT, "IORING_OP_LINK_TIMEOUT");
         Objects.requireNonNull(timespec, "timespec");
         if (!timespec.isNative()) {
@@ -2219,8 +2227,27 @@ public class JUring implements AutoCloseable {
         }
     }
 
-    private long getSqe(byte flags, boolean fixedFile) {
+    /**
+     * Enforces the one-owner-thread contract documented on the class: the ring may only be
+     * prepared/submitted/reaped/registered from the thread that created it. A ring is cheap;
+     * create one per thread instead of sharing.
+     */
+    private void checkOwner() {
+        Thread owner = ownerThread;
+        if (owner != null && Thread.currentThread() != owner) {
+            throw new WrongThreadException("JUring is owned by thread '" + owner.getName()
+                    + "' but was called from '" + Thread.currentThread().getName()
+                    + "'; create one ring per thread");
+        }
+    }
+
+    private void ensureOpenAndOwner() {
         ensureOpen();
+        checkOwner();
+    }
+
+    private long getSqe(byte flags, boolean fixedFile) {
+        ensureOpenAndOwner();
         long sqe = ioUring.getSqe();
         if (sqe == 0L) {
             throw new IllegalStateException("Submission queue ring is full; call submit() before preparing more operations");
@@ -2265,7 +2292,7 @@ public class JUring implements AutoCloseable {
      * needed; otherwise it issues {@code io_uring_enter()}.
      */
     public void submit() {
-        ensureOpen();
+        ensureOpenAndOwner();
         ioUring.submit();
     }
 
@@ -2276,7 +2303,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions currently available in the CQ ring
      */
     public int submitAndWait(int minComplete) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.submitAndWait(minComplete);
     }
 
@@ -2289,7 +2316,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int submitAndWaitForBatchResult(int minComplete, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.submitAndWaitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
     }
 
@@ -2303,7 +2330,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.submitAndWaitForBatchResult(minComplete, maxReap, consumer);
     }
 
@@ -2316,7 +2343,7 @@ public class JUring implements AutoCloseable {
      * @return the number of completions reaped (0 when none are ready)
      */
     public int forEachBatchResult(int batchSize, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
@@ -2329,7 +2356,7 @@ public class JUring implements AutoCloseable {
      * @return the number of completions reaped (0 when none are ready)
      */
     public int peekForBatchResult(int batchSize, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.peekForBatchResult(batchSize, consumer);
     }
 
@@ -2344,7 +2371,7 @@ public class JUring implements AutoCloseable {
      * @return the reaped results, empty when none are ready
      */
     public List<Result> peekForBatchResult(int batchSize) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.peekForBatchResult(batchSize);
     }
 
@@ -2359,7 +2386,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped (0 when none are ready)
      */
     int pollForBatchResult(int batchSize, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         int reaped = ioUring.peekForBatchResult(batchSize, consumer);
         if (reaped == 0 && ioUring.pollCq() > 0) {
             reaped = ioUring.peekForBatchResult(batchSize, consumer);
@@ -2378,7 +2405,7 @@ public class JUring implements AutoCloseable {
      * @return the reaped results
      */
     public List<Result> waitForBatchResult(int batchSize) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.waitForBatchResult(batchSize);
     }
 
@@ -2390,7 +2417,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.waitForBatchResult(minComplete, Integer.MAX_VALUE, consumer);
     }
 
@@ -2403,7 +2430,7 @@ public class JUring implements AutoCloseable {
      * @return number of completions reaped
      */
     public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.waitForBatchResult(minComplete, maxReap, consumer);
     }
 
@@ -2416,7 +2443,7 @@ public class JUring implements AutoCloseable {
      * @return the reaped completion
      */
     public Result waitForResult() {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.waitForResult();
     }
 
@@ -2427,7 +2454,7 @@ public class JUring implements AutoCloseable {
      * @return the populated {@code target}
      */
     public Result waitForResult(Result target) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.waitForResult(target);
     }
 
@@ -2445,7 +2472,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException when buffers are already registered or the ring is closed
      */
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (this.registeredBuffersArray != null && this.registeredBuffersArray.length > 0) {
             throw new IllegalStateException("Buffers are already registered; cannot register twice");
         }
@@ -2475,7 +2502,7 @@ public class JUring implements AutoCloseable {
      * @return the index of the checked-out buffer, or {@code -1} when all buffers are in use
      */
     public int checkOutBuffer() {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (freeBufferTop == 0) {
             return -1;
         }
@@ -2494,7 +2521,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException    when the buffer is not currently checked out
      */
     public void checkInBuffer(int bufferIndex) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (bufferInUse == null || bufferIndex < 0 || bufferIndex >= bufferInUse.length) {
             throw new IllegalArgumentException("Invalid bufferIndex: " + bufferIndex);
         }
@@ -2529,7 +2556,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException when the ring is closed
      */
     public int registerFiles(FileDescriptor... fileDescriptors) {
-        ensureOpen();
+        ensureOpenAndOwner();
         int[] fds = new int[fileDescriptors.length];
         for (int i = 0; i < fileDescriptors.length; i++) {
             fds[i] = fileDescriptors[i].getFd();
@@ -2549,7 +2576,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException when the range exceeds the tracked table capacity
      */
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
-        ensureOpen();
+        ensureOpenAndOwner();
         int end = offset + fileDescriptors.length;
         if (offset < 0 || registeredFileTable.length < end) {
             // The kernel-side table and the JUring tracking table are created together and have the
@@ -2577,7 +2604,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException     if a file table is already registered on this ring
      */
     void initFileTable(int capacity) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (capacity <= 0) {
             throw new IllegalArgumentException("Invalid file table capacity: " + capacity);
         }
@@ -2601,7 +2628,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException if the table is full
      */
     public int registerFileAdd(FileDescriptor fd) {
-        ensureOpen();
+        ensureOpenAndOwner();
         Objects.requireNonNull(fd, "fd");
         if (registeredFileTable.length == 0) {
             initFileTable(DEFAULT_FILE_TABLE_CAPACITY);
@@ -2630,7 +2657,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException    when the slot is not registered
      */
     public void unregisterFileSlot(int slot) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (slot < 0 || slot >= registeredFileTable.length) {
             throw new IllegalArgumentException("File slot out of range: " + slot + " (table capacity " + registeredFileTable.length + ")");
         }
@@ -2647,7 +2674,7 @@ public class JUring implements AutoCloseable {
      * No-op when no file table is registered.
      */
     public void unregisterFiles() {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (registeredFileTable.length == 0) {
             return;
         }
@@ -2664,7 +2691,7 @@ public class JUring implements AutoCloseable {
      * No-op when no buffers are registered.
      */
     public void unregisterBuffers() {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (registeredBuffersArray.length == 0) {
             return;
         }
@@ -2696,7 +2723,7 @@ public class JUring implements AutoCloseable {
      *                                       (the message carries the errno)
      */
     public void updateRegisteredBuffers(int offset, MemorySegment... buffers) {
-        ensureOpen();
+        ensureOpenAndOwner();
         Objects.requireNonNull(buffers, "buffers");
         if (registeredBuffersArray.length == 0) {
             throw new IllegalStateException("No registered buffers to update; call registerBuffers() first");
@@ -2772,7 +2799,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException    when the ring is closed
      */
     public void setDefaultIoprio(short ioprio) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
             throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
         }
@@ -2799,7 +2826,7 @@ public class JUring implements AutoCloseable {
      * @throws IllegalStateException    when the ring is closed or no SQE has been prepared yet
      */
     public void setLastSqeIoprio(short ioprio) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
             throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
         }
@@ -2830,7 +2857,7 @@ public class JUring implements AutoCloseable {
      * owner thread; allocates only when the registry grows (open-time, never per request).
      */
     void attachFile(JuringFile file) {
-        ensureOpen();
+        ensureOpenAndOwner();
         if (attachedFileCount == attachedFiles.length) {
             int newLength = attachedFiles.length == 0 ? 4 : attachedFiles.length << 1;
             attachedFiles = Arrays.copyOf(attachedFiles, newLength);
@@ -2891,6 +2918,11 @@ public class JUring implements AutoCloseable {
     }
 
     /** Number of queued-but-not-yet-completed operations on the underlying ring. */
+    /**
+     * Number of queued-but-not-completed operations on the underlying ring. Read-only and safe
+     * from any thread (used by {@code IoShard}/{@code RingGroup} stats); submission, reaping and
+     * registration still require the owner thread.
+     */
     int inFlightCount() {
         ensureOpen();
         return ioUring.inFlightCount();
@@ -2898,7 +2930,7 @@ public class JUring implements AutoCloseable {
 
     /** Reads {@code stx_size} from a completed statx buffer (package-private helper for JuringFile). */
     long staticxSize(MemorySegment statxBuffer) {
-        ensureOpen();
+        ensureOpenAndOwner();
         return ioUring.staticxSize(statxBuffer);
     }
 
@@ -2981,6 +3013,7 @@ public class JUring implements AutoCloseable {
         if (timeoutMillis < 0) {
             throw new IllegalArgumentException("close timeout must be >= 0: " + timeoutMillis);
         }
+        checkOwner();
         closed = true;
         try {
             ioUring.closeBounded(timeoutMillis);
