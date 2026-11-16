@@ -1,5 +1,7 @@
 # JUring: io_uring for Java using the FFM API
 
+[![CI](https://github.com/davidtos/JUring/actions/workflows/ci.yml/badge.svg)](https://github.com/davidtos/JUring/actions/workflows/ci.yml)
+
 JUring lets Java submit file I/O to Linux `io_uring` directly, using the Foreign Function & Memory API (JEP 454). There is no JNI, no C glue code and no `liburing`. The rings are mapped into memory and driven from Java.
 
 Java's file APIs are synchronous. A thread issues one request and waits for it. To keep storage busy you need many requests in flight, meaning lots of platform threads are needed. Virtual threads don't change this for file I/O. A virtual thread blocked in a file read stays mounted on its carrier thread, and the scheduler makes up for it by temporarily adding carrier threads (up to 256 by default). From a single thread, JUring can keep many requests in flight by submitting and collecting completions in batches.
@@ -10,12 +12,31 @@ Java's file APIs are synchronous. A thread issues one request and waits for it. 
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
 > [!NOTE]
-> - JUring is a focused Linux `io_uring` file-I/O library (x86_64, Java FFM API): raw ring operations (`JUring`), async file handles (`JuringFile`), buffered readahead/write-behind streams (`JuringInputStream`/`JuringOutputStream`), explicit durability and group commit (`DurabilityMode`, `GroupCommit`), a multi-ring shard runtime (`IoShard`/`RingGroup`), per-ring observability (`RingMetrics`, `ShardMetrics`, `MetricsJmx`), and virtual-thread blocking (`JUringBlocking`). Several file/stream/`GroupCommit` handles can share one ring, with completions routed per handle (B10a).
+> - JUring is a focused Linux `io_uring` file-I/O library (x86-64 and aarch64, Java FFM API): raw ring operations (`JUring`), async file handles (`JuringFile`), buffered readahead/write-behind streams (`JuringInputStream`/`JuringOutputStream`), explicit durability and group commit (`DurabilityMode`, `GroupCommit`), a multi-ring shard runtime (`IoShard`/`RingGroup`), per-ring observability (`RingMetrics`, `ShardMetrics`, `MetricsJmx`), and virtual-thread blocking (`JUringBlocking`). Several file/stream/`GroupCommit` handles can share one ring, with completions routed per handle (B10a).
 > - All headline benchmarks below come from the pre-registered, reproducible harness in [`bench/`](bench/README.md) ([methodology](docs/benchmark-methodology.md)) against registration-matched `fio` (`--ioengine=io_uring --registerfiles=1 --fixedbufs=1`, neutral referee) and [Seastar](https://seastar.io/) (`--reactor-backend=io_uring`, opponent bracket).
 
 JUring does not do QoS, fair queuing or priorities between workload classes in v1 by design. Isolate classes with separate rings or shards (`IoShard`/`RingGroup`), or with OS-level I/O controls such as cgroup v2 `io.weight`/`io.max` and `ionice`; see [docs/m4-decision.md](docs/m4-decision.md).
 
-A per-request block-layer `ioprio` **hint** is exposed (`IoPriority` with `JUring.defaultIoprio`, `JUring.setLastSqeIoprio` for raw operations, and `JuringFile.withIoPriority`, inherited by streams and `GroupCommit`; read/write operations). It is scheduler-dependent (`bfq`/`mq-deadline` act on it, `none`/`kyber` ignore it) and is not a QoS or fair-queuing mechanism; `0` inherits the thread's `ionice`/nice priority. See [docs/b10-design.md](docs/b10-design.md).
+A per-request block-layer `ioprio` **hint** is exposed (`IoPriority` with `JUring.defaultIoprio`, `JUring.setLastSqeIoprio` for raw operations, and `JuringFile.withIoPriority`, inherited by streams and `GroupCommit`; read/write operations). It is scheduler-dependent (`bfq`/`mq-deadline` act on it, `none`/`kyber` ignore it) and is not a QoS or fair-queuing mechanism; `0` inherits the thread's `ionice`/nice priority. See [docs/internal/b10-design.md](docs/internal/b10-design.md).
+
+## Install
+
+```xml
+<dependency>
+    <groupId>io.github.davidtos</groupId>
+    <artifactId>juring</artifactId>
+    <version>0.1.0</version>
+</dependency>
+```
+
+Requirements: Linux on x86-64 or aarch64, JDK 25+, and native access enabled
+(`--enable-native-access=JUring` on the module path, `ALL-UNNAMED` on the classpath). Check
+`JUring.isSupported()` before creating a ring if your environment may restrict io_uring (Docker's
+default seccomp profile, AppArmor, `kernel.io_uring_disabled`); see [docs/platforms.md](docs/platforms.md)
+for the full envelope and the `java.nio` fallback guidance.
+
+0.1.0 is the first release. The API is pre-1.0 but covered by the compatibility policy in
+[docs/api-stability.md](docs/api-stability.md); see [CHANGELOG.md](CHANGELOG.md) for what changed.
 
 ## Benchmark Results
 
@@ -314,4 +335,9 @@ See [docs/examples.md](docs/examples.md) for the mapping table, the run instruct
 
 - [docs/platforms.md](docs/platforms.md) — supported OS/arch/JDK/kernel, native-access flags, container/seccomp and `io_uring_disabled` caveats, O_DIRECT/memlock, and `JUring.isSupported()` fallback guidance.
 - [docs/api-stability.md](docs/api-stability.md) — the public API surface (`com.davidvlijmincx.lio.api`), SemVer rules, and the compatibility and deprecation policy.
-- [docs/UPGRADING.md](docs/UPGRADING.md) — capability history and migration notes (no released version exists yet).
+- [docs/UPGRADING.md](docs/UPGRADING.md) — capability history and migration notes.
+- [CHANGELOG.md](CHANGELOG.md) — release notes.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

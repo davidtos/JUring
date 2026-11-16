@@ -9,15 +9,14 @@ to.
 
 | item | value |
 |---|---|
-| project version | `0.1-SNAPSHOT` |
-| released versions | **none** — no JUring release has been published (`git tag` is empty) |
-| current deprecations added by B9 | **none** |
+| project version | `0.1.0` |
+| released versions | **0.1.0** (first release; tag `v0.1.0`) |
+| current deprecations added by 0.1.0 | **none** |
 | pre-existing deprecations (pre-policy) | **one**, see [§3](#3-deprecations) |
-| compatibility policy | takes effect at the first published release; see [api-stability.md](api-stability.md) |
+| compatibility policy | in effect from 0.1.0; see [api-stability.md](api-stability.md) |
 
-**There is no released version yet, so there is nothing to migrate from.** This file exists
-so that the first release starts with a real upgrade history instead of a blank page;
-entries below describe what the 0.1-SNAPSHOT line has accumulated, not steps you must take.
+**0.1.0 is the first release.** There is no earlier released version to migrate from; the
+entries below are the upgrade history future releases build on.
 
 ## 1. Versioning rules at a glance
 
@@ -37,7 +36,7 @@ prototype package, `com.davidvlijmincx.lio.blackpanda`, was removed from the rep
 
 ## 2. Capability history (additive; one pre-release prototype package removed)
 
-The 0.1-SNAPSHOT line grew additively. Each capability step below added surface and none
+The 0.1 line grew additively. Each capability step below added surface and none
 changed an existing signature incompatibly; the only removal is the pre-release prototype
 package `com.davidvlijmincx.lio.blackpanda` (D12, 2026-11-16), which carried no compatibility
 guarantee.
@@ -100,13 +99,13 @@ predates the stability policy and is grandfathered by it.
 - Migration: replace `prepareCancel(handle)` with `prepareCancelByUserData(handle)`. The
   behaviour is identical — the deprecated method delegates to the replacement.
 
-No public API has been removed from the 0.1-SNAPSHOT line so far.
+No public API has been removed from the 0.1 line so far.
 
 ## 4. Migration notes
 
-- **From a previous JUring release:** not possible — there is no released version yet. The
-  first release will be the first version anyone can migrate from, and changes after it will
-  be recorded here.
+- **From 0.1.0 to a later 0.x release:** 0.1.0 is the first release; there is nothing to migrate
+  from yet. Future releases record breaking changes and deprecations here, with the 0.1.0
+  behaviour baseline in §2a.
 - **From the pre-rewrite JUring API** (the older socket operations and primitives that were
   removed before the current library focus): that API was **never released**, so there is no
   supported migration path to document. If you have code against an old unreleased snapshot,

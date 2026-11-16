@@ -1,8 +1,7 @@
 # JUring API stability and compatibility policy
 
-**Status:** forward-looking policy for the **0.1-SNAPSHOT** development line. No JUring
-release has been published yet, so this policy is the target the project is working to and
-it **takes effect at the first published release**; before that, snapshot builds may change.
+**Status:** policy for the **0.1.x** release line. JUring 0.1.0 is the first published
+release, so this policy is now in effect for `0.1.0`; pre-1.0 SemVer rules in §3 apply.
 Compatibility issues and questions are tracked at
 [github.com/davidtos/JUring](https://github.com/davidtos/JUring).
 
@@ -15,15 +14,14 @@ changes per release and links back here.
 
 | item | value | source of truth |
 |---|---|---|
-| project version | `0.1-SNAPSHOT` | `pom.xml` (`<version>`) |
-| published releases | **none** | `git tag` is empty; no release has been announced or published |
-| effect of this policy | starts at the first published release | this document |
+| project version | `0.1.0` | `pom.xml` (`<version>`) |
+| published releases | **0.1.0** (first release; git tag `v0.1.0`) | GitHub releases / `git tag` |
+| effect of this policy | in effect from 0.1.0 | this document |
 | repository (report issues here) | [github.com/davidtos/JUring](https://github.com/davidtos/JUring) | `git remote -v` (`origin`) |
-| build command (the project's CI command) | `mvn -o test` | repo has no hosted CI; see `docs/b9-design.md` §7 |
+| build command (the project's CI command) | `mvn -B -ntp test` | `.github/workflows/ci.yml` (JDK 25/26) |
 
-Because no artifact has been released, there is nothing to migrate **from** yet
-(`docs/UPGRADING.md` says the same). The policy is written now so that the first release
-starts from a documented contract instead of an implicit one.
+There is no older released version to migrate **from**; `docs/UPGRADING.md` records the 0.1.0
+contract and migration-relevant changes for future releases.
 
 ## 2. What counts as the public API
 
@@ -37,7 +35,7 @@ JUring is a library-first Java module named `JUring`, which exports a single sup
 `JuringFile.CancelStatus`, `MetricsJmx.Handle`). This surface is what the compatibility promise
 in §4 covers.
 
-In the 0.1-SNAPSHOT line this package has **37 public top-level types**:
+In the 0.1.x line this package has **37 public top-level types**:
 
 - **Entry points and core values** — `JUring`, `JUringBlocking`, `JuringFile`,
   `JuringInputStream`, `JuringOutputStream`, `FileDescriptor`, `Result`, `ResultConsumer`,
@@ -59,6 +57,11 @@ The 2026-11-16 B10 additions are purely additive: `IoPriority` is new, and
 `JuringFile.withIoPriority(short)`/`ioPriority()` add members without changing any existing
 signature. The only behaviour change is a relaxation: blocking `JuringFile` helpers now
 accept sibling `JuringFile`-based handles on the same ring (B10a).
+
+0.1.0 is also purely additive at the signature level: it adds 16 no-option
+`JUringBlocking` read/write/`*Fixed` overloads, `JUring.isSupported()`, and
+`RingMetrics.cqFlushEnters()`. Behaviour changes (owner-thread enforcement, flag rejection,
+buffer-pool misuse errors, CQ-overflow flushing) are recorded in `docs/UPGRADING.md` §2a.
 
 ### Internal — no guarantee
 
@@ -186,12 +189,12 @@ recorded in `docs/UPGRADING.md`.
 
 ## 10. How the claims in this document were verified
 
-Checked against the tree at `b75515e` (0.1-SNAPSHOT, before B9 changes):
+Checked against the 0.1.0 tree:
 
 | claim | verification |
 |---|---|
-| version `0.1-SNAPSHOT` | `pom.xml`: `<version>0.1-SNAPSHOT</version>` |
-| no releases / no tags | `git tag` prints nothing; no release artifacts in the repo |
+| version `0.1.0` | `pom.xml`: `<version>0.1.0</version>` |
+| first release `0.1.0` / tag `v0.1.0` | release workflow + `CHANGELOG.md`; tag is created by the maintainer during release |
 | repository URL | `git remote -v` → `https://github.com/davidtos/JUring.git` |
 | exported packages | `src/main/java/module-info.java` exports `com.davidvlijmincx.lio.api` |
 | 37 public types in `lio.api` | source inspection of top-level `public` type declarations |

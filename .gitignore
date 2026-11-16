@@ -51,3 +51,4 @@ SeaStarRef/
 
 ### Writable NVMe benchmark dir (bind-mounted from /mnt/TestData, local only) ###
 nvme-data/
+.m2repo/
