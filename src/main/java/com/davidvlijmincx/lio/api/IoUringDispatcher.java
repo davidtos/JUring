@@ -398,6 +398,16 @@ final class IoUringDispatcher implements AutoCloseable {
                 throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(-ret));
             }
 
+            // Probe the attached ring itself: the opcode-support cache is per dispatcher, so
+            // without this every optional opcode would be reported unsupported on the new ring
+            // (timeouts, statx, fallocate, ftruncate) even though the parent supports it.
+            try {
+                dispatcher.probeSupportedOpcodes();
+            } catch (Throwable t) {
+                dispatcher.close();
+                throw t;
+            }
+
             return dispatcher;
         } finally {
             NativeDispatcher.C.free(params);
