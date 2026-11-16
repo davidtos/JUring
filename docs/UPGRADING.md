@@ -55,6 +55,31 @@ guarantee.
 For the design/evidence record of each step see `docs/b1-report.md`, `docs/b2-report.md`,
 `docs/b3-design.md`, `docs/b4-report.md`, `docs/b5-report.md` and `docs/b6-report.md`.
 
+## 2a. 0.1.0 release-readiness changes (unreleased)
+
+These changes are part of the 0.1.0 release. Because no version has been released yet, they are
+recorded here for the first release's upgrade history; they do not affect any published user.
+
+**Additive API**
+
+| addition | notes |
+|---|---|
+| 16 exact-arity `JUringBlocking` read/write/`*Fixed` overloads | no-option variants that avoid the varargs `SqeOptions[]` allocation; the varargs forms remain for explicit flags |
+| `JUring.isSupported()` | cached `io_uring_setup` probe; intended for `java.nio` fallback decisions in libraries |
+| `RingMetrics.cqFlushEnters()` | count of non-blocking `enter(GETEVENTS)` flushes issued to drain the kernel CQ-overflow list / run deferred task work |
+
+**Behaviour changes (all part of the unreleased 0.1.0 line)**
+
+| change | effect / migration |
+|---|---|
+| `JUring` enforces its single-owner-thread contract | data-plane, registration and buffer-pool methods called from a foreign thread throw `WrongThreadException`; `close(long)` while open must be called by the owner. `isClosed()`, `ringMetrics()`, `cancelledAtClose()`, `abandonedAtClose()` and the read-only `inFlightCount()` remain callable from any thread. Create one ring per thread (or use `IoShard`/`RingGroup`). |
+| `JUring` automatically drains CQ-overflow completions | peek/blocking-wait paths may issue one non-blocking `enter(GETEVENTS)` when the visible CQ is empty but work is outstanding. No caller action needed; fixes lost completions/hangs at very deep in-flight counts. |
+| `minComplete > CQ size` is rejected | `submitAndWait`, `waitForBatchResult*`, `submitAndWaitForBatchResult*` throw `IllegalArgumentException` instead of blocking forever. |
+| Unwired setup flags are rejected | `SQ_AFF`, `CQSIZE`, `NO_MMAP`, `REGISTERED_FD_ONLY`, `HYBRID_IOPOLL`, `IOPOLL`, `DEFER_TASKRUN` without `SINGLE_ISSUER`, and `SQPOLL` on shared-worker rings throw `IllegalArgumentException` with the reason. See `docs/platforms.md`. |
+| Read buffer pool tracks ownership | `setupReadBufferPool`/`prepareReadPooled`/`checkInReadBuffer` reject double/foreign check-ins, an exhausted pool throws instead of allocating outside its capacity, and replacing a pool with outstanding buffers throws. |
+| `JUringBlocking` buffer pool tracks ownership | `checkInBuffer` rejects double/foreign check-ins; a second `registerBuffers` call throws. |
+| `JUringBlocking` frees registered-buffer memory only after all shards terminate | shutdown no longer frees shared buffer memory while a sibling ring could still touch it. |
+
 ## 3. Deprecations
 
 **B9 adds no deprecations.** The tree contains exactly **one** `@Deprecated` member; it

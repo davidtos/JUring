@@ -312,5 +312,6 @@ See [docs/examples.md](docs/examples.md) for the mapping table, the run instruct
 
 ## Compatibility and upgrading
 
+- [docs/platforms.md](docs/platforms.md) — supported OS/arch/JDK/kernel, native-access flags, container/seccomp and `io_uring_disabled` caveats, O_DIRECT/memlock, and `JUring.isSupported()` fallback guidance.
 - [docs/api-stability.md](docs/api-stability.md) — the public API surface (`com.davidvlijmincx.lio.api`), SemVer rules, and the compatibility and deprecation policy.
 - [docs/UPGRADING.md](docs/UPGRADING.md) — capability history and migration notes (no released version exists yet).

@@ -2316,8 +2316,10 @@ public class JUring implements AutoCloseable {
     /**
      * Submits all queued SQEs and waits until at least {@code minComplete} CQEs are available.
      *
-     * @param minComplete minimum number of completions to wait for
+     * @param minComplete minimum number of completions to wait for; must not exceed the ring's
+     *                    completion-queue size (otherwise the wait could never be satisfied)
      * @return number of completions currently available in the CQ ring
+     * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
      */
     public int submitAndWait(int minComplete) {
         ensureOpenAndOwner();
@@ -2327,6 +2329,12 @@ public class JUring implements AutoCloseable {
     /**
      * Submits all queued SQEs, waits until at least {@code minComplete} CQEs are available,
      * and drains ready CQEs into {@code consumer}.
+     *
+     * <p>{@code consumer} receives the same reusable {@link Result} instance for every
+     * completion (see {@link ResultConsumer}); copy anything needed beyond the callback. If the
+     * visible CQ is empty while work is outstanding, the implementation may issue one
+     * non-blocking {@code enter(GETEVENTS)} to drain completions parked in the kernel CQ
+     * overflow list.
      *
      * @param minComplete minimum number of completions to wait for
      * @param consumer    zero-allocation completion callback
@@ -2429,9 +2437,13 @@ public class JUring implements AutoCloseable {
     /**
      * Waits until at least {@code minComplete} CQEs are available and reaps them into {@code consumer}.
      *
-     * @param minComplete minimum number of completions to wait for
+     * <p>{@code consumer} receives the same reusable {@link Result} instance for every
+     * completion (see {@link ResultConsumer}); copy anything needed beyond the callback.
+     *
+     * @param minComplete minimum number of completions to wait for; must not exceed the CQ size
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
+     * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
      */
     public int waitForBatchResult(int minComplete, ResultConsumer consumer) {
         ensureOpenAndOwner();
@@ -2441,10 +2453,14 @@ public class JUring implements AutoCloseable {
     /**
      * Waits until at least {@code minComplete} CQEs are available and reaps up to {@code maxReap} CQEs into {@code consumer}.
      *
-     * @param minComplete minimum number of completions to wait for
+     * <p>{@code consumer} receives the same reusable {@link Result} instance for every
+     * completion (see {@link ResultConsumer}); copy anything needed beyond the callback.
+     *
+     * @param minComplete minimum number of completions to wait for; must not exceed the CQ size
      * @param maxReap     maximum number of completions to reap
      * @param consumer    zero-allocation completion callback
      * @return number of completions reaped
+     * @throws IllegalArgumentException when {@code minComplete} exceeds the CQ size
      */
     public int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
         ensureOpenAndOwner();
