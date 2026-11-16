@@ -1,5 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
+import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
@@ -79,6 +80,13 @@ public class JUringBlocking implements AutoCloseable {
     private boolean closed;
 
     // Registered buffer state & lock-free MPMC buffer index pool
+    /**
+     * Owns the memory for the registered-buffer iovec table and buffers. It is deliberately not
+     * a dispatcher arena: the same buffers are registered on every worker ring, so their memory
+     * must outlive every worker/shard and may only be freed after the whole group terminated.
+     */
+    private final Arena registeredBufferArena = Arena.ofShared();
+    private volatile boolean registeredBufferArenaClosed;
     private volatile MemorySegment[] registeredBuffers;
     private volatile long[] registeredBufferAddresses;
     private volatile long[] registeredBufferSizes;
@@ -1210,9 +1218,8 @@ public class JUringBlocking implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("JUringBlocking is closed");
         }
-        var iovecStructure = workers[0].runOnPoller(() -> workers[0].dispatcher.allocateAndRegisterBuffers(size, nrOfBuffers));
-        for (int i = 1; i < workers.length; i++) {
-            Worker w = workers[i];
+        var iovecStructure = libc.allocateIovec(registeredBufferArena, size, nrOfBuffers);
+        for (Worker w : workers) {
             w.runOnPoller(() -> {
                 w.dispatcher.registerExistingIovecStructure(iovecStructure, nrOfBuffers);
                 return null;
@@ -1256,6 +1263,9 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalArgumentException when no buffers are registered or the index is out of range
      */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
+        if (closed) {
+            throw new IllegalStateException("JUringBlocking is closed");
+        }
         MemorySegment[] bufs = this.registeredBuffers;
         if (bufs == null || bufferIndex < 0 || bufferIndex >= bufs.length) {
             throw new IllegalArgumentException("Invalid registered buffer index: " + bufferIndex);
@@ -1823,6 +1833,24 @@ public class JUringBlocking implements AutoCloseable {
             }
             for (Worker w : workers) {
                 w.freeEventfdResourcesIfTerminated();
+            }
+            // The registered-buffer memory is shared by every worker ring. It may be freed only
+            // after all shards have terminated; if one failed to terminate, keep it alive rather
+            // than free memory a still-running ring could touch (a bounded leak beats a UAF).
+            if (!registeredBufferArenaClosed && group.awaitTermination(0)) {
+                registeredBufferArenaClosed = true;
+                try {
+                    registeredBufferArena.close();
+                } catch (RuntimeException ignored) {
+                    // Bounded close is best effort; a failed arena close leaks, never crashes.
+                } finally {
+                    registeredBuffers = null;
+                    registeredBufferAddresses = null;
+                    registeredBufferSizes = null;
+                    freeBufBuffer = null;
+                    freeBufSeq = null;
+                    bufferInUse = null;
+                }
             }
         }
     }
