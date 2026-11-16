@@ -2,6 +2,8 @@
 
 Evidence base for `SEASTAR-PLAN.md`. Written 2026-11-13 against JUring HEAD `4526338` ("feat(blackpanda): implement high-throughput zero-allocation O_DIRECT streaming log engine"), workspace clean (`git status` empty; branch `kafka-engine` per `bench/results/2026-11-13/manifest.txt:86-88`). Runtime JDK 26.0.2, class-file target 25 (`pom.xml:57-58`, `bench/results/2026-11-13/manifest.txt:81-84`). Host: Ryzen 9 3950X (16C/32T), 62 GiB, kernel 7.0.12-201.fc44, data disk `nvme1n1` ext4 mounted read-only at `/mnt/TestData` (`bench/results/2026-11-13/manifest.txt:6,56-58,76`).
 
+> **Superseded snapshot (2026-11-16).** This inventory was written against HEAD `4526338`, before the library-first cleanup. The `com.davidvlijmincx.lio.blackpanda` prototype package it describes in §A.3 (and elsewhere) was **removed from the repository** in decision **D12** (`ed88c77`, 2026-11-16); `JUring` now exports only `com.davidvlijmincx.lio.api`. All `blackpanda` references below are retained as historical evidence of the 2026-11-13 state, not as current repository state.
+
 Legend: `[V]` = verified by executing code in this workspace today; `[U]` = inference/UNVERIFIED. Every claim carries a `path:line` citation. Paths are repo-relative. `bench/results/...` is a gitignored artifact directory produced by the parallel benchmarking effort, not part of the Maven build.
 
 ### File index (short names used in citations)
