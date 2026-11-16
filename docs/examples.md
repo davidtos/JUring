@@ -73,11 +73,12 @@ fail with `IllegalStateException`.
 as a fixed-file slot, and issues 16 writes (two offsets per file) in a single batched
 submission, followed by 16 reads in a single batch. Every file has its own deterministic
 content, so per-file offsets and independent completion are checked, not just aggregate
-byte counts. This example deliberately stays at the raw ring level (the files are not
-`JuringFile` handles), but since B10a `JuringFile` handles can also share one ring: their
-blocking helpers multiplex completions without the `JuringFileMultiplexingTest`-era
-`IllegalStateException`, while raw un-reaped ring work remains guarded. seastar expresses
-the same multi-file pattern as many file objects multiplexed by one reactor.
+byte counts. It opens eight `JuringFile` handles and drives them with the raw `JUring`
+`prepare*`/reap batch API (using each handle's `registeredSlot()`); since B10a those same
+handles could instead be driven through their blocking helpers on the shared ring, with
+completions routed per handle. This example deliberately shows the raw batch form (the
+lowest-overhead submission), while raw un-reaped ring work remains guarded. seastar
+expresses the same multi-file pattern as many file objects multiplexed by one reactor.
 
 ### E4 — eight virtual threads on one blocking ring
 
@@ -103,9 +104,10 @@ differences are deliberate:
   familiar blocking surface for virtual threads. There is no coroutine or task-graph layer —
   the framework built on top of JUring is a separate project.
 - **Explicit ownership.** seastar's reactor owns the ring and multiplexes every file; in
-  JUring the `JUring` ring is single-issuer/single-owner, and `JuringFile` blocking helpers
-  require the ring's in-flight operations to belong to that handle. Multi-file and
-  multi-owner batching is done with the raw `prepare*` API and ring-level reaping (E3).
+  JUring the `JUring` ring is single-issuer/single-owner (one thread), and since B10a many
+  `JuringFile`-based handles can share that ring with per-handle completion routing. Batch
+  multi-file submission can therefore use either the blocking helpers or the raw `prepare*`
+  + ring-level reaping form shown in E3.
 - **Explicit buffers.** seastar's `fstream` manages read-ahead/write-behind internally, and
   seastar's DMA path uses aligned buffers that must stay alive until the future resolves.
   JUring's streams do manage option-bounded buffers internally, but on the raw fixed-buffer

@@ -284,11 +284,16 @@ public final class JuringFile implements AutoCloseable {
      * untouched, because the kernel rejects a non-zero {@code ioprio} on them ({@code EINVAL}).
      * {@link JuringInputStream}, {@link JuringOutputStream} and {@link GroupCommit} inherit
      * the setting because they prepare through this handle. It is a <b>hint</b>: only
-     * priority-aware schedulers ({@code bfq}/{@code mq-deadline}) act on it, and {@code 0}
-     * keeps inheriting the thread's priority ({@code ionice}/nice).
+     * priority-aware schedulers ({@code bfq}/{@code mq-deadline}) act on it.
+     *
+     * <p>Precedence: a non-zero handle value wins over the ring default
+     * ({@link JUring#setDefaultIoprio(short)}). {@code 0} means <b>no handle override</b>:
+     * the ring default still applies if one is set, otherwise the submitting thread's
+     * priority ({@code ionice}/nice) is inherited. To clear one specific raw SQE use
+     * {@link JUring#setLastSqeIoprio(short)} with {@code 0}.
      *
      * @param ioprio the encoded {@code ioprio} value, built with {@link IoPriority};
-     *               {@code 0} means inherit the submitting thread's priority
+     *               {@code 0} removes the handle override (ring default/thread priority applies)
      * @return this handle, for chaining
      * @throws IllegalArgumentException when the value is not a valid encoding
      * @throws IllegalStateException    when the handle is closed
@@ -305,7 +310,8 @@ public final class JuringFile implements AutoCloseable {
     /**
      * Returns the block-layer I/O priority applied to requests prepared through this handle.
      *
-     * @return the encoded {@code ioprio} value ({@code 0} = inherit the thread's priority)
+     * @return the encoded {@code ioprio} value ({@code 0} = no handle override; the ring
+     *         default or the submitting thread's priority applies)
      */
     public short ioPriority() {
         return ioPriority;
@@ -501,6 +507,12 @@ public final class JuringFile implements AutoCloseable {
      * Prepares an asynchronous offset read into {@code buffer} ({@code READ} or
      * {@code READ_EXT}; fixed-file when registered). Does not submit and does not retry.
      *
+     * <p><b>Non-fixed buffers (B3 F1):</b> this overload encodes the buffer address as the
+     * ring {@code user_data}, so two concurrent non-fixed operations on the same
+     * {@code MemorySegment} share one handle and cannot be routed to their own ledgers (this
+     * can corrupt the JVM; the limitation predates B10a). Use distinct buffers, or
+     * {@link #prepareReadFixed(long, int, int)} for concurrent reads.
+     *
      * @param offset file offset
      * @param length number of bytes to read, {@code 0 <= length <= buffer.byteSize()}
      * @param buffer native memory segment (must be writable)
@@ -550,6 +562,12 @@ public final class JuringFile implements AutoCloseable {
     /**
      * Prepares an asynchronous offset write from {@code buffer} ({@code WRITE} or
      * {@code WRITE_EXT}). Does not submit and does not retry.
+     *
+     * <p><b>Non-fixed buffers (B3 F1):</b> like
+     * {@link #prepareRead(long, int, MemorySegment)}, the buffer address becomes the ring
+     * {@code user_data}; do not have two concurrent non-fixed writes into the same segment.
+     * Use distinct buffers or {@link #prepareWriteFixed(long, int, int)} for concurrent
+     * writes.
      *
      * @param offset file offset
      * @param buffer native memory segment containing the bytes to write
@@ -968,17 +986,22 @@ public final class JuringFile implements AutoCloseable {
      * ({@code -ECANCELED} or its real result), and {@link #await(long)} on any previously
      * issued handle is deterministic afterwards.
      *
-     * <p>Implementation: one bulk cancel by file
-     * ({@code IORING_OP_ASYNC_CANCEL} with {@code ALL|FD[_FIXED]}) for file operations plus
-     * per-handle cancels for the standalone timers, then a bounded drain
-     * ({@link #closeTimeoutMillis}).
+     * <p>Implementation: when this handle owns everything in flight on the ring, one ring-wide
+     * {@code IORING_OP_ASYNC_CANCEL} ({@code ALL|ANY}) is issued (O(1)); when sibling handles
+     * are also in flight, one {@code CANCEL_BY_USER_DATA} is issued per own pending target or
+     * standalone timer. Linked-timeout companions are never cancelled directly — the kernel
+     * disarms them when their target is cancelled and folds both completions into
+     * {@link #await(long)}. The handle then drains its own ledger within
+     * {@link #closeTimeoutMillis}.
      *
-     * @return number of {@code -ECANCELED} completions observed (includes disarmed linked
-     *         timeouts of timed operations; ring-request granularity)
+     * @return number of terminal {@code -ECANCELED} completions observed for this handle's own
+     *         targets and standalone timers (control requests and linked-timeout companions
+     *         are reconciled but not counted)
      * @throws JuringException       when the bounded drain did not observe all completions
      *                              (the remaining requests are still tracked and can be
      *                              awaited or closed)
-     * @throws IllegalStateException when the handle is closed or the ring carries foreign work
+     * @throws IllegalStateException when the handle is closed, the ring carries raw un-reaped
+     *                              work, or a full ledger leaves no slot for a cancel request
      */
     public int cancelAll() throws JuringException {
         ensureOpen("cancelAll");

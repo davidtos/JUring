@@ -71,6 +71,20 @@ the ring is raw un-reaped `JUring.prepare*` work, and the blocking helpers still
   active is legal. `ring.close()` does not need to detach anything; handles closed afterwards
   detach against the closed ring safely.
 
+### 2.6 Inherited B3 §11.9 / F1 limitation (duplicate `user_data`)
+
+Non-fixed `JuringFile` reads/writes encode the **buffer address** as the SQE `user_data`
+(B3 F1). Two concurrent non-fixed operations on the **same** `MemorySegment` therefore share
+one handle: with B10a this can happen across two attached handles, and the dispatcher cannot
+tell them apart — the second completion is treated as a duplicate and one ledger entry is
+stranded. On this host the `JuringFile` form was also observed to corrupt the JVM native heap
+(a **pre-existing** B3 `READ_EXT` limitation: the same probe crashes the pre-B10 baseline
+`b117667`, while the raw-ring equivalent reaps both completions cleanly). The supported rule
+is unchanged and now applies per ring: **do not reuse one buffer for concurrent non-fixed
+operations**; use distinct buffers or the registered fixed-buffer path. B10 does not fix this;
+it only makes the cross-handle form reachable, so it is documented here and in the
+`JuringFile.prepareRead`/`prepareWrite` Javadoc.
+
 ### 2.5 Performance / allocation
 
 - The raw `JUring.prepare*`/reap path is untouched (M1 W1–W4 cannot move).
@@ -98,11 +112,13 @@ the ring is raw un-reaped `JUring.prepare*` work, and the blocking helpers still
 |---|---|---|
 | ring default | `JUring.setDefaultIoprio(short)` / `defaultIoprio()` | read/write-family SQEs prepared while set |
 | raw per-SQE | `JUring.setLastSqeIoprio(short)` | the SQE just prepared, read/write opcodes only |
-| per-handle | `JuringFile.withIoPriority(short)` / `ioPriority()` | every read/write SQE the handle prepares, incl. timed-operation **targets** (not their `LINK_TIMEOUT` companion); inherited by streams and group commit |
+| per-handle | `JuringFile.withIoPriority(short)` / `ioPriority()` | every read/write SQE the handle prepares, incl. timed-operation **targets** (not their `LINK_TIMEOUT` companion); inherited by streams and group commit. A **non-zero** value wins over the ring default. |
 
-Precedence: per-handle > ring default; `setLastSqeIoprio` is the raw escape hatch. `0` means
-"leave the SQE field zero", so the kernel inherits the submitting thread's priority
-(`get_current_ioprio()`), i.e. `ionice`/nice keep working.
+Precedence: **non-zero** per-handle value > ring default > thread priority. `0` is not a
+priority value but "no override at this level": `withIoPriority(0)` removes the handle
+override (a non-zero ring default then applies, otherwise the kernel inherits the submitting
+thread's `ionice`/nice priority via `get_current_ioprio()`); `setLastSqeIoprio(0)` clears the
+field on one raw SQE, overriding the ring default for that request.
 
 ### 3.3 Kernel facts (verified on Linux 7.0.12-201.fc44, the campaign host)
 

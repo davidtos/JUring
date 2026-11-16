@@ -109,6 +109,48 @@ class IoPriorityTest {
     }
 
     @Test
+    void settersRejectAClosedRingInsteadOfUsingStaleMemory() {
+        ring.setDefaultIoprio(IoPriority.bestEffort(1));
+        ring.prepareNop(); // record a last-SQE address before the ring goes away
+        ring.close();
+
+        assertEquals(0L, ring.lastPreparedSqeAddress(), "close() must clear the stale SQE address");
+        assertEquals(0L, ring.previousPreparedSqeAddress());
+        assertThrows(IllegalStateException.class,
+                () -> ring.setDefaultIoprio(IoPriority.bestEffort(1)),
+                "mutating a closed ring must throw, not touch unmapped memory");
+        assertThrows(IllegalStateException.class,
+                () -> ring.setLastSqeIoprio(IoPriority.bestEffort(1)),
+                "a closed ring must never be dereferenced through a stale SQE address");
+    }
+
+    @Test
+    void handleZeroDoesNotOverrideTheRingDefault(@TempDir Path dir) throws Exception {
+        Path path = dir.resolve("handle-zero.bin");
+        Files.write(path, pattern(BLOCK));
+
+        ring.setDefaultIoprio(IoPriority.bestEffort(3));
+        try (JuringFile file = JuringFile.open(ring, path, READ)) {
+            file.withIoPriority(IoPriority.NONE);
+            try (Arena arena = Arena.ofConfined()) {
+                MemorySegment buffer = arena.allocate(BLOCK);
+
+                long handle = file.prepareRead(0, BLOCK, buffer);
+                assertEquals(IoPriority.bestEffort(3), Sqe.getIoprio(ring.lastPreparedSqeAddress()),
+                        "handle 0 means no handle override: the ring default still applies");
+                assertEquals(BLOCK, file.await(handle));
+
+                // the raw escape hatch clears the field on one specific SQE
+                long second = file.prepareRead(0, BLOCK, buffer);
+                ring.setLastSqeIoprio(IoPriority.NONE);
+                assertEquals((short) 0, Sqe.getIoprio(ring.lastPreparedSqeAddress()),
+                        "setLastSqeIoprio(0) overrides the ring default for that raw SQE");
+                assertEquals(BLOCK, file.await(second));
+            }
+        }
+    }
+
+    @Test
     void realTimeClassRequiresPrivilegeOrSucceedsWhenGranted(@TempDir Path dir) throws Exception {
         Path path = dir.resolve("priority-rt.bin");
         Files.write(path, pattern(BLOCK));

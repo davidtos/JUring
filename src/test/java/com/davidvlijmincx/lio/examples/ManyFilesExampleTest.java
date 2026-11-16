@@ -32,13 +32,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * by the calling thread; many {@link JuringFile} handles can live on that ring and the
  * application decides the batch. Each handle is opened and registered as a fixed-file
  * slot (the descriptor then costs no SQE field per operation), and the whole cross-file
- * batch is prepared with the raw {@link JUring} API and submitted once. This is different
- * from seastar by design, not by omission: {@link JuringFile}'s blocking helpers
- * ({@code read}/{@code write}/{@code await}/{@code drain}) require every in-flight
- * operation on their ring to belong to that handle, so multi-file batching is done with
- * {@code prepare*} + ring-level reaping (exactly what this example does), while the
- * blocking helpers are for a ring owned by one file. seastar can multiplex both because
- * its reactor owns the ring and every file object is a participant in it.
+ * batch is prepared with the raw {@link JUring} API and submitted once. Since B10a those handles can also be
+ * driven through their blocking helpers on the same ring — completions are routed to the
+ * issuing handle — but this example deliberately keeps the batch at the raw
+ * {@code prepare*} + ring-level reaping level to show the lowest-overhead batch submission;
+ * the raw batch is a choice here, not a restriction. seastar expresses the same
+ * one-ring/many-files pattern through its reactor, where every file object participates.
  *
  * <p>The test opens {@value #FILES} independent direct-I/O files on one ring, registers
  * them, and issues {@value #FILES} × {@value #BLOCKS_PER_FILE} writes (two offsets per

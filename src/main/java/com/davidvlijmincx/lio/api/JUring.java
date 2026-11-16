@@ -2700,10 +2700,12 @@ public class JUring implements AutoCloseable {
     /**
      * Returns the ring-wide default block-layer I/O priority.
      *
-     * <p>The default is applied to every SQE prepared by this ring; a handle-level
-     * {@link JuringFile#withIoPriority(short)} or {@link #setLastSqeIoprio(short)} overrides
-     * it per operation. The returned value is the encoded {@code ioprio} field, where
-     * {@code 0} means "inherit the submitting thread's priority".
+     * <p>The default is written into every read/write SQE prepared by this ring (other
+     * opcodes are left untouched because the kernel rejects {@code ioprio} on them). A
+     * non-zero handle-level {@link JuringFile#withIoPriority(short)} overrides it, and
+     * {@link #setLastSqeIoprio(short)} overrides it for one raw SQE. The returned value is the
+     * encoded {@code ioprio} field, where {@code 0} means "no ring default" (the handle or
+     * submitting thread's priority applies).
      *
      * @return the default {@code ioprio} value
      */
@@ -2712,17 +2714,23 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Sets the ring-wide default block-layer I/O priority applied to every prepared SQE.
+     * Sets the ring-wide default block-layer I/O priority applied to every read/write SQE
+     * prepared by this ring.
      *
      * <p>This is a <b>hint</b> for the block layer: it only changes ordering when the active
      * I/O scheduler supports priorities ({@code bfq}/{@code mq-deadline}); {@code none} and
-     * {@code kyber} ignore it. Build values with {@link IoPriority}; {@code 0} keeps
-     * inheriting the submitting thread's priority (for example from {@code ionice}).
+     * {@code kyber} ignore it. Build values with {@link IoPriority}. {@code 0} clears the ring
+     * default so requests inherit the handle's or submitting thread's priority (for example
+     * from {@code ionice}); a handle {@code withIoPriority(0)} does not by itself override a
+     * non-zero ring default — use {@link #setLastSqeIoprio(short)} with {@code 0} to clear one
+     * specific raw SQE.
      *
-     * @param ioprio the encoded {@code ioprio} value ({@code 0} = inherit)
+     * @param ioprio the encoded {@code ioprio} value ({@code 0} = no ring default)
      * @throws IllegalArgumentException when the value is not a valid encoding
+     * @throws IllegalStateException    when the ring is closed
      */
     public void setDefaultIoprio(short ioprio) {
+        ensureOpen();
         if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
             throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
         }
@@ -2734,8 +2742,9 @@ public class JUring implements AutoCloseable {
      *
      * <p>This is the raw per-request escape hatch for callers that use the low-level
      * {@code prepare*}/{@link #submit()} API; it must be called on the owner thread after the
-     * prepare call and before {@link #submit()}. {@code 0} leaves the field unset (the kernel
-     * then inherits the thread's priority).
+     * prepare call and before {@link #submit()}. {@code 0} clears the field on this SQE, so the
+     * kernel inherits the thread's priority and any {@linkplain #setDefaultIoprio(short) ring
+     * default} is overridden for this request only.
      *
      * <p>Only the read/write opcode family ({@code READ}, {@code WRITE}, {@code READV},
      * {@code WRITEV}, {@code READ_FIXED}, {@code WRITE_FIXED}) accepts {@code ioprio}: the
@@ -2745,9 +2754,10 @@ public class JUring implements AutoCloseable {
      * @param ioprio the encoded {@code ioprio} value ({@code 0} = inherit)
      * @throws IllegalArgumentException when the value is not a valid encoding, or when the
      *                                  most recently prepared SQE is not a read/write operation
-     * @throws IllegalStateException    when no SQE has been prepared yet
+     * @throws IllegalStateException    when the ring is closed or no SQE has been prepared yet
      */
     public void setLastSqeIoprio(short ioprio) {
+        ensureOpen();
         if (ioprio != 0 && !IoPriority.isValid(ioprio)) {
             throw new IllegalArgumentException("invalid I/O priority encoding: " + ioprio);
         }
@@ -2937,6 +2947,9 @@ public class JUring implements AutoCloseable {
             // Cache the dispatcher's frozen final snapshot for the JUring-level accessor.
             this.frozenRingMetrics = ioUring.ringMetrics();
         } finally {
+            // The SQE mapping is unmapped after close: never hand out a stale address.
+            lastSqeAddress = 0L;
+            previousSqeAddress = 0L;
             if (readBufferPool != null) {
                 readBufferPool.close();
                 readBufferPool = null;

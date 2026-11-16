@@ -150,9 +150,11 @@ per type in the Javadoc rather than repeated (and potentially diverged from) her
 - [`JUring`](../src/main/java/com/davidvlijmincx/lio/api/JUring.java) — one ring is
   single-issuer and owned by one thread (registered buffers/files, submission and reaping
   follow that ownership).
-- [`JuringFile`](../src/main/java/com/davidvlijmincx/lio/api/JuringFile.java) — its blocking
-  helpers require every in-flight operation on the ring to belong to that handle; use the
-  raw ring API for sharing a ring between owners.
+- [`JuringFile`](../src/main/java/com/davidvlijmincx/lio/api/JuringFile.java) — not thread-safe,
+  one owner thread per ring; since B10a any number of `JuringFile`-based handles (files,
+  streams, group commits) may share that thread's ring, with completions routed to the
+  issuing handle. Only raw un-reaped `JUring.prepare*` work on the ring is rejected by the
+  blocking helpers (reap it first, or drive everything through the raw API).
 - [`IoShard`](../src/main/java/com/davidvlijmincx/lio/api/IoShard.java) /
   [`RingGroup`](../src/main/java/com/davidvlijmincx/lio/api/RingGroup.java) — one ring per
   shard thread, with documented cross-thread submission/shutdown rules.
