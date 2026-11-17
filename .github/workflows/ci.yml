@@ -36,14 +36,17 @@ jobs:
           sudo sysctl -w kernel.io_uring_disabled=0 || true
           sysctl kernel.apparmor_restrict_unprivileged_io_uring kernel.io_uring_disabled || true
 
+      # GitHub-hosted runner IPs are occasionally rate-limited by Maven Central (HTTP 429)
+      # while build plugins are resolved; the retry wrapper only retries those network
+      # failures, not genuine compile/test failures.
       - name: Test
-        run: mvn -B -ntp clean test
+        run: .github/scripts/mvn-retry.sh -B -ntp clean test
 
       - name: Javadoc (strict, doclint=all)
-        run: mvn -B -ntp javadoc:javadoc
+        run: .github/scripts/mvn-retry.sh -B -ntp javadoc:javadoc
 
       - name: Package (unsigned; verifies sources/javadoc attachment)
-        run: mvn -B -ntp -Prelease -DskipTests -Dgpg.skip=true package
+        run: .github/scripts/mvn-retry.sh -B -ntp -Prelease -DskipTests -Dgpg.skip=true package
 
       - name: Upload test reports on failure
         if: failure()
