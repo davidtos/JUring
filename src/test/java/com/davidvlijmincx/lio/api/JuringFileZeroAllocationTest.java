@@ -24,8 +24,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Zero-allocation hot-path test for {@link JuringFile}: registered file +
  * registered fixed buffer, {@code prepareReadFixed}/{@code prepareWriteFixed} +
  * {@code await}. Mirrors {@link ZeroAllocationHotPathTest}: warm up until three
- * consecutive rounds allocate exactly 0 bytes, then run 100_000 measured operations
- * and require exactly 0 heap bytes allocated on the owning thread.
+ * consecutive rounds allocate exactly 0 bytes, calibrate on full-size windows until the JVM
+ * has completed its late tier transitions, then run 100_000 measured operations and require
+ * exactly 0 heap bytes allocated on the owning thread.
  */
 class JuringFileZeroAllocationTest {
 
@@ -107,6 +108,19 @@ class JuringFileZeroAllocationTest {
         }
         assertTrue(zeroCount >= 3, "warmup must reach 3 consecutive 0-allocation rounds before measuring");
 
+        // Calibrate on full-size windows: a late JVM tier transition relinks
+        // signature-polymorphic (VarHandle/MethodHandle) call sites and allocates a few
+        // hundred bytes on this thread. That is JVM linkage, not a library allocation, so
+        // require two consecutive allocation-free windows of the measured shape first. A
+        // library allocation (per-operation or once per window) never reaches that state,
+        // and the measured window below still requires exactly zero bytes.
+        int steadyWindows = 0;
+        for (int window = 0; window < 8 && steadyWindows < 2; window++) {
+            long before = getThreadAllocatedBytes(threadId);
+            runReadFixed(MEASURED_OPS);
+            steadyWindows = getThreadAllocatedBytes(threadId) - before == 0L ? steadyWindows + 1 : 0;
+        }
+
         long bytesBefore = getThreadAllocatedBytes(threadId);
         long bytesRead = runReadFixed(MEASURED_OPS);
         long bytesAfter = getThreadAllocatedBytes(threadId);
@@ -153,6 +167,19 @@ class JuringFileZeroAllocationTest {
             }
         }
         assertTrue(zeroCount >= 3, "warmup must reach 3 consecutive 0-allocation rounds before measuring");
+
+        // Calibrate on full-size windows: a late JVM tier transition relinks
+        // signature-polymorphic (VarHandle/MethodHandle) call sites and allocates a few
+        // hundred bytes on this thread. That is JVM linkage, not a library allocation, so
+        // require two consecutive allocation-free windows of the measured shape first. A
+        // library allocation (per-operation or once per window) never reaches that state,
+        // and the measured window below still requires exactly zero bytes.
+        int steadyWindows = 0;
+        for (int window = 0; window < 8 && steadyWindows < 2; window++) {
+            long before = getThreadAllocatedBytes(threadId);
+            runWriteFixed(MEASURED_OPS);
+            steadyWindows = getThreadAllocatedBytes(threadId) - before == 0L ? steadyWindows + 1 : 0;
+        }
 
         long bytesBefore = getThreadAllocatedBytes(threadId);
         long bytesWritten = runWriteFixed(MEASURED_OPS);
@@ -242,6 +269,19 @@ class JuringFileZeroAllocationTest {
             }
         }
         assertTrue(zeroCount >= 3, "warmup must reach 3 consecutive 0-allocation rounds before measuring");
+
+        // Calibrate on full-size windows: a late JVM tier transition relinks
+        // signature-polymorphic (VarHandle/MethodHandle) call sites and allocates a few
+        // hundred bytes on this thread. That is JVM linkage, not a library allocation, so
+        // require two consecutive allocation-free windows of the measured shape first. A
+        // library allocation (per-operation or once per window) never reaches that state,
+        // and the measured window below still requires exactly zero bytes.
+        int steadyWindows = 0;
+        for (int window = 0; window < 8 && steadyWindows < 2; window++) {
+            long before = getThreadAllocatedBytes(threadId);
+            runMultiplexedReads(MEASURED_OPS / 2);
+            steadyWindows = getThreadAllocatedBytes(threadId) - before == 0L ? steadyWindows + 1 : 0;
+        }
 
         long bytesBefore = getThreadAllocatedBytes(threadId);
         long bytesRead = runMultiplexedReads(MEASURED_OPS / 2);

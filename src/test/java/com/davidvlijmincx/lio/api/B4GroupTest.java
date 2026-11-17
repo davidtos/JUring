@@ -1,5 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -53,16 +54,22 @@ class B4GroupTest {
 
     @Test
     void groupAffinityUsesBaseCpuPlusIndex() {
-        RingGroup group = RingGroup.create(2, ShardOptions.defaults().withCpuAffinity(3));
+        // The GitHub runner exposes four vCPUs (0-3) while developer hosts usually expose
+        // many more: pick an adjacent pair from the process's allowed CPUs instead of
+        // hard-coding 3/4, which fails on hosts without a CPU 4.
+        int[] cpus = CpuTopology.adjacentPair();
+        Assumptions.assumeTrue(cpus != null, "needs two adjacent allowed CPUs to test base+index affinity");
+        int base = cpus[0];
+        RingGroup group = RingGroup.create(2, ShardOptions.defaults().withCpuAffinity(base));
         try {
             group.start();
             List<ShardStats> stats = group.stats();
-            assertThat(stats.get(0).requestedCpu()).isEqualTo(3);
-            assertThat(stats.get(1).requestedCpu()).isEqualTo(4);
+            assertThat(stats.get(0).requestedCpu()).isEqualTo(base);
+            assertThat(stats.get(1).requestedCpu()).isEqualTo(base + 1);
             assertThat(stats.get(0).affinityApplied()).isTrue();
-            assertThat(stats.get(0).currentCpu()).isEqualTo(3);
+            assertThat(stats.get(0).currentCpu()).isEqualTo(base);
             assertThat(stats.get(1).affinityApplied()).isTrue();
-            assertThat(stats.get(1).currentCpu()).isEqualTo(4);
+            assertThat(stats.get(1).currentCpu()).isEqualTo(base + 1);
         } finally {
             group.close(500);
         }

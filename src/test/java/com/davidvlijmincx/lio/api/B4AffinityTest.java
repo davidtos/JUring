@@ -1,5 +1,6 @@
 package com.davidvlijmincx.lio.api;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -16,19 +17,22 @@ class B4AffinityTest {
 
     @Test
     void shardPinsToRequestedCpuAndReportsIt() {
-        IoShard shard = IoShard.create(0, ShardOptions.defaults().withCpuAffinity(3));
+        // Pick a CPU from the process's allowed set: developer hosts and CI runners expose
+        // different ids/counts (the runner has four vCPUs, 0-3).
+        int cpu = CpuTopology.firstCpu();
+        Assumptions.assumeTrue(cpu >= 0, "needs a discoverable allowed CPU");
+        IoShard shard = IoShard.create(0, ShardOptions.defaults().withCpuAffinity(cpu));
         try {
             shard.start();
             assertThat(shard.shardThread()).isNotNull();
             ShardStats stats = shard.stats();
-            // The B4 design probe (scratch/b4-lead/AffinityProbe) proved rc=0 for CPU 3 on
-            // this host; if a cgroup ever denies it the assertion records the environment
-            // change rather than silently weakening the contract.
-            assertThat(stats.requestedCpu()).isEqualTo(3);
+            // Affinity is best effort (cgroups/cpusets may deny it); pinning to an allowed
+            // CPU makes the assertion test the contract rather than the host layout.
+            assertThat(stats.requestedCpu()).isEqualTo(cpu);
             assertThat(stats.affinityApplied())
-                    .as("sched_setaffinity(CPU 3) expected to succeed (design §1 probe)")
+                    .as("sched_setaffinity(CPU %d) expected to succeed for an allowed CPU", cpu)
                     .isTrue();
-            assertThat(stats.currentCpu()).isEqualTo(3);
+            assertThat(stats.currentCpu()).isEqualTo(cpu);
             assertThat(shard.shardThread().getName()).startsWith("juring-shard-0-");
         } finally {
             shard.close();
