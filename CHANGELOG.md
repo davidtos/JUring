@@ -56,6 +56,11 @@ All notable changes to JUring are documented here. The project follows
 - `JUringBlocking` adopting a non-power-of-two `RingGroup` now routes calls across all
   workers. Worker selection used `threadId & (size - 1)`, which stranded workers when the
   group size was not a power of two (for example size 3 only ever used workers 0 and 2).
+- The build on Maven 3.10.0 (the version GitHub Actions runners ship). Maven 3.10 sets
+  `project.build.outputTimestamp` by default, which makes maven-compiler-plugin patch
+  `module-info.class` for reproducible builds; maven-compiler-plugin 3.13.0 did that patch
+  with ASM 9.6, which rejects Java 25 class files (`Unsupported class file major version
+  69`). Upgraded maven-compiler-plugin to 3.16.0 (plexus-java 1.6.0, ASM 9.10.1).
 
 ## [0.1.0] — 2026-11-16
 
