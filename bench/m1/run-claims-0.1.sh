@@ -27,10 +27,17 @@ export REPS=${REPS:-5} DURATION=${DURATION:-30} WARMUP=${WARMUP:-10}
 export QDS="64 128" ENGINES="juring seastar fio-io_uring" ROTATE_ENGINES=1
 
 echo "session: $SESSION"
+first=1
 for variant in matched matchedbatch; do
     sub="$SESSION/read-matrix-$variant"
     echo "=== fio variant: $variant -> $sub ==="
-    FIO_VARIANT=$variant M1_RESULTS="$sub" "$HERE/run-read-matrix.sh"
+    # The second matrix is a chained phase: the previous matrix's just-finished
+    # engine processes can still inflate loadavg(1m) from D state. The strict
+    # foreign-process check still runs; only the stale own-load gate is relaxed.
+    allow=0
+    if ((first == 0)); then allow=1; fi
+    ALLOW_RESIDUAL_LOAD=$allow FIO_VARIANT=$variant M1_RESULTS="$sub" "$HERE/run-read-matrix.sh"
+    first=0
 done
 echo "done: $SESSION"
 echo "analyze each sub-session with:"

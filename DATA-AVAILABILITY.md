@@ -17,7 +17,8 @@ the analysis from raw data.
   device-state gating, statistics and threats to validity.
 - The internal campaign reports (`docs/internal/m1-report.md`, `docs/internal/m1-write-report.md`,
   `docs/internal/m2-report.md`, `docs/internal/m3-report.md`, `docs/internal/stepd-report.md`, `docs/internal/b6-report.md`) — the authoritative
-  per-campaign analysis.
+  per-campaign analysis — and `docs/internal/perf-findings-0.1.md` (the 0.1.0
+  performance-impact and improvement investigation, including the batching/SQPOLL sweeps).
 
 ## What is not committed
 
@@ -51,9 +52,11 @@ python3 bench/m1/analyze_m1.py --dir bench/results/<session> [--out-prefix ...]
   dependent; see the device-state gating sections in the reports and `BENCHMARK.md`.
 - The write path is published as **INCONCLUSIVE** (`docs/internal/m1-write-report.md`): the
   consumer NVMe exhibits SLC-burst/TLC-folding cliffs, so no write-parity ranking is claimed.
-- fio reference cells are registration-matched; the read-path reference uses fio's default submit
-  batching (see the fio configuration notes in `BENCHMARK.md`). Seastar is reported as a bracket
-  with an explicit asymmetry section, not as an equal-config opponent.
+- fio reference cells are registration-matched; the historical read matrix used fio's default
+  submit batching, and the 0.1.0 claims control run (`BENCHMARK.md` §2.1a) adds a
+  batching-matched `matchedbatch` reference and rotated engine order. fio still cannot fuse
+  submits or set JUring's taskrun flags, so read comparisons are capability comparisons. Seastar
+  is reported as a bracket with an explicit asymmetry section, not as an equal-config opponent.
 - Benchmark data is evidence for the claims in this repository, not a portable performance
   guarantee for other hardware, kernels or filesystems.
 

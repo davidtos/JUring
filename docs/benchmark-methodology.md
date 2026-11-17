@@ -119,6 +119,12 @@ vs FileChannel QD=1 comparison is only valid because FileChannel is synchronous 
   (`fill_to_qd` default) and `min_complete`. W3/W7 must also run partial fills of **8, 16, 32** so the
   fio `iodepth_batch_submit` sweep is matched one-to-one; otherwise the comparison measures batching,
   not the engine.
+- Perf knobs (`929b44d`, threads runtime only, recorded in the JSON manifest):
+  `--min-complete N` sets the completions requested per fused submit+wait (default 1);
+  `--sqpoll` selects `SINGLE_ISSUER|SQPOLL` with `sqThreadIdleMs=0` (experimental). The
+  0.1.0 claims use the defaults; see `docs/internal/perf-findings-0.1.md` for the measured
+  batching sweep (higher `minComplete` trims p99 but lowers throughput monotonically) and
+  the SQPOLL result (70–80 % slower, parked).
 - O_DIRECT: `LinuxOpenOptions.READ_DIRECT/WRITE_DIRECT` = `O_DIRECT` (`.../LinuxOpenOptions.java:18-21,42-51`).
 - Random offsets: 64-bit xorshift + multiply, uniform over file blocks
   (`src/test/java/bench/suite/common/DatasetManager.java:431-452`), matching fio's per-job PRNG style.
@@ -322,11 +328,16 @@ batching and registration**:
 > The read cells are therefore a **best-config capability comparison**, not the equal-config gate
 > written above. The device-state gate and fast-state subset were calibrated after the first
 > session (report §4), not pre-registered. The 0.1.0 claims rerun
-> (`bench/m1/run-claims-0.1.sh`) adds fio `matchedbatch` (`--registerfiles=1 --fixedbufs=1
-> --iodepth_batch_submit=qd`) and rotated engine order for W3/W4. Until that control run is
-> published, read comparisons against fio are **best-config**, not equal-config; run the script
-> on an idle benchmark host and publish the rows together with the historical reference. The
-> write cells follow the original gate and remain `INCONCLUSIVE`.
+> (`bench/m1/run-claims-0.1.sh`, 2026-11-17) now exists: W3/W4 with rotated engine order and
+> two fio references (`matched`, plus `matchedbatch` =
+> `--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit=qd`). Each fio variant is written to
+> its own `read-matrix-<variant>/` sub-session so the non-fio cells are not overwritten. Results
+> are in `BENCHMARK.md` §2.1a; the control run reproduced the published JUring numbers within
+> ~1 % (W3 324,148 vs 327,371; W4 408,446 vs 411,136) and the paired `JUring/fio-matched`
+> ratios (1.0763 W3, 1.2133 W4), so read comparisons remain **best-config capability**
+> comparisons — fio still cannot fuse submits or set the matching taskrun flags — but they are
+> now batching-and-registration-matched and order-rotated. The write cells follow the original
+> gate and remain `INCONCLUSIVE`.
 1. **Plan gate:** at the saturation QDs (W3/W4, W7/W8) `IOPS_JUring ≥ IOPS_fio − 5 %` (plan-M1
    criterion), equivalently a one-sided 95 % lower bound of the ratio ≥ 0.95;
 2. **CPU gate:** `cycles/op` (user+kernel) within 15 % of fio at the same QD (plan-M1 criterion);

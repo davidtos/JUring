@@ -22,6 +22,11 @@ and CI. Do not tag or deploy from a dirty tree.
       `com.davidvlijmincx.lio.api`.
 - [ ] Benchmark claims match BENCHMARK.md / DATA-AVAILABILITY.md (no unlabelled overclaim);
       claims-rerun session from `bench/m1/run-claims-0.1.sh` archived if used.
+      **State 2026-11-17:** control run done with the fixed sub-session harness
+      (`bench/results/claims-0.1-20261117/read-matrix-{matched,matchedbatch}`); the no-regression
+      check is in `BENCHMARK.md` §2.1a. Archive that session, plus
+      `bench/results/perf-claims-0.1-20261117` and the lever logs in `scratch/exp-*`, with the
+      release data archive.
 - [ ] `CHANGELOG.md`, `docs/api-stability.md`, `docs/UPGRADING.md` say `0.1.0`.
 
 ## Tag and deploy

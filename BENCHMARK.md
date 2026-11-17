@@ -70,6 +70,54 @@ All Part I campaigns follow [`docs/benchmark-methodology.md`](docs/benchmark-met
 
 ¹ In W4, JUring (`r5`: `386,629`) and `fio-matched` (`r3`: `314,883`) each had one slow-state rep flagged by the `< 0.92 × max` rule; fast-subset means (`n=4`) are `417,263 ± 13,110` vs `336,445 ± 9,547` IOPS, and the paired fast-subset ratio (`n=3`) is **`1.2542 [1.2139, 1.2946]`** (`PASS`).
 
+#### 2.1a 0.1.0 claims control run — rotated order, batching-matched `fio`, release-candidate code (2026-11-17)
+
+The signed matrix above ran the engines in a fixed order and used `fio`'s default submit batching.
+The 0.1.0 control run (`REPS=5 bench/m1/run-claims-0.1.sh`, code `5202e88`) re-ran W3/W4 with
+(i) the engine order rotated per repetition, (ii) the `matched` reference, and (iii) a
+batching-matched `matchedbatch` reference
+(`--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit=qd`). Each `fio` variant is written to
+its own sub-session so non-`fio` cells cannot be overwritten:
+`bench/results/claims-0.1-20261117/read-matrix-{matched,matchedbatch}` (aggregates generated next
+to each session by `bench/m1/analyze_m1.py`). Same host, governor `performance`, `R=5`,
+10 s warmup + 30 s measured; preflight starts were `loadavg(1m)` 0.74 (matched) and 0.29
+(matchedbatch).
+
+| Case | QD | Engine / Variant | `n` | IOPS Mean ± 95% CI | `p50` (µs) | `p99` (µs) | CV% | Paired vs `fio` [95% CI] | Paired vs Seastar [95% CI] |
+|---|---|---|---|---|---|---|---|---|---|
+| **W3** | 64 | `juring/std` (`matched` run) | 5 | **323,876 ± 8,104** | 170.1 | 492.6 | 2.0 | **1.0655 [1.0167, 1.1143]** | 1.0293 [0.9899, 1.0686] |
+| **W3** | 64 | `fio-io_uring/matched` | 5 | 304,160 ± 9,750 | 182.5 | 478.0 | 2.6 | — | — |
+| **W3** | 64 | `seastar/std` | 5 | 314,786 ± 7,404 | 177.8 | 480.1 | 1.9 | — | — |
+| **W4** | 128 | `juring/std` (`matched` run) | 5 | **406,966 ± 19,948**³ | 263.6 | 931.9 | 3.9 | **1.2183 [1.1596, 1.2771]**³ | 1.0622 [1.0385, 1.0859]³ |
+| **W4** | 128 | `fio-io_uring/matched` | 5 | 334,074 ± 8,122 | 349.4 | 721.7 | 2.0 | — | — |
+| **W4** | 128 | `seastar/std` | 5 | 383,200 ± 19,155 | 292.8 | 834.8 | 4.0 | — | — |
+| **W3** | 64 | `juring/std` (`matchedbatch` run) | 5 | **323,753 ± 8,575** | 170.3 | 491.8 | 2.1 | **1.0693 [1.0209, 1.1178]** | 1.0501 [0.9787, 1.1215] |
+| **W3** | 64 | `fio-io_uring/matchedbatch` | 5 | 302,930 ± 8,195 | 183.3 | 480.9 | 2.2 | — | — |
+| **W3** | 64 | `seastar/std` | 5 | 308,844 ± 16,057 | 178.2 | 507.9 | 4.2 | — | — |
+| **W4** | 128 | `juring/std` (`matchedbatch` run) | 5 | **410,833 ± 14,052** | 262.2 | 914.4 | 2.8 | **1.2306 [1.1694, 1.2918]** | 1.0625 [1.0106, 1.1144] |
+| **W4** | 128 | `fio-io_uring/matchedbatch` | 5 | 334,025 ± 8,714 | 350.2 | 720.1 | 2.1 | — | — |
+| **W4** | 128 | `seastar/std` | 5 | 386,854 ± 10,835 | 291.5 | 806.5 | 2.3 | — | — |
+
+³ In the `matched` W4 cell one JUring rep (`r3`, `385,000` IOPS) and one Seastar rep were flagged
+slow by the `< 0.92 × max` rule, so the analyzer also reports the fast subset: JUring/`fio`
+`1.2275 [1.1696, 1.2854]` (n=4) and JUring/Seastar `1.0594 [1.0349, 1.0839]` (n=4). The
+`matchedbatch` W4 cells were all fast.
+
+**Reproduction and regression check.** JUring reproduces the signed table within ~1 % in both
+runs: W3 `323,876` / `323,753` (−1.1 % vs `327,371`), W4 `406,966` / `410,833` (−1.0 % / −0.1 %
+vs `411,136`); `fio-matched` `304,160` (signed `304,064`), `matchedbatch` `302,930` (W3) /
+`334,025` (W4), Seastar `314,786` / `308,844` (W3) and `383,200` / `386,854` (W4). The paired
+`JUring/fio` ratios reproduce as `1.0655–1.0693` (W3, signed `1.0771`) and `1.2183–1.2306`
+(W4, signed `1.2388`); `JUring/Seastar` as `1.0293–1.0501` and `1.0622–1.0625`. The
+release-candidate hardening batch changed no read-path code and the per-op cost is unchanged
+(`11,438` cycles/op and `0.327` syscalls/op vs the signed `11,335` / `0.330`;
+[`docs/internal/perf-findings-0.1.md`](docs/internal/perf-findings-0.1.md)), so the small absolute
+deltas are host-state noise common to all engines, not a regression. The `matchedbatch` reference
+is **not faster** than `matched`, i.e. the historical reference was already representative for
+batching; the remaining asymmetry is JUring's ring flags and fused submit, so read comparisons
+stay capability comparisons as stated in §2.1.
+
+
 #### 2.2 CPU, Instructions & Syscalls per I/O (`perf stat`, 30 s steady-state window, `R=3`)
 
 | Case | QD | Engine / Variant | `n` | Cycles / op (`u+k`) ± 95% CI | Instructions / op | Syscalls / op | Context Switches / op |
