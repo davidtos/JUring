@@ -34,7 +34,7 @@ resolve a missing dependency online.
 | E1 | [DirectFileExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/DirectFileExampleTest.java) | `JUring.registerFiles`, `registerBuffers`, `checkOutBuffer`/`checkInBuffer`, `prepareWriteFixed`/`prepareReadFixed`, batched `submitAndWaitForBatchResult` | `open_file_dma` + `file::dma_read` / `file::dma_write` (aligned direct I/O) | 8 blocks written then read back byte-identical; buffer pool is fully owned during the batch and fully returned after it |
 | E2 | [StreamCopyExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/StreamCopyExampleTest.java) | `JuringInputStream` (`readAhead`, `read`, `eof`, `bufferMemoryBytes`), `JuringOutputStream` (`writeBehind`, `write`, `flush`, `durability`), `InputStreamOptions`/`OutputStreamOptions`, `JuringFile` | seastar `fstream` read-ahead / write-behind stream copy | copied file is byte-identical to the source; stream memory equals the option-bounded formula while open and 0 after close; after `flush()` file length equals stream position |
 | E3 | [ManyFilesExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/ManyFilesExampleTest.java) | one `JUring` + 8 `JuringFile`s + `register()` (fixed-file slots), `registerBuffers`, raw `prepareWriteFixed`/`prepareReadFixed` on each slot, batched `submitAndWaitForBatchResult` | seastar many-open-`file` pattern / io_uring multi-file batching | 8 files × 2 offsets round-trip independently, per-file offsets and contents correct; fixed-buffer pool capacity bound holds |
-| E4 | [VirtualThreadsExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/VirtualThreadsExampleTest.java) | `JUringBlocking` (`read`, `write`) shared by 8 virtual threads, with one poller | seastar futures + reactor (the ergonomic opposite: blocking calls vs continuations) | every virtual thread writes and reads back its own record; final file is the concatenation of all records; bounded poller/thread budget |
+| E4 | [VirtualThreadsExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/VirtualThreadsExampleTest.java) | `JUringBlocking` (`read`, `write`) shared by 8 virtual threads, with one poller | seastar futures + reactor (the ergonomic opposite: blocking calls vs continuations) | every virtual thread writes and reads back its own record; final file is the concatenation of all records; fixed poller count and pre-sized call-record capacity |
 
 ## What each example demonstrates
 
@@ -86,11 +86,21 @@ expresses the same multi-file pattern as many file objects multiplexed by one re
 32-byte record at its own offset and reads it back through one shared `JUringBlocking` with
 a single poller (`new JUringBlocking(64, 1)`). The test asserts each virtual thread observes
 its own bytes, that the file ends up as the concatenation of all records, and that every
-future completes. The platform-thread budget is bounded by construction: one poller thread
-plus the JDK's virtual-thread carrier pool, independent of the number of virtual threads;
-each virtual thread parks while its request is in flight. seastar is the mirror image —
-single-threaded per shard with futures and continuations, where a blocking call would be an
-anti-pattern.
+future completes.
+
+The platform-thread count is set by the facade, not by the number of calling virtual threads:
+one poller thread plus the JDK's virtual-thread carrier pool. Each virtual thread parks
+(unmounts) while its request is in flight or while it waits for a call record. The resource
+that *does* need sizing for a larger fan-out is the call-record capacity: every admitted
+blocking call owns one pre-allocated record, so `BlockingOptions.withMaxConcurrentCalls(...)`
+bounds how many calls can be parked or in flight at once (by default it is derived from the
+queue depth, as in 0.1.0). Calls beyond that capacity wait for admission
+(`OverflowPolicy.BLOCK`, the default) or fail fast (`OverflowPolicy.FAIL`) instead of
+retrying in a timed loop or creating extra platform threads. Eight calls are well inside the
+default pool for `new JUringBlocking(64, 1)`; sizing the pool for a real virtual-thread
+fan-out, with the memory math, is covered in [`docs/vt-scale.md`](vt-scale.md). seastar is
+the mirror image — single-threaded per shard with futures and continuations, where a
+blocking call would be an anti-pattern.
 
 ## seastar mapping and JUring differences
 

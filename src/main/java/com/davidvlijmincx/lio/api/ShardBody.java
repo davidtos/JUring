@@ -23,4 +23,13 @@ interface ShardBody {
      */
     default void wake() {
     }
+
+    /**
+     * Called on the shard thread after the ring has been closed and before the shard is
+     * marked terminated. A body uses it to unblock callers whose requests were still in
+     * flight when the bounded shutdown gave up: only now is the kernel done with their
+     * buffers. The default is a no-op.
+     */
+    default void afterRingClose() {
+    }
 }

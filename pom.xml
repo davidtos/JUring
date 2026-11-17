@@ -50,6 +50,10 @@
         <!-- Resolved from the release workflow environment; keep a defined default so the
              plugin parameter is never an unresolved ${...} expression. -->
         <skipPublishing>false</skipPublishing>
+        <!-- Extra JVM arguments for the forked test JVM (for example
+             -Djuring.surefire.argLine="-Xmx6g -Djuring.scale.vt=1000000" to run the
+             opt-in 10^6-virtual-thread scale test). Empty by default. -->
+        <juring.surefire.argLine></juring.surefire.argLine>
     </properties>
 
     <dependencies>
@@ -126,7 +130,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <argLine>--enable-native-access=ALL-UNNAMED ${juring.surefire.argLine}</argLine>
                 </configuration>
             </plugin>
             <plugin>

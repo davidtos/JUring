@@ -33,11 +33,26 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * native syscall, so virtual threads waiting on I/O do not pin their carrier thread and a
  * small platform-thread budget serves many virtual threads.
  *
+ * <p><b>Capacity.</b> Each worker owns a pre-allocated pool of call records bound by
+ * {@link BlockingOptions#withMaxConcurrentCalls(int)} (default: derived from the queue depth,
+ * exactly as in 0.1.0). A blocking call admits itself by taking one record and releases it when
+ * the completion is reaped; the record is the wait node, so no per-call object is ever
+ * allocated. A call that arrives when every record is in use follows
+ * {@link BlockingOptions#overflow()}: {@link OverflowPolicy#BLOCK} (default) parks on the
+ * worker's admission monitor until a record is released, {@link OverflowPolicy#FAIL} throws
+ * {@link IllegalStateException}. Size the budget to the expected number of concurrently blocked
+ * calls; {@link BlockingOptions#estimatedBytes()} reports the resulting heap footprint
+ * (~90 bytes per record). {@link #maxConcurrentCalls()}, {@link #parkedCallers()} and
+ * {@link #overflowWaits()} expose the resulting state for tests and diagnostics.
+ *
  * <p>Calls return the raw io_uring completion result: the transferred byte count for reads
  * and writes, the new file descriptor for opens, {@code 0} for closes, or the negative errno
  * on failure. They do not throw {@link JuringException}; misuse (closed instance, invalid
- * buffer or size) throws unchecked exceptions. Methods are safe to call from multiple
- * threads and from virtual threads.
+ * buffer or size) throws unchecked exceptions. A caller interrupted while parked requests a
+ * kernel cancellation of its own request (issued once the request is in the ring) and gets
+ * {@code -}{@link JuringException#EINTR} after the terminal completion is reaped, so the
+ * caller's buffer is not touched after the method returns; the interrupt flag is preserved.
+ * Methods are safe to call from multiple threads and from virtual threads.
  *
  * <p>Registered buffers and files are installed on every worker ring, so the {@code *Fixed}
  * and {@code indexFD} overloads work from any calling thread. {@link #close()} is bounded
@@ -49,6 +64,8 @@ public class JUringBlocking implements AutoCloseable {
     private static final int STATE_PARKED = 1;
     private static final int STATE_DONE = 2;
     private static final int STATE_ABANDONED = 3;
+    /** The record was handed to the ring; only now can a kernel cancellation target it. */
+    private static final int STATE_SUBMITTED = 4;
 
     private static final int SPINS_BEFORE_YIELD = 64;
 
@@ -63,6 +80,9 @@ public class JUringBlocking implements AutoCloseable {
 
     private static final VarHandle VH_INT_ARRAY = MethodHandles.arrayElementVarHandle(int[].class);
     private static final VarHandle VH_LONG_ARRAY = MethodHandles.arrayElementVarHandle(long[].class);
+    private static final VarHandle VH_BYTE_ARRAY = MethodHandles.arrayElementVarHandle(byte[].class);
+    /** Top bit of {@code slotSqeFlags}: "cancel this request when it is submitted". */
+    private static final byte CANCEL_FLAG_BIT = (byte) 0x80;
     private static final VarHandle VH_FREE_BUF_HEAD;
     private static final VarHandle VH_FREE_BUF_TAIL;
 
@@ -80,6 +100,9 @@ public class JUringBlocking implements AutoCloseable {
     private final Worker[] workers;
     private final int workerMask;
     private final RingGroup group;
+    private final BlockingOptions options;
+    private final int recordsPerWorker;
+    private final int maxConcurrentCalls;
     private final Object closeLock = new Object();
     private boolean closed;
 
@@ -146,10 +169,14 @@ public class JUringBlocking implements AutoCloseable {
         static final long EVENTFD_SENTINEL = Long.MIN_VALUE;
         static final long CANCEL_SENTINEL = Long.MIN_VALUE + 1;
         final JUringBlocking parent;
+        final BlockingOptions options;
         final int workerId;
         final int eventFd;
         final long eventfdReadBuf;
         final long eventfdWriteBuf;
+        @SuppressWarnings("unused")
+        long padInKernel01, padInKernel02, padInKernel03, padInKernel04,
+                padInKernel05, padInKernel06, padInKernel07;
         @SuppressWarnings("unused")
         volatile int inKernel;
         boolean eventfdArmed;
@@ -158,14 +185,49 @@ public class JUringBlocking implements AutoCloseable {
         final int[] freeSlotBuffer;
         final long[] freeSlotSeq;
         @SuppressWarnings("unused")
+        long padFreeHead01, padFreeHead02, padFreeHead03, padFreeHead04,
+                padFreeHead05, padFreeHead06, padFreeHead07;
+        @SuppressWarnings("unused")
         volatile long freeSlotHead;
+        @SuppressWarnings("unused")
+        long padFreeTail01, padFreeTail02, padFreeTail03, padFreeTail04,
+                padFreeTail05, padFreeTail06, padFreeTail07;
         @SuppressWarnings("unused")
         volatile long freeSlotTail;
         final int[] mpscBuffer;
         final long[] mpscSeq;
         @SuppressWarnings("unused")
+        long padMpsc01, padMpsc02, padMpsc03, padMpsc04, padMpsc05, padMpsc06, padMpsc07;
+        @SuppressWarnings("unused")
         volatile long mpscTail;
         long mpscHead;
+        /**
+         * Guards the saturation path only: callers wait here when every call record is in use.
+         * The monitor is never taken while a record is available, and the wait set is the
+         * JDK's own allocation-free queue of parked threads, so no per-waiter node exists.
+         */
+        final Object admissionLock = new Object();
+        @SuppressWarnings("unused")
+        long padWaiters01, padWaiters02, padWaiters03, padWaiters04,
+                padWaiters05, padWaiters06, padWaiters07;
+        @SuppressWarnings("unused")
+        volatile int slotWaiters;
+        final java.util.concurrent.atomic.AtomicLong overflowWaits =
+                new java.util.concurrent.atomic.AtomicLong();
+        /** Sized above the in-flight cap: at most one ready cancellation per in-flight request. */
+        final int cancelRingSize;
+        final long[] cancelRing;
+        final Object cancelLock = new Object();
+        @SuppressWarnings("unused")
+        long padCancel01, padCancel02, padCancel03, padCancel04,
+                padCancel05, padCancel06, padCancel07;
+        volatile int cancelPending;
+        /**
+         * Set when a cancellation that can actually be issued is queued (its target is already
+         * in the ring). Deferred cancellations do not set it, so a pending-but-not-drainable
+         * cancellation never makes the poller spin instead of waiting.
+         */
+        volatile int cancelWake;
         final byte[] slotOpcode;
         final byte[] slotSqeFlags;
         final int[] slotFd;
@@ -191,16 +253,25 @@ public class JUringBlocking implements AutoCloseable {
         @SuppressWarnings("unused")
         volatile int pollerParked;
 
-        Worker(JUringBlocking parent, int workerId, int queueDepth) {
+        Worker(JUringBlocking parent, int workerId, int slotCapacity, int ringEntries, BlockingOptions options) {
             this.parent = parent;
+            this.options = options;
             this.workerId = workerId;
-            int minCap = Math.max(256, queueDepth * 8);
-            int cap = Integer.highestOneBit(minCap - 1) << 1;
-            if (cap < 256) {
-                cap = 256;
+            if (slotCapacity < 2 || Integer.bitCount(slotCapacity) != 1) {
+                throw new IllegalArgumentException("slotCapacity must be a power of two >= 2: " + slotCapacity);
             }
+            int cap = slotCapacity;
             this.slotCapacity = cap;
             this.slotMask = cap - 1;
+            // The kernel rounds the requested SQ entries up to a power of two, so this bound
+            // is above the real in-flight cap: at most one ready cancellation per in-flight
+            // request can exist.
+            int roundedEntries = Integer.highestOneBit(Math.max(8, ringEntries));
+            if (roundedEntries != Math.max(8, ringEntries)) {
+                roundedEntries <<= 1;
+            }
+            this.cancelRingSize = roundedEntries + 8;
+            this.cancelRing = new long[cancelRingSize];
 
             this.freeSlotBuffer = new int[cap];
             this.freeSlotSeq = new long[cap];
@@ -270,7 +341,8 @@ public class JUringBlocking implements AutoCloseable {
                 // completion are abandoned and their callers observe IllegalStateException.
                 running = false;
                 failPendingControlTask();
-                unparkParkedSlots();
+                unparkQueuedSlots();
+                wakeAdmissionWaiters();
             }
         }
 
@@ -278,6 +350,17 @@ public class JUringBlocking implements AutoCloseable {
         @Override
         public void wake() {
             wakePoller();
+        }
+
+        /**
+         * Runs on the shard thread after the ring is closed: callers whose requests were
+         * still in flight can now be released without touching a buffer the kernel still owns.
+         */
+        @Override
+        public void afterRingClose() {
+            unparkSubmittedSlots();
+            unparkQueuedSlots();
+            wakeAdmissionWaiters();
         }
 
         void failPendingControlTask() {
@@ -291,9 +374,29 @@ public class JUringBlocking implements AutoCloseable {
             }
         }
 
-        void unparkParkedSlots() {
+        /**
+         * Unparks callers whose request was never handed to the ring. This is always safe: no
+         * kernel operation can be using their buffer.
+         */
+        void unparkQueuedSlots() {
             for (int i = 0; i < slotCapacity; i++) {
                 if ((int) VH_INT_ARRAY.getAcquire(slotState, i) == STATE_PARKED) {
+                    Thread t = slotThread[i];
+                    if (t != null) {
+                        LockSupport.unpark(t);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Unparks callers whose request is in the ring. Only safe once the ring is gone: until
+         * then the kernel may still write into the caller's buffer. Called by
+         * {@link JUringBlocking#close(long)} after the shard group terminated.
+         */
+        void unparkSubmittedSlots() {
+            for (int i = 0; i < slotCapacity; i++) {
+                if ((int) VH_INT_ARRAY.getAcquire(slotState, i) == STATE_SUBMITTED) {
                     Thread t = slotThread[i];
                     if (t != null) {
                         LockSupport.unpark(t);
@@ -343,20 +446,14 @@ public class JUringBlocking implements AutoCloseable {
                 inFlightHolder[0]--;
                 slotResult[slotId] = res;
                 Thread vt = slotThread[slotId];
-                if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_DONE)) {
+                if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_SUBMITTED, STATE_DONE)) {
                     if (vt != null) {
                         inFlightHolder[1]++;
                         LockSupport.unpark(vt);
                     }
                 } else {
-                    long toFree = slotFreeAddr[slotId];
-                    if (toFree != 0L) {
-                        slotFreeAddr[slotId] = 0L;
-                        parent.libc.free(toFree);
-                    }
-                    slotThread[slotId] = null;
-                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
-                    releaseSlot(slotId);
+                    // The request was abandoned (close or an exception): release the record.
+                    freeSlot(slotId);
                 }
             };
 
@@ -364,6 +461,11 @@ public class JUringBlocking implements AutoCloseable {
 
             while (running && !ctx.stopRequested()) {
                 runPendingControlTask();
+                cancelWake = 0;
+                int drainedCancels = drainCancelRequests();
+                if (drainedCancels > 0) {
+                    unsubmitted += drainedCancels;
+                }
 
                 while (inFlightHolder[0] < (sqEntries - 1) && unsubmitted < (sqEntries - 1)) {
                     long head = this.mpscHead;
@@ -373,18 +475,45 @@ public class JUringBlocking implements AutoCloseable {
                         break;
                     }
 
+                    int slotId = this.mpscBuffer[idx];
+                    if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) == STATE_ABANDONED) {
+                        // The caller gave up while the record was queued: consume the queue
+                        // entry and release the record without submitting anything.
+                        VH_LONG_ARRAY.setRelease(this.mpscSeq, idx, head + this.slotCapacity);
+                        this.mpscHead = head + 1;
+                        freeSlot(slotId);
+                        continue;
+                    }
+
                     long sqe = dispatcher.getSqe();
                     if (sqe == 0L) {
                         break;
                     }
 
-                    int slotId = this.mpscBuffer[idx];
                     VH_LONG_ARRAY.setRelease(this.mpscSeq, idx, head + this.slotCapacity);
                     this.mpscHead = head + 1;
 
+                    // Hand the record to the ring. The state flip is what allows a caller's
+                    // interrupt to target this request in the kernel: a queued record has no
+                    // in-flight request to cancel yet. A record abandoned between the check
+                    // above and this CAS burns the reserved SQE as an ignored NOP.
+                    if (!VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_SUBMITTED)) {
+                        Sqe.zero(sqe);
+                        Sqe.setOpcode(sqe, IORING_OP_NOP);
+                        Sqe.setUserData(sqe, CANCEL_SENTINEL);
+                        unsubmitted++;
+                        freeSlot(slotId);
+                        continue;
+                    }
+                    byte sqeFlags = (byte) VH_BYTE_ARRAY.getVolatile(slotSqeFlags, slotId);
+                    boolean cancelOnSubmit = (sqeFlags & CANCEL_FLAG_BIT) != 0;
+                    if (cancelOnSubmit) {
+                        VH_BYTE_ARRAY.setVolatile(slotSqeFlags, slotId, (byte) (sqeFlags & ~CANCEL_FLAG_BIT));
+                        sqeFlags &= ~CANCEL_FLAG_BIT;
+                    }
                     byte op = slotOpcode[slotId];
                     Sqe.setOpcode(sqe, op);
-                    Sqe.setFlags(sqe, slotSqeFlags[slotId]);
+                    Sqe.setFlags(sqe, sqeFlags);
                     Sqe.setFd(sqe, slotFd[slotId]);
                     Sqe.setOff(sqe, slotOff[slotId]);
                     Sqe.setAddr(sqe, slotAddr[slotId]);
@@ -392,13 +521,29 @@ public class JUringBlocking implements AutoCloseable {
                     Sqe.setRwFlags(sqe, slotRwFlags[slotId]);
                     Sqe.setBufIndex(sqe, slotBufIndex[slotId]);
                     Sqe.setFileIndex(sqe, slotFileIndex[slotId]);
-                    Sqe.setUserData(sqe, slotId);
+                    Sqe.setUserData(sqe, userData(head, slotId));
 
                     inFlightHolder[0]++;
                     if (inFlightHolder[1] > 0) {
                         inFlightHolder[1]--;
                     }
                     unsubmitted++;
+                    if (cancelOnSubmit) {
+                        // The caller interrupted while this record was still queued. Both SQEs
+                        // go out in the same batch, target first, so the kernel sees the target
+                        // in flight when it processes the cancellation. A linked target cannot
+                        // take a successor SQE (it would join the user's chain), so its
+                        // cancellation is queued for the next batch instead.
+                        byte linkMask = (byte) (SqeOptions.IOSQE_IO_LINK.value
+                                | SqeOptions.IOSQE_IO_HARDLINK.value);
+                        long cancelSqe = (sqeFlags & linkMask) == 0 ? dispatcher.getSqe() : 0L;
+                        if (cancelSqe != 0L) {
+                            writeCancelSqe(cancelSqe, userData(head, slotId));
+                            unsubmitted++;
+                        } else {
+                            enqueueReadyCancel(userData(head, slotId));
+                        }
+                    }
                 }
 
                 int reaped = dispatcher.reapRawCqes(Integer.MAX_VALUE, cqeConsumer);
@@ -450,6 +595,7 @@ public class JUringBlocking implements AutoCloseable {
                         VH_WORKER_IN_KERNEL.setVolatile(this, 1);
                         VarHandle.fullFence();
                         if (!running || ctx.stopRequested() || controlTask.get() != null
+                                || cancelWake != 0
                                 || (canAcceptMore && hasPendingMpsc())) {
                             VH_WORKER_IN_KERNEL.setVolatile(this, 0);
                             if (unsubmitted > 0) {
@@ -481,7 +627,7 @@ public class JUringBlocking implements AutoCloseable {
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 1);
                         VarHandle.fullFence();
                         if (!hasPendingMpsc() && controlTask.get() == null && running
-                                && !ctx.stopRequested()) {
+                                && !ctx.stopRequested() && cancelWake == 0) {
                             LockSupport.park(this);
                         }
                         VH_WORKER_POLLER_PARKED.setVolatile(this, 0);
@@ -636,13 +782,35 @@ public class JUringBlocking implements AutoCloseable {
         }
 
         private int acquireSlot() {
+            if (!running) {
+                throw new IllegalStateException("JUringBlocking is closed");
+            }
+            int slotId = tryAcquireSlot();
+            if (slotId >= 0) {
+                return slotId;
+            }
+            if (!running) {
+                throw new IllegalStateException("JUringBlocking is closed");
+            }
+            if (options.overflow() == OverflowPolicy.FAIL) {
+                throw new IllegalStateException("JUringBlocking is at its concurrent-call capacity ("
+                        + slotCapacity + " records per worker, " + parent.workers.length
+                        + " worker(s)); raise BlockingOptions.withMaxConcurrentCalls(...) or use "
+                        + "OverflowPolicy.BLOCK");
+            }
+            return acquireSlotBlocking();
+        }
+
+        /**
+         * Lock-free admission fast path: pops a free call record.
+         *
+         * @return a record id, or {@code -1} when every record of this worker is in use
+         */
+        private int tryAcquireSlot() {
             final int mask = this.slotMask;
             final int cap = this.slotCapacity;
             int spins = 0;
             while (true) {
-                if (!running) {
-                    throw new IllegalStateException("JUringBlocking is closed");
-                }
                 long pos = (long) VH_WORKER_FREE_SLOT_HEAD.getVolatile(this);
                 int idx = (int) (pos & mask);
                 long seq = (long) VH_LONG_ARRAY.getAcquire(this.freeSlotSeq, idx);
@@ -654,10 +822,47 @@ public class JUringBlocking implements AutoCloseable {
                         return slotId;
                     }
                 } else if (dif < 0) {
-                    LockSupport.parkNanos(this, 10_000L);
-                    spins = 0;
+                    return -1;
                 } else {
                     spins = onContendedSpin(spins);
+                }
+            }
+        }
+
+        /**
+         * Saturation path: wait on the admission monitor until a record is released. The wait
+         * set is the JDK's own VM-managed queue of parked threads, so millions of blocked
+         * callers need no per-waiter library object and no timer. {@code Object.wait} on a
+         * virtual thread unmounts (JDK 25 floor), so the carrier is not pinned. The fast path
+         * never enters this monitor.
+         *
+         * @return a record id, or {@code -1} when the caller was interrupted while waiting
+         */
+        private int acquireSlotBlocking() {
+            overflowWaits.incrementAndGet();
+            if (!running) {
+                throw new IllegalStateException("JUringBlocking is closed");
+            }
+            synchronized (admissionLock) {
+                slotWaiters++;
+                try {
+                    for (;;) {
+                        if (!running) {
+                            throw new IllegalStateException("JUringBlocking is closed");
+                        }
+                        int slotId = tryAcquireSlot();
+                        if (slotId >= 0) {
+                            return slotId;
+                        }
+                        try {
+                            admissionLock.wait();
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return -1;
+                        }
+                    }
+                } finally {
+                    slotWaiters--;
                 }
             }
         }
@@ -665,7 +870,7 @@ public class JUringBlocking implements AutoCloseable {
         private void releaseSlot(int slotId) {
             final int mask = this.slotMask;
             int spins = 0;
-            while (true) {
+            for (;;) {
                 long pos = (long) VH_WORKER_FREE_SLOT_TAIL.getVolatile(this);
                 int idx = (int) (pos & mask);
                 long seq = (long) VH_LONG_ARRAY.getAcquire(this.freeSlotSeq, idx);
@@ -674,14 +879,176 @@ public class JUringBlocking implements AutoCloseable {
                     if (VH_WORKER_FREE_SLOT_TAIL.compareAndSet(this, pos, pos + 1)) {
                         this.freeSlotBuffer[idx] = slotId;
                         VH_LONG_ARRAY.setRelease(this.freeSlotSeq, idx, pos + 1);
-                        return;
+                        break;
                     }
                 } else {
                     spins = onContendedSpin(spins);
                 }
             }
+            // Wake one saturated caller. The fence publishes the released record before the
+            // slotWaiters read, closing the classic Dekker lost-wakeup window against
+            // acquireSlotBlocking (which increments slotWaiters before re-checking the queue).
+            VarHandle.fullFence();
+            if (this.slotWaiters != 0) {
+                synchronized (admissionLock) {
+                    admissionLock.notify();
+                }
+            }
         }
 
+        /**
+         * Marks a record abandoned, whichever phase it is in.
+         *
+         * @return {@code true} when the record was still owned by this call (the poller or
+         *         close() will release it); {@code false} when it is already terminal
+         */
+        private boolean abandonSlot(int slotId) {
+            if (VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_ABANDONED)) {
+                return true;
+            }
+            return VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_SUBMITTED, STATE_ABANDONED);
+        }
+
+        /** Releases a record whose request is terminal (completed, cancelled or abandoned). */
+        private void freeSlot(int slotId) {
+            long toFree = slotFreeAddr[slotId];
+            if (toFree != 0L) {
+                slotFreeAddr[slotId] = 0L;
+                parent.libc.free(toFree);
+            }
+            slotThread[slotId] = null;
+            VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
+            releaseSlot(slotId);
+        }
+
+        /** Unparks every caller waiting on the admission monitor (used by close). */
+        void wakeAdmissionWaiters() {
+            VarHandle.fullFence();
+            if (this.slotWaiters != 0) {
+                synchronized (admissionLock) {
+                    admissionLock.notifyAll();
+                }
+            }
+        }
+
+        long countParkedSlots() {
+            long parked = 0;
+            for (int i = 0; i < slotCapacity; i++) {
+                int state = (int) VH_INT_ARRAY.getAcquire(slotState, i);
+                if (state == STATE_PARKED || state == STATE_SUBMITTED) {
+                    parked++;
+                }
+            }
+            return parked;
+        }
+
+        /**
+         * Requests a best-effort kernel cancellation of the request identified by
+         * {@code userData}. The request is queued for the poller, which submits the
+         * {@code IORING_OP_ASYNC_CANCEL}; the caller still waits for its own completion, so its
+         * buffer stays valid until the kernel is done with it. Interrupts are rare, so this is
+         * a small monitor-guarded ring rather than a hot-path structure.
+         *
+         * @param userData target request's {@code user_data}, as encoded by
+         *                 {@link JUringBlocking#userData(long, int)} at submission
+         */
+        boolean requestCancel(long userData) {
+            int slotId = (int) userData;
+            byte flags = (byte) VH_BYTE_ARRAY.getVolatile(slotSqeFlags, slotId);
+            if ((flags & CANCEL_FLAG_BIT) == 0) {
+                VH_BYTE_ARRAY.setVolatile(slotSqeFlags, slotId, (byte) (flags | CANCEL_FLAG_BIT));
+            }
+            // Order the flag store before the state read (Dekker against the poller's
+            // PARKED->SUBMITTED CAS + flag read) so a cancellation cannot be lost.
+            VarHandle.fullFence();
+            boolean queued = true;
+            if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) == STATE_SUBMITTED) {
+                // Already in the ring: the poller cannot see a flag that is set after its
+                // submit-time check, so queue a ready cancellation for it. Ready
+                // cancellations are bounded by the in-flight requests.
+                queued = enqueueReadyCancel(userData);
+            }
+            wakePoller();
+            return queued;
+        }
+
+        private boolean enqueueReadyCancel(long userData) {
+            boolean queued = false;
+            synchronized (cancelLock) {
+                if (cancelPending < cancelRingSize) {
+                    cancelRing[cancelPending++] = userData;
+                    queued = true;
+                }
+            }
+            if (queued) {
+                cancelWake = 1;
+            }
+            return queued;
+        }
+
+        /**
+         * Drains queued cancellations into SQEs (they use the {@link #CANCEL_SENTINEL} user
+         * data, so their completions are ignored and no call record is consumed).
+         *
+         * @return the number of cancel SQEs written
+         */
+        private int drainCancelRequests() {
+            if (cancelPending == 0) {
+                return 0;
+            }
+            int drained = 0;
+            synchronized (cancelLock) {
+                int i = 0;
+                while (i < cancelPending) {
+                    long target = cancelRing[i];
+                    int slotId = (int) target;
+                    int state = (int) VH_INT_ARRAY.getAcquire(slotState, slotId);
+                    if (state == STATE_PARKED) {
+                        // Still queued: the poller has not submitted it, so a kernel cancel
+                        // would find nothing. Leave it pending and retry on the next pass.
+                        i++;
+                        continue;
+                    }
+                    if (state != STATE_SUBMITTED) {
+                        // Terminal (completed or abandoned): the request is already done, so
+                        // the cancel is no longer needed. Drop it.
+                        cancelRing[i] = cancelRing[--cancelPending];
+                        continue;
+                    }
+                    long sqe = dispatcher.getSqe();
+                    if (sqe == 0L) {
+                        break;
+                    }
+                    writeCancelSqe(sqe, target);
+                    cancelRing[i] = cancelRing[--cancelPending];
+                    drained++;
+                }
+            }
+            return drained;
+        }
+
+        private static void writeCancelSqe(long sqe, long target) {
+            Sqe.zero(sqe);
+            Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+            Sqe.setFd(sqe, -1);
+            Sqe.setAddr(sqe, target);
+            Sqe.setLen(sqe, 0);
+            Sqe.setRwFlags(sqe, 0);
+            Sqe.setUserData(sqe, CANCEL_SENTINEL);
+        }
+
+        /**
+         * Submits one request and parks until it completes.
+         *
+         * <p>Zero library allocation on the hot path: the request lives in the pre-allocated
+         * record arrays, the queue entry is an {@code int}, and the caller parks with plain
+         * {@link LockSupport#park(Object)}. The completion side is O(1): the poller looks the
+         * record up from {@code user_data} and unparks the stored thread.
+         *
+         * <p>An interrupt requests a kernel cancellation of this request and is reported as
+         * {@code -EINTR} once the kernel completion (the cancellation or the real result) has
+         * been reaped, so the caller's buffer is not touched after the method returns.
+         */
         private long submitAndAwaitSlot(
                 byte opcode,
                 byte sqeFlags,
@@ -703,6 +1070,13 @@ public class JUringBlocking implements AutoCloseable {
                 }
                 throw t;
             }
+            if (slotId < 0) {
+                // The caller was interrupted while waiting for admission.
+                if (freeAddrOnComplete != 0L) {
+                    parent.libc.free(freeAddrOnComplete);
+                }
+                return -JuringException.EINTR;
+            }
             slotOpcode[slotId] = opcode;
             slotSqeFlags[slotId] = sqeFlags;
             slotFd[slotId] = fd;
@@ -717,6 +1091,7 @@ public class JUringBlocking implements AutoCloseable {
             VH_INT_ARRAY.setRelease(slotState, slotId, STATE_PARKED);
 
             long tail = (long) VH_WORKER_MPSC_TAIL.getAndAdd(this, 1L);
+            long userData = userData(tail, slotId);
             int idx = (int) (tail & this.slotMask);
             int spins = 0;
             while ((long) VH_LONG_ARRAY.getAcquire(this.mpscSeq, idx) != tail) {
@@ -728,75 +1103,95 @@ public class JUringBlocking implements AutoCloseable {
             wakePoller();
 
             boolean completed = false;
+            boolean interrupted = false;
+            boolean cancelPending = false;
             try {
-                boolean interrupted = false;
-                while ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
-                    if (!running && (int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
+                for (;;) {
+                    if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) == STATE_DONE) {
+                        break;
+                    }
+                    if (!running) {
+                        int state = (int) VH_INT_ARRAY.getAcquire(slotState, slotId);
+                        if (state == STATE_DONE) {
+                            break;
+                        }
+                        if (state == STATE_SUBMITTED && shard != null && !shard.isTerminated()) {
+                            // The ring is closing but has not cancelled this request yet. Wait
+                            // for the terminal completion instead of returning while the kernel
+                            // may still be writing into the caller's buffer.
+                            LockSupport.parkNanos(this, 100_000L);
+                            continue;
+                        }
                         throw new IllegalStateException("JUringBlocking closed while waiting for I/O completion");
                     }
-                    LockSupport.park(this);
+                    int preParkSpins = options.preParkSpins();
+                    if (preParkSpins > 0) {
+                        int spun = 0;
+                        while (spun < preParkSpins
+                                && (int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
+                            Thread.onSpinWait();
+                            spun++;
+                        }
+                        if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) == STATE_DONE) {
+                            break;
+                        }
+                    }
+                    if (cancelPending) {
+                        // The (correctly sized) ready ring was momentarily full: retry on the
+                        // next park return instead of losing the cancellation.
+                        LockSupport.parkNanos(this, 1_000_000L);
+                    } else {
+                        LockSupport.park(this);
+                    }
                     if ((int) VH_INT_ARRAY.getAcquire(slotState, slotId) != STATE_DONE) {
                         wakePoller();
                     }
                     if (Thread.interrupted()) {
                         interrupted = true;
+                        cancelPending = true;
                     }
-                }
-                if (interrupted) {
-                    Thread.currentThread().interrupt();
+                    if (cancelPending && requestCancel(userData)) {
+                        cancelPending = false;
+                    }
                 }
                 completed = true;
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                    return -JuringException.EINTR;
+                }
                 return slotResult[slotId];
             } finally {
-                if (completed || !VH_INT_ARRAY.compareAndSet(slotState, slotId, STATE_PARKED, STATE_ABANDONED)) {
-                    long toFree = slotFreeAddr[slotId];
-                    if (toFree != 0L) {
-                        slotFreeAddr[slotId] = 0L;
-                        parent.libc.free(toFree);
-                    }
-                    slotThread[slotId] = null;
-                    VH_INT_ARRAY.setRelease(slotState, slotId, STATE_IDLE);
-                    releaseSlot(slotId);
+                if (completed || !abandonSlot(slotId)) {
+                    freeSlot(slotId);
                 }
+                // otherwise an exception left the request queued or in flight: the poller or
+                // close() releases the record when it is skipped or completed
             }
         }
     }
 
-    private static int defaultWorkerCount(int queueDepth) {
-        String prop = System.getProperty("juring.blocking.pollers");
-        if (prop != null && !prop.isBlank()) {
-            try {
-                int p = Integer.parseInt(prop.trim());
-                if (p > 0) return Integer.highestOneBit(Math.min(16, p));
-            } catch (NumberFormatException ignored) {}
-        }
-        if (queueDepth < 64) {
-            return 1;
-        }
-        int procs = Runtime.getRuntime().availableProcessors();
-        return Math.max(1, Math.min(4, Integer.highestOneBit(procs / 4)));
-    }
-
     /**
-     * Creates a wrapper with the default number of poller workers.
+     * Creates a wrapper with the default configuration.
      *
      * <p>The worker count comes from the {@code juring.blocking.pollers} system property when
      * set (rounded down to a power of two, at most sixteen); otherwise it is {@code 1} for
      * queue depths below {@code 64} and a small CPU-derived value (1 to 4) for larger depths.
+     * The concurrent-call budget is derived from the queue depth, as in 0.1.0.
      *
      * @param queueDepth   submission queue entries per worker ring
      * @param ioUringFlags {@link IoUringOptions} setup flags for each worker ring
      * @throws RuntimeException when a worker ring or its poller thread cannot be started
      */
     public JUringBlocking(int queueDepth, IoUringOptions... ioUringFlags) {
-        this(queueDepth, defaultWorkerCount(queueDepth), ioUringFlags);
+        this(BlockingOptions.defaults().withQueueDepth(queueDepth), ioUringFlags);
     }
 
     /**
      * Creates a wrapper with an explicit number of poller workers.
      *
      * <p>{@code numPollers} is rounded down to a power of two (minimum one); each worker gets
-     * its own ring with {@code max(8, queueDepth)} submission queue entries.
+     * its own ring with {@code max(8, queueDepth)} submission queue entries and the
+     * concurrent-call budget is derived from the queue depth, as in 0.1.0.
      *
      * @param queueDepth   submission queue entries per worker ring
      * @param numPollers   requested number of poller workers
@@ -804,13 +1199,30 @@ public class JUringBlocking implements AutoCloseable {
      * @throws RuntimeException when a worker ring or its poller thread cannot be started
      */
     public JUringBlocking(int queueDepth, int numPollers, IoUringOptions... ioUringFlags) {
-        int workerCount = Math.max(1, Integer.highestOneBit(Math.max(1, numPollers)));
-        int ringEntries = Math.max(8, queueDepth);
+        this(BlockingOptions.defaults()
+                .withQueueDepth(queueDepth)
+                .withPollers(Math.max(1, numPollers)), ioUringFlags);
+    }
+
+    /**
+     * Creates a wrapper from an explicit configuration (queue depth, poller count,
+     * concurrent-call budget and oversubscription policy).
+     *
+     * @param options      the configuration, must not be {@code null}
+     * @param ioUringFlags {@link IoUringOptions} setup flags for each worker ring
+     * @throws RuntimeException         when a worker ring or its poller thread cannot be started
+     * @throws IllegalArgumentException when the options are invalid
+     */
+    public JUringBlocking(BlockingOptions options, IoUringOptions... ioUringFlags) {
+        Objects.requireNonNull(options, "options");
+        int workerCount = options.resolvedPollers();
+        int ringEntries = Math.max(8, options.queueDepth());
+        int recordCapacity = options.perWorkerCapacity(workerCount);
         Worker[] newWorkers = new Worker[workerCount];
         RingGroup newGroup = null;
         try {
             for (int i = 0; i < workerCount; i++) {
-                newWorkers[i] = new Worker(this, i, ringEntries);
+                newWorkers[i] = new Worker(this, i, recordCapacity, ringEntries, options);
             }
             newGroup = RingGroup.create(workerCount, ShardOptions.defaults()
                     .withName("JUringBlocking-Poller")
@@ -830,6 +1242,9 @@ public class JUringBlocking implements AutoCloseable {
         this.workers = newWorkers;
         this.workerMask = workerCount - 1;
         this.group = newGroup;
+        this.options = options;
+        this.recordsPerWorker = recordCapacity;
+        this.maxConcurrentCalls = recordCapacity * workerCount;
     }
 
     /**
@@ -855,10 +1270,12 @@ public class JUringBlocking implements AutoCloseable {
         }
         int workerCount = group.size();
         int ringEntries = Math.max(8, group.shard(0).options().ringEntries());
+        BlockingOptions groupOptions = BlockingOptions.forGroup(ringEntries, workerCount);
+        int recordCapacity = groupOptions.perWorkerCapacity(workerCount);
         Worker[] newWorkers = new Worker[workerCount];
         try {
             for (int i = 0; i < workerCount; i++) {
-                newWorkers[i] = new Worker(this, i, ringEntries);
+                newWorkers[i] = new Worker(this, i, recordCapacity, ringEntries, groupOptions);
                 newWorkers[i].shard = group.shard(i);
             }
             for (int i = 0; i < workerCount; i++) {
@@ -874,6 +1291,9 @@ public class JUringBlocking implements AutoCloseable {
         this.workers = newWorkers;
         this.workerMask = workerCount - 1;
         this.group = group;
+        this.options = groupOptions;
+        this.recordsPerWorker = recordCapacity;
+        this.maxConcurrentCalls = recordCapacity * workerCount;
     }
 
     private static void awaitBodies(Worker[] workers) {
@@ -937,16 +1357,96 @@ public class JUringBlocking implements AutoCloseable {
         return workers.length;
     }
 
+    /**
+     * Returns the configuration this instance was created with. For an instance that adopted a
+     * caller-supplied {@link RingGroup}, the poller count is the group's shard count and the
+     * other values are the defaults used to size the call-record pool.
+     *
+     * @return the immutable options
+     */
+    public BlockingOptions options() {
+        return options;
+    }
+
+    /**
+     * Returns the effective concurrent-call budget: the number of blocking calls that may be
+     * admitted (parked or in flight) at once. Every admitted call owns one pre-allocated
+     * record, so this value also fixes the memory bound (see {@link BlockingOptions#estimatedBytes()}).
+     *
+     * @return the effective total record capacity across all workers
+     */
+    public int maxConcurrentCalls() {
+        return maxConcurrentCalls;
+    }
+
+    /**
+     * Returns the call-record capacity of one worker. The pool is pre-allocated at construction
+     * (a power of two, at least 256).
+     *
+     * @return the per-worker record capacity
+     */
+    public int recordsPerWorker() {
+        return recordsPerWorker;
+    }
+
+    /**
+     * Returns the number of callers currently parked waiting for their I/O completion. The
+     * count is computed by scanning the record states, so it is an observability snapshot for
+     * tests and diagnostics, not a hot-path counter.
+     *
+     * @return the number of parked callers across all workers
+     */
+    public long parkedCallers() {
+        long parked = 0;
+        for (Worker w : workers) {
+            parked += w.countParkedSlots();
+        }
+        return parked;
+    }
+
+    /**
+     * Returns how many calls had to wait for a free call record (the saturation path). A
+     * growing value means {@link BlockingOptions#withMaxConcurrentCalls(int)} is undersized
+     * for the workload; with {@link OverflowPolicy#FAIL} those calls throw instead.
+     *
+     * @return the number of saturated admissions since construction
+     */
+    public long overflowWaits() {
+        long waits = 0;
+        for (Worker w : workers) {
+            waits += w.overflowWaits.get();
+        }
+        return waits;
+    }
+
     private Worker getWorker() {
         if (workers.length == 1) {
             return workers[0];
         }
         long tid = Thread.currentThread().threadId();
-        return workers[(int) (tid & workerMask)];
+        if ((workers.length & (workers.length - 1)) == 0) {
+            return workers[(int) (tid & workerMask)];
+        }
+        // RingGroup allows any size in 1..1024; a mask would strand workers when it is not a
+        // power of two (for example size 3 only ever picks workers 0 and 2).
+        return workers[(int) Long.remainderUnsigned(tid, workers.length)];
     }
 
     static void validateNativeSegment(MemorySegment segment, boolean forRead) {
         JUring.validateNativeSegment(segment, forRead);
+    }
+
+    /**
+     * Encodes a call record's {@code user_data} as {@code (queue sequence, slot id)}. The queue
+     * sequence makes the value unique per submission, so a cancellation requested for an
+     * earlier use of the same record can never match a later request's {@code user_data}.
+     *
+     * @param queueSequence per-worker submission sequence (the MPSC tail/head value)
+     * @param slotId        call-record id
+     * @return a positive {@code user_data} value
+     */
+    static long userData(long queueSequence, int slotId) {
+        return ((queueSequence & 0x7FFF_FFFFL) << 32) | (slotId & 0xFFFF_FFFFL);
     }
 
     /**
@@ -2048,9 +2548,15 @@ public class JUringBlocking implements AutoCloseable {
             } catch (RuntimeException ignored) {
                 // bounded close is best effort by contract; cleanup below still runs
             }
+            boolean terminated = group.awaitTermination(0);
             for (Worker w : workers) {
                 w.failPendingControlTask();
-                w.unparkParkedSlots();
+                w.unparkQueuedSlots();
+                if (terminated) {
+                    // The rings are closed, so the kernel no longer owns any caller buffer.
+                    w.unparkSubmittedSlots();
+                }
+                w.wakeAdmissionWaiters();
             }
             for (Worker w : workers) {
                 w.freeEventfdResourcesIfTerminated();

@@ -10,6 +10,7 @@ to.
 | item | value |
 |---|---|
 | project version | `0.1.0` |
+| planned next release | **0.2.0** (unreleased; see [§2b](#2b-020-unreleased--capacity-model-and-interrupt-semantics)) |
 | released versions | **0.1.0** (first release; tag `v0.1.0`) |
 | current deprecations added by 0.1.0 | **none** |
 | pre-existing deprecations (pre-policy) | **one**, see [§3](#3-deprecations) |
@@ -83,6 +84,37 @@ recorded here for the first release's upgrade history; they do not affect any pu
 | `JUringBlocking` buffer pool tracks ownership | `checkInBuffer` rejects double/foreign check-ins; a second `registerBuffers` call throws. |
 | `JUringBlocking` frees registered-buffer memory only after all shards terminate | shutdown no longer frees shared buffer memory while a sibling ring could still touch it. |
 
+## 2b. 0.2.0 (unreleased) — capacity model and interrupt semantics
+
+0.2.0 is additive at the signature level, with documented behaviour changes in
+`JUringBlocking` (oversubscription handling, interrupt handling, and routing for a
+non-power-of-two `RingGroup`). The existing `(int[, int], IoUringOptions...)` constructors
+and every blocking method keep their signatures; no public API was removed or deprecated.
+
+**Additive API**
+
+| addition | notes |
+|---|---|
+| `BlockingOptions` | immutable configuration for `JUringBlocking`: queue depth, poller count, `maxConcurrentCalls`, `OverflowPolicy` and an optional pre-park spin, with `defaults()`, `with*` builders, `resolvedPollers()` and `estimatedBytes()` |
+| `OverflowPolicy { BLOCK, FAIL }` | what a call does when every call record of its worker is in use: `BLOCK` (default) waits for one, `FAIL` throws `IllegalStateException` |
+| `JUringBlocking(BlockingOptions, IoUringOptions...)` | explicit configuration; the two older constructors keep the 0.1.0 defaults |
+| `JUringBlocking.options()`, `maxConcurrentCalls()`, `recordsPerWorker()`, `parkedCallers()`, `overflowWaits()` | read the effective capacity and its diagnostics |
+| `JuringException.EINTR = 4` | the errno a blocking call returns when it is interrupted while parked |
+
+**Behaviour changes (MINOR, documented)**
+
+| change | before 0.2.0 | after 0.2.0 | migration |
+|---|---|---|---|
+| Oversubscription | a call that found every call record of its worker in use retried with `LockSupport.parkNanos(10 µs)` until one was free | `OverflowPolicy.BLOCK` (default) parks on the worker's admission monitor until a record is released; `OverflowPolicy.FAIL` throws `IllegalStateException` immediately | no source change. Raise `withMaxConcurrentCalls(...)` if `overflowWaits()` grows, or choose `FAIL` to make an undersized budget fail fast |
+| Interrupt during a parked call | the interrupt was ignored and the call kept waiting for its completion | the call requests an `IORING_OP_ASYNC_CANCEL` and returns `-EINTR` once the kernel completion (the cancellation or the real result) has been reaped; the interrupt flag is preserved | callers that now see `-EINTR` follow their own interrupt policy; a cancelled write may already have taken effect. Documented per the "behavioural changes are MINOR" rule in [api-stability.md](api-stability.md) §3 |
+| Non-power-of-two `RingGroup` | worker selection used `threadId & (size - 1)`, so a group whose size was not a power of two left workers unused | selection falls back to `% size`; every worker receives submissions | none |
+| Constructor argument validation | `new JUringBlocking(queueDepth, ...)` accepted any queue depth (the ring was clamped to at least 8 entries) and any poller count | `queueDepth` must be `1..32768` and an explicit poller count `1..1024`; other values throw `IllegalArgumentException` | pass a valid value (`0`/negative queue depths were never meaningful) |
+
+Capacity defaults are unchanged: when `maxConcurrentCalls` is `0`, each worker still derives
+`nextPow2(max(256, queueDepth × 8))` records, so code that does not pass `BlockingOptions`
+keeps the 0.1.0 behaviour. The capacity model, sizing recipe and memory math are in
+[`docs/vt-scale.md`](vt-scale.md).
+
 ## 3. Deprecations
 
 **B9 adds no deprecations.** The tree contains exactly **one** `@Deprecated` member; it
@@ -107,9 +139,13 @@ No public API has been removed from the 0.1 line so far.
 
 ## 4. Migration notes
 
-- **From 0.1.0 to a later 0.x release:** 0.1.0 is the first release; there is nothing to migrate
-  from yet. Future releases record breaking changes and deprecations here, with the 0.1.0
-  behaviour baseline in §2a.
+- **From 0.1.0 to 0.2.0 (unreleased):** no source migration is required. 0.2.0 adds the
+  `BlockingOptions`/`OverflowPolicy` configuration and accessors (§2b) and changes one
+  documented call-level behaviour: an interrupt during a parked `JUringBlocking` call now
+  cancels the request and returns `-EINTR` instead of being ignored. Callers that are
+  interrupted should handle the negative result; see §2b.
+- **From 0.1.0 to a later 0.x release:** 0.1.0 is the first release; future releases record
+  breaking changes and deprecations here, with the 0.1.0 behaviour baseline in §2a.
 - **From the pre-rewrite JUring API** (the older socket operations and primitives that were
   removed before the current library focus): that API was **never released**, so there is no
   supported migration path to document. If you have code against an old unreleased snapshot,

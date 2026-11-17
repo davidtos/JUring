@@ -7,8 +7,15 @@ JUring lets Java submit file I/O to Linux `io_uring` directly, using the Foreign
 Java's file APIs are synchronous. A thread issues one request and waits for it. To keep storage busy you need many requests in flight, meaning lots of platform threads are needed. Virtual threads don't change this for file I/O. A virtual thread blocked in a file read stays mounted on its carrier thread, and the scheduler makes up for it by temporarily adding carrier threads (up to 256 by default). From a single thread, JUring can keep many requests in flight by submitting and collecting completions in batches.
 
 - Only Java FFM downcalls and VarHandles.
-- Zero heap allocation on the raw-ring hot path after setup, and on `JUringBlocking`'s no-option blocking overloads (passing `SqeOptions` explicitly allocates the varargs array at the call site).
-- Virtual thread support with JUringBlocking.
+- Zero heap allocation on the raw-ring hot path after setup, and on `JUringBlocking`'s
+  caller-side no-option blocking overloads (passing `SqeOptions` explicitly allocates the
+  varargs array at the call site). The blocking facade's call records are pre-allocated at
+  construction, so its capacity, not per-call allocation, bounds concurrent calls.
+- Virtual thread support with `JUringBlocking`, configured through `BlockingOptions`: worker
+  pollers, queue depth, a concurrent-call budget and an overflow policy. Every admitted call
+  owns one pre-allocated ~88-byte record; callers beyond capacity park for admission
+  (`BLOCK`, the default) or fail fast (`FAIL`) instead of retrying in a timed loop or adding
+  platform threads. Sizing, memory math and interrupt semantics are in [docs/vt-scale.md](docs/vt-scale.md).
 - Focus on random direct I/O, registered files, and fixed buffers to drive high queue depths.
 
 > [!NOTE]
@@ -325,6 +332,13 @@ public class VirtualThreadExample {
     }
 }
 ```
+
+The no-option constructor above uses the 0.1.0 defaults (a CPU-derived poller count and a
+call-record pool derived from the queue depth). For a fan-out larger than that default pool,
+build the facade from `BlockingOptions` and size `withPollers`/`withMaxConcurrentCalls` for
+the peak number of concurrently blocked calls; `estimatedBytes()` reports the heap cost of
+the pre-allocated records. Interrupt behaviour, the admission/overflow policy and the memory
+math are documented in [docs/vt-scale.md](docs/vt-scale.md).
 
 ## Runnable examples
 

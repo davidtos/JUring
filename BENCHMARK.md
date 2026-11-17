@@ -310,6 +310,19 @@ Because `FileChannel` operations are synchronous, a single thread can only issue
 > **parity at Loom defaults** (uncapped carrier pool, §3.2) plus "same device throughput with
 > 2–4 poller threads instead of hundreds of carriers" under a fixed budget.
 
+> [!NOTE]
+> **The data in this subsection predates the unreleased 0.2.0 `JUringBlocking` capacity
+> model and is unchanged**: the 1,000-virtual-thread JMH runs were not rerun for 0.2.0 and
+> no new performance claim is made here. The blocking facade's scale evidence is instead the
+> committed scale test
+> [`JUringBlockingScaleTest`](src/test/java/com/davidvlijmincx/lio/api/JUringBlockingScaleTest.java):
+> the normal suite runs it with 10,000 virtual threads, and a 1,000,000-thread run is
+> opt-in via [`bench/blocking/run-scale.sh`](bench/blocking/run-scale.sh). That test asserts
+> correctness and bounded resources (every call completes, the admission path is exercised,
+> all records are released) at the configured scale; it is not a throughput benchmark. The
+> capacity model, sizing recipe and memory math are in
+> [`docs/vt-scale.md`](docs/vt-scale.md).
+
 When `FileChannel` blocks a virtual thread in kernel I/O, the virtual thread remains pinned/mounted to its carrier thread, forcing the ForkJoinPool scheduler to compensate by spawning up to `maxPoolSize` (default 256) carrier threads. `JUringBlocking` unmounts the virtual thread via `LockSupport.park()` while its `IoShard`-backed poller threads drive `io_uring`.
 
 #### 3.1 Equal Total Platform Thread Budget (`1–2, 4, 8, 16` Platform Threads, 1,000 VTs)

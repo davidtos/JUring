@@ -1,7 +1,8 @@
 # JUring API stability and compatibility policy
 
-**Status:** policy for the **0.1.x** release line. JUring 0.1.0 is the first published
-release, so this policy is now in effect for `0.1.0`; pre-1.0 SemVer rules in §3 apply.
+**Status:** policy for the pre-1.0 release lines (`0.1.x`, and the unreleased `0.2.0`
+line). JUring 0.1.0 is the first published release, so this policy is now in effect for
+`0.1.0`; pre-1.0 SemVer rules in §3 apply.
 Compatibility issues and questions are tracked at
 [github.com/davidtos/JUring](https://github.com/davidtos/JUring).
 
@@ -35,14 +36,15 @@ JUring is a library-first Java module named `JUring`, which exports a single sup
 `JuringFile.CancelStatus`, `MetricsJmx.Handle`). This surface is what the compatibility promise
 in §4 covers.
 
-In the 0.1.x line this package has **37 public top-level types**:
+In the current line (0.1.0 plus the unreleased 0.2.0 additions) this package has
+**39 public top-level types**:
 
 - **Entry points and core values** — `JUring`, `JUringBlocking`, `JuringFile`,
   `JuringInputStream`, `JuringOutputStream`, `FileDescriptor`, `Result`, `ResultConsumer`,
   `CompletionHandler`, `OperationType`, `IoPriority`.
 - **Options and policy enums** — `IoUringOptions`, `SqeOptions`, `LinuxOpenOptions`,
   `InputStreamOptions`, `OutputStreamOptions`, `DurabilityMode`, `FadviseAdvice`, `IoPolicy`,
-  `ShardOptions`, `GroupCommitOptions`.
+  `BlockingOptions`, `OverflowPolicy`, `ShardOptions`, `GroupCommitOptions`.
 - **Runtime, streams and durability** — `IoShard`, `RingGroup`, `ShardContext`, `ShardTask`,
   `ShardStats`, `ShardMetrics`, `GroupMetrics`, `GroupCommit`, `GroupCommitStats`,
   `RingMetrics`, `LatencyHistogram`, `LatencySnapshot`.
@@ -62,6 +64,15 @@ accept sibling `JuringFile`-based handles on the same ring (B10a).
 `JUringBlocking` read/write/`*Fixed` overloads, `JUring.isSupported()`, and
 `RingMetrics.cqFlushEnters()`. Behaviour changes (owner-thread enforcement, flag rejection,
 buffer-pool misuse errors, CQ-overflow flushing) are recorded in `docs/UPGRADING.md` §2a.
+
+The unreleased 0.2.0 additions are purely additive at the signature level: two new public
+types (`BlockingOptions`, `OverflowPolicy`), a new
+`JUringBlocking(BlockingOptions, IoUringOptions...)` constructor, five `JUringBlocking`
+accessors and `JuringException.EINTR`. The documented behaviour changes are MINOR changes
+under §3 — an interrupt during a parked `JUringBlocking` call now cancels the request and
+returns `-EINTR` instead of being ignored, callers beyond capacity park for admission
+instead of retrying in a timed loop, and a non-power-of-two `RingGroup` now routes across all
+its workers — recorded in `docs/UPGRADING.md` §2b.
 
 ### Internal — no guarantee
 
@@ -189,7 +200,7 @@ recorded in `docs/UPGRADING.md`.
 
 ## 10. How the claims in this document were verified
 
-Checked against the 0.1.0 tree:
+Checked against the current tree (0.1.0 plus the unreleased 0.2.0 additions, 2026-11-17):
 
 | claim | verification |
 |---|---|
@@ -197,7 +208,7 @@ Checked against the 0.1.0 tree:
 | first release `0.1.0` / tag `v0.1.0` | release workflow + `CHANGELOG.md`; tag is created by the maintainer during release |
 | repository URL | `git remote -v` → `https://github.com/davidtos/JUring.git` |
 | exported packages | `src/main/java/module-info.java` exports `com.davidvlijmincx.lio.api` |
-| 37 public types in `lio.api` | source inspection of top-level `public` type declarations |
+| 39 public types in `lio.api` (37 at 0.1.0 + the 0.2.0 `BlockingOptions`/`OverflowPolicy`) | source inspection of top-level `public` type declarations |
 | internal type list | source inspection of top-level package-private type declarations |
 | exactly one `@Deprecated` | source grep of `src/main/java`: only `JUring.prepareCancel(long)` |
 | no hosted CI | no `.github/` or other CI configuration in the repo (`docs/internal/b9-design.md` §7) |

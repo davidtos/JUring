@@ -23,6 +23,12 @@ public final class JuringException extends IOException {
 
     /** {@code EAGAIN} — the operation would block and can be retried. */
     public static final int EAGAIN = 11;
+    /**
+     * {@code EINTR} — the operation was interrupted before it completed. {@link JUringBlocking}
+     * returns this negative errno when a caller is interrupted while parked and the request is
+     * cancelled instead of blocking again.
+     */
+    public static final int EINTR = 4;
     /** {@code ENOENT} — no such file or directory. */
     public static final int ENOENT = 2;
     /** {@code EBADF} — bad file descriptor. */

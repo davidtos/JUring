@@ -802,6 +802,16 @@ public final class IoShard implements AutoCloseable {
                     loopFailure = t;
                 }
             } finally {
+                try {
+                    ShardBody loopBody = body;
+                    if (loopBody != null) {
+                        loopBody.afterRingClose();
+                    }
+                } catch (Throwable t) {
+                    if (loopFailure == null) {
+                        loopFailure = t;
+                    }
+                }
                 synchronized (lifecycle) {
                     started = false;
                     terminated = true;
