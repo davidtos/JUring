@@ -130,6 +130,7 @@ import java.util.concurrent.TimeUnit;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_COOP_TASKRUN;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_DEFER_TASKRUN;
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSUER;
+import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SQPOLL;
 
 public final class JUringFileBench {
 
@@ -148,6 +149,23 @@ public final class JUringFileBench {
             "IORING_SETUP_COOP_TASKRUN",
             "IORING_SETUP_DEFER_TASKRUN"
     };
+    /** SQPOLL submission variant: a kernel thread consumes the SQ ring. */
+    static final IoUringOptions[] RING_FLAGS_SQPOLL = {
+            IORING_SETUP_SINGLE_ISSUER,
+            IORING_SETUP_SQPOLL
+    };
+    static final String[] RING_FLAG_NAMES_SQPOLL = {
+            "IORING_SETUP_SINGLE_ISSUER",
+            "IORING_SETUP_SQPOLL"
+    };
+
+    static IoUringOptions[] ringFlags(Config cfg) {
+        return cfg.sqpoll ? RING_FLAGS_SQPOLL : RING_FLAGS;
+    }
+
+    static String[] ringFlagNames(Config cfg) {
+        return cfg.sqpoll ? RING_FLAG_NAMES_SQPOLL : RING_FLAG_NAMES;
+    }
 
     public static void main(String[] args) {
         Config cfg = null;
@@ -305,6 +323,9 @@ public final class JUringFileBench {
         int latencySamples = 1_000_000;
         long seed = 0L;                 // 0 => derive from System.nanoTime()
         boolean verbose = false;
+        // Performance knobs for the raw-ring runtime (threads mode only).
+        int minComplete = 1;            // --min-complete N: completions per submit+wait
+        boolean sqpoll = false;         // --sqpoll: IORING_SETUP_SQPOLL submission
 
         // B5 schema 1.1 metrics (docs/b5-design.md §7): ring_metrics for both runtimes,
         // a 1 Hz ring_series sampled during the measured phase, and (shard runtime only)
@@ -426,6 +447,14 @@ public final class JUringFileBench {
                     case "--verbose":
                         if (inline != null) throw new UsageException("--verbose takes no value");
                         c.verbose = true;
+                        break;
+                    case "--min-complete":
+                        c.minComplete = intArg(value(argv, i, key, inline));
+                        if (inline == null) i++;
+                        break;
+                    case "--sqpoll":
+                        if (inline != null) throw new UsageException("--sqpoll takes no value");
+                        c.sqpoll = true;
                         break;
                     default:
                         throw new UsageException("unknown argument '" + arg + "' (try --help)");
@@ -583,6 +612,12 @@ public final class JUringFileBench {
                     throw new UsageException("--first-cpu requires --runtime=shard");
                 }
             }
+            if (minComplete < 1 || minComplete > qd) {
+                throw new UsageException("--min-complete must be in [1, qd=" + qd + "], got " + minComplete);
+            }
+            if (sqpoll && runtime == WorkerRuntime.SHARD) {
+                throw new UsageException("--sqpoll is only supported with --runtime=threads");
+            }
             if (label == null || label.isBlank()) {
                 label = defaultLabel();
             }
@@ -648,6 +683,10 @@ public final class JUringFileBench {
                 "                          off removes every B5 metrics field and disables shard latency sampling",
                 "  --metrics-interval SEC  ring_series sampling interval during the measured phase",
                 "                          (default 1.0; 0 disables the series; shard mode)",
+                "  --min-complete N        completions to request per submit+wait (default 1;",
+                "                          threads runtime only; higher N trades throughput for tail)",
+                "  --sqpoll                IORING_SETUP_SQPOLL submission ring (threads runtime only;",
+                "                          experimental: measured far slower than the default flags)",
                 "  --engine juring         accepted for symmetry; JUring only",
                 "  --verbose               extra setup diagnostics on stderr",
                 "  --help                  this text",
@@ -796,10 +835,10 @@ public final class JUringFileBench {
         }
         if (cfg.mode.isNop()) {
             System.err.printf("[juring] ring flags=%s entries=max(256,2*qd) buffers=none (nop)%n",
-                    Arrays.toString(RING_FLAG_NAMES));
+                    Arrays.toString(ringFlagNames(cfg)));
         } else {
             System.err.printf("[juring] ring flags=%s entries=max(256,2*qd) buffers=%s (%d x %d B)%n",
-                    Arrays.toString(RING_FLAG_NAMES),
+                    Arrays.toString(ringFlagNames(cfg)),
                     cfg.fixedBuffers ? "registered-fixed" : "arena-unregistered", cfg.qd, cfg.bs);
         }
         System.err.printf("[juring] metrics=%s interval=%.3fs%s (schema %s)%n",
@@ -1509,7 +1548,9 @@ public final class JUringFileBench {
             slotMask = slotCount - 1;
             submitNanos = new long[slotCount];
 
-            ring = new JUring(ringEntries, RING_FLAGS);
+            ring = cfg.sqpoll
+                    ? new JUring(ringEntries, 0, ringFlags(cfg))  // no SQPOLL idle sleep
+                    : new JUring(ringEntries, ringFlags(cfg));
             if (mode.isNop()) {
                 fixedOps = false;
                 bufferOps = false;
@@ -1653,7 +1694,7 @@ public final class JUringFileBench {
             inFlight = fill(inFlight);
             long deadline = this.deadlineNanos;
             while (true) {
-                int reaped = ring.submitAndWaitForBatchResult(1, cfg.qd, consumer);
+                int reaped = ring.submitAndWaitForBatchResult(cfg.minComplete, cfg.qd, consumer);
                 inFlight -= reaped;
                 if (System.nanoTime() >= deadline) {
                     break;
@@ -1661,7 +1702,8 @@ public final class JUringFileBench {
                 inFlight = fill(inFlight);
             }
             while (inFlight > 0) {
-                int reaped = ring.submitAndWaitForBatchResult(1, cfg.qd, consumer);
+                int reaped = ring.submitAndWaitForBatchResult(
+                        Math.min(cfg.minComplete, inFlight), cfg.qd, consumer);
                 inFlight -= reaped;
             }
         }
@@ -2982,10 +3024,11 @@ public final class JUringFileBench {
             w.name("direct_io").bool(!c.mode.isNop());
             w.name("ring_entries").num(Math.max(256, c.qd * 2));
             w.name("ring_flags").arr();
-            for (String f : RING_FLAG_NAMES) {
+            for (String f : ringFlagNames(c)) {
                 w.str(f);
             }
             w.endArr();
+            w.name("min_complete").num(c.minComplete);
             w.name("io_buffer_mode").str(c.resolvedBufferMode != null ? c.resolvedBufferMode
                     : (c.mode.isNop() ? "none" : (c.fixedBuffers ? "registered-fixed" : "arena-unregistered")));
             w.name("registered_files").num(c.resolvedRegisteredFiles);
