@@ -32,7 +32,7 @@ All notable changes to JUring are documented here. The project follows
 
 ### Changed
 
-- `JUringBlocking` oversubscription no longer retries in a timed loop: a caller that finds
+- `JUringBlocking` oversubscription no longer retries in a timed loop. A caller that finds
   every call record of its worker in use parks on the worker's admission monitor
   (`OverflowPolicy.BLOCK`) or throws immediately (`OverflowPolicy.FAIL`). Previously it
   retried with `LockSupport.parkNanos(10 µs)`. The wait set is VM-managed, so waiting costs
@@ -44,9 +44,8 @@ All notable changes to JUring are documented here. The project follows
   taken effect.
 - The zero-allocation documentation for the blocking facade is now explicit that the
   guarantee is caller-side: the hot path allocates nothing after construction, and the call
-  records it uses are pre-allocated at construction, so capacity — not per-call allocation —
+  records it uses are pre-allocated at construction, so capacity, not per-call allocation,
   bounds concurrent calls.
-
 - The `JUringBlocking(int[, int], ...)` constructors now validate their arguments: the queue
   depth must be in `1..32768` and an explicit poller count in `1..1024` (previously the ring
   was silently clamped to at least 8 entries and any poller count was accepted).
@@ -64,9 +63,11 @@ All notable changes to JUring are documented here. The project follows
 
 ## [0.1.0] — 2026-11-16
 
-First release. JUring drives Linux `io_uring` file I/O directly from Java through the
-Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact is
-`io.github.davidtos:juring` (module name `JUring`, package `com.davidvlijmincx.lio.api`).
+First release, dated 2026-11-16. It is not on Maven Central yet; the repository builds
+from source. JUring drives Linux `io_uring` file I/O directly from
+Java through the Foreign Function & Memory API: no JNI, no C library, no `liburing`. The
+Maven coordinates are `io.github.davidtos:juring` (module name `JUring`, package
+`com.davidvlijmincx.lio.api`).
 
 ### Added
 
@@ -84,6 +85,12 @@ Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact
 - Observability: `RingMetrics`, `ShardMetrics`, `GroupMetrics`, latency histograms, JMX
   MXBeans, and machine-readable benchmark JSON.
 - `JUring.isSupported()`: cached `io_uring_setup` probe for `java.nio` fallback decisions.
+- Shared-ring completion multiplexing: `JuringFile`, `JuringInputStream`, `JuringOutputStream`
+  and `GroupCommit` handles can share one `JUring` on its owner thread, with every completion
+  routed to the handle that issued it.
+- `IoPriority` block-layer hint: `JUring.defaultIoprio()` / `setDefaultIoprio(short)` /
+  `setLastSqeIoprio(short)` and `JuringFile.withIoPriority(short)`, inherited by streams and
+  group commit. It is a hint to the I/O scheduler, not QoS.
 - `JuringInputStream.abandonedAtClose()` / `JuringOutputStream.abandonedAtClose()`: count the
   reads/writes abandoned by the hard-bounded stream close (`0` for a normal close).
 - `JUring.prepareReadUnique(...)`: raw read variant whose handle stays unique even when the same
@@ -136,6 +143,6 @@ Foreign Function & Memory API: no JNI, no C library, no `liburing`. The artifact
 - The "zero allocation" claim is now precise: the raw-ring path and `JUringBlocking`'s
   no-option overloads are allocation-free; passing `SqeOptions` explicitly allocates the
   varargs array.
-- Internal process/audit documents live under `docs/internal/`; user documentation is
-  README, BENCHMARK, `docs/api-stability.md`, `docs/UPGRADING.md`, `docs/examples.md`,
-  `docs/benchmark-methodology.md`, `docs/m4-decision.md` and `docs/platforms.md`.
+- The user documentation is README, BENCHMARK, `docs/api-stability.md`, `docs/UPGRADING.md`,
+  `docs/examples.md`, `docs/benchmark-methodology.md`, `docs/qos-decision.md` and
+  `docs/platforms.md`.

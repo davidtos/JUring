@@ -1,24 +1,33 @@
 # Contributing to JUring
 
-Thanks for taking a look. JUring is a Linux-focused, FFM-based file-I/O library; the most
-useful contributions are correctness reports, small reproducible probes, platform reports
-(kernel/arch/libc/container), and documentation fixes that make the supported envelope clearer.
+JUring is a Linux-only file-I/O library built on the Foreign Function & Memory API. I maintain
+it alone, so the most useful thing you can send me is rarely a large patch. It's usually a small
+report I can act on.
+
+The contributions that move the project forward:
+
+- correctness bugs, ideally with a reproducer,
+- platform reports: kernel, architecture, libc and container setup,
+- documentation fixes that make the supported-platform story clearer.
+
+The scope is narrow on purpose, and the build stays pure Java.
 
 ## Before you start
 
-- Read [docs/platforms.md](docs/platforms.md) for the supported OS/arch/kernel/JDK envelope and
-  the container/seccomp caveats. Many "it does not work" reports are environment restrictions
-  (`io_uring` denied by Docker seccomp, AppArmor, or `kernel.io_uring_disabled`).
-- JUring is **library-first**: futures/coroutines runtimes, networking, QoS schedulers and an
-  application framework are out of scope (see [docs/m4-decision.md](docs/m4-decision.md) and
-  `docs/internal/`). FileChannel-style integration is planned as a separate module, not as a
-  change to the core API.
-- The public API is `com.davidvlijmincx.lio.api` only. Everything else is internal and may
-  change; do not add JNI, `liburing`, or new native build requirements.
+Read [docs/platforms.md](docs/platforms.md) first. It lists the supported OS/arch/kernel/JDK
+envelope and the container caveats. Many "it does not work" reports turn out to be environment
+restrictions: Docker's default seccomp profile denies io_uring, AppArmor blocks it on newer
+Ubuntu, or `kernel.io_uring_disabled` is set.
+
+JUring is library-first. Futures/coroutines runtimes, networking, QoS schedulers and an
+application framework are out of scope. FileChannel-style integration is planned as a separate
+module, not as a change to the core API. The public API is `com.davidvlijmincx.lio.api` only;
+everything else is internal and may change. I don't want JNI, liburing, or new native build
+requirements.
 
 ## Build and test
 
-Requirements: Linux with io_uring enabled, JDK 25+ (Maven), Maven 3.9+.
+You need Linux with io_uring enabled, JDK 25+, and Maven 3.9+.
 
 ```sh
 mvn clean test                      # full JUnit suite (io_uring required)
@@ -27,11 +36,11 @@ mvn -o test                         # offline, if dependencies are already cache
 mvn -Pjcstress test -DskipTests     # optional jcstress memory-model run
 ```
 
-The suite creates `O_DIRECT` files via JUnit `@TempDir`; some tests self-skip when the
-filesystem or kernel genuinely cannot support the operation. Do not blanket-disable a test —
-guard it with an explicit assumption and explain why.
+The suite creates `O_DIRECT` files through JUnit's `@TempDir`. Some tests skip themselves when
+the filesystem or kernel genuinely can't support an operation. Don't blanket-disable a test.
+Guard it with an explicit assumption and say why.
 
-Runnable examples are JUnit tests (`*ExampleTest`, see [docs/examples.md](docs/examples.md)):
+The runnable examples are JUnit tests (`*ExampleTest`, see [docs/examples.md](docs/examples.md)):
 
 ```sh
 mvn -o test -Dtest='*ExampleTest'
@@ -39,42 +48,45 @@ mvn -o test -Dtest='*ExampleTest'
 
 ## Code guidelines
 
-- Keep the hot path allocation-free: no per-operation boxing, lambdas capturing state, varargs,
-  or `String` building in `prepare*`/reap loops. Add or extend an allocation test when touching
-  `JUring`, `JuringFile` or `JUringBlocking` fast paths.
-- Respect the ownership model: a `JUring` is single-owner-thread; shard/blocking runtimes own
-  their rings on their shard threads. `WrongThreadException` is the intended outcome of misuse.
-- Memory-mapped ring memory is `MemorySegment`-wrapped manually; any `mmap`/`munmap`,
-  `Arena` lifetime, or registered-buffer ownership change needs a lifecycle test (see the
-  `*Lifetime*`, `*Ledger*`, `*UseAfterClose*` tests).
-- Javadoc is part of the build: every public/protected member needs complete `@param`/`@return`
-  /`@throws` docs; `doclint=all` + `failOnWarnings` is enforced.
-- Cross-thread reads are allowed only for documented snapshots (`ringMetrics`, `isClosed`,
-  shard/group stats). Everything else must stay owner-thread confined.
-- Add regression tests for bugs. New tests belong next to the existing package-private tests and
-  should fail without the fix (verify by reverting the code path mentally or locally).
+- Keep the hot path allocation-free: no per-operation boxing, no lambdas that capture state, no
+  varargs, no `String` building in `prepare*`/reap loops. If you touch the `JUring`,
+  `JuringFile` or `JUringBlocking` fast paths, add or extend an allocation test.
+- Respect the ownership model. A `JUring` is single-owner-thread, and the shard and blocking
+  runtimes own their rings on their shard threads. `WrongThreadException` is the intended
+  outcome of misuse.
+- The ring memory is `MemorySegment`-wrapped by hand. Any change to `mmap`/`munmap`, `Arena`
+  lifetime or registered-buffer ownership needs a lifecycle test. The `*Lifetime*`, `*Ledger*`
+  and `*UseAfterClose*` tests are the place to look.
+- Javadoc is part of the build. Every public or protected member needs complete
+  `@param`/`@return`/`@throws` docs, and `doclint=all` with `failOnWarnings` is enforced.
+- Cross-thread reads are allowed only for the documented snapshots (`ringMetrics`, `isClosed`,
+  shard/group stats). Everything else stays confined to its owner thread.
+- Add a regression test for every bug. New tests belong next to the existing package-private
+  tests, and they should fail without your fix. Check that by reverting the code path locally.
 
 ## Benchmarks
 
-Benchmark harnesses live under `bench/` and are documented in
+The harnesses live under `bench/`, and the write-ups are
 [docs/benchmark-methodology.md](docs/benchmark-methodology.md) and [BENCHMARK.md](BENCHMARK.md).
-They rely on a dedicated NVMe device and root-only host state (`perf`, `drop_caches`, SMART);
-do not add CI jobs that pretend to measure performance. Process/audit documents live under
-`docs/internal/` and are not user-facing documentation.
+They need a dedicated NVMe device and root-only host state (`perf`, `drop_caches`, SMART).
+Please don't add CI jobs that pretend to measure performance.
 
 ## Pull requests
 
-- Keep changes focused; one logical change per PR. Update `docs/UPGRADING.md` and
-  `docs/api-stability.md` for public API or behaviour changes.
-- Include the test evidence in the PR description (`mvn clean test` count, javadoc result,
-  platform used). If a test only runs on specific kernels/filesystems, say so.
-- Do not rewrite published history or force-push shared branches. DCO is not required today,
-  but by submitting a PR you agree your contribution is licensed under Apache-2.0.
-- Security issues: see [SECURITY.md](SECURITY.md) — do not open a public issue.
+- Keep changes focused: one logical change per PR. If you change public API or behaviour,
+  update `docs/UPGRADING.md` and `docs/api-stability.md`.
+- Put the test evidence in the PR description: the `mvn clean test` result and count, the
+  javadoc result, and the platform you used. If a test only runs on certain kernels or
+  filesystems, say so.
+- Don't rewrite published history or force-push shared branches. DCO isn't required today, but
+  submitting a PR means your contribution is licensed under Apache-2.0.
+- Security issues go through [SECURITY.md](SECURITY.md). Please don't open a public issue.
 
 ## Reporting bugs
 
-Include: kernel version (`uname -r`), JDK version, distro/arch/libc, filesystem + mount options,
-`JUring.isSupported()`, whether you run in a container (and its seccomp profile), the smallest
-reproducible snippet, and the complete exception/errno. For hangs, a `jstack` of the blocked
-thread and whether the ring had more in-flight requests than its CQ size is useful.
+Send me `uname -r`, your JDK version, distro/arch/libc, the filesystem and mount options, the
+result of `JUring.isSupported()`, and whether you run in a container (plus its seccomp profile).
+Include the smallest snippet that reproduces the problem and the complete exception or errno.
+
+For hangs, a `jstack` of the blocked thread helps. So does whether the ring had more in-flight
+requests than its CQ size.
