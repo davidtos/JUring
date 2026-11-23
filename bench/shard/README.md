@@ -28,61 +28,48 @@ The session I ran in `bench/results/m3-2026-11-15/` had 60 invocations, all `sta
 
 ## The drivers
 
-- `run-m3-campaign.sh` is the scaling driver. It runs the JUring shard runtime, `fio` and Seastar at 1, 2, 4 and 8 shards, with five repetitions and a 300 s rest per invocation. It is resumable in chunks: `--max-blocks K` runs at most K `(N, repetition)` blocks, and `--resume` keeps complete configurations and runs only the missing invocations. The 300 s rest is carried across chunk boundaries by reading the last invocation's end time from `cell-meta.tsv`. The driver never invokes Maven: the JUring harness is compiled `javac`-only (`JURING_SKIP_MVN=1 ... --help`) against `target/classes`, then runs with `JURING_SKIP_COMPILE=1`.
-- `run-b5-overhead.sh` is the metrics A/B. The baseline arm is commit `6cc1a75`, built once in a `git archive` scratch tree with offline Maven and its own `javac`; the workspace is not edited. The metrics arm is the current tree with metrics on: `RingMetrics` plus `LatencyHistogram`, `latencySampleEvery = 1`, 1 Hz `ring_series`. The three configurations are one shard, eight shards, and threaded mode with one worker. Five repetitions each, 30 s rests, interleaved arms with the order alternating per repetition.
-- `analyze_m3.py` builds the scaling tables from the raw JSON: one-sided 95% t intervals, paired ratios against `fio` and Seastar, per-shard `min/mean`, p99 ratios, and the per-ring queue-depth and runtime-completion p99 tables. It writes `aggregate/m3.{md,json}`.
-- `analyze_b5_overhead.py` reads the same raw JSON and writes `aggregate/overhead.{json,md}`: paired per-repetition ratio metrics-on / metrics-off, mean, standard deviation and one-sided 95% t interval, with state-flagged repetitions disclosed.
-- `run-shard-scaling.sh` and `analyze_shard.py` are the older preliminary pair. Three repetitions, 60 s rests, one session. The analyzer also renders the per-ring columns and prints `n/a` for sessions that predate the metrics fields.
+- `run-scale-out.sh` is the scaling driver. It runs the JUring shard runtime, `fio` and Seastar at 1, 2, 4 and 8 shards, with five repetitions and a 300 s rest per invocation. It is resumable in chunks: `--max-blocks K` runs at most K `(N, repetition)` blocks, and `--resume` keeps complete configurations and runs only the missing invocations. The 300 s rest is carried across chunk boundaries by reading the last invocation's end time from `cell-meta.tsv`. The driver never invokes Maven: the JUring harness is compiled `javac`-only (`JURING_SKIP_MVN=1 ... --help`) against `target/classes`, then runs with `JURING_SKIP_COMPILE=1`.
+- `run-metrics-overhead.sh` is the metrics A/B. The baseline arm is commit `6cc1a75`, built once in a `git archive` scratch tree with offline Maven and its own `javac`; the workspace is not edited. The metrics arm is the current tree with metrics on: `RingMetrics` plus `LatencyHistogram`, `latencySampleEvery = 1`, 1 Hz `ring_series`. The three configurations are one shard, eight shards, and threaded mode with one worker. Five repetitions each, 30 s rests, interleaved arms with the order alternating per repetition.
+- `analyze_scale_out.py` builds the scaling tables from the raw JSON: one-sided 95% t intervals, paired ratios against `fio` and Seastar, per-shard `min/mean`, p99 ratios, and the per-ring queue-depth and runtime-completion p99 tables. It writes `aggregate/m3.{md,json}`.
+- `analyze_metrics_overhead.py` reads the same raw JSON and writes `aggregate/overhead.{json,md}`: paired per-repetition ratio metrics-on / metrics-off, mean, standard deviation and one-sided 95% t interval, with state-flagged repetitions disclosed.
 
 ## Run the scaling session
 
 ```bash
 # plan only: preflight plus every exact command, no files, no I/O
-bench/shard/run-m3-campaign.sh --dry-run
+bench/shard/run-scale-out.sh --dry-run
 
 # pilot: 2 s harness check, not session data
-bench/shard/run-m3-campaign.sh --session m3-pilot-2026-11-15 --force \
+bench/shard/run-scale-out.sh --session m3-pilot-2026-11-15 --force \
   --engines juring-group,juring-manual,fio,seastar --n-list 1,2,4,8 \
   --reps 1 --seconds 2 --warmup 2 --rest 30
 
 # full session in chunks: repeat the --resume line until it finishes
-ALLOW_RESIDUAL_LOAD=1 bench/shard/run-m3-campaign.sh --session m3-2026-11-15 --max-blocks 3
-ALLOW_RESIDUAL_LOAD=1 bench/shard/run-m3-campaign.sh --session m3-2026-11-15 --resume --max-blocks 3
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session m3-2026-11-15 --max-blocks 3
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session m3-2026-11-15 --resume --max-blocks 3
 
-python3 bench/shard/analyze_m3.py --session m3-2026-11-15
+python3 bench/shard/analyze_scale_out.py --session m3-2026-11-15
 ```
 
 Overrides: `--session`, `--n-list`, `--engines`, `--reps`, `--seconds`, `--warmup`, `--rest`, `--max-blocks`, `--force`, `--resume`, `--dry-run`. Environment: `READ_FILE`, `JURING_RUN`, `FIO_BIN`, `SEASTAR_BIN`, `JVM_OPTS` (default `-Xms8g -Xmx8g -XX:+AlwaysPreTouch`), `FIO_GROUP_REPORTING` (default 1), `ALLOW_RESIDUAL_LOAD=1`.
 
 `ALLOW_RESIDUAL_LOAD=1` relaxes only our own chunk-start loadavg residual. A foreign process above 20% CPU is still a hard failure. The driver records `uptime`, `loadavg` and the top `ps` entry per invocation in `logs/<id>.env`, and records the start and end check in `cell-meta.tsv`.
 
-The older quick look:
-
-```bash
-bench/shard/run-shard-scaling.sh --dry-run
-bench/shard/run-shard-scaling.sh
-bench/shard/run-shard-scaling.sh --n-list 1,8
-python3 bench/shard/analyze_shard.py --session b4-2026-11-14
-python3 bench/shard/analyze_shard.py --results-dir <dir>   # fixtures/self-test
-```
-
-It takes `--session NAME` (default `b4-<YYYY-MM-DD>`), `--n-list`, `--reps`, `--seconds`, `--warmup`, `--rest`, `--settle`, `--force` and `--dry-run`. Its analyzer reports total IOPS, the ratio against fio, `SE(N)`, per-shard `min/mean` and `p99(N)/p99(1)`, plus the group/manual ratio.
-
 ## Run the metrics A/B
 
 ```bash
 # build the baseline arm once: git archive 6cc1a75 into scratch/b5-bench/baseline,
 # offline maven compile, then its own javac
-bench/shard/run-b5-overhead.sh --prep-baseline
+bench/shard/run-metrics-overhead.sh --prep-baseline
 
 # plan only
-bench/shard/run-b5-overhead.sh --dry-run
+bench/shard/run-metrics-overhead.sh --dry-run
 
 # real session, ~40 min on an otherwise idle machine
 FROZEN_HEAD=<sha> FROZEN_SRC_SHA1=<sha> FROZEN_TEST_SHA1=<sha> \
-  bench/shard/run-b5-overhead.sh --session b5-overhead-2026-11-14
+  bench/shard/run-metrics-overhead.sh --session b5-overhead-2026-11-14
 
-python3 bench/shard/analyze_b5_overhead.py --session b5-overhead-2026-11-14
+python3 bench/shard/analyze_metrics_overhead.py --session b5-overhead-2026-11-14
 ```
 
 The three variables are the code identity the session must run against; `--allow-unfrozen` skips the check for a dry run or a prep. Overrides for this driver: `--session`, `--reps`, `--seconds`, `--warmup`, `--rest`, `--prep-only`, `--prep-baseline`, `--resume`, `--force`, `--dry-run`. The analyzer reports state-flagged repetitions side by side under the flat external p99 rule and under a rule scaled by the number of workers, and the primary mean is the same under both.

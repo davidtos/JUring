@@ -2,7 +2,7 @@
 
 The harness tables in [BENCHMARK.md](../BENCHMARK.md) come from this directory. The harness drives JUring, `fio` and Seastar through the same workloads on the same file, records the raw output of every repetition, and the analyzers rebuild those tables from it. If you want to check a claim, this is where you start.
 
-I keep three things separate. The measuring rules are in [docs/benchmark-methodology.md](../docs/benchmark-methodology.md). The decisions about what I chose not to build are in [docs/design-notes.md](../docs/design-notes.md). What is and isn't committed is in [DATA-AVAILABILITY.md](../DATA-AVAILABILITY.md).
+I keep three things separate. The measuring rules are in [docs/benchmark-methodology.md](../docs/benchmark-methodology.md). The decisions about what I chose not to build are in [docs/design-notes.md](../docs/design-notes.md). What is and isn't committed is in [DATA-AVAILABILITY.md](../DATA-AVAILABILITY.md). The 2026-11-23 sanity check of the `fio` and Seastar invocations — what was verified, what was broken in the one-command driver, and what changed — is in [docs/benchmark-harness-audit-2026-11-23.md](../docs/benchmark-harness-audit-2026-11-23.md).
 
 ## What you need
 
@@ -63,7 +63,9 @@ fio can't set JUring's three ring flags or fuse submit and wait, so this is a ca
 
 ### Seastar
 
-There are two Seastar paths. `io_tester` with the YAML configs under `bench/seastar/conf/` is the normal one; it creates and prefills its own files under `--storage`, so it needs a writable directory. The second is `bench/seastar/seastar_file_bench`, a small app that opens an existing file and emits the same JSON as the JUring harness. That one is how the read workloads run against the read-only dataset.
+There are two Seastar paths. `bench/seastar/seastar_file_bench`, a small app that opens an existing file and emits the same JSON as the JUring harness, is how the published read and write comparisons run: same file, same offsets, same warmup. The second is `io_tester` with the YAML configs under `bench/seastar/conf/`, which `run-comparison.sh` uses. `io_tester` creates and prefills its own files under `--storage`, so it needs a writable directory **on the device under test** (the repo checkout is normally on the OS disk), it has no warmup phase, and it cannot open the aged read dataset. Treat that path as a same-device bracket, not the same-file comparison. The prebuilt `io_tester` links against the repo sysroot, and `run-comparison.sh` puts `.sysroot/root/usr/lib64` on `LD_LIBRARY_PATH` for it.
+
+Do not pass `bench/seastar/io-properties.example.yaml` as-is: it is a template with placeholder numbers and an example mountpoint, and Seastar aborts if that mountpoint does not exist (or silently uses a fictional scheduler model if it does). `run-comparison.sh` leaves `SEASTAR_IO_PROPS` empty by default so Seastar probes the device; pass a file measured with `iotune` on this host when you want the model.
 
 Seastar's ring has no taskrun flags, no registered files and no fixed buffers. That asymmetry is real, and it stays until Seastar exposes those calls, so I report Seastar as a bracket rather than an equal opponent.
 
@@ -95,6 +97,20 @@ python3 bench/parse_results.py --dir /path/to/run --csv /path/to/run/results.csv
 ```
 
 The CSV columns are `case, engine, workload, bs, qd, threads, iops, mibs, p50_us, p99_us, p999_us, max_us, ops, errors, buffer_mode, source`. One corrupt file produces a warning, not a crash.
+
+## Analyzers
+
+The analyzers are thin CLIs: each one owns its campaign's policy — which cells, which bar, which verdict — and writes the tables BENCHMARK.md cites. What more than one needs lives in `bench/analysis/`: `stats.py` (Student-t intervals, paired ratios, gate verdicts), `jsonio.py` (tolerant cell-JSON and manifest loading), `md.py` (the number and markdown formats) and `cli.py` (session resolution and output writing). The package docstring explains the two statistics conventions it keeps side by side on purpose, because the published tables were produced with each. The write campaign's state-controlled 3-way rerun has its own runner, `bench/write/run-write-3way.sh`, and analyzer, `bench/write/analyze_write_3way.py`, with the pre-registered protocol in [docs/write-state-3way-protocol.md](../docs/write-state-3way-protocol.md); the interleaved fallback used when a generation will not hold homogeneous is `bench/write/run-write-interleaved.sh` with `bench/write/analyze_write_interleaved.py` and [docs/write-state-interleaved-protocol.md](../docs/write-state-interleaved-protocol.md). The figures embedded in README.md and BENCHMARK.md are generated from the same sessions by `bench/write/plot_write_modes.py` and `bench/m1/plot_read_claims.py`, using the shared SVG primitives in `bench/analysis/svg.py`.
+
+`selftest.py` is the regression harness for that package and the analyzers:
+```bash
+python3 bench/analysis/selftest.py            # unit tests (the default)
+python3 bench/analysis/selftest.py --unit     # the same, named explicitly
+python3 bench/analysis/selftest.py --golden   # analyzer output vs bench/analysis/golden/
+python3 bench/analysis/selftest.py --update   # regenerate the goldens from the current code
+```
+
+`--golden` runs every analyzer against a copy of its session directory, normalizes timestamps and paths, and compares the exit code, stdout, stderr and output tree with `bench/analysis/golden/`. Those goldens were captured once from the pristine analyzers; `bench/analysis/golden/PROVENANCE.md` records the commit. The session data is gitignored, so a fresh clone and CI skip every golden case; CI only runs `--unit`. The Python is linted with `uvx ruff check bench`; the rules live in `ruff.toml` at the repo root.
 
 ## The per-harness docs
 

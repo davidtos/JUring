@@ -1,6 +1,6 @@
 # Write-path matrix (bench/write/)
 
-The write path is the honest failure in this project. This is the harness I used: a matrix of 4 KiB random writes and 1 MiB sequential writes, with device preconditioning before every configuration and a 1 s device IOPS series during the run, so a run that crosses the SLC cliff is visible. The result is in [`BENCHMARK.md`](../../BENCHMARK.md#the-write-path-i-could-not-measure-fairly): no write-parity ranking, because the drive's state moves under the run. The follow-up state-controlled chain is in [`bench/stepd/`](../stepd/README.md) (`run-write-chain.sh` and `write_state_analysis.py`), and it also came out inconclusive.
+The write path is the honest failure in this project. This is the harness I used: a matrix of 4 KiB random writes and 1 MiB sequential writes, with device preconditioning before every configuration and a 1 s device IOPS series during the run, so a run that crosses the SLC cliff is visible. The result is in [`BENCHMARK.md`](../../BENCHMARK.md#the-write-path-i-could-not-measure-fairly): no write-parity ranking, because the drive's state moves under the run. The follow-up state-controlled chain is in [`bench/stepd/`](../stepd/README.md) (`run-write-chain.sh` and `analyze_write_state.py`), and it also came out inconclusive.
 
 Everything writes to `nvme-data/write_files/single_file_bench_w.bin`; `/mnt/TestData` stays read-only. The protocol is in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md), and the decision to stop at inconclusive is in [`docs/design-notes.md`](../../docs/design-notes.md).
 
@@ -19,6 +19,11 @@ A real matrix takes the NVMe for hours. Start with `--dry-run`, confirm it print
 
 | file | purpose |
 |---|---|
+| `run-write-3way.sh` | pre-registered state-controlled 3-way rerun (JUring + fio matched/matchedbatch + Seastar); stops at 4 valid generations |
+| `analyze_write_3way.py` | 3-way table and frozen-gate companion for `run-write-3way.sh` |
+| `run-write-interleaved.sh` | interleaved fallback bracket when a generation will not hold homogeneous |
+| `analyze_write_interleaved.py` | descriptive per-cycle table for the interleaved bracket |
+| `analyze_write_steady.py` | separates sustained vs cache-assisted windows and reports the sustained-state comparison |
 | `create-write-file.sh` | create or verify the non-sparse 10 GiB `O_DIRECT` write file (`fallocate`, `dd oflag=direct`, fsync, `stat`, `filefrag`); idempotent, `--force`, `--dry-run` |
 | `precondition.sh` | the preconditioning burst: 4K random write at QD 64 in 4 GiB chunks until `3 x` file size, then fsync; records the generation and device state; `--condition and` reproduces the old rule; `--dry-run` |
 | `run-write-cells.sh` | the matrix for JUring and fio, Seastar opt-in: methodology windows, three repetitions by default, `--reps-by-cell`, `--resume`, `--dry-run` |
@@ -105,6 +110,57 @@ The per-configuration protocol:
 
 Preconditioning defaults to per configuration. `--precondition session-once` costs less but a long session drifts away from the pre-write state, and `none` is for smoke runs only. `--condition and --chunk-bytes 10g` reproduces the 2026-11-13 block, where the old target-and-120 s rule wrote 128.8 GiB; the current target-driven rule stops at about 8 chunks and 32-34 GiB.
 
+## State-controlled 3-way rerun (JUring / fio / Seastar)
+
+`bench/write/run-write-3way.sh` is the pre-registered continuous-state protocol behind the 2026-11-23 write table in BENCHMARK.md: cells W7/W8, one preconditioned generation per attempt, no rests inside a generation, 60 s warmup + 60 s measured, JUring + `fio` matched/matchedbatch + Seastar, engine order rotated per generation, and stop as soon as four generations pass the frozen `analyze_write_state.py` gate. The protocol, the deviations and the validity/ranking rules are frozen in [docs/write-state-3way-protocol.md](../../docs/write-state-3way-protocol.md). The Seastar arm is opt-in in the generic harness, so the wrapper passes `--allow-seastar-write`; the write path is validated in [bench/seastar/build-and-run.md](../seastar/build-and-run.md).
+
+```bash
+# zero-I/O structural check first
+bash bench/write/run-write-3way.sh --dry-run
+
+# the campaign: up to 5 generations, stop at 4 valid
+bash bench/write/run-write-3way.sh
+
+# the frozen JUring/fio gate and the 3-way table
+python3 bench/stepd/analyze_write_state.py --session "$S" --gens "$GENS" --out "$S/analysis"
+python3 bench/write/analyze_write_3way.py --session "$S" --gens "$GENS" --out "$S/analysis-3way"
+```
+
+To run on a second dedicated NVMe, bind-mount it under the repo and pass the path and sysfs device;
+`--allow-any-path` relaxes the write-file guard (the read dataset is still refused) and the thermal
+probe follows `--device-stat`:
+
+```bash
+sudo mkdir -p /mnt/data/juring-write && sudo chown david:david /mnt/data/juring-write
+mkdir -p nvme-write
+sudo mount --bind /mnt/data/juring-write nvme-write
+bench/write/create-write-file.sh --file "$PWD/nvme-write/write_files/single_file_bench_w.bin" \
+    --allow-any-path --allow-other-device
+# 400 GiB SLC burn-in on a near-empty 1 TB TLC drive before generation 1
+bench/write/precondition.sh --file "$PWD/nvme-write/write_files/single_file_bench_w.bin" \
+    --device-stat /sys/block/nvme2n1/stat --target-mult 40 --min-sec 800 --max-sec 1200 --allow-any-path
+ALLOW_ANY_PATH=1 WRITE_FILE="$PWD/nvme-write/write_files/single_file_bench_w.bin" \
+    DEVICE_STAT=/sys/block/nvme2n1/stat bash bench/write/run-write-3way.sh
+python3 bench/write/analyze_write_steady.py --session "$S" --gens "$GENS" --out "$S/analysis-steady"
+
+# mode probe: same fio command, --iodepth_batch_submit 1..128, two rounds
+OUTPUT_DIR=bench/results/write-mode-probe bash bench/write/probe-write-modes.sh
+
+# figures used by README.md / BENCHMARK.md
+python3 bench/write/plot_write_modes.py --session "$S" --gens "$GENS" \
+    --probe-dir bench/results/write-mode-probe --out-dir docs/figures
+```
+
+### Interleaved fallback bracket
+
+When the drive cannot hold a generation homogeneous — the 2026-11-23 primary campaign failed the gate in both completed generations — `bench/write/run-write-interleaved.sh` alternates the three engines in short cycles (15 s warmup + 30 s measured, 5 cycles per cell, order rotated) so all of them sample the same drifting state. It is a descriptive bracket, not a frozen-gate PASS/FAIL, and it is documented in [docs/write-state-interleaved-protocol.md](../../docs/write-state-interleaved-protocol.md). It runs 30 measured runs in about 24 minutes.
+
+```bash
+bash bench/write/run-write-interleaved.sh --dry-run   # zero-I/O plan check
+bash bench/write/run-write-interleaved.sh
+python3 bench/write/analyze_write_interleaved.py --session "$S" --out "$S/analysis"
+```
+
 ## Engine invocations
 
 All engines are pinned with `taskset -c 2`. JUring runs with `JURING_SKIP_COMPILE=1`, one fresh JVM, ring and file descriptor per run, `--runs 1`, fixed seed `20261113`. Its JVM flags match the read session (`--enable-native-access=ALL-UNNAMED`, no `-Xms`/`-Xmx`), keeping the engine constant across the read and write matrices.
@@ -159,7 +215,7 @@ LD_LIBRARY_PATH=$PWD/.sysroot/root/usr/lib64 taskset -c 2 bench/seastar/seastar_
 # 1M: --workload seqwrite --bs 1m
 ```
 
-The runner opens the existing file `rw|create`, uses `file::dma_write` (no fixed buffers or files, the documented Seastar asymmetry), one fiber per outstanding I/O, and emits the same schema as JUring. Smoke-test it with `--seconds 3 --warmup-sec 1` before enabling it.
+The runner opens the existing file `rw|create`, uses `file::dma_write` (no fixed buffers or files, the documented Seastar asymmetry), one fiber per outstanding I/O, and emits the same schema as JUring. The write path was smoke-validated on this host on 2026-11-23 (`status=ok`, `errors=0`, in-place write on the 10 GiB file, size unchanged, no truncate/fsync), but it stays opt-in via `--allow-seastar-write` because the binary is host-built. Smoke-test it with `--seconds 3 --warmup-sec 1` before enabling it on another host.
 
 ## Device-state controls
 

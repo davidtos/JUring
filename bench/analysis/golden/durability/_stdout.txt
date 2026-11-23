@@ -1,0 +1,7 @@
+wrote <WORK>/durability/out/durability.json
+wrote <WORK>/durability/out/durability.md
+  paired juring  durable/control ratio all=0.997 state-matched=1.292 (unstable-no-ranking (CV > 10%))
+  paired seastar durable/control ratio all=0.840 state-matched=1.149 (unstable-no-ranking (CV > 10%))
+  bracket control: start=142.6 end=973.7 diff=148.91% agree=False
+  data quality: excluded=0 missing=5 unparsed=0 (see aggregate/durability.md)
+  WARNING: session state-confounded (bracket controls differ > 10%); no durability-cost number may be quoted.

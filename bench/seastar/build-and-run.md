@@ -45,14 +45,15 @@ $IO_TESTER \
     --duration 10 \
     --smp 1 --cpuset 2 \
     --reactor-backend io_uring \
-    --io-properties-file bench/seastar/io-properties.example.yaml \
     --keep-files true \
     > results-seastar-randread_4k_qd64.yaml
 ```
 
 The configs in `bench/seastar/conf/` are `randread_4k_qd1.yaml`, `randread_4k_qd64.yaml`, `randread_4k_qd128.yaml`, `seqread_1m_qd8.yaml`, `randwrite_4k_qd64.yaml`, `seqwrite_1m_qd8.yaml`, `latency_isolated_4k_qd1.yaml` and `multi_job_mixed.yaml`. `seqwrite_1m_qd8` uses type `overwrite`, because io_tester has no sequential-write type. `--smp N` is the shard count and matches JUring `--threads N`.
 
-The io-properties template holds placeholder numbers. Replace them with values measured on your drive, or the scheduler model won't describe the device.
+Two limits of `io_tester` matter for the comparison. It always creates and prefills its own files under `--storage` (a read case writes the dataset first), so it cannot measure the aged read dataset the way `fio` and JUring do, and `--storage` must be on the device under test. It also has no warmup/ramp phase: `--duration` is measured from the first request. Use `bench/seastar/seastar_file_bench` (below) for the same-file comparison; `run-comparison.sh` uses `io_tester` and records both caveats in the manifest.
+
+`bench/seastar/io-properties.example.yaml` is a **template**, not a config to pass as-is: its numbers are placeholders and its mountpoint is an example. Seastar stat()s the mountpoint at startup, so a missing path aborts the run, and a path that exists but was not measured silently sets the I/O scheduler model to fiction. Measure the filesystem that backs `--storage` with `build/release/apps/iotune/iotune` and pass the result with `--io-properties-file`. Leave the option out to let Seastar probe the device.
 
 `--reactor-backend` also takes `linux-aio` and `epoll`; `asymmetric_io_uring` needs `--async-workers-cpuset` as well.
 
@@ -75,12 +76,14 @@ taskset -c 2 bench/seastar/seastar_file_bench \
 
 ## Run the comparison
 
-Set `SEASTAR_BIN` and `DATA_DIR` and let the driver run the matrix:
+Set `SEASTAR_BIN` and `DATA_DIR` and let the driver run the matrix. `DATA_DIR` must be a writable directory on the device under test: `io_tester` creates and prefills its own 10 GiB files there. Leaving it under the repo normally puts those files on the OS disk, not the dataset NVMe. The prebuilt `io_tester` links against the repo sysroot, so `run-comparison.sh` adds it to `LD_LIBRARY_PATH` when `SEASTAR_BIN` is set. Do not pass the placeholder io-properties template:
 
 ```bash
-SEASTAR_BIN=/path/to/seastar/build/release/apps/io_tester/io_tester \
-DATA_DIR=/mnt/nvme/seastar-bench \
+SEASTAR_BIN=$PWD/SeaStarRef/build/release/apps/io_tester/io_tester \
+DATA_DIR=$PWD/nvme-data/iotester-storage \
 ./bench/run-comparison.sh
 ```
+
+This is the `io_tester` bracket: fresh generated files, no warmup, same device and size. The same-file Seastar numbers in BENCHMARK.md come from `bench/seastar/seastar_file_bench`, which opens the aged dataset and emits the JUring JSON; the `bench/m1/` read matrix and `bench/write/` campaign drive it. The seastar write path through that runner is opt-in in the write harness (`--allow-seastar-write`).
 
 `python3 bench/parse_results.py --dir bench-results --csv bench-results/results.csv` then normalizes the io_tester YAML and the runners' JSON together with the JUring and fio output.

@@ -1,46 +1,45 @@
 #!/usr/bin/env python3
-"""Turn one `perf stat -x, -p <engine-pid> -e ... -- sleep <window>` capture into
-per-op CPU/syscall numbers, using the engine's own IOPS for the op count.
+"""Per-op CPU/syscall numbers from one `perf stat` capture of an engine.
 
 Usage: perf_summary.py <perf.txt> <engine.json> <window_seconds>
 
-Prints one TSV line (no header):
+Reads a `perf stat -x,` capture and the engine's JSON report (for its IOPS);
+prints one TSV line, no header (parsed by bench/m1/run-perf-cells.sh):
+
   ops_window iops task_clock_s cyc_u cyc_k instr_u instr_k syscalls ctxt
   cyc_u_per_op cyc_k_per_op cyc_per_op instr_per_op syscalls_per_op ctxt_per_op
 
-`perf stat -p PID` counts all threads of the engine process (verified on this
-host: 2 busy pthreads -> task-clock 2x the wall window). The window lies inside
-the engine's measured phase, so ops_window is estimated as iops * window (a
-<1.5 % approximation; the Lead records the exact attach offsets in the log).
+ops_window is estimated as iops * window: the perf window lies inside the
+engine's measured phase, so this is a <1.5 % approximation (the exact attach
+offsets are recorded in the run log).  `perf stat -p PID` counts all threads of
+the engine process (2 busy pthreads -> task-clock 2x the wall window).
 """
-import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from analysis import jsonio  # noqa: E402
 
 
 def engine_iops(path):
     """Total measured IOPS from a JUring/seastar report or a fio JSON job."""
-    try:
-        with open(path) as f:
-            d = json.load(f)
-    except Exception:
+    d = jsonio.load_json(path)
+    if d is None:
         return 0.0
     if "jobs" in d:  # fio
         total = 0.0
         for job in d.get("jobs") or []:
             for rw in ("read", "write"):
                 b = job.get(rw) or {}
-                try:
-                    total += float(b.get("iops") or 0.0)
-                except (TypeError, ValueError):
-                    pass
+                total += jsonio.as_float(b.get("iops")) or 0.0
         return total
     runs = d.get("runs") or []
     if runs:
-        iops = runs[0].get("iops")
+        iops = jsonio.as_float(runs[0].get("iops"))
         if iops is not None:
-            return float(iops)
+            return iops
     agg = d.get("aggregate") or {}
-    return float((agg.get("iops") or {}).get("mean", 0.0) or 0.0)
+    return jsonio.as_float((agg.get("iops") or {}).get("mean")) or 0.0
 
 
 def parse_perf(path):
@@ -88,12 +87,8 @@ def main():
         per_op(cyc_u), per_op(cyc_k), per_op(cyc_u + cyc_k),
         per_op(instr_u + instr_k), per_op(syscalls), per_op(ctxt),
     ]
-    out = []
-    for i, v in enumerate(fields):
-        out.append(f"{v:.3f}" if i in (1, 2, 9, 10, 11, 12, 13, 14) or i == 0
-                   else f"{v:.0f}")
-    # ops stays 0-decimal as well; keep it simple and explicit:
-    out[0] = f"{ops:.0f}"
+    out = [f"{v:.3f}" if i in (1, 2, 9, 10, 11, 12, 13, 14) else f"{v:.0f}"
+           for i, v in enumerate(fields)]
     print("\t".join(out))
     return 0
 

@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="668" viewBox="0 0 1060 668">
+<rect x="0.0" y="0.0" width="1060.0" height="668.0" rx="0" fill="#ffffff"/>
+<text x="530.0" y="30.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write — the margins all three engines operate in</text>
+<text x="530.0" y="52.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#57606a" text-anchor="middle">one point per 60 s measured window; every engine moves between the same sustained and cache-assisted bands</text>
+<rect x="80.0" y="157.2" width="440.0" height="154.8" rx="0" fill="#e3742a" opacity="0.10"/>
+<rect x="80.0" y="393.7" width="440.0" height="17.2" rx="0" fill="#2ea043" opacity="0.16"/>
+<text x="86.0" y="388.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1a7f37" text-anchor="start">sustained</text>
+<text x="86.0" y="324.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#b45309" text-anchor="start">cache-assisted</text>
+<line x1="80.0" y1="570.0" x2="520.0" y2="570.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="574.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">0k</text>
+<line x1="80.0" y1="484.0" x2="520.0" y2="484.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="488.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">100k</text>
+<line x1="80.0" y1="398.0" x2="520.0" y2="398.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="402.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">200k</text>
+<line x1="80.0" y1="312.0" x2="520.0" y2="312.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="316.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">300k</text>
+<line x1="80.0" y1="226.0" x2="520.0" y2="226.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="230.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">400k</text>
+<line x1="80.0" y1="140.0" x2="520.0" y2="140.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="70.0" y="144.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">500k</text>
+<line x1="80.0" y1="570.0" x2="520.0" y2="570.0" stroke="#1f2328" stroke-width="1.2"/>
+<text x="300.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 64 (W7)</text>
+<text x="122.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:23</text>
+<text x="211.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:39</text>
+<text x="300.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:56</text>
+<text x="389.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:13</text>
+<text x="478.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:30</text>
+<polyline points="122.0,167.6 211.0,168.9 300.0,402.9 389.0,402.2 478.0,404.8" fill="none" stroke="#1f6feb" stroke-width="1.8" opacity="0.85"/>
+<circle cx="122.0" cy="167.6" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="211.0" cy="168.9" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="300.0" cy="402.9" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="389.0" cy="402.2" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="478.0" cy="404.8" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="122.0,294.0 211.0,292.3 300.0,293.6 389.0,399.6 478.0,296.1" fill="none" stroke="#e3742a" stroke-width="1.8" opacity="0.85"/>
+<circle cx="122.0" cy="294.0" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="211.0" cy="292.3" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="300.0" cy="293.6" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="389.0" cy="399.6" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="478.0" cy="296.1" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="122.0,294.0 211.0,292.3 300.0,293.6 389.0,399.6 478.0,296.1" fill="none" stroke="#b45309" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.85"/>
+<circle cx="122.0" cy="294.0" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="211.0" cy="292.3" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="300.0" cy="293.6" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="389.0" cy="399.6" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="478.0" cy="296.1" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="122.0,253.2 211.0,252.7 300.0,401.8 389.0,402.4 478.0,402.4" fill="none" stroke="#2ea043" stroke-width="1.8" opacity="0.85"/>
+<circle cx="122.0" cy="253.2" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="211.0" cy="252.7" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="300.0" cy="401.8" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="389.0" cy="402.4" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="478.0" cy="402.4" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<rect x="570.0" y="157.2" width="440.0" height="154.8" rx="0" fill="#e3742a" opacity="0.10"/>
+<rect x="570.0" y="393.7" width="440.0" height="17.2" rx="0" fill="#2ea043" opacity="0.16"/>
+<text x="576.0" y="388.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1a7f37" text-anchor="start">sustained</text>
+<text x="576.0" y="324.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#b45309" text-anchor="start">cache-assisted</text>
+<line x1="570.0" y1="570.0" x2="1010.0" y2="570.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="574.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">0k</text>
+<line x1="570.0" y1="484.0" x2="1010.0" y2="484.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="488.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">100k</text>
+<line x1="570.0" y1="398.0" x2="1010.0" y2="398.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="402.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">200k</text>
+<line x1="570.0" y1="312.0" x2="1010.0" y2="312.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="316.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">300k</text>
+<line x1="570.0" y1="226.0" x2="1010.0" y2="226.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="230.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">400k</text>
+<line x1="570.0" y1="140.0" x2="1010.0" y2="140.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="560.0" y="144.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">500k</text>
+<line x1="570.0" y1="570.0" x2="1010.0" y2="570.0" stroke="#1f2328" stroke-width="1.2"/>
+<text x="790.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 128 (W8)</text>
+<text x="612.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:31</text>
+<text x="701.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:47</text>
+<text x="790.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:04</text>
+<text x="879.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:21</text>
+<text x="968.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:38</text>
+<polyline points="612.0,169.5 701.0,170.8 790.0,404.1 879.0,404.9 968.0,405.0" fill="none" stroke="#1f6feb" stroke-width="1.8" opacity="0.85"/>
+<circle cx="612.0" cy="169.5" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="701.0" cy="170.8" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="790.0" cy="404.1" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="879.0" cy="404.9" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="968.0" cy="405.0" r="3.6" fill="#1f6feb" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="612.0,291.3 701.0,292.6 790.0,290.9 879.0,399.4 968.0,399.0" fill="none" stroke="#e3742a" stroke-width="1.8" opacity="0.85"/>
+<circle cx="612.0" cy="291.3" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="701.0" cy="292.6" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="790.0" cy="290.9" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="879.0" cy="399.4" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="968.0" cy="399.0" r="3.6" fill="#e3742a" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="612.0,291.3 701.0,292.6 790.0,290.9 879.0,399.4 968.0,399.0" fill="none" stroke="#b45309" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.85"/>
+<circle cx="612.0" cy="291.3" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="701.0" cy="292.6" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="790.0" cy="290.9" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="879.0" cy="399.4" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="968.0" cy="399.0" r="3.6" fill="#b45309" stroke="#ffffff" stroke-width="1.1"/>
+<polyline points="612.0,259.6 701.0,258.9 790.0,402.2 879.0,402.4 968.0,402.4" fill="none" stroke="#2ea043" stroke-width="1.8" opacity="0.85"/>
+<circle cx="612.0" cy="259.6" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="701.0" cy="258.9" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="790.0" cy="402.2" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="879.0" cy="402.4" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<circle cx="968.0" cy="402.4" r="3.6" fill="#2ea043" stroke="#ffffff" stroke-width="1.1"/>
+<line x1="80.0" y1="74.0" x2="102.0" y2="74.0" stroke="#1f6feb" stroke-width="2.2"/>
+<circle cx="91.0" cy="74.0" r="3.4" fill="#1f6feb"/>
+<text x="108.0" y="78.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">JUring</text>
+<line x1="270.0" y1="74.0" x2="292.0" y2="74.0" stroke="#e3742a" stroke-width="2.2"/>
+<circle cx="281.0" cy="74.0" r="3.4" fill="#e3742a"/>
+<text x="298.0" y="78.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">fio matched</text>
+<line x1="460.0" y1="74.0" x2="482.0" y2="74.0" stroke="#b45309" stroke-width="2.2" stroke-dasharray="5 4"/>
+<circle cx="471.0" cy="74.0" r="3.4" fill="#b45309"/>
+<text x="488.0" y="78.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">fio matchedbatch</text>
+<line x1="650.0" y1="74.0" x2="672.0" y2="74.0" stroke="#2ea043" stroke-width="2.2"/>
+<circle cx="661.0" cy="74.0" r="3.4" fill="#2ea043"/>
+<text x="678.0" y="78.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">Seastar</text>
+<text x="530.0" y="608.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">measurement start, 23 Nov (CET) — one column per back-to-back pass over all four arms, ~17 min apart</text>
+<text x="530.0" y="632.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">Same file and 60 s windows; engine order rotated so no engine always runs first.</text>
+<text x="530.0" y="649.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">The bands are the drive's modes, not engine groups: a point above the sustained band is the drive absorbing writes into SLC, and all three engines show it.</text>
+</svg>

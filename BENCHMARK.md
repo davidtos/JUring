@@ -35,7 +35,7 @@ I checked that before trusting anything else. Here is Seastar's `hugetlbfs` conf
 
 The hugepage choice doesn't change a conclusion. Four of the five intervals include parity, and the one that doesn't is −0.34%.
 
-One caveat: `run-stepd.sh` samples `/proc/meminfo` `HugePages_Free` before spawning `seastar_file_bench` and after it exits. Seastar maps an unlinked `file_desc::temporary` in `/mnt/hugepages-juring` with `MAP_SHARED | MAP_POPULATE` and throws if that fails (`SeaStarRef/src/core/memory.cc:2016-2025`), so the pages are freed when the process exits — before the second sample is taken (`hp0 = 4608 → hp1 = 4608`, with 15 warnings logged). The mapping did happen while Seastar ran; the second sample just can't prove it.
+One caveat: `run-host-setup.sh` samples `/proc/meminfo` `HugePages_Free` before spawning `seastar_file_bench` and after it exits. Seastar maps an unlinked `file_desc::temporary` in `/mnt/hugepages-juring` with `MAP_SHARED | MAP_POPULATE` and throws if that fails (`SeaStarRef/src/core/memory.cc:2016-2025`), so the pages are freed when the process exits — before the second sample is taken (`hp0 = 4608 → hp1 = 4608`, with 15 warnings logged). The mapping did happen while Seastar ran; the second sample just can't prove it.
 
 I also re-ran the 1 MiB sequential read workloads with `prlimit --memlock=unlimited:unlimited`, five paired repetitions. All 15 JUring runs used `io_buffer_mode = registered-fixed`, and all 15 `fio` runs used `fixedbufs = 1, registerfiles = 1`. Paired JUring / `fio-matched` means: QD 1 `1.0138 [0.9825, 1.0451]`, QD 8 `1.0108 [0.9582, 1.0635]`, QD 32 `1.0005 [0.9573, 1.0437]`. All three intervals include parity.
 
@@ -83,7 +83,7 @@ Ten seconds of warmup, thirty seconds measured, five repetitions, CPU 2:
 
 The table above ran the engines in a fixed order and used `fio`'s default submit batching, which is a fair thing to be suspicious of. So for the 0.1.0 release I re-ran the two deep-queue workloads with the engine order rotated per repetition, added a second `fio` reference whose batching matches how JUring submits, and used the release-candidate code (`5202e88`). The command was `REPS=5 bench/m1/run-claims-0.1.sh`.
 
-Each `fio` variant writes to its own sub-session, `bench/results/claims-0.1-20261117/read-matrix-{matched,matchedbatch}`, with aggregates generated next to it by `bench/m1/analyze_m1.py`. Same host, `performance` governor, five repetitions, 10 s warmup + 30 s measured. Preflight `loadavg(1m)` was 0.74 for the matched run and 0.29 for the batching-matched run.
+Each `fio` variant writes to its own sub-session, `bench/results/claims-0.1-20261117/read-matrix-{matched,matchedbatch}`, with aggregates generated next to it by `bench/m1/analyze_read_write.py`. Same host, `performance` governor, five repetitions, 10 s warmup + 30 s measured. Preflight `loadavg(1m)` was 0.74 for the matched run and 0.29 for the batching-matched run.
 
 Matched reference:
 
@@ -112,6 +112,34 @@ Batching-matched reference:
 That doubles as a regression check. JUring reproduces the original table within about 1% in both runs: QD 64 `323,876` / `323,753` (−1.1% against `327,371`), QD 128 `406,966` / `410,833` (−1.0% / −0.1% against `411,136`); `fio-matched` `304,160` against `304,064`, `matchedbatch` `302,930` (QD 64) / `334,025` (QD 128), Seastar `314,786` / `308,844` (QD 64) and `383,200` / `386,854` (QD 128). The paired JUring / fio ratios reproduce as `1.0655–1.0693` (QD 64, original `1.0771`) and `1.2183–1.2306` (QD 128, original `1.2388`); JUring / Seastar as `1.0293–1.0501` and `1.0622–1.0625`.
 
 The release-candidate hardening batch changed no read-path code, and the per-op cost is unchanged: `11,438` cycles/op and `0.327` syscalls/op against the original `11,335` / `0.330`. So the small absolute deltas are host-state noise common to all engines, not a regression. The batching-matched reference is not faster than the matched one, which means the historical `fio` reference was already representative for batching. What is left is the capability difference: JUring's ring flags and fused submit. So I treat these as capability comparisons, not as an apples-to-apples win.
+
+### Re-running the claims, 2026-11-23
+
+I re-ran the two deep-queue read cells on 2026-11-23 with the same protocol as the rotated run: three engines, five repetitions, 10 s warmup + 30 s measured, a fresh process per repetition, engine order rotated per repetition, every engine pinned to CPU 2, the same host, the same 10 GiB `O_DIRECT` file. The command was `WARMUP=10 DURATION=30 REPS=5 QDS="64 128" ENGINES="juring seastar fio-io_uring" FIO_VARIANT=matched ROTATE_ENGINES=1 bench/m1/run-read-matrix.sh` with `M1_RESULTS=bench/results/rerun-2026-11-23/read`; Seastar is the same-file runner. All 30 cell runs returned `status=ok`.
+
+| Workload | QD | Engine | n | IOPS mean ± 95% CI | p50 (µs) | p99 (µs) | CV% | Paired vs fio | Paired vs Seastar |
+|---|---|---|---|---|---|---|---|---|---|
+| 4 KiB random read | 64 | JUring | 5 | 318,172 ± 10,205 | 170.6 | 512.8 | 2.6 | 1.0536 [90% 1.0187, 1.0885] | 1.0057 [90% 0.9803, 1.0312] |
+| 4 KiB random read | 64 | fio io_uring, matched | 5 | 302,107 ± 8,082 | 182.1 | 489.9 | 2.2 | — | — |
+| 4 KiB random read | 64 | Seastar | 5 | 316,420 ± 8,132 | 176.4 | 482.8 | 2.1 | — | — |
+| 4 KiB random read | 128 | JUring | 5 | 411,929 ± 13,306 | 260.9 | 918.5 | 2.6 | 1.2059 [90% 1.1594, 1.2523] | 1.0539 [90% 1.0347, 1.0732] |
+| 4 KiB random read | 128 | fio io_uring, matched | 5 | 341,774 ± 7,242 | 342.0 | 713.5 | 1.7 | — | — |
+| 4 KiB random read | 128 | Seastar | 5 | 390,886 ± 11,143 | 287.2 | 814.2 | 2.3 | — | — |
+
+![4 KiB random read throughput at QD 64 and QD 128, JUring vs fio vs Seastar](docs/figures/read-throughput.svg)
+
+*Mean IOPS with 95% CIs from the rerun, five repetitions each. fio is the
+registration-matched reference; Seastar is the same-file bracket.*
+
+The rerun reproduces the published picture: JUring is `−1.8%` at QD 64 and `+1.2%` at QD 128 against the 0.1.0 numbers, `fio-matched` `−0.7%` / `+2.3%`, Seastar `+0.5%` / `+2.0%`. The paired ratios are `1.0536` against fio and `1.0057` against Seastar at QD 64, and `1.2059` / `1.0539` at QD 128. Read honestly, that is "about 5% ahead of fio, level with Seastar" at QD 64, and "about 21% ahead of fio, about 5% ahead of Seastar" at QD 128. The one-sided 95% lower bound clears the 1.05 bar against fio at QD 128 (`1.1594`) but not against fio at QD 64 (`1.0187`) or against Seastar at either depth (`0.9803`, `1.0347`); the tail difference at QD 128 is real (p99 `918.5` µs against `713.5` µs for fio) and is reported, not smoothed away. QD 1/16, the 1 MiB sequential rows, streams, shard scale-out and the group-commit rows were not re-run in this session; their numbers in this document remain the 0.1.0 measurements.
+
+![Paired read ratios with 90% confidence intervals against the ±5% parity band](docs/figures/read-ratios.svg)
+
+*Paired ratios put the intervals next to the ±5% parity band. The QD 128 JUring/fio interval is entirely above the band; the others overlap it, which is why the text claims a clear lead over fio only at QD 128.*
+
+![4 KiB random read latency: p50 and p99 per engine and queue depth](docs/figures/read-latency.svg)
+
+*Mean of the per-repetition p50/p99 from the rerun. JUring has the lowest median at both depths; its QD 128 p99 (`919` µs) is higher than fio's (`714` µs).*
 
 ### How much does the fio configuration matter?
 
@@ -306,15 +334,183 @@ The first attempt was the full write matrix. I ran 4 KiB random writes at QD 1/1
 
 At 4 KiB random write QD 64 with five repetitions, JUring was stable (`188,704 ± 1,983` IOPS, `CV = 0.8%`), while `fio/matched` (`158,570 ± 50,427`, `CV = 25.6%`), `fio/matchedbatch` (`170,543 ± 42,826`, `CV = 20.2%`) and Seastar (`167,073 ± 43,672`, `CV = 21.1%`) randomly sampled post-cliff states across repetitions.
 
-The second attempt was a state-controlled protocol: seven generations, 42 runs over 2 h 22 m. The idea was to run JUring, `fio/matched` and `fio/matchedbatch` back-to-back inside a single preconditioned generation, so all three engines see the same device state, and compare them only when a generation is homogeneous (`max/min ≤ 1.25` per configuration).
+The second attempt was a state-controlled protocol: seven passes, 42 runs over 2 h 22 m. The idea was to run JUring, `fio/matched` and `fio/matchedbatch` back-to-back inside a single preconditioned pass, so all three engines see the same device state, and compare them only when a pass is homogeneous (`max/min ≤ 1.25` per configuration).
 
-The first pilot used a 600 s rest after preconditioning and no rest between runs. It failed: at 4 KiB QD 64 the `max/min` was `2.0921` (`191,497 / 167,671 / 91,534` IOPS). A 600 s rest partially rebuilds the SLC burst capacity, which then exhausts mid-generation and makes the last engine look terrible.
+The first pilot used a 600 s rest after preconditioning and no rest between runs. It failed: at 4 KiB QD 64 the `max/min` was `2.0921` (`191,497 / 167,671 / 91,534` IOPS). A 600 s rest partially rebuilds the SLC burst capacity, which then exhausts mid-pass and makes the last engine look terrible.
 
 The second pilot dropped the post-preconditioning rest and the between-run rest. It passed: at 4 KiB QD 64 the three engines measured `188,070 / 197,148 / 196,440` IOPS (`max/min = 1.0483`), and at QD 128 `185,943 / 196,802 / 196,719` IOPS (`max/min = 1.0584`).
 
-Then I ran five generations of that continuous protocol. Two were valid; three failed homogeneity because one or more `fio` arms entered a deep GC state (`39.7k–84.8k` IOPS) during their 120 s warmup. I required four valid generations and got two, so the result is inconclusive. On the two valid generations, the paired JUring / fio ratios are `0.9459 [0.9316, 0.9602]` (QD 64, matched), `0.9531 [0.9369, 0.9693]` (QD 64, matchedbatch), `0.9533 [0.9244, 0.9821]` (QD 128, matched) and `0.9835 [0.6333, 1.3336]` (QD 128, matchedbatch).
+Then I ran five passes of that continuous protocol. Two were valid; three failed homogeneity because one or more `fio` arms entered a deep GC state (`39.7k–84.8k` IOPS) during their 120 s warmup. I required four valid passes and got two, so the result is inconclusive. On the two valid passes, the paired JUring / fio ratios are `0.9459 [0.9316, 0.9602]` (QD 64, matched), `0.9531 [0.9369, 0.9693]` (QD 64, matchedbatch), `0.9533 [0.9244, 0.9821]` (QD 128, matched) and `0.9835 [0.6333, 1.3336]` (QD 128, matchedbatch).
 
-Two generations out of five is not enough to rank write parity. The state you get on this drive depends on where the run lands relative to the SLC burst, and I can't control that tightly enough on a consumer NVMe. So there is no write-parity claim for v1. The decision record, including why I stopped there, is in [`docs/design-notes.md`](docs/design-notes.md).
+Two passes out of five is not enough to rank write parity. The state you get on this drive depends on where the run lands relative to the SLC burst, and I can't control that tightly enough on a consumer NVMe. So there is no write-parity claim for v1. The decision record, including why I stopped there, is in [`docs/design-notes.md`](docs/design-notes.md).
+
+### The 2026-11-23 rerun: still no ranking, with the drive's own data
+
+I came back to the write path on 2026-11-23, with Seastar as a third measured arm (its write path was smoke-validated first: `status=ok`, zero errors, in-place write on the 10 GiB file, no truncate or `fsync`). Phase 1 used the pre-registered state-controlled protocol in [docs/write-state-3way-protocol.md](docs/write-state-3way-protocol.md) (`bench/write/run-write-3way.sh`): one preconditioned pass per attempt, no rest after preconditioning and none between runs, 60 s warmup + 60 s measured, and the frozen gate (`bench/stepd/analyze_write_state.py`: all three JUring/`fio` arms single-state, `max/min <= 1.25` per cell). It failed in both completed passes:
+
+| started (CET) | cell | JUring | fio matched | fio matchedbatch | Seastar | `max/min` (frozen arms) |
+|---|---|---|---|---|---|---|
+| 21:02 | W7 (QD 64) | 171,243 | 198,478 | 302,125 | 131,638 | 1.77 |
+| 21:10 | W8 (QD 128) | 129,638 | 179,828 | 68,916 | 71,361 | 2.61 |
+| 21:20 | W7 (QD 64) | 103,896 | 140,848 | 177,837 | 132,058 | 1.71 |
+| 21:28 | W8 (QD 128) | 152,096 | — | — | 38,483 | incomplete |
+
+I stopped the campaign rather than spend the remaining budget on passes the gate was going to reject. Phase 2 was an interleaved bracket whose protocol was fixed before it ran ([docs/write-state-interleaved-protocol.md](docs/write-state-interleaved-protocol.md), `bench/write/run-write-interleaved.sh`): five cycles of 15 s warmup + 30 s measured per engine per cell, engine order rotated every cycle, no preconditioning, no rests. All 30 runs returned `status=ok`.
+
+| cell | engine | n | IOPS mean ± 95% CI | MiB/s | p99 µs | CV% | min | median | max | cliff runs |
+|---|---|---|---|---|---|---|---|---|---|---|
+| W7 (QD 64) | JUring | 5 | 97,372 ± 79,405 | 380.4 | 2,309.9 | 65.7 | 20,894 | 122,467 | 165,294 | 2/5 |
+| W7 (QD 64) | fio matched | 5 | 143,597 ± 93,419 | 560.9 | 2,084.9 | 52.4 | 34,364 | 194,019 | 198,057 | 0/5 |
+| W7 (QD 64) | Seastar | 5 | 118,012 ± 70,300 | 461.0 | 2,254.3 | 48.0 | 39,255 | 129,294 | 194,575 | 2/5 |
+| W8 (QD 128) | JUring | 5 | 211,196 ± 53,996 | 825.0 | 3,651.8 | 20.6 | 190,233 | 192,501 | 288,970 | 1/5 |
+| W8 (QD 128) | fio matched | 5 | 197,040 ± 1,989 | 769.7 | 4,007.5 | 0.8 | 194,843 | 198,166 | 198,213 | 0/5 |
+| W8 (QD 128) | Seastar | 5 | 294,325 ± 62,806 | 1,149.7 | 1,567.5 | 17.2 | 217,118 | 294,268 | 339,678 | 1/5 |
+
+The paired per-cycle ratios (90% CI) are `0.7757 [0.2265, 1.3248]` and `0.8417 [0.3224, 1.3610]` at QD 64, and `1.0725 [0.8574, 1.2877]`, `0.7267 [0.5960, 0.8574]`, `0.6872 [0.5632, 0.8113]` at QD 128. Within one cycle the three arms still spread by up to `1.88x` at QD 64 and `1.76x` at QD 128, and both cells trip the pre-registered descriptive-only rule (CV > 20% or CI half-width > 15%). The one arm that held still was `fio` at QD 128 (CV 0.8%, `194,843–198,213` IOPS); JUring's QD 128 median was `192,501` with one `288,970` window, and Seastar's five QD 128 windows rose from `217k` to `340k`. That pattern is consistent with the drive improving during the second half of the bracket and with the engines having different software ceilings, not with a stable engine ordering.
+
+The drive is neither worn nor throttling: SMART around the session reported `percentage_used = 3%`, `available_spare = 100%`, `media_errors = 0`, thermal-management T1/T2 transitions `0`, `43 °C`, and `50.74 TB` written over `3,361` power-on hours. The write file is 10 GiB rewritten in place on a partition that is 86% full; the movement is the consumer NVMe's SLC-burst/TLC-folding behaviour, not a property of JUring, `fio` or Seastar. **I still will not publish a write ranking.** The measured QD 128 fast-state windows are roughly `190–193k` IOPS for JUring, `195–198k` for `fio`, and `217–340k` for Seastar; use the spread as the error bar, not the inter-engine difference.
+
+### Second-drive steady-state run (2026-11-23)
+
+The first run above was on the main data NVMe at 81% fill. The host has a second drive of the same
+model and firmware (`nvme2n1`, `GIGABYTE GP-ASM2NE6100TTTD`, ext4, 6% used), so I repeated the
+comparison there. This is the write measurement I would point a reader at: on an empty drive the
+device has room for its SLC/GC logic instead of thrashing, and the engines separate from the device.
+The protocol is the same frozen one ([docs/write-state-3way-protocol.md](docs/write-state-3way-protocol.md),
+"Run 2"), plus one pre-registered device-preparation step: a **400 GiB steady-state burn-in**
+(4K random write QD 64, 4 GiB chunks, fsync) before the first pass, because on a near-empty 1 TB TLC
+drive the 32 GiB per-pass precondition cannot exhaust the dynamic SLC cache.
+
+Five continuous passes ran, 8 measured runs each: JUring, `fio` matched, `fio` matchedbatch and
+Seastar, 60 s warmup + 60 s measured, engine order rotated per pass, no rests, CPU 2.
+All 40 runs returned `status=ok`. To keep the figure and table readable without internal
+labels, each pass is identified by its measurement start time (CET); the protocol calls one
+pass a *generation*, and the session directories are `g1`–`g5` in the same order. Two
+behaviours show up:
+
+| started (CET) | cell | JUring | fio matched | fio matchedbatch | Seastar |
+|---|---|---|---|---|---|
+| 22:23 | W7 (QD 64) | 467,866 | 320,955 | 320,139 | 368,402 |
+| 22:31 | W8 (QD 128) | 465,693 | 324,058 | 322,640 | 360,901 |
+| 22:39 | W7 | 466,398 | 322,902 | 321,141 | 368,977 |
+| 22:47 | W8 | 464,131 | 322,528 | 323,258 | 361,759 |
+| 22:56 | W7 | 194,277 | 321,353 | 319,947 | 195,540 |
+| 23:04 | W8 | 192,856 | 324,483 | 324,558 | 195,171 |
+| 23:13 | W7 | **195,092** | **198,194** | **198,034** | **194,839** |
+| 23:21 | W8 | 191,982 | 198,408 | 323,537 | 194,921 |
+| 23:30 | W7 | 192,088 | 318,544 | 257,477¹ | 194,842 |
+| 23:38 | W8 | 191,916 | 198,786 | 323,502 | 194,912 |
+
+¹ sustained cliff inside the measured window; disclosed, not trimmed.
+
+![Write throughput by measurement start time for JUring, fio matched, fio matchedbatch and Seastar against the drive's sustained and cache-assisted bands](docs/figures/write-operating-modes.svg)
+
+*Columns are the five consecutive passes, labelled by start time (CET); each point
+is one 60 s measured window. The shaded bands are the drive's modes; the engines move
+between them rather than occupying engine-specific levels.*
+
+The rows around `320k–468k` are cache-assisted windows: the drive absorbs the writes into SLC. They
+are not a sustained-storage comparison, and they are not engine-specific — every arm shows them
+(`fio`'s batching-matched variant happened to catch fast windows in all five W8 cells, which is why
+it looks special; the probe below shows the same command can just as easily land at ~220k). The rows
+around `192k–199k` are the sustained state for all three engines, within about 3%. The frozen gate is
+**INCONCLUSIVE (0 of 5)**: the within-pass `max/min <= 1.25` bound rejects every pass
+because one or more `fio` arms flip into the fast mode, which the gate cannot distinguish from
+device drift. The 23:13 W7 cell is the fully homogeneous anchor.
+
+The steady-state windows, selected by a rule fixed in `bench/write/analyze_write_steady.py` (frozen
+single-state classifier passes, measured mean below 250k IOPS; the observed modes are <=199k and
+>=257k):
+
+| cell | engine | n steady | IOPS mean ± 95% CI | MiB/s | p99 µs | CV% | min | max |
+|---|---|---|---|---|---|---|---|---|
+| W7 (QD 64) | JUring | 3 | 193,819 ± 3,859 | 757.1 | 2,678.6 | 0.80 | 192,088 | 195,092 |
+| W7 (QD 64) | fio matched | 1 | 198,194 | 774.2 | 2,572.3 | — | 198,194 | 198,194 |
+| W7 (QD 64) | fio matchedbatch | 1 | 198,034 | 773.6 | 2,572.3 | — | 198,034 | 198,034 |
+| W7 (QD 64) | Seastar | 3 | 195,074 ± 1,004 | 762.0 | 2,684.3 | 0.21 | 194,839 | 195,540 |
+| W8 (QD 128) | JUring | 3 | 192,251 ± 1,303 | 751.0 | 4,039.0 | 0.27 | 191,916 | 192,856 |
+| W8 (QD 128) | fio matched | 2 | 198,597 ± 2,402 | 775.8 | 3,997.7 | 0.13 | 198,408 | 198,786 |
+| W8 (QD 128) | Seastar | 3 | 195,001 ± 366 | 761.7 | 4,064.5 | 0.08 | 194,912 | 195,171 |
+
+![Sustained 4 KiB write throughput: JUring, fio and Seastar inside the same band](docs/figures/write-steady-parity.svg)
+
+*Sustained-state means with 95% CIs. The shaded band is the drive's sustained ceiling;
+the three engines are inside it together. No ranking is claimed.*
+
+Paired steady-state ratios: JUring/Seastar `0.9936 [90% 0.9806, 1.0066]` (W7) and
+`0.9859 [0.9826, 0.9892]` (W8); JUring/`fio`-matched `0.9843` (W7, `n=1`) and
+`0.9665 [0.9597, 0.9734]` (W8, `n=2`). Every interval with `n >= 2` sits inside the ±5% parity
+band. The sustained-state result is parity at about `192k–199k` IOPS, not an engine ranking.
+
+### Why the fast windows are not an engine advantage
+
+The first version of this analysis called the `fio` batching-matched QD 128 number (`323,499 ± 860`
+IOPS across five passes) a configuration advantage and briefly concluded that `fio` was well
+ahead. That was wrong. I re-ran the **same** `fio` command on the now-steady drive with
+`--iodepth_batch_submit` from 1 to 128, twice, 15 s measured per run:
+
+| round | batch=1 | batch=8 | batch=16 | batch=32 | batch=64 | batch=128 |
+|---|---|---|---|---|---|---|
+| 1 | 205,601 | 322,631 | 226,276 | 322,106 | 223,908 | 324,385 |
+| 2 | 317,264 | 211,624 | 296,760 | 217,026 | 293,543 | 220,237 |
+
+Throughput flips between ~220k and ~320k regardless of batch size. Two more controls agree:
+`--fixedbufs=0` (register files only) measured `219,078` / `301,343` IOPS, and
+`--iodepth_batch_complete=128` measured `240,812` / `221,246` IOPS. The mode is the drive's
+write-cache/GC state, not `fio`'s submission pattern, and every engine samples both modes:
+JUring reached `468k`, Seastar `369k`, `fio` `324k` in fast windows. The probe is
+`bench/write/probe-write-modes.sh`.
+
+![fio batch-size sweep on the steady drive: throughput flips between two clusters independent of --iodepth_batch_submit](docs/figures/write-mode-probe.svg)
+
+*Same fio command, same file, same queue depth; only `--iodepth_batch_submit` changes.
+Both rounds land in both clusters at every batch size, including 1 and 128, so the fast
+windows are the drive's mode, not fio's batching.*
+
+This is also why the frozen gate cannot reach four homogeneous passes: the mode flips
+inside 60 s windows, and the gate cannot tell it from engine drift.
+
+SMART before the run: `percentage_used = 1%`, `available_spare = 100%`, `media_errors = 0`,
+thermal T1/T2 transitions `0`, `31 °C`, `8.89 TB` written over `3,372` power-on hours. The
+cache-assisted windows and the 0/5 gate result are disclosed in the session's
+`analysis-steady/write-steady-summary.md` and `analysis/write-state-summary.md`; no pass was
+dropped from the record.
+
+The continuation passes in the protocol addendum (`g6`–`g8` in the session naming) were
+**not run**: after the fifth pass the gate stood at 0/5, so even three more homogeneous
+passes could not reach the pre-registered four,
+and the expected number of attempts (because of the `fio` mode flips) made the verdict a matter of
+cache-burst luck. The steady-state table above is the result instead.
+
+Reproduce (the second drive is bind-mounted under the repo so the harness can see it):
+
+```bash
+sudo mkdir -p /mnt/data/juring-write && sudo chown david:david /mnt/data/juring-write
+mkdir -p /home/david/projects/JUring/nvme-write
+sudo mount --bind /mnt/data/juring-write /home/david/projects/JUring/nvme-write
+sudo chown david:david /home/david/projects/JUring/nvme-write
+
+bench/write/create-write-file.sh \
+    --file "$PWD/nvme-write/write_files/single_file_bench_w.bin" --allow-any-path --allow-other-device
+bench/write/precondition.sh \
+    --file "$PWD/nvme-write/write_files/single_file_bench_w.bin" \
+    --device-stat /sys/block/nvme2n1/stat --target-mult 40 --min-sec 800 --max-sec 1200 --allow-any-path
+ALLOW_ANY_PATH=1 WRITE_FILE="$PWD/nvme-write/write_files/single_file_bench_w.bin" \
+    DEVICE_STAT=/sys/block/nvme2n1/stat bash bench/write/run-write-3way.sh
+
+S=bench/results/<write-3way-session>
+python3 bench/stepd/analyze_write_state.py --session "$S" --gens g1,g2,g3,g4,g5 --out "$S/analysis"
+python3 bench/write/analyze_write_3way.py --session "$S" --gens g1,g2,g3,g4,g5 --out "$S/analysis-3way"
+python3 bench/write/analyze_write_steady.py --session "$S" --gens g1,g2,g3,g4,g5 --out "$S/analysis-steady"
+
+# the mode probe: same fio command, batch-submit 1..128, two rounds (~6 min)
+OUTPUT_DIR=bench/results/write-mode-probe bash bench/write/probe-write-modes.sh
+
+# regenerate the SVG figures in docs/figures/ from the session + probe JSONs
+python3 bench/write/plot_write_modes.py \
+    --session "$S" --gens g1,g2,g3,g4,g5 \
+    --probe-dir bench/results/write-mode-probe --out-dir docs/figures
+```
 
 ## Panama downcall overhead
 
@@ -342,16 +538,31 @@ Everything above is scripted; none of it was typed in by hand.
 cd /home/david/projects/JUring
 
 # Re-generate all aggregate tables from the raw session output (no device I/O):
-python3 bench/m1/analyze_m1.py --dir bench/results/m1-2026-11-13
-python3 bench/m1/analyze_m1.py --dir bench/results/m1-write-2026-11-15 \
+python3 bench/m1/analyze_read_write.py --dir bench/results/m1-2026-11-13
+python3 bench/m1/analyze_read_write.py --dir bench/results/m1-write-2026-11-15 \
     --out-prefix bench/results/m1-write-2026-11-15/aggregate/m1-write
 python3 bench/stream/analyze_stream.py --session m2-final
-python3 bench/shard/analyze_m3.py --session m3-2026-11-15
-python3 bench/stepd/analyze_stepd.py --dir bench/results/unattended-2026-11-16/stepd
-python3 bench/stepd/write_state_analysis.py \
+python3 bench/shard/analyze_scale_out.py --session m3-2026-11-15
+python3 bench/stepd/analyze_host_setup.py --dir bench/results/unattended-2026-11-16/stepd
+python3 bench/stepd/analyze_write_state.py \
     --session bench/results/unattended-2026-11-16/write-state \
     --gens w2-g1,w2-g2,w2-g3,w2-g4,w2-g5 \
     --out bench/results/unattended-2026-11-16/write-state/analysis
+
+# 2026-11-23 reruns (the session directories are gitignored; these are the commands):
+WARMUP=10 DURATION=30 REPS=5 QDS="64 128" \
+    ENGINES="juring seastar fio-io_uring" FIO_VARIANT=matched ROTATE_ENGINES=1 \
+    bench/m1/run-read-matrix.sh
+python3 bench/m1/analyze_read_write.py --dir bench/results/<read-session> \
+    --out-prefix bench/results/<read-session>/aggregate/claims
+python3 bench/m1/plot_read_claims.py --session bench/results/<read-session> --out-dir docs/figures
+
+# write attempt: pre-registered state-controlled campaign, then the interleaved bracket
+bash bench/write/run-write-3way.sh          # stops at 4 valid passes or 5 attempts
+bash bench/write/run-write-interleaved.sh   # 30 runs, about 24 min
+python3 bench/write/analyze_write_interleaved.py \
+    --session bench/results/<interleaved-session> \
+    --out bench/results/<interleaved-session>/analysis
 ```
 
 Run the benchmarks themselves with the scripts documented in each `bench/*/README.md`; start with [`bench/README.md`](bench/README.md). For the one-command comparison, `./bench/run-comparison.sh`. For the read comparison as it ran for 0.1.0, `REPS=5 bench/m1/run-claims-0.1.sh`. The older JMH suite lives under `src/test/java/bench/suite/` and is not part of the `bench/` harness.

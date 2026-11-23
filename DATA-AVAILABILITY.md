@@ -5,6 +5,7 @@ I publish numbers, so I owe you a way to check them. Every claim in [BENCHMARK.m
 ## What is committed
 
 - `bench/` — the runnable harness: run scripts, analyzers, the `fio` / Seastar / JUring drivers, the measurement protocol in [docs/benchmark-methodology.md](docs/benchmark-methodology.md), and the quick start in [bench/README.md](bench/README.md).
+- `bench/analysis/golden/` — normalized stdout, stderr and aggregate output of the analyzers, committed as regression fixtures so a refactor cannot silently move a number. They are not the release archive: the raw sessions behind them are gitignored, so the golden comparison skips unless you have those session directories.
 - `BENCHMARK.md` — the published tables, each labeled with its workload, engine configuration and number of repetitions.
 - `docs/benchmark-methodology.md` — the measurement protocol, the rules I use to count a run, device-state checks, statistics and what could still be wrong.
 - [`docs/design-notes.md`](docs/design-notes.md) — the engineering decisions behind the measurements, including why the write path is published as inconclusive.
@@ -24,7 +25,7 @@ Reproduction path:
 # Full protocol and prerequisites:
 sed -n '1,120p' docs/benchmark-methodology.md
 # Re-generate aggregates from a raw session directory (no device I/O):
-python3 bench/m1/analyze_m1.py --dir bench/results/<session> [--out-prefix ...]
+python3 bench/m1/analyze_read_write.py --dir bench/results/<session> [--out-prefix ...]
 # One-command comparison quick start (writes under bench/results/):
 ./bench/run-comparison.sh
 ```
@@ -32,7 +33,7 @@ python3 bench/m1/analyze_m1.py --dir bench/results/<session> [--out-prefix ...]
 ## Caveats to carry when citing these numbers
 
 - The headline runs used one host and one consumer NVMe (AMD Ryzen 9 3950X, GIGABYTE GP-ASM2NE6100TTTD 1 TB, ext4, Fedora 44, kernel 7.0.12). Absolute IOPS depend on the device state; see the device-state notes in [BENCHMARK.md](BENCHMARK.md) and [docs/benchmark-methodology.md](docs/benchmark-methodology.md).
-- The write path is published as inconclusive. The consumer NVMe shows SLC-burst / TLC-folding cliffs, so no write-parity ranking is claimed. The details are in [BENCHMARK.md](BENCHMARK.md).
+- The write path is published as a descriptive measurement, not a ranking. On 2026-11-23 the main drive failed the frozen homogeneity gate; a second, near-empty same-model NVMe was then used. In its sustained state the drive gives ~192–199k IOPS at 4 KiB for JUring, `fio` and Seastar alike (within ~3%), while cache-assisted windows reach up to 468k/369k/324k for the three engines. A controlled probe (`bench/write/probe-write-modes.sh`) shows the fast/slow flip is independent of `fio`'s batch size and fixed buffers, so it is the drive's write-cache/GC mode, not an engine advantage; no write ranking is claimed. The frozen gate returns no verdict (0 of 5) for the same reason. Every window is disclosed, and SMART (1% used, 100% spare, 0 media errors, no thermal-throttle transitions) rules out wear and throttling. Details are in [BENCHMARK.md](BENCHMARK.md#second-drive-steady-state-run-2026-11-23).
 - The `fio` reference configurations are registration-matched. The original read matrix used `fio`'s default submit batching; the 0.1.0 verification run in [BENCHMARK.md](BENCHMARK.md) adds a batching-matched (`matchedbatch`) reference and rotated engine order. `fio` still cannot fuse submits or set JUring's taskrun flags, so read comparisons are capability comparisons. Seastar is reported as a bracket with an explicit asymmetry, not as an equal-config opponent.
 - Benchmark data is evidence for the claims in this repository, not a portable performance guarantee for other hardware, kernels or filesystems.
 

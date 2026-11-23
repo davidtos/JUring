@@ -1,0 +1,8 @@
+# Ruff configuration for the bench tooling. The Java build is untouched by this.
+target-version = "py39"
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F", "W", "B", "I"]
+# The analyzers emit long markdown table rows and prose strings by design.
+ignore = ["E501"]

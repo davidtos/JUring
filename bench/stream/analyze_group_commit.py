@@ -1,33 +1,13 @@
 #!/usr/bin/env python3
-"""analyze_group_commit.py -- B6 W25 group-commit micro-bench aggregator
-(docs/b6-design.md §6.4 + A2 rest adjudication).
+"""B6 W25 group-commit micro-benchmark aggregator (JUring-only).
 
-Reads the raw JSON of the JUring-only group-commit runner
-
-    bench/juring/JUringDurabilityBench.java
-
-from ``bench/results/<session>/cells/<cell>__juring__groupcommit__r<rep>.json`` and writes
-
-    bench/results/<session>/aggregate/group-commit.json
-    bench/results/<session>/aggregate/group-commit.md
-
-The analyzer enforces the machine-checkable W25 acceptance identities and fails loudly
-(exit 3) if any cell JSON violates them:
-
-  * ``fsyncs_per_group == 1.0`` (successful FDATASYNC/FSYNC batch => exactly one sync);
-  * ``groups_total * batch_size == committed_writes`` (records-mode short last group is
-    accepted only if ``committed_writes == records`` and the shortfall is < one batch);
-  * ``syncs_completed == syncs_issued == groups_total``, ``syncs_failed == 0``;
-  * ``restart_verify.ok == true`` from the fresh-process re-read (process-restart
-    visibility, NOT a power-loss test).
-
-It requires ``schema_extensions`` to contain ``b6-durability-1`` and does not touch the
-M2/M3 artifacts or ``analyze_stream.py``.
-
-Per cell (batch size B) it reports: MiB/s mean/sd/95% CI/CV, writes/s, groups/s,
-group-latency p50/p99 (ms), sync-latency p50/p99, syncs/s, MiB/sync, sync_wait_share,
-fsyncs_per_group, wrap-arounds and the identity checks.  Every rep is kept and any
-failed/missing rep is listed explicitly.
+Reads the JSON written by the JUring group-commit runner from
+``<session>/cells/<cell>__juring__groupcommit__r<rep>.json`` and writes
+``<session>/aggregate/group-commit.{json,md}``: per-cell cost/latency statistics
+and the machine-checkable W25 acceptance identities (one fdatasync per batch,
+``groups_total * batch_size == committed_writes``, sync/group counters, and the
+fresh-process restart re-read).  Every rep is kept; failed/missing reps and
+contract violations are listed explicitly (docs/b6-design.md §6.4).
 
 Usage:
     python3 bench/stream/analyze_group_commit.py [--session NAME] [--results DIR] [--out DIR]
@@ -39,11 +19,12 @@ Exit codes: 0 = aggregate written and all identities hold; 1 = no cell JSONs fou
 
 import argparse
 import datetime
-import glob
-import json
-import math
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 REQUIRED_EXTENSION = "b6-durability-1"
@@ -51,151 +32,9 @@ DEFAULT_SESSION = "b6-group-commit-2026-11-15"
 CELL_ORDER = ["W25-4k-b1", "W25-4k-b8", "W25-4k-b32", "W25-4k-b128"]
 FPG_TOLERANCE = 1e-9
 
-_T975 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
-         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
-         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
-
-
-def _mean(values):
-    return sum(values) / len(values) if values else None
-
-
-def _sd(values):
-    n = len(values)
-    if n < 2:
-        return None
-    m = _mean(values)
-    return math.sqrt(sum((x - m) ** 2 for x in values) / (n - 1))
-
-
-def _ci95(values):
-    n = len(values)
-    if n < 2:
-        return None
-    df = n - 1
-    t = _T975[df - 1] if df <= len(_T975) else 1.96
-    return t * _sd(values) / math.sqrt(n)
-
-
-def _cv_pct(values):
-    m = _mean(values)
-    if not m or len(values) < 2:
-        return None
-    return 100.0 * _sd(values) / abs(m)
-
 
 def _r6(x):
     return None if x is None else round(float(x), 6)
-
-
-def _fmt(v, digits=2, dash="n/a"):
-    if v is None:
-        return dash
-    return ("%." + str(digits) + "f") % float(v)
-
-
-def parse_name(stem):
-    parts = stem.split("__")
-    if len(parts) != 4:
-        return None
-    cell, engine, variant, repstr = parts
-    if not repstr.startswith("r"):
-        return None
-    try:
-        rep = int(repstr[1:])
-    except ValueError:
-        return None
-    if not cell or not engine or not variant or rep < 1:
-        return None
-    return cell, engine, variant, rep
-
-
-def extract(data):
-    cfg = data.get("config") or {}
-    agg = data.get("aggregate") or {}
-    runs = data.get("runs") or []
-    run = runs[0] if runs else {}
-    group_lat = run.get("group_latency_us") or {}
-    sync_lat = run.get("sync_latency_us") or {}
-    verify = run.get("restart_verify") or {}
-    return {
-        "status": data.get("status"),
-        "error": data.get("error"),
-        "schema_version": data.get("schema_version"),
-        "schema_extensions": data.get("schema_extensions"),
-        "engine": data.get("engine"),
-        "label": data.get("label"),
-        "manifest": data.get("manifest") or {},
-        "file": cfg.get("file"),
-        "bs": cfg.get("bs"),
-        "batch_size": cfg.get("batch_size", run.get("batch_size")),
-        "durability": cfg.get("durability"),
-        "seconds": cfg.get("seconds"),
-        "warmup_sec": cfg.get("warmup_sec"),
-        "runs": cfg.get("runs"),
-        "seed": cfg.get("seed"),
-        "run_seconds": run.get("seconds"),
-        "durability_mode": run.get("durability_mode"),
-        "groups_total": int(run.get("groups_total") or 0),
-        "committed_writes": int(run.get("committed_writes") or 0),
-        "committed_bytes": int(run.get("committed_bytes") or 0),
-        "max_observed_batch": run.get("max_observed_batch"),
-        "writes_per_group": run.get("writes_per_group") or {},
-        "syncs_issued": int(run.get("syncs_issued") or 0),
-        "syncs_completed": int(run.get("syncs_completed") or 0),
-        "syncs_failed": int(run.get("syncs_failed") or 0),
-        "fsyncs_per_group": run.get("fsyncs_per_group"),
-        "bytes_synced": int(run.get("bytes_synced") or 0),
-        "syncs_per_sec": run.get("syncs_per_sec"),
-        "mib_per_sync": run.get("mib_per_sync"),
-        "sync_wait_share": run.get("sync_wait_share"),
-        "sync_p50_us": sync_lat.get("p50"),
-        "sync_p99_us": sync_lat.get("p99"),
-        "group_p50_us": group_lat.get("p50"),
-        "group_p99_us": group_lat.get("p99"),
-        "p99_group_latency_us": run.get("p99_group_latency_us"),
-        "mibs": (agg.get("mibs") or {}).get("mean", run.get("mibs")),
-        "writes_per_sec": run.get("writes_per_sec"),
-        "wrap_arounds": run.get("wrap_arounds"),
-        "restart_verify": verify,
-        "errors_total": (agg.get("errors_total")
-                         if agg.get("errors_total") is not None else run.get("errors_total")),
-    }
-
-
-def load_session(results_dir):
-    records, unparsed, schema_errors = [], [], []
-    for path in sorted(glob.glob(os.path.join(results_dir, "cells", "*.json"))):
-        stem = os.path.basename(path)[:-len(".json")]
-        parsed = parse_name(stem)
-        if parsed is None:
-            unparsed.append({"file": path, "reason": "unrecognised cell filename "
-                             "(expected <cell>__juring__groupcommit__r<rep>.json)"})
-            continue
-        cell, engine, variant, rep = parsed
-        rec = {"cell": cell, "engine": engine, "variant": variant, "rep": rep,
-               "path": path, "data": None, "error": None, "extracted": None}
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                rec["data"] = json.load(fh)
-        except Exception as exc:
-            rec["error"] = "unreadable/invalid JSON: %s" % exc
-            schema_errors.append({"file": path, "reason": rec["error"]})
-            continue
-        ext = rec["data"].get("schema_extensions")
-        if not isinstance(ext, list) or REQUIRED_EXTENSION not in ext:
-            schema_errors.append({
-                "file": path,
-                "reason": "missing schema_extensions [%r] (schema_extensions=%r); refusing "
-                          "to aggregate a mixed/old session" % (REQUIRED_EXTENSION, ext)})
-            continue
-        if rec["data"].get("schema_version") != SCHEMA_VERSION:
-            schema_errors.append({"file": path, "reason": "schema_version %r != %r"
-                                  % (rec["data"].get("schema_version"), SCHEMA_VERSION)})
-            continue
-        rec["extracted"] = extract(rec["data"])
-        records.append(rec)
-    return records, unparsed, schema_errors
 
 
 def check_identities(rec):
@@ -243,8 +82,8 @@ def check_identities(rec):
 
 def stats_block(values):
     vals = [v for v in values if v is not None]
-    return {"n": len(vals), "mean": _r6(_mean(vals)), "sd": _r6(_sd(vals)),
-            "ci95": _r6(_ci95(vals)), "cv_pct": _r6(_cv_pct(vals)),
+    return {"n": len(vals), "mean": _r6(stats.mean(vals)), "sd": _r6(stats.sd(vals)),
+            "ci95": _r6(stats.ci95(vals)), "cv_pct": _r6(stats.cv_pct(vals)),
             "min": _r6(min(vals)) if vals else None,
             "max": _r6(max(vals)) if vals else None}
 
@@ -338,7 +177,7 @@ def render_markdown(session, results_dir, aggregate):
     p = aggregate["protocol"]
     a("Protocol observed in the cell JSONs: warmup %ss + measured %ss, bs %s B, "
       "durability %s, seed %s; R=%s."
-      % (_fmt(p.get("warmup_sec"), 0), _fmt(p.get("seconds"), 0), p.get("bs"),
+      % (md.fixed(p.get("warmup_sec"), 0), md.fixed(p.get("seconds"), 0), p.get("bs"),
          p.get("durability"), p.get("seed"), p.get("reps")))
     a("")
     a("## Contract identities (machine-checkable acceptance)")
@@ -350,7 +189,7 @@ def render_markdown(session, results_dir, aggregate):
     for c in aggregate["cells"]:
         f = c["fsyncs_per_group"]
         a("| %s | %s | %d | %s | %s | %s | 0 | %s | %d |"
-          % (c["cell"], c["batch_size"], c["n"], _fmt(f["mean"], 6),
+          % (c["cell"], c["batch_size"], c["n"], md.fixed(f["mean"], 6),
              "PASS" if c["fsyncs_per_group_ok"] else "FAIL",
              "PASS" if c["identity_groups_batch_writes"] else "FAIL",
              "PASS" if c["restart_verify_ok"] else "FAIL",
@@ -369,14 +208,14 @@ def render_markdown(session, results_dir, aggregate):
         f = c["fsyncs_per_group"]
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
           % (c["cell"], c["batch_size"], c["n"],
-             _fmt(c["groups_per_sec"]["mean"]), _fmt(c["writes_per_sec"]["mean"], 0),
-             _fmt(m["mean"], 1), _fmt(m["sd"], 2), _fmt(m["ci95"], 2),
-             _fmt(m["cv_pct"], 2), _fmt(c["group_latency_ms"]["p50"]["mean"], 3),
-             _fmt(c["group_latency_ms"]["p99"]["mean"], 3),
-             _fmt(c["sync_latency_us"]["p50"]["mean"], 1),
-             _fmt(c["sync_latency_us"]["p99"]["mean"], 1),
-             _fmt(c["syncs_per_sec"]["mean"], 1), _fmt(c["mib_per_sync"]["mean"], 3),
-             _fmt(c["sync_wait_share"]["mean"], 3), _fmt(f["mean"], 6)))
+             md.fixed(c["groups_per_sec"]["mean"], 2), md.fixed(c["writes_per_sec"]["mean"], 0),
+             md.fixed(m["mean"], 1), md.fixed(m["sd"], 2), md.fixed(m["ci95"], 2),
+             md.fixed(m["cv_pct"], 2), md.fixed(c["group_latency_ms"]["p50"]["mean"], 3),
+             md.fixed(c["group_latency_ms"]["p99"]["mean"], 3),
+             md.fixed(c["sync_latency_us"]["p50"]["mean"], 1),
+             md.fixed(c["sync_latency_us"]["p99"]["mean"], 1),
+             md.fixed(c["syncs_per_sec"]["mean"], 1), md.fixed(c["mib_per_sync"]["mean"], 3),
+             md.fixed(c["sync_wait_share"]["mean"], 3), md.fixed(f["mean"], 6)))
     a("")
     a("Per-rep detail (exactly one fdatasync per committed batch; the fresh-process "
       "re-read verifies the deterministic pattern):")
@@ -388,8 +227,9 @@ def render_markdown(session, results_dir, aggregate):
         for r in c["reps"]:
             a("| %s | %d | %d | %d | %s | %s | %s | %s | %s | %s | %s |"
               % (c["cell"], r["rep"], r["groups_total"], r["committed_writes"],
-                 _fmt(r["mibs"], 1), _fmt(r["group_p50_ms"], 3), _fmt(r["group_p99_ms"], 3),
-                 _fmt(r["sync_p50_us"], 1), _fmt(r["fsyncs_per_group"], 6),
+                 md.fixed(r["mibs"], 1), md.fixed(r["group_p50_ms"], 3),
+                 md.fixed(r["group_p99_ms"], 3),
+                 md.fixed(r["sync_p50_us"], 1), md.fixed(r["fsyncs_per_group"], 6),
                  r["verified_bytes"], r["wrap_arounds"]))
     a("")
     a("## Data quality / contract violations (no rep silently dropped)")
@@ -420,8 +260,6 @@ def render_markdown(session, results_dir, aggregate):
 
 
 def main(argv):
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, "..", ".."))
     ap = argparse.ArgumentParser(
         description="Aggregate B6 W25 group-commit cells into aggregate/group-commit.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
@@ -433,10 +271,13 @@ def main(argv):
     args = ap.parse_args(argv)
 
     results_dir = os.path.abspath(args.results) if args.results else os.path.join(
-        repo_root, "bench", "results", args.session)
+        jsonio.REPO_ROOT, "bench", "results", args.session)
     out_dir = os.path.abspath(args.out) if args.out else os.path.join(results_dir, "aggregate")
 
-    records, unparsed, schema_errors = load_session(results_dir)
+    records, unparsed, schema_errors = load_session(
+        results_dir,
+        expected_hint="<cell>__juring__groupcommit__r<rep>.json",
+        schema_version=SCHEMA_VERSION, required_extension=REQUIRED_EXTENSION)
     if schema_errors:
         sys.stderr.write("error: B6 durability schema check FAILED for %d cell JSON(s); "
                          "refusing to aggregate a mixed/old session\n" % len(schema_errors))
@@ -447,8 +288,7 @@ def main(argv):
         sys.stderr.write("error: no cell JSON files found under %s/cells\n" % results_dir)
         return 1
 
-    cells = sorted({r["cell"] for r in records},
-                   key=lambda c: (CELL_ORDER.index(c) if c in CELL_ORDER else len(CELL_ORDER), c))
+    cells = sort_cells({r["cell"] for r in records}, CELL_ORDER)
     cells_out = []
     excluded = []
     missing = []
@@ -525,23 +365,18 @@ def main(argv):
         "disclosures": disclosures,
     }
 
-    os.makedirs(out_dir, exist_ok=True)
     json_path = os.path.join(out_dir, "group-commit.json")
     md_path = os.path.join(out_dir, "group-commit.md")
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(aggregate, fh, indent=2, sort_keys=False)
-        fh.write("\n")
-    with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(render_markdown(args.session, results_dir, aggregate))
-        fh.write("\n")
+    cli.write_json(json_path, aggregate)
+    cli.write_text(md_path, render_markdown(args.session, results_dir, aggregate))
 
     print("wrote %s" % json_path)
     print("wrote %s" % md_path)
     for c in cells_out:
         print("  %-12s batch=%-4s n=%d MiB/s=%s group_p99=%s ms syncs/group=%s verify=%s"
-              % (c["cell"], c["batch_size"], c["n"], _fmt(c["mibs"]["mean"], 1),
-                 _fmt(c["group_latency_ms"]["p99"]["mean"], 2),
-                 _fmt(c["fsyncs_per_group"]["mean"], 6),
+              % (c["cell"], c["batch_size"], c["n"], md.fixed(c["mibs"]["mean"], 1),
+                 md.fixed(c["group_latency_ms"]["p99"]["mean"], 2),
+                 md.fixed(c["fsyncs_per_group"]["mean"], 6),
                  "ok" if c["restart_verify_ok"] else "FAIL"))
     if violations:
         print("  CONTRACT VIOLATIONS: %d (see aggregate/group-commit.md/json)"

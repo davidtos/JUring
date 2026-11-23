@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="500" viewBox="0 0 920 500">
+<rect x="0.0" y="0.0" width="920.0" height="500.0" rx="0" fill="#ffffff"/>
+<text x="460.0" y="32.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write — sustained state</text>
+<text x="460.0" y="54.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#57606a" text-anchor="middle">all three engines sit inside the same ~2–3% band (mean ± 95% CI)</text>
+<rect x="90.0" y="120.8" width="790.0" height="27.7" rx="0" fill="#2ea043" opacity="0.10"/>
+<line x1="90.0" y1="405.0" x2="880.0" y2="405.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="409.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">0k</text>
+<line x1="90.0" y1="335.7" x2="880.0" y2="335.7" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="339.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">50k</text>
+<line x1="90.0" y1="266.4" x2="880.0" y2="266.4" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="270.4" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">100k</text>
+<line x1="90.0" y1="197.0" x2="880.0" y2="197.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="201.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">150k</text>
+<line x1="90.0" y1="127.7" x2="880.0" y2="127.7" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="131.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">200k</text>
+<line x1="90.0" y1="405.0" x2="880.0" y2="405.0" stroke="#1f2328" stroke-width="1.2"/>
+<rect x="195.0" y="136.3" width="58.0" height="268.7" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="224.0" y="128.3" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">193.8k</text>
+<line x1="224.0" y1="130.9" x2="224.0" y2="141.6" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="217.0" y1="130.9" x2="231.0" y2="130.9" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="217.0" y1="141.6" x2="231.0" y2="141.6" stroke="#1f2328" stroke-width="1.2"/>
+<text x="224.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
+<rect x="271.0" y="130.3" width="58.0" height="274.7" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="300.0" y="122.3" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">198.1k</text>
+<line x1="300.0" y1="128.9" x2="300.0" y2="131.8" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="293.0" y1="128.9" x2="307.0" y2="128.9" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="293.0" y1="131.8" x2="307.0" y2="131.8" stroke="#1f2328" stroke-width="1.2"/>
+<text x="300.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=2</text>
+<rect x="347.0" y="134.6" width="58.0" height="270.4" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="376.0" y="126.6" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">195.1k</text>
+<line x1="376.0" y1="133.2" x2="376.0" y2="135.9" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="369.0" y1="133.2" x2="383.0" y2="133.2" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="369.0" y1="135.9" x2="383.0" y2="135.9" stroke="#1f2328" stroke-width="1.2"/>
+<text x="376.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
+<text x="300.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 64 (W7)</text>
+<rect x="565.0" y="138.5" width="58.0" height="266.5" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="594.0" y="130.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">192.3k</text>
+<line x1="594.0" y1="136.7" x2="594.0" y2="140.3" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="587.0" y1="136.7" x2="601.0" y2="136.7" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="587.0" y1="140.3" x2="601.0" y2="140.3" stroke="#1f2328" stroke-width="1.2"/>
+<text x="594.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
+<rect x="641.0" y="129.7" width="58.0" height="275.3" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="670.0" y="121.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">198.6k</text>
+<line x1="670.0" y1="126.3" x2="670.0" y2="133.0" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="663.0" y1="126.3" x2="677.0" y2="126.3" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="663.0" y1="133.0" x2="677.0" y2="133.0" stroke="#1f2328" stroke-width="1.2"/>
+<text x="670.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=2</text>
+<rect x="717.0" y="134.7" width="58.0" height="270.3" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="746.0" y="126.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">195.0k</text>
+<line x1="746.0" y1="134.2" x2="746.0" y2="135.2" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="739.0" y1="134.2" x2="753.0" y2="134.2" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="739.0" y1="135.2" x2="753.0" y2="135.2" stroke="#1f2328" stroke-width="1.2"/>
+<text x="746.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
+<text x="670.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 128 (W8)</text>
+<text x="460.0" y="470.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">Near-empty second NVMe (nvme2n1, 6% used), 60 s measured windows, 400 GiB burn-in;  fio matched = batch-submit 1.</text>
+<text x="460.0" y="487.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">No ranking is claimed: the intervals overlap and the drive's fast mode is disclosed in BENCHMARK.md.</text>
+<rect x="90.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#1f6feb"/>
+<text x="108.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">JUring</text>
+<rect x="240.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#e3742a"/>
+<text x="258.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">fio matched</text>
+<rect x="390.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#2ea043"/>
+<text x="408.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">Seastar</text>
+<rect x="540.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#2ea043" opacity="0.18"/>
+<text x="558.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">sustained band (~185–205k IOPS)</text>
+</svg>

@@ -1,23 +1,21 @@
 #!/usr/bin/env python3
-"""
-parse_results.py - normalize benchmark results from three engines into one table/CSV.
+"""Normalize benchmark results from three engines into one table/CSV.
 
-Supported inputs (auto-detected by content, extension does not matter):
+Usage:
+    python3 bench/parse_results.py --dir bench-results --csv bench-results/results.csv
+    python3 bench/parse_results.py bench-results/raw/juring/*.json bench-results/raw/fio/*.json
+
+Inputs are auto-detected by content, extension does not matter:
   * JUring      - JSON printed by bench/juring/JUringFileBench.java
   * fio         - JSON produced with `fio --output-format=json`
   * seastar     - YAML printed by apps/io_tester (stdout; preamble lines skipped)
 
-Output:
-  * a human-readable table on stdout
-  * results.csv (sorted by case, then engine) if --csv is given
-
-Only the Python standard library is required. If PyYAML is installed it is used
-for the io_tester YAML; otherwise a small built-in YAML-subset parser handles
-io_tester's output (maps, sequences of maps, scalars, comments).
-
-Usage:
-  python3 bench/parse_results.py --dir bench-results --csv bench-results/results.csv
-  python3 bench/parse_results.py bench-results/raw/juring/*.json bench-results/raw/fio/*.json
+Outputs: a fixed-width table on stdout and, with --csv or a scanned --dir,
+<dir>/results.csv sorted by case then engine.  Only the Python standard library
+is required; PyYAML is used for the io_tester YAML when installed, otherwise a
+built-in YAML-subset parser handles it (maps, sequences of maps, scalars,
+comments).  The table/CSV shape and the exit codes are a frozen contract with
+bench/run-comparison.sh, which calls this script.
 """
 
 from __future__ import annotations
@@ -25,9 +23,13 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from analysis import jsonio, md  # noqa: E402
 
 ENGINE_ORDER = {"juring": 0, "fio": 1, "seastar": 2}
 
@@ -195,24 +197,6 @@ def load_yaml_text(text: str):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def as_float(value):
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def as_int(value):
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
 def infer_bs_qd(case: str):
     """Infer block size / queue depth from case names like randread_4k_qd64."""
     bs = None
@@ -273,17 +257,19 @@ def parse_juring(path: Path, data: dict):
     if not agg:
         return []  # failed run: no measurements
     label = data.get("label") or cfg.get("workload") or path.stem
-    iops = as_float((agg.get("iops") or {}).get("mean"))
-    mibs = as_float((agg.get("mibs") or {}).get("mean"))
+    iops = jsonio.as_float((agg.get("iops") or {}).get("mean"))
+    mibs = jsonio.as_float((agg.get("mibs") or {}).get("mean"))
     lat = agg.get("latency_us") or {}
-    errors = as_int(agg.get("errors_total"))
+    errors = jsonio.as_int(agg.get("errors_total"))
     if errors is None:
         errors = ""
     return [make_row(
-        engine, label, cfg.get("workload"), as_int(cfg.get("bs")), as_int(cfg.get("qd")),
-        as_int(cfg.get("threads")), iops, mibs,
-        as_float(lat.get("p50")), as_float(lat.get("p99")), as_float(lat.get("p999")),
-        as_float(lat.get("max")), as_int(agg.get("ops_total")), errors,
+        engine, label, cfg.get("workload"),
+        jsonio.as_int(cfg.get("bs")), jsonio.as_int(cfg.get("qd")),
+        jsonio.as_int(cfg.get("threads")), iops, mibs,
+        jsonio.as_float(lat.get("p50")), jsonio.as_float(lat.get("p99")),
+        jsonio.as_float(lat.get("p999")), jsonio.as_float(lat.get("max")),
+        jsonio.as_int(agg.get("ops_total")), errors,
         cfg.get("io_buffer_mode"), path,
     )]
 
@@ -308,11 +294,14 @@ def _fio_percentile(section: dict, target: float):
                 if best is None or abs(kf - target) < abs(best[0] - target):
                     best = (kf, v)
             if best is not None:
-                return as_float(best[1]) / 1000.0 if key.endswith("_ns") else as_float(best[1])
+                if key.endswith("_ns"):
+                    return jsonio.as_float(best[1]) / 1000.0
+                return jsonio.as_float(best[1])
         for mk in ("max", "mean"):
             if mk in s and target >= 99.999 and mk == "max":
-                return as_float(s[mk]) / 1000.0 if key.endswith("_ns") else as_float(s[mk])
-    # fall back to the latency max for the max column
+                if key.endswith("_ns"):
+                    return jsonio.as_float(s[mk]) / 1000.0
+                return jsonio.as_float(s[mk])
     return None
 
 
@@ -320,7 +309,7 @@ def _fio_max_lat(section: dict):
     for key in ("clat_ns", "lat_ns", "lat"):
         s = section.get(key)
         if isinstance(s, dict) and "max" in s:
-            v = as_float(s["max"])
+            v = jsonio.as_float(s["max"])
             return v / 1000.0 if key.endswith("_ns") else v
     return None
 
@@ -336,19 +325,22 @@ def parse_fio(path: Path, data: dict):
         write = job.get("write") or {}
         use_read = rw.startswith("read") or rw in ("randread", "read")
         if not rw:
-            use_read = as_float(read.get("io_bytes")) or 0 >= (as_float(write.get("io_bytes")) or 0)
+            use_read = (jsonio.as_float(read.get("io_bytes"))
+                        or 0 >= (jsonio.as_float(write.get("io_bytes")) or 0))
         # pick the direction that actually moved bytes
-        if not use_read and (as_float(read.get("io_bytes")) or 0) > (as_float(write.get("io_bytes")) or 0):
+        if not use_read and ((jsonio.as_float(read.get("io_bytes")) or 0)
+                             > (jsonio.as_float(write.get("io_bytes")) or 0)):
             use_read = True
-        elif use_read and (as_float(write.get("io_bytes")) or 0) > (as_float(read.get("io_bytes")) or 0):
+        elif use_read and ((jsonio.as_float(write.get("io_bytes")) or 0)
+                           > (jsonio.as_float(read.get("io_bytes")) or 0)):
             use_read = False
         sec = read if use_read else write
         workload = "randread" if "randread" in rw else "seqread" if "read" in rw else \
                    "randwrite" if "randwrite" in rw else "seqwrite" if rw else ""
         name = job.get("jobname") or path.stem
         case = path.stem if len(data.get("jobs") or []) == 1 else f"{path.stem}:{name}"
-        iops = as_float(sec.get("iops"))
-        bw_kib = as_float(sec.get("bw"))
+        iops = jsonio.as_float(sec.get("iops"))
+        bw_kib = jsonio.as_float(sec.get("bw"))
         mibs = bw_kib / 1024.0 if bw_kib is not None else None
         p50 = _fio_percentile(sec, 50.0)
         p99 = _fio_percentile(sec, 99.0)
@@ -358,9 +350,10 @@ def parse_fio(path: Path, data: dict):
         if errors is None:
             errors = sec.get("total_err")
         rows.append(make_row(
-            "fio", case, workload, as_int(opts.get("bs")), as_int(opts.get("iodepth")),
-            as_int(opts.get("numjobs")) or 1, iops, mibs, p50, p99, p999, mx,
-            as_int(sec.get("total_ios")), as_int(errors), "", path,
+            "fio", case, workload,
+            jsonio.as_int(opts.get("bs")), jsonio.as_int(opts.get("iodepth")),
+            jsonio.as_int(opts.get("numjobs")) or 1, iops, mibs, p50, p99, p999, mx,
+            jsonio.as_int(sec.get("total_ios")), jsonio.as_int(errors), "", path,
         ))
     return rows
 
@@ -383,7 +376,7 @@ def find_yaml_start(text: str) -> int:
 def _pct_value(d: dict, key: str):
     if not isinstance(d, dict):
         return None
-    return as_float(d.get(key))
+    return jsonio.as_float(d.get(key))
 
 
 def parse_seastar(path: Path, text: str):
@@ -407,7 +400,7 @@ def parse_seastar(path: Path, text: str):
         for key, value in shard_map.items():
             if key == "statistics":
                 if isinstance(value, dict):
-                    aio_retries = as_float(value.get("aio_retries"))
+                    aio_retries = jsonio.as_float(value.get("aio_retries"))
                 continue
             if key == "shard":
                 continue
@@ -422,9 +415,9 @@ def parse_seastar(path: Path, text: str):
         for e in entries:
             if not isinstance(e, dict):
                 continue
-            iops += as_float(e.get("IOPS")) or 0.0
-            throughput_kbs += as_float(e.get("throughput")) or 0.0
-            requests += as_int(e.get("stats", {}).get("total_requests")) or 0
+            iops += jsonio.as_float(e.get("IOPS")) or 0.0
+            throughput_kbs += jsonio.as_float(e.get("throughput")) or 0.0
+            requests += jsonio.as_int(e.get("stats", {}).get("total_requests")) or 0
             lat = e.get("latencies") or {}
             # io_tester quantile keys are "p0.5", "p0.99", "p0.999"
             for key, cur in (("p0.5", "p50"), ("p0.99", "p99"), ("p0.999", "p999")):
@@ -495,17 +488,18 @@ def collect_paths(paths, default_dir: Path):
 
 
 def fmt(value, width, precision=1):
+    """Right-justified table cell; the numeric core is ``md.thousands``."""
     if value is None or value == "":
         return "".rjust(width)
     if isinstance(value, float):
-        return f"{value:,.{precision}f}".rjust(width)
+        return md.thousands(value, precision).rjust(width)
     if isinstance(value, int):
-        return f"{value:,}".rjust(width)
+        return md.thousands(value, 0).rjust(width)
     return str(value).rjust(width)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[1],
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="*", help="raw result files or directories")
     ap.add_argument("--dir", default="bench-results",

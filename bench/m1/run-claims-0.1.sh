@@ -42,5 +42,5 @@ done
 echo "done: $SESSION"
 echo "analyze each sub-session with:"
 for variant in matched matchedbatch; do
-    echo "  python3 bench/m1/analyze_m1.py --dir $SESSION/read-matrix-$variant --out-prefix $SESSION/read-matrix-$variant/aggregate/claims"
+    echo "  python3 bench/m1/analyze_read_write.py --dir $SESSION/read-matrix-$variant --out-prefix $SESSION/read-matrix-$variant/aggregate/claims"
 done

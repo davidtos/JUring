@@ -1,41 +1,12 @@
 #!/usr/bin/env python3
-"""analyze_durability.py -- B6 W24 durability A/B aggregator (docs/b6-design.md §6.3).
+"""B6 W24 durability A/B aggregator (supporting evidence).
 
-Reads the raw per-process JSON emitted by the B6-extended runners
-
-    bench/juring/JUringStreamBench.java        (--durability writeback|fdatasync|fsync|dsync,
-                                                --sync-every BYTES)
-    bench/seastar/seastar_stream_bench.cc      (--durability writeback|fdatasync|dsync,
-                                                --sync-every BYTES)
-
-from ``bench/results/<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
-
-    bench/results/<session>/aggregate/durability.json
-    bench/results/<session>/aggregate/durability.md
-
-This is the W24 *supporting evidence* analyzer -- not a milestone verdict.  It:
-
-  * requires ``schema_extensions`` to contain ``b6-durability-1`` on every cell JSON and
-    fails loudly (exit 3) on a mixed/old session.  It never modifies the M2/M3 artifacts
-    and is a separate script from the byte-identical ``analyze_stream.py``;
-  * reports per arm (engine x variant): MiB/s mean / sample sd / two-sided 95% CI
-    (Student t) / CV%, syncs_issued/s, MiB per sync (bytes_synced/syncs_completed),
-    sync_wait_share, durability-point (sync) latency p50/p99, passes and the per-rep
-    write-state class;
-  * computes the within-rep paired durability-cost ratio per engine
-    (durable MiB/s / writeback MiB/s, same rep index) with a 95% CI over reps, plus the
-    state-matched subset (both arms of the pair in the same class);
-  * applies the frozen state-class rule (derived from M1 §4 + M2 §6, fixed before the
-    campaign): a rep is ``fast`` iff MiB/s >= 550 and write p50 <= 250 us, ``slow`` iff
-    MiB/s < 300 or write p50 > 600 us, else ``mixed``; the M1 0.92 same-arm rule also
-    marks a rep slow (MiB/s < 0.92 x the arm's max).  Classes are computed *within* the
-    arm, never across arms;
-  * applies the disclosure rules: an arm pair is ranked only if both arms have >= 2 reps
-    in the same class (else INCONCLUSIVE); an arm with CV > 10% is "unstable, no ranking"
-    (methodology D7); the two writeback controls bracketing the Tier-1 block must agree
-    within 10%, otherwise the session is state-confounded and only the raw table is
-    reported;
-  * keeps every rep (failed/missing reps are listed explicitly, never silently dropped).
+Reads the B6-extended JUring/seastar stream JSONs from
+``<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
+``<session>/aggregate/durability.{json,md}``.  This is W24 supporting evidence,
+not a milestone verdict: per-arm statistics, the within-rep paired durability
+cost (durable/writeback), the frozen write-state classes, the disclosure rules,
+and the writeback bracket control (docs/b6-design.md §6.3).
 
 Usage:
     python3 bench/stream/analyze_durability.py [--session NAME] [--results DIR] [--out DIR]
@@ -47,11 +18,12 @@ Exit codes: 0 = aggregate written; 1 = no cell JSONs found; 2 = usage error;
 
 import argparse
 import datetime
-import glob
-import json
-import math
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 REQUIRED_EXTENSION = "b6-durability-1"
@@ -68,11 +40,6 @@ M1_RATIO = 0.92           # M1 §4 rule: a rep < 0.92 x same-arm max is slow
 CV_UNSTABLE_PCT = 10.0    # methodology D7: CV > 10 % => unstable, no ranking
 BRACKET_TOLERANCE_PCT = 10.0
 
-# Two-sided 95% Student-t critical values (df = 1..30).
-_T975 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
-         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
-         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
-
 # Engine rows: Tier-1 decisive arms, Tier-2 exploratory arms.
 TIER1_ARMS = ("writeback", "fdatasync")           # both engines
 TIER2_DURABLE = ("dsync",)                        # both engines (exploratory)
@@ -81,182 +48,9 @@ CONTROL_END = "writeback-bracket"                 # last-overall JUring writebac
 ALL_ENGINES = ("juring", "seastar")
 
 
-# ---------------------------------------------------------------------------
-# small statistics helpers (stdlib only; same conventions as analyze_stream.py)
-# ---------------------------------------------------------------------------
-
-def _mean(values):
-    return sum(values) / len(values) if values else None
-
-
-def _sd(values):
-    n = len(values)
-    if n < 2:
-        return None
-    m = _mean(values)
-    return math.sqrt(sum((x - m) ** 2 for x in values) / (n - 1))
-
-
-def _t975(df):
-    if df < 1:
-        return None
-    return _T975[df - 1] if df <= len(_T975) else 1.96
-
-
-def _ci95(values):
-    n = len(values)
-    if n < 2:
-        return None
-    return _t975(n - 1) * _sd(values) / math.sqrt(n)
-
-
-def _cv_pct(values):
-    m = _mean(values)
-    if not m or len(values) < 2:
-        return None
-    return 100.0 * _sd(values) / abs(m)
-
 
 def _r6(x):
     return None if x is None else round(float(x), 6)
-
-
-def _fmt(v, digits=1, dash="n/a"):
-    if v is None:
-        return dash
-    return ("%." + str(digits) + "f") % float(v)
-
-
-def _fmt_signed(v, digits=2, dash="n/a"):
-    if v is None:
-        return dash
-    return ("%+." + str(digits) + "f") % float(v)
-
-
-# ---------------------------------------------------------------------------
-# loading and schema validation
-# ---------------------------------------------------------------------------
-
-def parse_name(stem):
-    """`<cell>__<engine>__<variant>__r<rep>` -> (cell, engine, variant, rep)."""
-    parts = stem.split("__")
-    if len(parts) != 4:
-        return None
-    cell, engine, variant, repstr = parts
-    if not repstr.startswith("r"):
-        return None
-    try:
-        rep = int(repstr[1:])
-    except ValueError:
-        return None
-    if not cell or not engine or not variant or rep < 1:
-        return None
-    return cell, engine, variant, rep
-
-
-def extract(data):
-    """Pull the fields this analyzer needs out of one bench JSON object."""
-    cfg = data.get("config") or {}
-    agg = data.get("aggregate") or {}
-    runs = data.get("runs") or []
-    run = runs[0] if runs else {}
-    run_lat = run.get("latency_us") or {}
-    run_sync = run.get("sync_wait_us") or {}
-
-    def pick(*paths, default=None):
-        for path in paths:
-            cur = data
-            for key in path:
-                if not isinstance(cur, dict) or key not in cur:
-                    cur = None
-                    break
-                cur = cur[key]
-            if cur is not None:
-                return cur
-        return default
-
-    out = {
-        "status": data.get("status"),
-        "error": data.get("error"),
-        "schema_version": data.get("schema_version"),
-        "schema_extensions": data.get("schema_extensions"),
-        "engine": data.get("engine"),
-        "label": data.get("label"),
-        "manifest": data.get("manifest") or {},
-        "workload": cfg.get("workload"),
-        "bs": cfg.get("bs"),
-        "qd": cfg.get("qd"),
-        "dataset_bytes": cfg.get("dataset_bytes"),
-        "seconds": cfg.get("seconds"),
-        "warmup_sec": cfg.get("warmup_sec"),
-        "seed": cfg.get("seed"),
-        "direct_io": cfg.get("direct_io"),
-        "registered_files": cfg.get("registered_files"),
-        "config_durability": cfg.get("durability"),
-        "sync_every_bytes": cfg.get("sync_every_bytes"),
-        "aio_fsync": cfg.get("aio_fsync"),
-        "run_durability_mode": run.get("durability_mode", cfg.get("durability")),
-        "passes": run.get("passes"),
-        "mibs": pick(("aggregate", "mibs", "mean"), default=run.get("mibs")),
-        "run_seconds": run.get("seconds"),
-        "errors_total": pick(("aggregate", "errors_total"), default=0),
-        "syncs_issued": run.get("syncs_issued", 0),
-        "syncs_completed": run.get("syncs_completed", 0),
-        "syncs_failed": run.get("syncs_failed", 0),
-        "durability_points": run.get("durability_points", 0),
-        "bytes_synced": run.get("bytes_synced", 0),
-        "sync_wait_share": run.get("sync_wait_share", 0.0),
-        "chunk_p50_us": run_lat.get("p50"),
-        "chunk_p99_us": run_lat.get("p99"),
-        "sync_p50_us": run_sync.get("p50"),
-        "sync_p99_us": run_sync.get("p99"),
-        "sync_samples": run_sync.get("samples", 0),
-    }
-    return out
-
-
-def load_session(results_dir):
-    """Returns (records, unparsed, schema_errors)."""
-    pattern = os.path.join(results_dir, "cells", "*.json")
-    records = []
-    unparsed = []
-    schema_errors = []
-    paths = sorted(glob.glob(pattern))
-    for path in paths:
-        stem = os.path.basename(path)[:-len(".json")]
-        parsed = parse_name(stem)
-        if parsed is None:
-            unparsed.append({"file": path, "reason": "unrecognised cell filename "
-                             "(expected <cell>__<engine>__<variant>__r<rep>.json)"})
-            continue
-        cell, engine, variant, rep = parsed
-        rec = {"cell": cell, "engine": engine, "variant": variant, "rep": rep,
-               "path": path, "data": None, "error": None, "extracted": None}
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                rec["data"] = json.load(fh)
-        except Exception as exc:                      # malformed JSON
-            rec["error"] = "unreadable/invalid JSON: %s" % exc
-            schema_errors.append({"file": path, "reason": rec["error"]})
-            continue
-        ext = rec["data"].get("schema_extensions")
-        if not isinstance(ext, list) or REQUIRED_EXTENSION not in ext:
-            schema_errors.append({
-                "file": path,
-                "reason": "missing schema_extensions [%r]: this is not a B6 durability "
-                          "JSON (schema_extensions=%r); refusing to aggregate a "
-                          "mixed/old session" % (REQUIRED_EXTENSION, ext)})
-            continue
-        if rec["data"].get("schema_version") != SCHEMA_VERSION:
-            schema_errors.append({"file": path,
-                                  "reason": "schema_version %r != %r (the B6 extension "
-                                            "must be additive on 1.0)"
-                                            % (rec["data"].get("schema_version"),
-                                               SCHEMA_VERSION)})
-            continue
-        rec["extracted"] = extract(rec["data"])
-        records.append(rec)
-    return records, unparsed, schema_errors
 
 
 # ---------------------------------------------------------------------------
@@ -343,10 +137,10 @@ def summarize_arm(engine, variant, recs):
     class_counts = {"fast": 0, "mixed": 0, "slow": 0, "unknown": 0}
     for r in rows:
         class_counts[r["class"]] = class_counts.get(r["class"], 0) + 1
-    def stats(key):
+    def field_stats(key):
         vals = [r[key] for r in rows if r.get(key) is not None]
-        return {"n": len(vals), "mean": _r6(_mean(vals)), "sd": _r6(_sd(vals)),
-                "ci95": _r6(_ci95(vals)), "cv_pct": _r6(_cv_pct(vals)),
+        return {"n": len(vals), "mean": _r6(stats.mean(vals)), "sd": _r6(stats.sd(vals)),
+                "ci95": _r6(stats.ci95(vals)), "cv_pct": _r6(stats.cv_pct(vals)),
                 "min": _r6(min(vals)) if vals else None,
                 "max": _r6(max(vals)) if vals else None,
                 "values_by_rep": {str(r["rep"]): _r6(r.get(key)) for r in rows
@@ -357,20 +151,20 @@ def summarize_arm(engine, variant, recs):
         "arm": arm_key(engine, variant),
         "tier": arm_tier(engine, variant),
         "n": len(rows),
-        "mibs": stats("mibs"),
-        "chunk_latency_us": {"p50": stats("p50_us"), "p99": stats("p99_us")},
-        "sync_latency_us": {"p50": stats("sync_p50_us"), "p99": stats("sync_p99_us")},
-        "syncs_issued_per_sec": stats("syncs_per_sec"),
-        "mib_per_sync": stats("mib_per_sync"),
-        "sync_wait_share": stats("sync_wait_share"),
-        "passes": stats("passes"),
+        "mibs": field_stats("mibs"),
+        "chunk_latency_us": {"p50": field_stats("p50_us"), "p99": field_stats("p99_us")},
+        "sync_latency_us": {"p50": field_stats("sync_p50_us"), "p99": field_stats("sync_p99_us")},
+        "syncs_issued_per_sec": field_stats("syncs_per_sec"),
+        "mib_per_sync": field_stats("mib_per_sync"),
+        "sync_wait_share": field_stats("sync_wait_share"),
+        "passes": field_stats("passes"),
         "syncs_total": sum(r["syncs_completed"] for r in rows),
         "syncs_failed_total": sum(r["syncs_failed"] for r in rows),
         "bytes_synced_total": sum(r["bytes_synced"] for r in rows),
         "class_counts": class_counts,
-        "cv_pct": _r6(_cv_pct(mibs_values)),
-        "unstable": bool(_cv_pct(mibs_values) is not None
-                         and _cv_pct(mibs_values) > CV_UNSTABLE_PCT),
+        "cv_pct": _r6(stats.cv_pct(mibs_values)),
+        "unstable": bool(stats.cv_pct(mibs_values) is not None
+                         and stats.cv_pct(mibs_values) > CV_UNSTABLE_PCT),
         "reps": rows,
     }
     return payload
@@ -434,12 +228,12 @@ def paired_cost(engine, control_arm, durable_arm, expected_reps):
                                   "durable_class": pairs[r]["durable_class"],
                                   "state_matched": pairs[r]["state_matched"]}
                          for r in sorted(pairs)},
-        "ratio_mean_all": _r6(_mean(all_ratios)),
-        "ratio_ci95_all": _r6(_ci95(all_ratios)),
-        "cost_mean_all": _r6(1.0 - _mean(all_ratios)) if all_ratios else None,
-        "ratio_mean_state_matched": _r6(_mean(matched)),
-        "ratio_ci95_state_matched": _r6(_ci95(matched)),
-        "cost_mean_state_matched": _r6(1.0 - _mean(matched)) if matched else None,
+        "ratio_mean_all": _r6(stats.mean(all_ratios)),
+        "ratio_ci95_all": _r6(stats.ci95(all_ratios)),
+        "cost_mean_all": _r6(1.0 - stats.mean(all_ratios)) if all_ratios else None,
+        "ratio_mean_state_matched": _r6(stats.mean(matched)),
+        "ratio_ci95_state_matched": _r6(stats.ci95(matched)),
+        "cost_mean_state_matched": _r6(1.0 - stats.mean(matched)) if matched else None,
         "control_arm_cv_pct": control_arm["cv_pct"],
         "durable_arm_cv_pct": durable_arm["cv_pct"],
         "ranking_allowed": bool(ranked),
@@ -467,7 +261,7 @@ def render_markdown(session, results_dir, aggregate):
     a("Protocol observed in the cell JSONs: warmup %ss + measured %ss per process, "
       "sync-every %s B, seed %s; the driver protocol (R, 300 s rests, alternating arm "
       "order, writeback bracket control) is recorded in the session manifest."
-      % (_fmt(protocol.get("warmup_sec"), 0), _fmt(protocol.get("seconds"), 0),
+      % (md.fixed(protocol.get("warmup_sec"), 0), md.fixed(protocol.get("seconds"), 0),
          protocol.get("sync_every_bytes", "n/a"), protocol.get("seed")))
     a("")
     a("## Tier-1 arms (decisive): per-arm summary (all reps kept)")
@@ -482,15 +276,15 @@ def render_markdown(session, results_dir, aggregate):
         m = arm["mibs"]
         cl = arm["class_counts"]
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %d/%d/%d | %s |"
-          % (arm["engine"], arm["variant"], arm["n"], _fmt(m["mean"]), _fmt(m["sd"], 2),
-             _fmt(m["ci95"], 2), _fmt(arm["cv_pct"], 2),
-             _fmt(arm["syncs_issued_per_sec"]["mean"]),
-             _fmt(arm["mib_per_sync"]["mean"], 3),
-             _fmt(arm["sync_wait_share"]["mean"], 3),
-             _fmt(arm["sync_latency_us"]["p50"]["mean"]),
-             _fmt(arm["sync_latency_us"]["p99"]["mean"]),
-             _fmt(arm["chunk_latency_us"]["p50"]["mean"]),
-             _fmt(arm["passes"]["mean"]),
+          % (arm["engine"], arm["variant"], arm["n"], md.fixed(m["mean"]), md.fixed(m["sd"], 2),
+             md.fixed(m["ci95"], 2), md.fixed(arm["cv_pct"], 2),
+             md.fixed(arm["syncs_issued_per_sec"]["mean"]),
+             md.fixed(arm["mib_per_sync"]["mean"], 3),
+             md.fixed(arm["sync_wait_share"]["mean"], 3),
+             md.fixed(arm["sync_latency_us"]["p50"]["mean"]),
+             md.fixed(arm["sync_latency_us"]["p99"]["mean"]),
+             md.fixed(arm["chunk_latency_us"]["p50"]["mean"]),
+             md.fixed(arm["passes"]["mean"]),
              cl.get("fast", 0), cl.get("mixed", 0), cl.get("slow", 0),
              "yes" if arm["unstable"] else "no"))
     a("")
@@ -509,11 +303,11 @@ def render_markdown(session, results_dir, aggregate):
                 "exploratory (O_DSYNC per write; no explicit sync)" if arm["variant"] == "dsync"
                 else "state-control / bracket")
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %d/%d/%d | %s |"
-          % (arm["engine"], arm["variant"], arm["n"], _fmt(m["mean"]),
-             _fmt(arm["cv_pct"], 2), _fmt(arm["syncs_issued_per_sec"]["mean"]),
-             _fmt(arm["sync_wait_share"]["mean"], 3),
-             _fmt(arm["sync_latency_us"]["p50"]["mean"]),
-             _fmt(arm["sync_latency_us"]["p99"]["mean"]),
+          % (arm["engine"], arm["variant"], arm["n"], md.fixed(m["mean"]),
+             md.fixed(arm["cv_pct"], 2), md.fixed(arm["syncs_issued_per_sec"]["mean"]),
+             md.fixed(arm["sync_wait_share"]["mean"], 3),
+             md.fixed(arm["sync_latency_us"]["p50"]["mean"]),
+             md.fixed(arm["sync_latency_us"]["p99"]["mean"]),
              cl.get("fast", 0), cl.get("mixed", 0), cl.get("slow", 0), note))
     a("")
     a("## Within-rep paired durability cost (durable MiB/s / writeback MiB/s, same rep)")
@@ -524,10 +318,10 @@ def render_markdown(session, results_dir, aggregate):
     for engine, p in sorted(aggregate["paired"].items()):
         a("| %s | %s vs %s | %d | %s | %s | %s | %d | %s | %s | %s |"
           % (engine, p["durable_arm"], p["control_arm"], p["n_all_pairs"],
-             _fmt(p["ratio_mean_all"], 3), _fmt(p["ratio_ci95_all"], 3),
-             _fmt(p["cost_mean_all"], 3), p["n_state_matched_pairs"],
-             _fmt(p["ratio_mean_state_matched"], 3),
-             _fmt(p["cost_mean_state_matched"], 3), p["verdict"]))
+             md.fixed(p["ratio_mean_all"], 3), md.fixed(p["ratio_ci95_all"], 3),
+             md.fixed(p["cost_mean_all"], 3), p["n_state_matched_pairs"],
+             md.fixed(p["ratio_mean_state_matched"], 3),
+             md.fixed(p["cost_mean_state_matched"], 3), p["verdict"]))
     a("")
     a("Per-rep paired detail (positions and state classes attached; every rep kept):")
     a("")
@@ -538,8 +332,8 @@ def render_markdown(session, results_dir, aggregate):
         for rep in sorted(p["pairs_by_rep"], key=lambda x: int(x)):
             pr = p["pairs_by_rep"][rep]
             a("| %s | %s | %s | %s | %s | %s | %s | %s | %s |"
-              % (engine, rep, _fmt(pr["control_mibs"]), _fmt(pr["durable_mibs"]),
-                 _fmt(pr["ratio"], 3), _fmt(None if pr["cost"] is None else 100.0 * pr["cost"], 1),
+              % (engine, rep, md.fixed(pr["control_mibs"]), md.fixed(pr["durable_mibs"]),
+                 md.fixed(pr["ratio"], 3), md.fixed(None if pr["cost"] is None else 100.0 * pr["cost"], 1),
                  pr["control_class"], pr["durable_class"],
                  "yes" if pr["state_matched"] else "no"))
     a("")
@@ -550,9 +344,9 @@ def render_markdown(session, results_dir, aggregate):
       "within 10% |")
     a("|---|---|---|---|")
     a("| %s MiB/s (%s) | %s MiB/s (%s) | %s %% | %s |"
-      % (_fmt(br["start_mibs"]), br.get("start_class", "n/a"),
-         _fmt(br["end_mibs"]), br.get("end_class", "n/a"),
-         _fmt(br["diff_pct"], 2), "yes" if br["agree_within_10pct"] else "NO"))
+      % (md.fixed(br["start_mibs"]), br.get("start_class", "n/a"),
+         md.fixed(br["end_mibs"]), br.get("end_class", "n/a"),
+         md.fixed(br["diff_pct"], 2), "yes" if br["agree_within_10pct"] else "NO"))
     a("")
     a(br["note"])
     a("")
@@ -591,9 +385,6 @@ def render_markdown(session, results_dir, aggregate):
 # ---------------------------------------------------------------------------
 
 def main(argv):
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, "..", ".."))
-
     ap = argparse.ArgumentParser(
         description="Aggregate B6 W24 durability cells into aggregate/durability.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
@@ -605,10 +396,14 @@ def main(argv):
     args = ap.parse_args(argv)
 
     results_dir = os.path.abspath(args.results) if args.results else os.path.join(
-        repo_root, "bench", "results", args.session)
+        jsonio.REPO_ROOT, "bench", "results", args.session)
     out_dir = os.path.abspath(args.out) if args.out else os.path.join(results_dir, "aggregate")
 
-    records, unparsed, schema_errors = load_session(results_dir)
+    records, unparsed, schema_errors = load_session(
+        results_dir, expected_hint="<cell>__<engine>__<variant>__r<rep>.json",
+        schema_version=SCHEMA_VERSION, required_extension=REQUIRED_EXTENSION,
+        extension_note=": this is not a B6 durability JSON",
+        version_note=" (the B6 extension must be additive on 1.0)")
     if schema_errors:
         sys.stderr.write("error: B6 durability schema check FAILED for %d cell JSON(s); "
                          "refusing to aggregate a mixed/old session\n" % len(schema_errors))
@@ -619,8 +414,7 @@ def main(argv):
         sys.stderr.write("error: no cell JSON files found under %s/cells\n" % results_dir)
         return 1
 
-    cells = sorted({r["cell"] for r in records},
-                   key=lambda c: (CELL_ORDER.index(c) if c in CELL_ORDER else len(CELL_ORDER), c))
+    cells = sort_cells({r["cell"] for r in records}, CELL_ORDER)
     if len(cells) != 1:
         sys.stderr.write("warning: expected exactly one W24 cell, found %r; aggregating all\n"
                          % (cells,))
@@ -778,25 +572,20 @@ def main(argv):
         "disclosures": disclosures,
     }
 
-    os.makedirs(out_dir, exist_ok=True)
     json_path = os.path.join(out_dir, "durability.json")
     md_path = os.path.join(out_dir, "durability.md")
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(aggregate, fh, indent=2, sort_keys=False)
-        fh.write("\n")
-    with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(render_markdown(args.session, results_dir, aggregate))
-        fh.write("\n")
+    cli.write_json(json_path, aggregate)
+    cli.write_text(md_path, render_markdown(args.session, results_dir, aggregate))
 
     print("wrote %s" % json_path)
     print("wrote %s" % md_path)
     for engine, p in sorted(paired.items()):
         print("  paired %-7s durable/control ratio all=%s state-matched=%s (%s)"
-              % (engine, _fmt(p["ratio_mean_all"], 3),
-                 _fmt(p["ratio_mean_state_matched"], 3), p["verdict"]))
+              % (engine, md.fixed(p["ratio_mean_all"], 3),
+                 md.fixed(p["ratio_mean_state_matched"], 3), p["verdict"]))
     print("  bracket control: start=%s end=%s diff=%s%% agree=%s"
-          % (_fmt(bracket["start_mibs"]), _fmt(bracket["end_mibs"]),
-             _fmt(bracket["diff_pct"], 2), bracket["agree_within_10pct"]))
+          % (md.fixed(bracket["start_mibs"]), md.fixed(bracket["end_mibs"]),
+             md.fixed(bracket["diff_pct"], 2), bracket["agree_within_10pct"]))
     if excluded or missing or unparsed:
         print("  data quality: excluded=%d missing=%d unparsed=%d (see aggregate/durability.md)"
               % (len(excluded), len(missing), len(unparsed)))

@@ -62,7 +62,7 @@ if (( DRY == 1 )); then
     echo "Unattended chain dry-run:"
     echo "  root=$ROOT  logs=$LOGS"
     echo "  phase 0: ensure $HP_MOUNT, pool 4608, smart-log before, record state"
-    echo "  phase 1: prlimit --memlock=unlimited -- runuser -u david -- env JAVA_BIN=$JAVA_BIN ... bench/stepd/run-stepd.sh --block all --results $STEPD_RESULTS"
+    echo "  phase 1: prlimit --memlock=unlimited -- runuser -u david -- env JAVA_BIN=$JAVA_BIN ... bench/stepd/run-host-setup.sh --block all --results $STEPD_RESULTS"
     echo "  phase 2: runuser -u david -- bench/stepd/run-write-chain.sh --session-dir $WRITE_SESSION --deadline-epoch $DEADLINE"
     echo "  phase 3: analyses, smart-log after, cleanup pool/mount, RESULTS-SUMMARY.md"
     echo "  window=${WINDOW_HOURS}h deadline=$(date -u -d "@$DEADLINE" 2>/dev/null)"
@@ -77,9 +77,9 @@ if [[ ! -s $STATUS ]]; then
         echo "# started: $(now)  host: $(hostname)  window=${WINDOW_HOURS}h  deadline=$(date -u -d "@$DEADLINE")"
         echo "# repo: $(git rev-parse HEAD 2>/dev/null || echo unknown) dirty=$([[ -n $(git status --porcelain 2>/dev/null | head -1) ]] && echo true || echo false)"
         echo "# java: $("$JAVA_BIN" -version 2>&1 | head -1)"
-        echo "# artifacts: run-stepd.sh=$(sha256sum "$HERE/run-stepd.sh" | cut -d' ' -f1)"
+        echo "# artifacts: run-host-setup.sh=$(sha256sum "$HERE/run-host-setup.sh" | cut -d' ' -f1)"
         echo "#            run-write-chain.sh=$(sha256sum "$HERE/run-write-chain.sh" | cut -d' ' -f1)"
-        echo "#            write_state_analysis.py=$(sha256sum "$HERE/write_state_analysis.py" | cut -d' ' -f1)"
+        echo "#            analyze_write_state.py=$(sha256sum "$HERE/analyze_write_state.py" | cut -d' ' -f1)"
         echo "#            run-unattended.sh=$(sha256sum "$HERE/run-unattended.sh" | cut -d' ' -f1)"
     } >"$STATUS"
 fi
@@ -153,11 +153,11 @@ say "PHASE 0 done: huge_free=$(awk '/HugePages_Free/{print $2}' /proc/meminfo) m
 say "PHASE 1: Step D campaign (seastar hugetlbfs bracket + memlock cells)"
 timeout 6000 prlimit --memlock=unlimited:unlimited -- runuser -u david -- env \
     JAVA_BIN="$JAVA_BIN" JAVA_HOME="$JDK_HOME" \
-    bash -lc "cd '$REPO' && bench/stepd/run-stepd.sh --block all --results '$STEPD_RESULTS'" \
+    bash -lc "cd '$REPO' && bench/stepd/run-host-setup.sh --block all --results '$STEPD_RESULTS'" \
     >"$LOGS/stepd.log" 2>&1
 RC_STEPD=$?
 say "PHASE 1 done: rc=$RC_STEPD log=$LOGS/stepd.log"
-as_david bash -lc "cd '$REPO' && python3 bench/stepd/analyze_stepd.py --dir '$STEPD_RESULTS'" \
+as_david bash -lc "cd '$REPO' && python3 bench/stepd/analyze_host_setup.py --dir '$STEPD_RESULTS'" \
     >"$LOGS/stepd-analysis.log" 2>&1
 say "PHASE 1 analysis: rc=$? log=$LOGS/stepd-analysis.log"
 smart >"$STATE/smart-mid.txt"

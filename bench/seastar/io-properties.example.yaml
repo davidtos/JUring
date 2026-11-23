@@ -1,3 +1,12 @@
+# TEMPLATE ONLY - DO NOT PASS THIS FILE TO A BENCHMARK UNCHANGED.
+#
+# The numbers below are placeholders and the mountpoint is an example. Seastar
+# stat()s every configured mountpoint at startup: a missing path aborts the
+# process, and a path that exists but was not measured silently installs a
+# fictional io_queue scheduler model. Measure the device with
+# build/release/apps/iotune/iotune on the host, put the real mountpoint that
+# backs --storage in the file, and only then pass it with --io-properties-file.
+#
 # Example seastar --io-properties-file, describing THIS host's NVMe device.
 #
 # Purpose: seastar's I/O scheduler models the disk it runs on.  Without this

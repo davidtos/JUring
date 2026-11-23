@@ -1,0 +1,6 @@
+wrote <WORK>/group-commit/out/group-commit.json
+wrote <WORK>/group-commit/out/group-commit.md
+  W25-4k-b1    batch=1    n=3 MiB/s=5.9 group_p99=2.20 ms syncs/group=1.000000 verify=ok
+  W25-4k-b8    batch=8    n=3 MiB/s=62.8 group_p99=1.15 ms syncs/group=1.000000 verify=ok
+  W25-4k-b32   batch=32   n=3 MiB/s=293.8 group_p99=0.69 ms syncs/group=1.000000 verify=ok
+  W25-4k-b128  batch=128  n=3 MiB/s=720.7 group_p99=0.98 ms syncs/group=1.000000 verify=ok

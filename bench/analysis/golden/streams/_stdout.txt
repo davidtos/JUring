@@ -1,0 +1,7 @@
+wrote <WORK>/streams/out/stream.json
+wrote <WORK>/streams/out/stream.md
+overall: point_estimate_pass=True lower_bound_pass=False verdict=inconclusive
+  W21-128k   stream_write   juring=610.0 seastar=438.6 ratio=3.147 (inconclusive)
+  W22-128k   stream_read    juring=2284.6 seastar=2327.5 ratio=0.982 (pass)
+  W21-1M     stream_write   juring=569.5 seastar=355.7 ratio=3.056 (inconclusive)
+  W22-1M     stream_read    juring=4662.8 seastar=4724.3 ratio=0.986 (pass)

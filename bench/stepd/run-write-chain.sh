@@ -41,7 +41,7 @@ WRITE_FILE=$REPO/nvme-data/write_files/single_file_bench_w.bin
 READ_FILE=/mnt/TestData/read_files/single_file_bench.bin
 JAVA_BIN=${JAVA_BIN:-/home/david/.jdks/openjdk-26.0.2/bin/java}
 WRC=$REPO/bench/write/run-write-cells.sh
-ANALYZER=$HERE/write_state_analysis.py
+ANALYZER=$HERE/analyze_write_state.py
 LOGS=$SESSION/logs
 STATUS=$SESSION/STATUS.txt
 mkdir -p "$LOGS"

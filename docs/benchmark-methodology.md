@@ -269,6 +269,20 @@ partially-recovered SLC burst exhausts mid-generation and systematically penalis
 runs last, which is exactly what the first pilot measured (`max/min = 2.0921` at 4 KiB QD 64). Both
 protocols record their rest decisions, and results from one are never pooled with the other.
 
+On 2026-11-23 the continuous protocol itself could not hold a generation: two completed generations
+failed the frozen gate (within-cell `max/min` 1.71–2.61, with one Seastar run at 38k IOPS). I
+stopped that campaign rather than pick a flattering generation, and ran a time-multiplexed
+interleaved bracket whose protocol was fixed before it ran
+([write-state-interleaved-protocol.md](write-state-interleaved-protocol.md)): alternate the three
+engines in 15 s warmup + 30 s measured cycles, five cycles per queue depth, rotate the order every
+cycle, and pair the ratios within a cycle. That bracket is descriptive only — it is not the frozen
+gate and is never pooled with the state-controlled sessions — but it measures all three engines over
+the same drifting state. The host's SMART log around the session (3% used, 100% available spare, 0
+thermal-throttle transitions, 43 °C, 50.74 TB written over 3,361 power-on hours) rules out wear and
+thermal throttling as the cause of the movement; it is the SLC/TLC write behaviour of a consumer
+NVMe. The harness records the host-visible hwmon temperature around each run; root-only
+`nvme smart-log` is read on the host when available.
+
 The test partition has no `discard` mount option and automatic discard is not used. I never
 `blkdiscard` a shared data partition and never issue discard during a comparison; discard studies
 belong on a dedicated scratch namespace with identical state resets between engines.

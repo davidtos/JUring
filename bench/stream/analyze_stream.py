@@ -1,27 +1,13 @@
 #!/usr/bin/env python3
-"""analyze_stream.py -- B2 W21/W22 stream-matrix aggregator (docs/b2-design.md §3.3).
+"""B2 W21/W22 stream-matrix aggregator.
 
-Reads the raw per-process JSON emitted by bench/juring/JUringStreamBench.java and
-bench/seastar/seastar_stream_bench into
-``bench/results/<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
-
-    bench/results/<session>/aggregate/stream.json
-    bench/results/<session>/aggregate/stream.md
-
-with:
-
-  * per cell, per engine row: MiB/s mean / sample sd / two-sided 95% CI (Student t),
-    coefficient of variation, mean chunk-latency p50/p99, errors and n;
-  * per-rep paired ratio ``juring MiB/s / seastar MiB/s`` for the primary rows:
-    mean, two-sided 95% CI and the one-sided 95% lower bound;
-  * a verdict against the plan-M2 bar ``juring MiB/s >= 0.85 * seastar MiB/s``
-    (point estimate and the stricter one-sided-lower-bound reading), plus a parity
-    note;
-  * every rejected/failed/missing rep listed explicitly -- no rep is silently
-    dropped (json ``excluded`` / ``missing`` lists, md "Data quality" section).
-
-Only the Python standard library is used. The exploratory JUring ``--buffered``
-rows are reported but never used for the verdict (disclosed asymmetry, §3.3).
+Reads the per-process JSON written by the JUring/seastar stream runners from
+``<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
+``<session>/aggregate/stream.{json,md}``: per-cell engine statistics, per-rep
+paired juring/seastar MiB/s ratios, and the plan-M2 bar
+``juring MiB/s >= 0.85 * seastar MiB/s``.  Failed/missing/excluded reps are listed
+explicitly; the exploratory ``juring --buffered`` row is disclosed but never used
+for the verdict (docs/b2-design.md §3.3).
 
 Usage:
     python3 bench/stream/analyze_stream.py [--session NAME] [--results DIR]
@@ -32,11 +18,12 @@ Exit codes: 0 = aggregate written; 1 = no cell JSONs found; 2 = usage error.
 
 import argparse
 import datetime
-import glob
-import json
-import math
 import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_SESSION = "b2-2026-11-13"
@@ -44,171 +31,10 @@ PRIMARY_ENGINES = ("juring", "seastar")
 EXPLORATORY = "juring-buffered"
 CELL_ORDER = ["W21-128k", "W22-128k", "W21-1M", "W22-1M"]
 
-# Two-sided 95% Student-t critical values (df = 1..30) and one-sided 95%.
-_T975 = [12.706, 4.303, 3.182, 2.776, 2.571, 2.447, 2.365, 2.306, 2.262, 2.228,
-         2.201, 2.179, 2.160, 2.145, 2.131, 2.120, 2.110, 2.101, 2.093, 2.086,
-         2.080, 2.074, 2.069, 2.064, 2.060, 2.056, 2.052, 2.048, 2.045, 2.042]
-_T95_ONE_SIDED = [6.314, 2.920, 2.353, 2.132, 2.015, 1.943, 1.895, 1.860, 1.833, 1.812,
-                  1.796, 1.782, 1.771, 1.761, 1.753, 1.746, 1.740, 1.734, 1.729, 1.725,
-                  1.721, 1.717, 1.714, 1.711, 1.708, 1.706, 1.703, 1.701, 1.699, 1.697]
 
 
-# ---------------------------------------------------------------------------
-# small statistics helpers (stdlib only)
-# ---------------------------------------------------------------------------
-
-def _mean(values):
-    return sum(values) / len(values) if values else None
-
-
-def _sd(values):
-    """Sample standard deviation (n-1); None for n < 2."""
-    n = len(values)
-    if n < 2:
-        return None
-    m = _mean(values)
-    return math.sqrt(sum((x - m) ** 2 for x in values) / (n - 1))
-
-
-def _t975(df):
-    if df < 1:
-        return None
-    return _T975[df - 1] if df <= len(_T975) else 1.96
-
-
-def _t95_one_sided(df):
-    if df < 1:
-        return None
-    return _T95_ONE_SIDED[df - 1] if df <= len(_T95_ONE_SIDED) else 1.645
-
-
-def _ci95(values):
-    """Two-sided 95% CI half-width (Student t); None for n < 2."""
-    n = len(values)
-    if n < 2:
-        return None
-    return _t975(n - 1) * _sd(values) / math.sqrt(n)
-
-
-def _one_sided_lower(values):
-    """One-sided 95% lower confidence bound of the mean (Student t)."""
-    n = len(values)
-    if n < 2:
-        return None
-    return _mean(values) - _t95_one_sided(n - 1) * _sd(values) / math.sqrt(n)
-
-
-def _cv_pct(values):
-    """Coefficient of variation in percent; None when mean is 0."""
-    m = _mean(values)
-    if not m or len(values) < 2:
-        return None
-    return 100.0 * _sd(values) / abs(m)
-
-
-def _r3(x):
+def _r6(x):
     return None if x is None else round(float(x), 6)
-
-
-# ---------------------------------------------------------------------------
-# loading
-# ---------------------------------------------------------------------------
-
-def parse_name(stem):
-    """`<cell>__<engine>__<variant>__r<rep>` -> (cell, engine, variant, rep)."""
-    parts = stem.split("__")
-    if len(parts) != 4:
-        return None
-    cell, engine, variant, repstr = parts
-    if not repstr.startswith("r"):
-        return None
-    try:
-        rep = int(repstr[1:])
-    except ValueError:
-        return None
-    if not cell or not engine or not variant or rep < 1:
-        return None
-    return cell, engine, variant, rep
-
-
-def engine_row_name(engine, variant):
-    if engine == "juring" and variant == "buffered":
-        return EXPLORATORY
-    return engine
-
-
-def extract(data):
-    """Pull the fields the aggregator needs out of one bench JSON object."""
-    out = {"status": data.get("status"), "error": data.get("error")}
-    cfg = data.get("config") or {}
-    agg = data.get("aggregate") or {}
-    runs = data.get("runs") or []
-
-    mibs = agg.get("mibs") or {}
-    mibs_mean = mibs.get("mean")
-    if mibs_mean is None and runs:
-        mibs_mean = _mean([float(r.get("mibs", 0.0)) for r in runs])
-    out["mibs"] = mibs_mean
-
-    iops = agg.get("iops") or {}
-    iops_mean = iops.get("mean")
-    if iops_mean is None and runs:
-        iops_mean = _mean([float(r.get("iops", 0.0)) for r in runs])
-    out["iops"] = iops_mean
-
-    lat = agg.get("latency_us") or {}
-    p50 = lat.get("p50")
-    p99 = lat.get("p99")
-    if p50 is None and runs:
-        p50 = _mean([float((r.get("latency_us") or {}).get("p50", 0.0)) for r in runs])
-    if p99 is None and runs:
-        p99 = _mean([float((r.get("latency_us") or {}).get("p99", 0.0)) for r in runs])
-    out["p50_us"] = p50
-    out["p99_us"] = p99
-
-    out["errors"] = agg.get("errors_total")
-    if out["errors"] is None:
-        out["errors"] = sum(int(r.get("errors_total", 0)) for r in runs)
-    out["bytes"] = agg.get("bytes_total")
-    out["ops"] = agg.get("ops_total")
-
-    out["workload"] = cfg.get("workload")
-    out["bs"] = cfg.get("bs")
-    out["qd"] = cfg.get("qd")
-    out["dataset_bytes"] = cfg.get("dataset_bytes")
-    out["seconds"] = cfg.get("seconds")
-    out["warmup_sec"] = cfg.get("warmup_sec")
-    out["seed"] = cfg.get("seed")
-    out["direct_io"] = cfg.get("direct_io")
-    out["registered_files"] = cfg.get("registered_files")
-    out["manifest"] = data.get("manifest") or {}
-    return out
-
-
-def load_session(results_dir):
-    """Returns (records, unparsed) where records are dicts for every parsed file."""
-    pattern = os.path.join(results_dir, "cells", "*.json")
-    records = []
-    unparsed = []
-    for path in sorted(glob.glob(pattern)):
-        stem = os.path.basename(path)[:-len(".json")]
-        parsed = parse_name(stem)
-        if parsed is None:
-            unparsed.append({"file": path, "reason": "unrecognised cell filename"})
-            continue
-        cell, engine, variant, rep = parsed
-        rec = {"cell": cell, "engine": engine, "variant": variant, "rep": rep,
-               "row": engine_row_name(engine, variant), "path": path, "data": None,
-               "error": None, "extracted": None}
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                rec["data"] = json.load(fh)
-        except Exception as exc:                      # malformed JSON
-            rec["error"] = "unreadable/invalid JSON: %s" % exc
-        else:
-            rec["extracted"] = extract(rec["data"])
-        records.append(rec)
-    return records, unparsed
 
 
 # ---------------------------------------------------------------------------
@@ -220,18 +46,17 @@ def stats_block(values_by_rep):
     reps = sorted(values_by_rep)
     values = [float(values_by_rep[r]) for r in reps]
     n = len(values)
-    block = {
+    return {
         "n": n,
         "reps": reps,
-        "values_by_rep": {str(r): _r3(values_by_rep[r]) for r in reps},
-        "mean": _r3(_mean(values)),
-        "sd": _r3(_sd(values)),
-        "ci95": _r3(_ci95(values)),
-        "cv_pct": _r3(_cv_pct(values)),
-        "min": _r3(min(values)) if values else None,
-        "max": _r3(max(values)) if values else None,
+        "values_by_rep": {str(r): _r6(values_by_rep[r]) for r in reps},
+        "mean": _r6(stats.mean(values)),
+        "sd": _r6(stats.sd(values)),
+        "ci95": _r6(stats.ci95(values)),
+        "cv_pct": _r6(stats.cv_pct(values)),
+        "min": _r6(min(values)) if values else None,
+        "max": _r6(max(values)) if values else None,
     }
-    return block
 
 
 def analyze_cell(cell, records, expected_reps):
@@ -273,15 +98,15 @@ def analyze_cell(cell, records, expected_reps):
         reason = None
         if d.get("status") != "ok":
             reason = "status=%s error=%s" % (d.get("status"), d.get("error"))
-        elif d.get("errors") not in (None, 0):
-            reason = "errors_total=%s" % (d.get("errors"),)
+        elif d.get("errors_total") not in (None, 0):
+            reason = "errors_total=%s" % (d.get("errors_total"),)
         elif d.get("mibs") is None or float(d["mibs"]) <= 0:
             reason = "non-positive MiB/s"
         if reason is not None:
             row["excluded"].append({"rep": rec["rep"], "file": rec["path"], "reason": reason})
             excluded_global.append({"file": rec["path"], "reason": reason})
             continue
-        row["errors_total"] += int(d.get("errors") or 0)
+        row["errors_total"] += int(d.get("errors_total") or 0)
         row["mibs_by_rep"][rec["rep"]] = float(d["mibs"])
         if d.get("iops") is not None:
             row["iops_by_rep"][rec["rep"]] = float(d["iops"])
@@ -351,7 +176,7 @@ def paired_block(cell_result, bar):
         dropped.append({"rep": rep, "reason": "; ".join(reasons)})
     block = stats_block(ratios)
     n = block["n"]
-    lower_one = _one_sided_lower(list(ratios[r] for r in sorted(ratios)))
+    lower_one = stats.one_sided_lower(list(ratios[r] for r in sorted(ratios)))
     point_pass = block["mean"] is not None and block["mean"] >= bar
     strict_pass = lower_one is not None and lower_one >= bar
     if n < 2:
@@ -364,12 +189,12 @@ def paired_block(cell_result, bar):
         verdict = "inconclusive"
     return {
         "n": n,
-        "ratios_by_rep": {str(r): _r3(ratios[r]) for r in sorted(ratios)},
+        "ratios_by_rep": {str(r): _r6(ratios[r]) for r in sorted(ratios)},
         "ratio_mean": block["mean"],
         "ratio_sd": block["sd"],
-        "ratio_ci95": [None if block["ci95"] is None else _r3(block["mean"] - block["ci95"]),
-                       None if block["ci95"] is None else _r3(block["mean"] + block["ci95"])],
-        "ratio_one_sided_95_lower": _r3(lower_one),
+        "ratio_ci95": [None if block["ci95"] is None else _r6(block["mean"] - block["ci95"]),
+                       None if block["ci95"] is None else _r6(block["mean"] + block["ci95"])],
+        "ratio_one_sided_95_lower": _r6(lower_one),
         "bar": bar,
         "point_estimate_pass": bool(point_pass),
         "lower_bound_pass": bool(strict_pass),
@@ -381,12 +206,6 @@ def paired_block(cell_result, bar):
 # ---------------------------------------------------------------------------
 # markdown rendering
 # ---------------------------------------------------------------------------
-
-def _fmt(v, digits=1, dash="n/a"):
-    if v is None:
-        return dash
-    return ("%." + str(digits) + "f") % float(v)
-
 
 def render_markdown(session, results_dir, bar, cells, overall, unparsed, protocol):
     lines = []
@@ -402,7 +221,7 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
     if protocol.get("seconds") is not None:
         a("Protocol observed in the cell JSONs: warmup %ss + measured %ss per process, "
           "R=%s reps per cell (preliminary; the full M2 campaign uses longer cells/rests)."
-          % (_fmt(protocol.get("warmup_sec"), 0), _fmt(protocol.get("seconds"), 0),
+          % (md.fixed(protocol.get("warmup_sec"), 0), md.fixed(protocol.get("seconds"), 0),
              protocol.get("reps")))
         a("")
     a("## Verdict")
@@ -418,8 +237,8 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
         ci_s = "n/a" if ci[0] is None else "[%.3f, %.3f]" % (ci[0], ci[1])
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s |" % (
             c["cell"], c["config"].get("workload", "?"), p["n"],
-            _fmt(j, 1), _fmt(s, 1), _fmt(p["ratio_mean"], 3), ci_s,
-            _fmt(p["ratio_one_sided_95_lower"], 3), p["verdict"]))
+            md.fixed(j, 1), md.fixed(s, 1), md.fixed(p["ratio_mean"], 3), ci_s,
+            md.fixed(p["ratio_one_sided_95_lower"], 3), p["verdict"]))
     a("")
     a("Overall: point-estimate %s; strict one-sided-95%%-lower-bound %s."
       % ("PASS" if overall["point_estimate_pass"] else "FAIL",
@@ -443,8 +262,8 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
             m = r["mibs"]
             a("| %s | %s%s | %d | %s | %s | %s | %s | %d | %s | %s |" % (
                 c["cell"], name, " (exploratory)" if name == EXPLORATORY else "",
-                m["n"], _fmt(m["mean"], 1), _fmt(m["sd"], 2), _fmt(m["ci95"], 2),
-                _fmt(m["cv_pct"], 2), r["errors_total"], r["direct_io"],
+                m["n"], md.fixed(m["mean"], 1), md.fixed(m["sd"], 2), md.fixed(m["ci95"], 2),
+                md.fixed(m["cv_pct"], 2), r["errors_total"], r["direct_io"],
                 r["registered_files"]))
     a("")
     a("## Chunk latency (mean of per-run p50/p99, microseconds)")
@@ -460,7 +279,7 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
             lat = r["latency_us"]
             a("| %s | %s | %d | %s | %s |" % (
                 c["cell"], name, r["n"],
-                _fmt(lat["p50"]["mean"], 1), _fmt(lat["p99"]["mean"], 1)))
+                md.fixed(lat["p50"]["mean"], 1), md.fixed(lat["p99"]["mean"], 1)))
     a("")
     a("## Data quality (no rep silently dropped)")
     a("")
@@ -498,9 +317,6 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
 # ---------------------------------------------------------------------------
 
 def main(argv):
-    here = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.abspath(os.path.join(here, "..", ".."))
-
     ap = argparse.ArgumentParser(
         description="Aggregate B2 W21/W22 stream cells into aggregate/stream.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
@@ -514,17 +330,15 @@ def main(argv):
     args = ap.parse_args(argv)
 
     results_dir = os.path.abspath(args.results) if args.results else os.path.join(
-        repo_root, "bench", "results", args.session)
+        jsonio.REPO_ROOT, "bench", "results", args.session)
     out_dir = os.path.abspath(args.out) if args.out else os.path.join(results_dir, "aggregate")
 
-    records, unparsed = load_session(results_dir)
+    records, unparsed, _ = load_session(results_dir)
     if not records:
         sys.stderr.write("error: no cell JSON files found under %s/cells\n" % results_dir)
         return 1
-    os.makedirs(out_dir, exist_ok=True)
 
-    parsed_cells = sorted({r["cell"] for r in records},
-                          key=lambda c: (CELL_ORDER.index(c) if c in CELL_ORDER else len(CELL_ORDER), c))
+    parsed_cells = sort_cells({r["cell"] for r in records}, CELL_ORDER)
     cells_out = []
     protocol = {"reps": None, "seconds": None, "warmup_sec": None}
     seconds_seen = None
@@ -605,13 +419,9 @@ def main(argv):
 
     json_path = os.path.join(out_dir, "stream.json")
     md_path = os.path.join(out_dir, "stream.md")
-    with open(json_path, "w", encoding="utf-8") as fh:
-        json.dump(out, fh, indent=2, sort_keys=False)
-        fh.write("\n")
-    with open(md_path, "w", encoding="utf-8") as fh:
-        fh.write(render_markdown(args.session, results_dir, args.bar, cells_out, overall,
-                                 unparsed, protocol))
-        fh.write("\n")
+    cli.write_json(json_path, out)
+    cli.write_text(md_path, render_markdown(args.session, results_dir, args.bar,
+                                            cells_out, overall, unparsed, protocol))
 
     print("wrote %s" % json_path)
     print("wrote %s" % md_path)

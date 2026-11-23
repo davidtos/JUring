@@ -12,8 +12,10 @@
 #   W14 seqwrite  1M  QD32   60/60
 # Engines: juring (bench/juring/run-juring.sh, JURING_SKIP_COMPILE=1),
 #          fio (io_uring; variant default / matched registration / batching sweep),
-#          seastar (bench/seastar/seastar_file_bench; WRITE PATH IS UNTESTED, so it
-#          must be explicitly enabled with --allow-seastar-write).
+#          seastar (bench/seastar/seastar_file_bench; write path smoke-validated on
+#          this host 2026-11-23 - status ok, zero errors, in-place write, no
+#          truncate/fsync - but kept explicit opt-in because the binary is built
+#          for this host and the arm is a bracket, not an equal opponent).
 # Dataset: ONE dedicated 10 GiB non-sparse file on the data NVMe
 #          (<repo>/nvme-data/write_files/single_file_bench_w.bin, see
 #          create-write-file.sh).  The read dataset is never opened for writing.
@@ -103,6 +105,7 @@ SAMPLER=1
 ALLOW_SEASTAR_WRITE=0
 ALLOW_CONCURRENT=0
 ALLOW_CAPPED_PRECOND=0
+ALLOW_ANY_PATH=0
 DRY_RUN=0
 
 usage() {
@@ -123,7 +126,7 @@ Selection:
                          for W7/W8 as the M1 gate comparator)
   --no-w7-sweep          do not add the W7 fio batching sweep / W7-W8
                          matchedbatch comparator
-  --allow-seastar-write  enable the seastar write path (untested; opt-in)
+  --allow-seastar-write  enable the seastar write path (smoke-validated, opt-in)
 
 Protocol:
   --reps N               default repetitions per cell (default 3, methodology D7)
@@ -152,6 +155,9 @@ Protocol:
 Paths / safety:
   --write-file PATH      dedicated write dataset
                          (default <repo>/nvme-data/write_files/single_file_bench_w.bin)
+  --allow-any-path       allow a --write-file outside <repo>/nvme-data, e.g. a
+                         second dedicated NVMe bind-mounted under the repo; the
+                         read dataset is still refused. Pair with --device-stat
   --expect-size SIZE     expected file size (default 10g); refuse otherwise
   --session-dir DIR      result root
                          (default <repo>/bench/results/m1-2026-11-13-write)
@@ -218,6 +224,7 @@ while [[ $# -gt 0 ]]; do
         --precond-rest-sec)         [[ $# -ge 2 ]] || die "--precond-rest-sec needs a value"; PRECOND_REST_SEC=$2; shift 2 ;;
         --precondition)             [[ $# -ge 2 ]] || die "--precondition needs a value"; PRECOND_MODE=$2; shift 2 ;;
         --allow-capped-precondition) ALLOW_CAPPED_PRECOND=1; shift ;;
+        --allow-any-path)           ALLOW_ANY_PATH=1; shift ;;
         --write-file)               [[ $# -ge 2 ]] || die "--write-file needs a value"; WRITE_FILE=$2; shift 2 ;;
         --expect-size)              [[ $# -ge 2 ]] || die "--expect-size needs a value"; EXPECT_SIZE_SPEC=$2; shift 2 ;;
         --session-dir)              [[ $# -ge 2 ]] || die "--session-dir needs a value"; SESSION_DIR=$2; shift 2 ;;
@@ -256,6 +263,12 @@ fi
 
 EXPECT_BYTES=$(parse_size "$EXPECT_SIZE_SPEC") || die "cannot parse --expect-size '$EXPECT_SIZE_SPEC'"
 
+# NVMe controller for the thermal probe, derived from --device-stat
+# (/sys/block/nvme2n1/stat -> nvme2n1 -> nvme2).
+DEVNAME=$(basename "$(dirname "$DEVICE_STAT")" 2>/dev/null || echo nvme1n1)
+DEVCTRL=${DEVNAME%n[0-9]*}
+[[ -n "$DEVCTRL" ]] || DEVCTRL=nvme1
+
 canon() { realpath -m -- "$1"; }
 WF=$(canon "$WRITE_FILE")
 RF=$(canon "$READ_FILE")
@@ -264,8 +277,8 @@ ND=$(canon "$REPO_ROOT/nvme-data")
 case "$WF" in
     /mnt/TestData/read_files/*) die "refusing: write file is below the read dataset ($WF)" ;;
 esac
-if [[ "$WF" != "$ND"/* ]]; then
-    die "refusing: write file must be below $ND (got $WF); use --write-file with a path on the writable NVMe mount"
+if (( ! ALLOW_ANY_PATH )) && [[ "$WF" != "$ND"/* ]]; then
+    die "refusing: write file must be below $ND (got $WF); use --write-file with a path on the writable NVMe mount, or --allow-any-path for a second dedicated device"
 fi
 
 CELLS=$(printf '%s' "$CELLS_RAW" | tr ',' ' ')
@@ -294,7 +307,7 @@ for eng in $ENGINES; do
     case "$eng" in juring|fio|seastar) : ;; *) die "unknown --engines entry '$eng' (juring|fio|seastar)" ;; esac
 done
 if [[ " $ENGINES " == *" seastar "* ]] && (( ! ALLOW_SEASTAR_WRITE )); then
-    die "seastar write path is unvalidated: pass --allow-seastar-write to opt in explicitly"
+    die "seastar write path is opt-in: pass --allow-seastar-write explicitly"
 fi
 for v in $FIO_VARIANTS; do
     case "$v" in default|matched|regfile|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
@@ -408,9 +421,9 @@ read_file_state() {
 }
 thermal_state() {
     local t
-    for f in /sys/class/nvme/nvme1/device/hwmon/hwmon*/temp1_input \
-             /sys/class/nvme/nvme1/hwmon*/temp1_input \
-             /sys/block/nvme1n1/device/hwmon/hwmon*/temp1_input; do
+    for f in /sys/class/nvme/$DEVCTRL/device/hwmon/hwmon*/temp1_input \
+             /sys/class/nvme/$DEVCTRL/hwmon*/temp1_input \
+             /sys/block/$DEVNAME/device/hwmon/hwmon*/temp1_input; do
         if [[ -r "$f" ]]; then
             t=$(cat "$f" 2>/dev/null || true)
             if [[ -n "$t" ]]; then
@@ -420,7 +433,7 @@ thermal_state() {
         fi
     done
     if command -v nvme >/dev/null 2>&1; then
-        t=$(timeout 2 nvme smart-log /dev/nvme1n1 2>/dev/null | awk -F: '/temperature/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' || true)
+        t=$(timeout 2 nvme smart-log "/dev/$DEVNAME" 2>/dev/null | awk -F: '/temperature/ {gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2; exit}' || true)
         if [[ -n "$t" ]]; then
             printf 'smart_log=%s' "$t"
             return 0
@@ -636,6 +649,7 @@ run_precondition() { # cell
     local -a pcmd=("$SCRIPT_DIR/precondition.sh"
         --file "$WF" --session-dir "$SESSION_DIR" --device-stat "$DEVICE_STAT"
         --cpu "$CPU" --bs 4k --qd 64)
+    if (( ALLOW_ANY_PATH )); then pcmd+=(--allow-any-path); fi
     local rc=0
     set +e
     "${pcmd[@]}" >"$plog" 2>&1
@@ -950,7 +964,7 @@ if (( DRY_RUN )); then
                 printf '# precondition (D1) before cell %s: SKIP (cell fully present under --resume)\n' "$cell"
                 need_precond=0
             elif (( need_precond )); then
-                printf '# precondition (D1) before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64 (condition=target)\n' \
+                printf '# precondition (D1) before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64 (condition=target%s)\n' \
                     "$cell" "$SCRIPT_DIR" "$WF" "$SESSION_DIR" "$DEVICE_STAT" "$CPU"
                 printf '# rest %ss after preconditioning (D3)\n' "$PRECOND_REST_SEC"
                 pd_seen=1

@@ -3,20 +3,21 @@
 
 Usage: json_summary.py <engine> <path>
 
-Prints "<ops> <iops> <p99_us> <bytes>" on stdout (-1 for missing values).
-Engine is "juring", "seastar" or anything starting with "fio" (fio JSON).
-Used by bench/m1/lib.sh to fill cell-meta.tsv. Stdlib only.
+Prints "<ops> <iops> <p99_us> <bytes>" (-1 for missing values).  The engine is
+"juring", "seastar" or anything starting with "fio" (fio JSON).  Reads the raw
+engine JSON; used by bench/m1/lib.sh to fill cell-meta.tsv.
 """
-import json
+import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from analysis import jsonio  # noqa: E402
 
-def _num(x):
-    try:
-        v = float(x)
-    except (TypeError, ValueError):
-        return -1.0
-    return v
+
+def num(value):
+    """float(value), or -1.0 when absent/unparsable."""
+    v = jsonio.as_float(value)
+    return -1.0 if v is None else v
 
 
 def fio_summary(d):
@@ -30,14 +31,14 @@ def fio_summary(d):
     p99 = -1.0
     for rw in ("read", "write"):
         b = j.get(rw) or {}
-        nbytes += max(0.0, _num(b.get("io_bytes")))
-        i = _num(b.get("iops"))
+        nbytes += max(0.0, num(b.get("io_bytes")))
+        i = num(b.get("iops"))
         if i > 0:
             iops += i
-            ops += max(0.0, _num(b.get("total_ios")))
+            ops += max(0.0, num(b.get("total_ios")))
             pct = (b.get("clat_ns") or {}).get("percentile") or {}
             # fio clat_ns is in nanoseconds
-            v = _num(pct.get("99.000000"))
+            v = num(pct.get("99.000000"))
             if v > 0:
                 p99 = max(p99, v / 1000.0)
     return int(ops), iops, p99, int(nbytes)
@@ -47,26 +48,26 @@ def engine_summary(d):
     runs = d.get("runs") or []
     agg = d.get("aggregate") or {}
     r = runs[0] if runs else {}
-    ops = _num(r.get("ops"))
+    ops = num(r.get("ops"))
     if ops < 0:
-        ops = _num(r.get("ops_total"))
+        ops = num(r.get("ops_total"))
     if ops < 0:
-        ops = _num(agg.get("ops_total"))
-    iops = _num(r.get("iops"))
+        ops = num(agg.get("ops_total"))
+    iops = num(r.get("iops"))
     if iops < 0:
-        iops = _num((agg.get("iops") or {}).get("mean"))
+        iops = num((agg.get("iops") or {}).get("mean"))
     lat = r.get("latency_us") or {}
     if not isinstance(lat, dict):
         lat = {}
-    p99 = _num(lat.get("p99"))
+    p99 = num(lat.get("p99"))
     if p99 < 0:
         la = agg.get("latency_us") or {}
-        p99 = _num(la.get("p99")) if isinstance(la, dict) else -1.0
-    nbytes = _num(r.get("bytes"))
+        p99 = num(la.get("p99")) if isinstance(la, dict) else -1.0
+    nbytes = num(r.get("bytes"))
     if nbytes < 0:
-        nbytes = _num(r.get("bytes_total"))
+        nbytes = num(r.get("bytes_total"))
     if nbytes < 0:
-        nbytes = _num(agg.get("bytes_total"))
+        nbytes = num(agg.get("bytes_total"))
     return int(ops), iops, p99, int(nbytes)
 
 
@@ -75,10 +76,8 @@ def main():
         print("usage: json_summary.py <engine> <json-path>", file=sys.stderr)
         return 2
     engine, path = sys.argv[1], sys.argv[2]
-    try:
-        with open(path) as f:
-            d = json.load(f)
-    except Exception:
+    d = jsonio.load_json(path)
+    if d is None:
         print("-1 -1 -1 -1")
         return 0
     if engine.startswith("fio"):
