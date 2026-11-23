@@ -183,18 +183,20 @@ Reads are parity: `0.9816` and `0.9865` of Seastar's throughput, with strict low
 
 ## Group commit
 
-Batching writes is only worth something if it doesn't weaken durability. `GroupCommit` shares one `fdatasync` across a batch and still makes every write durable; this table is the proof.
+Batching writes is only worth something if it doesn't weaken durability. `GroupCommit` shares one `fdatasync` across a batch and still makes every write durable; the table below is the evidence for the one-sync-per-group part.
 
-4 KiB `O_DIRECT` writes with `DurabilityMode.FDATASYNC`, `2,048` committed writes per run (`8 MiB`), three repetitions, then a fresh process reopens the file and verifies it byte by byte:
+4 KiB `O_DIRECT` writes with `DurabilityMode.FDATASYNC`: three repetitions of a 5 s warmup and a 15 s measured window, one fresh process per arm, then a fresh process reopens the file and verifies it byte by byte. All three reps are kept; nothing is trimmed.
 
-| Batch size (`N`) | Groups | Committed writes | Explicit `fdatasync`s | `fsyncs_per_group` | Throughput (MiB/s ± 95% CI) | Writes/s | Fresh-process restart check |
-|---|---|---|---|---|---|---|---|
-| 1 | 2,048 | 2,048 | 2,048 | 1.000000 | 5.9 ± 0.1 | 1,522 | pass |
-| 8 | 256 | 2,048 | 256 | 1.000000 | 47.0 ± 0.5 | 12,035 | pass |
-| 32 | 64 | 2,048 | 64 | 1.000000 | 184.5 ± 3.1 | 47,232 | pass |
-| 128 | 16 | 2,048 | 16 | 1.000000 | 720.7 ± 12.1 | 184,497 | pass |
+| Batch size (`N`) | Groups/s | Writes/s | Explicit `fdatasync`s/s | `fsyncs_per_group` | Throughput (MiB/s, mean ± 95% CI) | Fresh-process restart check |
+|---|---|---|---|---|---|---|
+| 1 | 1,521.5 | 1,522 | 1,521.5 | 1.000000 | 5.9 ± 4.4 | pass |
+| 8 | 2,011.1 | 16,089 | 2,011.1 | 1.000000 | 62.8 ± 50.7 | pass |
+| 32 | 2,350.0 | 75,201 | 2,350.0 | 1.000000 | 293.8 ± 16.3 | pass |
+| 128 | 1,441.4 | 184,497 | 1,441.4 | 1.000000 | 720.7 ± 20.2 | pass |
 
 `fsyncs_per_group` stays at exactly `1.000000` all the way from batch 1 to batch 128. That matters: the throughput climb from `5.9 MiB/s` at batch 1 to `720.7 MiB/s` at batch 128 comes from doing fewer syncs, not from dropping durability. Every configuration also passes the fresh-process restart check, so the bytes really are on the file when the run ends.
+
+The sync *rate* barely moves (`1,521.5` to `1,441.4` per second); what changes is how much each sync covers, from `4 KiB` to `512 KiB`. Read the batch 1 and batch 8 intervals before quoting a multiplier, though: those are the noisiest cells (`CV` 29.7 % and 32.4 %, all three reps kept), because a write that pays its own sync is bounded by sync latency rather than throughput. The batch 128 cell is the measurement I would stand behind (CV 1.1 %).
 
 ## Multi-ring scale-out
 
@@ -262,7 +264,7 @@ Virtual threads and `io_uring` should be a good match. A virtual thread that blo
 
 This whole section is historical evidence from before the 0.1.0 release. I did not rerun it for 0.1.0: the benchmark harness does not record a committed CLI/JVM flag string, several confidence intervals (JMH's 99.9% interval, not the multi-process one above) overlap, and the "equal total platform thread budget" framing measures thread efficiency rather than a per-operation engine difference. I keep it for transparency and context, not as a 0.1.0 ranking. The defensible results are parity at Loom defaults (uncapped carrier pool, below) and "same device throughput with 2–4 poller threads instead of hundreds of carriers" under a fixed budget.
 
-The data predates the unreleased 0.2.0 `JUringBlocking` capacity model and is unchanged: the 1,000-virtual-thread JMH runs were not rerun for 0.2.0, and I make no new performance claim here. The scale evidence for the blocking facade is the committed scale test [`JUringBlockingScaleTest`](src/test/java/com/davidvlijmincx/lio/api/JUringBlockingScaleTest.java) — the normal suite runs it with 10,000 virtual threads, and a 1,000,000-thread run is opt-in via [`bench/blocking/run-scale.sh`](bench/blocking/run-scale.sh). That test asserts correctness and bounded resources (every call completes, the admission path is exercised, all records are released) at the configured scale; it is not a throughput benchmark. The capacity model, sizing recipe and memory math are in [`docs/vt-scale.md`](docs/vt-scale.md).
+The data predates the 0.1.0 `JUringBlocking` capacity model and is unchanged: the 1,000-virtual-thread JMH runs were not rerun for 0.1.0, and I make no new performance claim here. The scale evidence for the blocking facade is the committed scale test [`JUringBlockingScaleTest`](src/test/java/com/davidvlijmincx/lio/api/JUringBlockingScaleTest.java) — the normal suite runs it with 10,000 virtual threads, and a 1,000,000-thread run is opt-in via [`bench/blocking/run-scale.sh`](bench/blocking/run-scale.sh). That test asserts correctness and bounded resources (every call completes, the admission path is exercised, all records are released) at the configured scale; it is not a throughput benchmark. The capacity model, sizing recipe and memory math are in [`docs/vt-scale.md`](docs/vt-scale.md).
 
 When `FileChannel` blocks a virtual thread in kernel I/O, the virtual thread stays pinned or mounted to its carrier thread, so the ForkJoinPool scheduler compensates by spawning up to `maxPoolSize` (default 256) carrier threads. `JUringBlocking` unmounts the virtual thread with `LockSupport.park()` while its `IoShard`-backed poller threads drive `io_uring`.
 
@@ -300,7 +302,7 @@ When `FileChannel` is allowed to spawn hundreds of OS carrier threads (`maxPoolS
 
 I tried to measure write parity. I could not do it honestly, so I'm not publishing a ranking.
 
-The first attempt was the full write matrix. I ran 4 KiB random writes at QD 1/16/64/128 and 1 MiB sequential writes at QD 1/8/32: 130 completed runs over 8 h 47 m. Each configuration got a device preconditioning pass (8 × 4 GiB chunks, 34.36 GB in total) and a 600 s rest, with 300 s rests between repetitions and a 1 s device IOPS series. 36 of the 130 runs hit an in-run SLC-burst to steady-state write cliff (within-run burst/steady ratios `0.14×` to `3.85×`, for example `195k → 59k` IOPS). That left 21 of 34 configurations unstable, 17 of them with `CV > 10%`, and an unstable configuration gets no ranking from me.
+The first attempt was the full write matrix. I ran 4 KiB random writes at QD 1/16/64/128 and 1 MiB sequential writes at QD 1/8/32: 130 completed runs over 8 h 47 m. Each configuration got a device preconditioning pass (a 30 GiB target — 3× the 10 GiB write file — applied in 4 GiB chunks, so a burst stops on a chunk boundary at 8 × 4 GiB = 32 GiB = 34.36 GB) and a 600 s rest, with 300 s rests between repetitions and a 1 s device IOPS series. 36 of the 130 runs hit an in-run SLC-burst to steady-state write cliff (within-run burst/steady ratios `0.14×` to `3.85×`, for example `195k → 59k` IOPS). That left 21 of 34 configurations unstable, 17 of them with `CV > 10%`, and an unstable configuration gets no ranking from me.
 
 At 4 KiB random write QD 64 with five repetitions, JUring was stable (`188,704 ± 1,983` IOPS, `CV = 0.8%`), while `fio/matched` (`158,570 ± 50,427`, `CV = 25.6%`), `fio/matchedbatch` (`170,543 ± 42,826`, `CV = 20.2%`) and Seastar (`167,073 ± 43,672`, `CV = 21.1%`) randomly sampled post-cliff states across repetitions.
 

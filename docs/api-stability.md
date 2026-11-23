@@ -3,14 +3,15 @@
 Here's the short version: if a type is in the exported package `com.davidvlijmincx.lio.api`, I
 will tell you before I break it. If it isn't, I may change it at any time.
 
-This page is the versioning policy for the `0.1.x` line and the unreleased `0.2.0`. It's in
-effect from `0.1.0`, the first release. Compatibility questions go to
+This page is the versioning policy for the `0.1.x` line. It's in effect from `0.1.0`, the
+first public release. Compatibility questions go to
 [github.com/davidtos/JUring](https://github.com/davidtos/JUring).
 
 ## 1. Where the project stands
 
-The project version is `0.1.0` (`pom.xml`), the first release. The tag and the Maven
-Central publication are still pending. The build command is `mvn -B -ntp test`, which CI
+The project version is `0.1.0` (`pom.xml`), the first public release. The `v0.1.0` tag and
+the Maven Central publication are still pending, so today the only way to use the library is
+to build it from source. The build command is `mvn -B -ntp test`, which CI
 runs on JDK 25 and 26. There is no older release to migrate from;
 [docs/UPGRADING.md](UPGRADING.md) records the 0.1.0 contract and future upgrade notes.
 
@@ -21,7 +22,7 @@ public and protected types in that package, and their public and protected membe
 public API. That includes nested types such as `JuringFile.CancelStatus` and
 `MetricsJmx.Handle`.
 
-The current line (0.1.0 plus unreleased 0.2.0 additions) has 39 public top-level types:
+`0.1.0` has 39 public top-level types:
 
 - Entry points and core values: `JUring`, `JUringBlocking`, `JuringFile`, `JuringInputStream`,
   `JuringOutputStream`, `FileDescriptor`, `Result`, `ResultConsumer`, `CompletionHandler`,
@@ -44,14 +45,16 @@ The 2026-11-16 additions are additive: `IoPriority` and the ioprio members
 behaviour change is a relaxation: blocking `JuringFile` helpers now accept sibling
 `JuringFile`-based handles on the same ring.
 
-0.1.0 is additive at the signature level too (16 no-option `JUringBlocking` overloads,
-`JUring.isSupported()`, `RingMetrics.cqFlushEnters()`); its behaviour changes are in
-`docs/UPGRADING.md` §2a.
+0.1.0 is also additive at the signature level across the pre-release snapshots (16 no-option
+`JUringBlocking` overloads, `JUring.isSupported()`, `RingMetrics.cqFlushEnters()`); its
+behaviour changes are in `docs/UPGRADING.md` §2a.
 
-The unreleased 0.2.0 adds `BlockingOptions`, `OverflowPolicy`, a
+The first public release additionally includes `BlockingOptions`, `OverflowPolicy`, the
 `JUringBlocking(BlockingOptions, IoUringOptions...)` constructor, five `JUringBlocking`
-accessors and `JuringException.EINTR`. Its documented behaviour changes (interrupts, admission,
-`RingGroup` routing) are MINOR changes under §4, recorded in `docs/UPGRADING.md` §2b.
+accessors and `JuringException.EINTR`. These were developed for a later minor release that
+was never published, and they ship in 0.1.0 instead; because 0.1.0 is the first public
+release, no public compatibility promise is affected. Their documented behaviour changes
+(interrupts, admission, `RingGroup` routing) are recorded in `docs/UPGRADING.md` §2a.
 
 ## 3. What is internal
 

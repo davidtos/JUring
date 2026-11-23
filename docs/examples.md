@@ -77,11 +77,10 @@ while its request is in flight or while it waits for a call record. The resource
 a bigger fan-out is that call-record capacity, because every admitted call owns one
 pre-allocated record.
 
-The next release (0.2.0, still Unreleased in the changelog) adds
-`BlockingOptions.withMaxConcurrentCalls(...)` to size that pool, plus
-`OverflowPolicy.BLOCK`/`FAIL` for what a call does when the pool is full. On 0.1.0 there is
-no such knob: capacity is derived from the queue depth. Either way, eight calls are well
-inside the pool for `new JUringBlocking(64, 1)`. The sizing recipe and memory math are in
+`BlockingOptions.withMaxConcurrentCalls(...)` sizes that pool, and
+`OverflowPolicy.BLOCK`/`FAIL` controls what a call does when the pool is full (both are
+0.1.0 API). Without `BlockingOptions`, capacity is derived from the queue depth, and eight
+calls are well inside the pool for `new JUringBlocking(64, 1)`. The sizing recipe and memory math are in
 [`docs/vt-scale.md`](vt-scale.md). Seastar is the mirror image: single-threaded per shard
 with futures and continuations, where a blocking call would be an anti-pattern.
 

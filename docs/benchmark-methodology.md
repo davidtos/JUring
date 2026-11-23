@@ -242,9 +242,17 @@ time for `io_tester`; per-op CPU is user plus kernel cycles over operations from
 
 ## Writes are the hard part
 
-Before a write session I precondition the file: 3× the file size of 4K random writes at QD64, about
-30 GiB, or 120 seconds minimum, then `fsync`. I never start a measured write run on a fresh file or
-after a long idle, and I record the write generation and bytes since the last idle.
+Before a write session I precondition the file: 4K random writes at QD64 until at least 3× the file
+size has been written — a 30 GiB target for the 10 GiB write file — then `fsync`. The bursts run in
+4 GiB chunks, so they stop on a chunk boundary at 32 GiB (34.36 GB), which is the figure in
+[BENCHMARK.md](../BENCHMARK.md). The 120 seconds in the original protocol is a time cap, not a
+floor: a burst that has not reached the target by then is recorded as capped, and on this host the
+target is reached in 40–67 s. I never start a measured write run on a fresh file or after a long
+idle, and I record the write generation and bytes since the last idle.
+
+The first write block on 2026-11-13 predates the target rule and stopped only when the target *and*
+the 120 s minimum were both met, which wrote 128.8 GiB (12 chunks) instead of 32 GiB. That block is
+kept in the record and is not pooled with later ones; the target rule replaced it.
 
 This drive's SLC policy is unverified: no public spec, and `nvme smart-log` needs root on the
 host. I capture an IOPS-versus-time series at 1-second resolution for every write run, detect the
@@ -253,6 +261,13 @@ them.
 
 Rest is part of the protocol: 300 seconds idle between write reps, 600 seconds after a
 preconditioning burst, and the idle duration is recorded.
+
+The state-controlled write attempt in [BENCHMARK.md](../BENCHMARK.md) is a deliberate deviation
+from that rest rule, not an oversight: it drops the 600 s post-preconditioning rest and the 300 s
+between-run rest so that all three engines in a generation see the same device state. A
+partially-recovered SLC burst exhausts mid-generation and systematically penalises whichever engine
+runs last, which is exactly what the first pilot measured (`max/min = 2.0921` at 4 KiB QD 64). Both
+protocols record their rest decisions, and results from one are never pooled with the other.
 
 The test partition has no `discard` mount option and automatic discard is not used. I never
 `blkdiscard` a shared data partition and never issue discard during a comparison; discard studies

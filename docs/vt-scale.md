@@ -10,14 +10,11 @@ record doubles as the wait node. The facade allocates nothing per call on the ca
 it must reserve the capacity up front. This page is how I model that capacity, how I size it,
 what interrupts do, and what I measured.
 
-> **Version note.** This page describes the 0.2.0 line, which is still `[Unreleased]` in the
-> changelog while I write this; the project version is 0.1.0. If you are on 0.1.0, a few
-> things are different: there is no `BlockingOptions` and no `OverflowPolicy` — the
-> call-record pool is derived from the queue depth, and
-> `new JUringBlocking(queueDepth[, pollers])` is all the configuration you get. An exhausted
-> pool retried with a 10 µs park loop instead of parking on an admission monitor, and
-> interrupts were ignored while a call was parked; 0.2.0 cancels the request and returns
-> `-EINTR` once the kernel reaps it. The scale test and its script below are 0.2.0 additions.
+> **Version note.** This page describes `0.1.0`, the first public release. `BlockingOptions`
+> and `OverflowPolicy` are part of it, as are the committed scale test and its script below.
+> Code that keeps using `new JUringBlocking(queueDepth[, pollers])` gets the queue-depth
+> derived capacity and `OverflowPolicy.BLOCK`; an interrupted parked call cancels the
+> request and returns `-EINTR` once the kernel reaps it.
 
 ## 1. The capacity model
 
@@ -191,9 +188,9 @@ if (result == -JuringException.EINTR) {
 }
 ```
 
-To be clear: this is 0.2.0 behaviour. On 0.1.0 an interrupt during a parked call was ignored
-and the call kept waiting for its completion. That is a documented minor change; see
-[`docs/UPGRADING.md`](UPGRADING.md) §2b and [CHANGELOG.md](../CHANGELOG.md).
+To be clear: this is 0.1.0 behaviour. An interrupt during a parked call cancels the request
+and returns `-EINTR`; see [`docs/UPGRADING.md`](UPGRADING.md) §2a and
+[CHANGELOG.md](../CHANGELOG.md).
 
 ## 6. What the scale runs showed
 
@@ -258,6 +255,6 @@ records in `PARKED`/`SUBMITTED`); it does not count callers waiting for admissio
   Javadoc for the per-member contract.
 - [`docs/examples.md`](examples.md) E4 for the eight-virtual-thread example.
 - [`BENCHMARK.md`](../BENCHMARK.md#virtual-threads) for the historical JMH virtual-thread data
-  (unchanged by the 0.2.0 capacity work) and the caveat that it is not a 0.2.0 ranking.
-- [CHANGELOG.md](../CHANGELOG.md) for the 0.2.0 entries and
-  [`docs/UPGRADING.md`](UPGRADING.md) §2b for the migration notes.
+  (unchanged by the 0.1.0 capacity work) and the caveat that it is not a 0.1.0 ranking.
+- [CHANGELOG.md](../CHANGELOG.md) for the 0.1.0 entries and
+  [`docs/UPGRADING.md`](UPGRADING.md) §2a for the migration notes.

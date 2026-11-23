@@ -117,16 +117,15 @@ by the number of virtual threads calling in.
 Each concurrent call owns a pre-allocated record of about 88 bytes. The record holds
 the request fields, the result, and the wait node, so a call doesn't allocate. The
 pool is created at construction, which means capacity — not allocation — bounds
-concurrency. The next release (0.2.0) adds explicit `BlockingOptions` and an overflow
-policy; 0.1.0 retries in a timed loop when the pool is full, which works but wastes
-wakeups. That's a change I wanted in before recommending the facade for very large
-fan-outs.
+concurrency. Explicit `BlockingOptions` and an overflow policy (`OverflowPolicy.BLOCK`
+or `FAIL`) let you size it and choose what happens when it is full; the defaults keep
+the queue-depth-derived capacity. That is what makes the facade advisable for very
+large fan-outs.
 
-Interrupts are handled properly in 0.2.0: interrupting a parked call cancels the
+Interrupts are handled properly in 0.1.0: interrupting a parked call cancels the
 request in the kernel with `IORING_OP_ASYNC_CANCEL`, then returns `-EINTR` once the
-completion has been reaped. In 0.1.0 the interrupt was ignored and the call kept
-waiting. A cancelled write may already have taken effect, which is documented rather
-than hidden.
+completion has been reaped. A cancelled write may already have taken effect, which is
+documented rather than hidden.
 
 ## One ring, many handles
 
