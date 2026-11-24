@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -25,6 +26,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class JUringBlockingTest {
 
     static JUringBlocking jUringBlocking;
+
+    @TempDir
+    Path tempDir;
+
+    private Path writeFile() {
+        return tempDir.resolve("write_file");
+    }
 
     @BeforeEach
     void setUp() {
@@ -84,7 +92,7 @@ class JUringBlockingTest {
 
     @Test
     void writeToFile() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content : ".getBytes());
 
         String input = "Hello, from Java";
@@ -101,7 +109,7 @@ class JUringBlockingTest {
 
     @Test
     void writeToFileAtOffset() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Big ".getBytes());
 
         String input = "hello, from Java";
@@ -118,12 +126,12 @@ class JUringBlockingTest {
 
     @Test
     void multipleWrites() throws Exception {
-        Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
+        Files.write(writeFile(), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
 
-        try (FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", WRITE, 0);
+        try (FileDescriptor fd = new FileDescriptor(writeFile().toString(), WRITE, 0);
              var vts = Executors.newVirtualThreadPerTaskExecutor()) {
             var future1 = vts.submit(() -> jUringBlocking.write(fd, inputBytes, 0));
             var future2 = vts.submit(() -> jUringBlocking.write(fd, inputBytes, 0));
@@ -137,7 +145,8 @@ class JUringBlockingTest {
 
     @Test
     void mixedWriteAndReadFromFile() throws Exception {
-        Path writePath = Path.of("src/test/resources/write_file");
+        Path writePath = writeFile();
+        Files.write(writePath, "Clean content".getBytes());
         Path readPath = Path.of("src/test/resources/read_file");
 
         String input = "hello, from Java";
@@ -183,7 +192,7 @@ class JUringBlockingTest {
 
     @Test
     void writeToRegisteredFile() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -327,7 +336,7 @@ class JUringBlockingTest {
 
     @Test
     void prepareWriteFixed() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -347,7 +356,7 @@ class JUringBlockingTest {
 
     @Test
     void prepareWriteFixedWithRegisteredFileAndBuffer() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content".getBytes());
 
         String input = "Hello, from Java";

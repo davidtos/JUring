@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
@@ -20,6 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 class ReadvWritevTest {
 
     JUring jUring;
+
+    @TempDir
+    Path tempDir;
 
     @BeforeEach
     void setUp() {
@@ -57,7 +61,7 @@ class ReadvWritevTest {
 
     @Test
     void writevCombinesMultipleBuffersToFile() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = tempDir.resolve("write_file");
         Files.write(path, "Clean content".getBytes());
 
         byte[][] input = {
@@ -112,7 +116,7 @@ class ReadvWritevTest {
 
     @Test
     void writevFixedUsesRegisteredBuffers() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = tempDir.resolve("write_file");
         Files.write(path, "Clean content".getBytes());
 
         try (FileDescriptor fd = new FileDescriptor(path.toString(), WRITE, 0)) {
