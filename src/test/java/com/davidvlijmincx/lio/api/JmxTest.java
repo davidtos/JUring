@@ -233,6 +233,7 @@ class JmxTest {
                     failure.set(t);
                 }
             });
+            waitUntil(() -> reads.get() > 0L || failure.get() != null, 5_000L);
             try {
                 int perShard = 200;
                 CountDownLatch done = new CountDownLatch(2 * perShard);
