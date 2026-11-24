@@ -908,21 +908,28 @@ public class JUring implements AutoCloseable {
      * Prepares a zero-copy write from a raw native address that must be one of the registered
      * buffers.
      *
-     * @param fd           file to write
-     * @param bufferAddress native address of the data to write
-     * @param writeSize    number of bytes to write
-     * @param offset       file offset in bytes
-     * @param bufferIndex  index of the registered buffer the address belongs to
-     * @param sqeOptions   SQE flags, combined with bitwise OR
+     * <p>The address is validated against the registered-buffer table: it must be exactly the
+     * registered base address of {@code bufferIndex}, and {@code writeSize} must fit that
+     * buffer. This is what makes the overload safe to expose: the kernel trusts
+     * {@code sqe.addr}/{@code sqe.len} for a fixed write, so an unchecked raw address could make
+     * it read arbitrary process memory.
+     *
+     * @param fd            file to write
+     * @param bufferAddress native address of the data to write; must equal the registered address
+     *                      of {@code bufferIndex}
+     * @param writeSize     number of bytes to write; {@code 0 <= writeSize <= registered size}
+     * @param offset        file offset in bytes
+     * @param bufferIndex   index of the registered buffer the address belongs to
+     * @param sqeOptions    SQE flags, combined with bitwise OR
      * @return the operation handle ({@code user_data})
+     * @throws IllegalArgumentException when no buffers are registered, the index is out of
+     *                                  range, the size does not fit the buffer, or the address is
+     *                                  not the registered address for that index
+     * @throws IllegalStateException    when the ring is closed or the submission queue is full
      */
     public long prepareWriteFixed(FileDescriptor fd, long bufferAddress, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long sqe = getRwSqe(SqeOptions.combineOptions(sqeOptions), false);
-        long opId = opSeq++;
-        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
-        ioUring.prepareWriteFixed(sqe, fd.getFd(), bufferAddress, writeSize, offset, bufferIndex);
-        ioUring.setUserData(sqe, userData);
-        return userData;
+        return prepareWriteFixedRawInternal(fd.getFd(), bufferAddress, writeSize, offset, bufferIndex,
+                SqeOptions.combineOptions(sqeOptions), false);
     }
 
     /**
@@ -1600,6 +1607,37 @@ public class JUring implements AutoCloseable {
         long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
 
         ioUring.prepareWriteFixed(sqe, fdOrIndex, registeredBufferAddresses[bufferIndex], writeSize, offset, bufferIndex);
+        ioUring.setUserData(sqe, userData);
+
+        return userData;
+    }
+
+    /**
+     * Validated raw-address variant of {@link #prepareWriteFixedZeroCopyInternal}: the address
+     * must be the registered base address of {@code bufferIndex}, so the kernel can never be
+     * pointed at memory outside a registered buffer.
+     */
+    private long prepareWriteFixedRawInternal(int fdOrIndex, long bufferAddress, int writeSize, long offset,
+                                              int bufferIndex, byte flags, boolean fixedFile) {
+        if (bufferIndex < 0 || bufferIndex >= registeredBufferAddresses.length) {
+            throw new IllegalArgumentException("Buffer index out of range: " + bufferIndex);
+        }
+
+        long registeredAddress = registeredBufferAddresses[bufferIndex];
+        if (writeSize < 0 || writeSize > registeredBufferSizes[bufferIndex]) {
+            throw new IllegalArgumentException("Write size exceeds registered buffer size");
+        }
+        if (bufferAddress != registeredAddress) {
+            throw new IllegalArgumentException("bufferAddress 0x" + Long.toHexString(bufferAddress)
+                    + " is not the registered address 0x" + Long.toHexString(registeredAddress)
+                    + " of buffer index " + bufferIndex);
+        }
+
+        long sqe = getRwSqe(flags, fixedFile);
+        long opId = opSeq++;
+        long userData = UserData.encodeFixed(OperationType.WRITE_FIXED, bufferIndex, opId);
+
+        ioUring.prepareWriteFixed(sqe, fdOrIndex, bufferAddress, writeSize, offset, bufferIndex);
         ioUring.setUserData(sqe, userData);
 
         return userData;

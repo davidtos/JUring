@@ -9,7 +9,9 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * JDK-only JMX binding for the shard metrics.
@@ -18,6 +20,30 @@ import java.util.concurrent.atomic.AtomicLong;
  * {@link RingGroupMetricsMXBean} plus one shard bean per shard on the platform
  * {@link MBeanServer} ({@link ManagementFactory#getPlatformMBeanServer()}). Attributes are
  * pull-based snapshots, so there is no exporter thread and no background memory cost.
+ *
+ * <p><b>Coherent snapshots, refreshed at most once per window:</b> each bean caches one
+ * coherent snapshot of its shard/group metrics and serves <em>every</em> attribute getter from
+ * that snapshot instead of re-snapshotting per attribute. The cache is refreshed lazily on the
+ * first getter call after a short refresh window (50 ms), so a
+ * bean takes at most one {@link IoShard#metrics()} / {@link RingGroup#aggregateMetrics()}
+ * snapshot per window: a 20-30 attribute scrape merges the dispatch-latency histograms once,
+ * not once per attribute, and the attributes of one scrape describe one instant instead of a
+ * collage of 20-30 different instants. The first snapshot is taken when the bean is
+ * registered.
+ *
+ * <p><b>Bounded staleness:</b> when a getter finds the cached snapshot older than the refresh
+ * window it refreshes before returning, so every attribute value is at most one window
+ * (50 ms) old at the moment it is read. All attributes read from
+ * one bean inside one window come from that single snapshot; a scrape that spans a window
+ * boundary can mix two adjacent snapshots (a JVM-local scrape reads 20-30 attributes in
+ * microseconds, so in practice it is coherent). Lifecycle flags
+ * ({@code Started}/{@code Stopping}/{@code Closed}) share the same bound. Each bean caches
+ * independently, so a group bean and its per-shard beans are not coordinated with each other,
+ * and concurrent readers never block a shard and never throw. No background thread, executor,
+ * or timer is involved: refreshes happen on the reading thread. If a refresh ever fails the
+ * last good snapshot is kept and the next attempt is deferred by one window;
+ * {@link IoShard#metrics()} and {@link RingGroup#aggregateMetrics()} are total by contract, so
+ * that path is defensive only.
  *
  * <p><b>ObjectName scheme (frozen):</b>
  * <ul>
@@ -41,6 +67,16 @@ public final class MetricsJmx {
 
     /** JMX domain of every bean registered by this class. */
     public static final String DOMAIN = "com.davidvlijmincx.lio.api";
+
+    /**
+     * Refresh window (milliseconds) of the per-bean metrics snapshot cache: a bean re-snapshots
+     * its shard/group at most once per window. Package-private so the JMX tests can reason
+     * about the documented staleness bound without duplicating the number.
+     */
+    static final long SNAPSHOT_WINDOW_MILLIS = 50L;
+
+    /** {@link #SNAPSHOT_WINDOW_MILLIS} in nanoseconds, as used by the cache. */
+    static final long SNAPSHOT_WINDOW_NANOS = TimeUnit.MILLISECONDS.toNanos(SNAPSHOT_WINDOW_MILLIS);
 
     private static final Object LOCK = new Object();
     private static final MBeanServer SERVER = ManagementFactory.getPlatformMBeanServer();
@@ -266,6 +302,60 @@ public final class MetricsJmx {
     // MXBean implementations (pull-based snapshots)
     // ------------------------------------------------------------------
 
+    /** One cached metrics snapshot and the {@link System#nanoTime()} at which it was taken. */
+    private record Snapshot<T>(T metrics, long takenNanos) {
+    }
+
+    /**
+     * Thread-safe one-snapshot cache dedicated to a single bean. The first snapshot is taken at
+     * construction (registration); afterwards a getter refreshes it at most once per
+     * {@link #SNAPSHOT_WINDOW_NANOS} and serves every attribute from the same snapshot.
+     *
+     * <p>The fast path is a volatile read plus a {@link System#nanoTime()} compare. Only a
+     * getter that finds the snapshot stale takes the per-bean lock, and only one of the
+     * concurrent readers does the refresh while the others wait for it (single-flight refresh).
+     * The refresh runs on the reading thread; there is no background thread or timer.
+     *
+     * <p>Refresh failures never propagate: the last good snapshot is served and the next
+     * attempt is deferred by one window. Both snapshot suppliers are total by contract, so this
+     * is defense in depth for the "attribute reads never throw" guarantee.
+     */
+    private static final class SnapshotCache<T> {
+
+        private final Supplier<T> snapshotter;
+        private final Object refreshLock = new Object();
+        private volatile Snapshot<T> current;
+
+        SnapshotCache(Supplier<T> snapshotter) {
+            this.snapshotter = snapshotter;
+            this.current = new Snapshot<>(snapshotter.get(), System.nanoTime());
+        }
+
+        T get() {
+            Snapshot<T> snapshot = current;
+            long now = System.nanoTime();
+            if (now - snapshot.takenNanos() < SNAPSHOT_WINDOW_NANOS) {
+                return snapshot.metrics();
+            }
+            synchronized (refreshLock) {
+                snapshot = current;
+                now = System.nanoTime();
+                if (now - snapshot.takenNanos() < SNAPSHOT_WINDOW_NANOS) {
+                    return snapshot.metrics();
+                }
+                T metrics;
+                try {
+                    metrics = snapshotter.get();
+                } catch (Throwable t) {
+                    metrics = snapshot.metrics();
+                }
+                snapshot = new Snapshot<>(metrics, now);
+                current = snapshot;
+                return snapshot.metrics();
+            }
+        }
+    }
+
     /**
      * Package-private adapter (only the frozen public surface of {@code MetricsJmx} is public):
      * JMX introspects the public {@link IoShardMetricsMXBean} interface, so the bean class itself
@@ -274,249 +364,253 @@ public final class MetricsJmx {
     static final class ShardBean implements IoShardMetricsMXBean {
 
         private final IoShard shard;
+        /** One coherent shard snapshot served to every attribute; see {@link SnapshotCache}. */
+        private final SnapshotCache<ShardMetrics> snapshot;
 
         ShardBean(IoShard shard) {
             this.shard = Objects.requireNonNull(shard, "shard");
+            this.snapshot = new SnapshotCache<>(shard::metrics);
         }
 
         @Override
         public int getShardId() {
+            // Identity, not a metric: immutable for the lifetime of the bean.
             return shard.id();
         }
 
         @Override
         public String getThreadName() {
-            return shard.stats().threadName();
+            return snapshot.get().stats().threadName();
         }
 
         @Override
         public int getCurrentCpu() {
-            return shard.stats().currentCpu();
+            return snapshot.get().stats().currentCpu();
         }
 
         @Override
         public boolean isAffinityApplied() {
-            return shard.stats().affinityApplied();
+            return snapshot.get().stats().affinityApplied();
         }
 
         @Override
         public boolean isStarted() {
-            return shard.isStarted();
+            return snapshot.get().stats().started();
         }
 
         @Override
         public boolean isStopping() {
-            return shard.isStopping();
+            return snapshot.get().stats().stopping();
         }
 
         @Override
         public boolean isClosed() {
-            return shard.isClosed();
+            return snapshot.get().stats().closed();
         }
 
         @Override
         public long getSqesPrepared() {
-            return shard.metrics().ring().sqesPrepared();
+            return snapshot.get().ring().sqesPrepared();
         }
 
         @Override
         public long getSubmitted() {
-            return shard.metrics().ring().submitted();
+            return snapshot.get().ring().submitted();
         }
 
         @Override
         public long getReaped() {
-            return shard.metrics().ring().reaped();
+            return snapshot.get().ring().reaped();
         }
 
         @Override
         public long getCompleted() {
-            return shard.metrics().ring().completed();
+            return snapshot.get().ring().completed();
         }
 
         @Override
         public long getFailed() {
-            return shard.metrics().ring().failed();
+            return snapshot.get().ring().failed();
         }
 
         @Override
         public long getCancelled() {
-            return shard.metrics().ring().cancelled();
+            return snapshot.get().ring().cancelled();
         }
 
         @Override
         public long getTimedOut() {
-            return shard.metrics().ring().timedOut();
+            return snapshot.get().ring().timedOut();
         }
 
         @Override
         public long getInFlight() {
-            return shard.metrics().ring().inFlight();
+            return snapshot.get().ring().inFlight();
         }
 
         @Override
         public long getEnters() {
-            return shard.metrics().ring().enters();
+            return snapshot.get().ring().enters();
         }
 
         @Override
         public long getSubmitBatches() {
-            return shard.metrics().ring().submitBatches();
+            return snapshot.get().ring().submitBatches();
         }
 
         @Override
         public long getSubmitErrors() {
-            return shard.metrics().ring().submitErrors();
+            return snapshot.get().ring().submitErrors();
         }
 
         @Override
         public long getSubmitRetries() {
-            return shard.metrics().ring().submitRetries();
+            return snapshot.get().ring().submitRetries();
         }
 
         @Override
         public long getSqFullEvents() {
-            return shard.metrics().ring().sqFullEvents();
+            return snapshot.get().ring().sqFullEvents();
         }
 
         @Override
         public long getSqQueued() {
-            return shard.metrics().ring().sqQueued();
+            return snapshot.get().ring().sqQueued();
         }
 
         @Override
         public int getSqEntries() {
-            return shard.metrics().ring().sqEntries();
+            return snapshot.get().ring().sqEntries();
         }
 
         @Override
         public long getCqReady() {
-            return shard.metrics().ring().cqReady();
+            return snapshot.get().ring().cqReady();
         }
 
         @Override
         public int getCqEntries() {
-            return shard.metrics().ring().cqEntries();
+            return snapshot.get().ring().cqEntries();
         }
 
         @Override
         public long getCqOverflowEvents() {
-            return shard.metrics().ring().cqOverflowEvents();
+            return snapshot.get().ring().cqOverflowEvents();
         }
 
         @Override
         public long getTasksSubmitted() {
-            return shard.stats().tasksSubmitted();
+            return snapshot.get().stats().tasksSubmitted();
         }
 
         @Override
         public long getTasksExecuted() {
-            return shard.stats().tasksExecuted();
+            return snapshot.get().stats().tasksExecuted();
         }
 
         @Override
         public long getTaskFailures() {
-            return shard.stats().taskFailures();
+            return snapshot.get().stats().taskFailures();
         }
 
         @Override
         public long getTasksRejected() {
-            return shard.stats().tasksRejected();
+            return snapshot.get().stats().tasksRejected();
         }
 
         @Override
         public long getCompletionsRegistered() {
-            return shard.stats().completionsRegistered();
+            return snapshot.get().stats().completionsRegistered();
         }
 
         @Override
         public long getCompletionsDispatched() {
-            return shard.stats().completionsDispatched();
+            return snapshot.get().stats().completionsDispatched();
         }
 
         @Override
         public long getCompletionsUnattributed() {
-            return shard.stats().completionsUnattributed();
+            return snapshot.get().stats().completionsUnattributed();
         }
 
         @Override
         public long getCompletionFailures() {
-            return shard.stats().completionFailures();
+            return snapshot.get().stats().completionFailures();
         }
 
         @Override
         public long getHandoffsSent() {
-            return shard.stats().handoffsSent();
+            return snapshot.get().stats().handoffsSent();
         }
 
         @Override
         public long getHandoffsInlineFallback() {
-            return shard.stats().handoffsInlineFallback();
+            return snapshot.get().stats().handoffsInlineFallback();
         }
 
         @Override
         public long getEventfdWrites() {
-            return shard.stats().eventfdWrites();
+            return snapshot.get().stats().eventfdWrites();
         }
 
         @Override
         public long getRingSubmits() {
-            return shard.stats().ringSubmits();
+            return snapshot.get().stats().ringSubmits();
         }
 
         @Override
         public long getCancelledAtClose() {
-            return shard.stats().cancelledAtClose();
+            return snapshot.get().stats().cancelledAtClose();
         }
 
         @Override
         public long getAbandonedAtClose() {
-            return shard.stats().abandonedAtClose();
+            return snapshot.get().stats().abandonedAtClose();
         }
 
         @Override
         public boolean isCloseTimedOut() {
-            return shard.stats().closeTimedOut();
+            return snapshot.get().stats().closeTimedOut();
         }
 
         @Override
         public long getLatencySamples() {
-            return shard.metrics().dispatchLatency().samples();
+            return snapshot.get().dispatchLatency().samples();
         }
 
         @Override
         public double getLatencyMeanMicros() {
-            return micros(shard.metrics().dispatchLatency().meanNanos());
+            return micros(snapshot.get().dispatchLatency().meanNanos());
         }
 
         @Override
         public double getLatencyP50Micros() {
-            return micros(shard.metrics().dispatchLatency().p50Nanos());
+            return micros(snapshot.get().dispatchLatency().p50Nanos());
         }
 
         @Override
         public double getLatencyP90Micros() {
-            return micros(shard.metrics().dispatchLatency().p90Nanos());
+            return micros(snapshot.get().dispatchLatency().p90Nanos());
         }
 
         @Override
         public double getLatencyP99Micros() {
-            return micros(shard.metrics().dispatchLatency().p99Nanos());
+            return micros(snapshot.get().dispatchLatency().p99Nanos());
         }
 
         @Override
         public double getLatencyP999Micros() {
-            return micros(shard.metrics().dispatchLatency().p999Nanos());
+            return micros(snapshot.get().dispatchLatency().p999Nanos());
         }
 
         @Override
         public double getLatencyMaxMicros() {
-            return micros(shard.metrics().dispatchLatency().maxNanos());
+            return micros(snapshot.get().dispatchLatency().maxNanos());
         }
 
         @Override
         public double getLatencyMinMicros() {
-            return micros(shard.metrics().dispatchLatency().minNanos());
+            return micros(snapshot.get().dispatchLatency().minNanos());
         }
     }
 
@@ -528,99 +622,103 @@ public final class MetricsJmx {
     static final class GroupBean implements RingGroupMetricsMXBean {
 
         private final RingGroup group;
+        /** One coherent group-aggregate snapshot served to every attribute. */
+        private final SnapshotCache<GroupMetrics> snapshot;
 
         GroupBean(RingGroup group) {
             this.group = Objects.requireNonNull(group, "group");
+            this.snapshot = new SnapshotCache<>(group::aggregateMetrics);
         }
 
         @Override
         public int getShards() {
+            // Group size, not a metric: immutable for the lifetime of the bean.
             return group.size();
         }
 
         @Override
         public long getSubmitted() {
-            return group.aggregateMetrics().submitted();
+            return snapshot.get().submitted();
         }
 
         @Override
         public long getReaped() {
-            return group.aggregateMetrics().reaped();
+            return snapshot.get().reaped();
         }
 
         @Override
         public long getCompleted() {
-            return group.aggregateMetrics().completed();
+            return snapshot.get().completed();
         }
 
         @Override
         public long getFailed() {
-            return group.aggregateMetrics().failed();
+            return snapshot.get().failed();
         }
 
         @Override
         public long getCancelled() {
-            return group.aggregateMetrics().cancelled();
+            return snapshot.get().cancelled();
         }
 
         @Override
         public long getTimedOut() {
-            return group.aggregateMetrics().timedOut();
+            return snapshot.get().timedOut();
         }
 
         @Override
         public long getInFlight() {
-            return group.aggregateMetrics().inFlight();
+            return snapshot.get().inFlight();
         }
 
         @Override
         public long getSqQueued() {
-            return group.aggregateMetrics().sqQueued();
+            return snapshot.get().sqQueued();
         }
 
         @Override
         public long getCqReady() {
-            return group.aggregateMetrics().cqReady();
+            return snapshot.get().cqReady();
         }
 
         @Override
         public long getLatencySamples() {
-            return group.aggregateMetrics().dispatchLatency().samples();
+            return snapshot.get().dispatchLatency().samples();
         }
 
         @Override
         public double getLatencyMeanMicros() {
-            return micros(group.aggregateMetrics().dispatchLatency().meanNanos());
+            return micros(snapshot.get().dispatchLatency().meanNanos());
         }
 
         @Override
         public double getLatencyP50Micros() {
-            return micros(group.aggregateMetrics().dispatchLatency().p50Nanos());
+            return micros(snapshot.get().dispatchLatency().p50Nanos());
         }
 
         @Override
         public double getLatencyP90Micros() {
-            return micros(group.aggregateMetrics().dispatchLatency().p90Nanos());
+            return micros(snapshot.get().dispatchLatency().p90Nanos());
         }
 
         @Override
         public double getLatencyP99Micros() {
-            return micros(group.aggregateMetrics().dispatchLatency().p99Nanos());
+            return micros(snapshot.get().dispatchLatency().p99Nanos());
         }
 
         @Override
         public double getLatencyP999Micros() {
-            return micros(group.aggregateMetrics().dispatchLatency().p999Nanos());
+            return micros(snapshot.get().dispatchLatency().p999Nanos());
         }
 
         @Override
         public double getLatencyMaxMicros() {
-            return micros(group.aggregateMetrics().dispatchLatency().maxNanos());
+            return micros(snapshot.get().dispatchLatency().maxNanos());
         }
 
         @Override
         public double getLatencyMinMicros() {
-            return micros(group.aggregateMetrics().dispatchLatency().minNanos());
+            return micros(snapshot.get().dispatchLatency().minNanos());
         }
     }
 

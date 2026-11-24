@@ -111,10 +111,8 @@ public final class GroupCommit implements AutoCloseable {
      * @return a new group commit
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
-     * @throws JuringException          retained by the frozen group-commit signature; this overload
-     *                                  performs no I/O and does not normally throw it
      */
-    public static GroupCommit open(JuringFile file) throws JuringException {
+    public static GroupCommit open(JuringFile file) {
         return open(file, GroupCommitOptions.defaults());
     }
 
@@ -132,10 +130,8 @@ public final class GroupCommit implements AutoCloseable {
      * @throws NullPointerException     if {@code file} or {@code options} is {@code null}
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
-     * @throws JuringException          retained by the frozen group-commit signature; construction
-     *                                  performs no I/O and does not normally throw it
      */
-    public static GroupCommit open(JuringFile file, GroupCommitOptions options) throws JuringException {
+    public static GroupCommit open(JuringFile file, GroupCommitOptions options) {
         Objects.requireNonNull(file, "file");
         Objects.requireNonNull(options, "options");
         if (!file.isOpen()) {

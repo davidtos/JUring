@@ -62,7 +62,7 @@ jobs:
           if-no-files-found: ignore
 
   jcstress:
-    name: jcstress (wake-poller memory model)
+    name: jcstress (wake-path and handoff memory model)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:

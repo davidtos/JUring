@@ -284,6 +284,63 @@ class JmxTest {
     }
 
     // ------------------------------------------------------------------
+    // coherent snapshot cache
+    // ------------------------------------------------------------------
+
+    /**
+     * Pins the coherent-snapshot contract: within one refresh window every attribute of a bean
+     * is served from the same cached snapshot (so a burst that advances the shard is not visible
+     * until the window expires), and after the window the next read refreshes and catches up.
+     *
+     * <p>This is deterministic rather than timing-luck based: after registration the test waits
+     * longer than the window so the first read is guaranteed to refresh; it then measures how
+     * long the burst took and only asserts the frozen-snapshot property when that is well under
+     * one window (otherwise the iteration is skipped, never silently weakened).
+     */
+    @Test
+    void attributesShareOneCachedSnapshotWithinTheWindowThenRefresh() throws Exception {
+        IoShard shard = IoShard.create(5, ShardOptions.defaults().withRingEntries(128));
+        MetricsJmx.Handle handle = null;
+        try {
+            shard.start();
+            handle = MetricsJmx.register(shard);
+            ObjectName name = handle.name();
+            // The bean snapshots at registration; wait so the read below must refresh instead of
+            // serving that registration-time snapshot.
+            Thread.sleep(MetricsJmx.SNAPSHOT_WINDOW_MILLIS + 20L);
+
+            long before = System.nanoTime();
+            long completedBefore = ((Number) attr(name, "Completed")).longValue();
+            runNops(shard, 8);
+            ShardMetrics afterBurst = shard.metrics();
+            long elapsed = System.nanoTime() - before;
+            org.junit.jupiter.api.Assumptions.assumeTrue(
+                    elapsed < MetricsJmx.SNAPSHOT_WINDOW_NANOS / 2,
+                    "machine too slow to observe the frozen window (elapsed " + elapsed + " ns)");
+
+            // Same window: the cached snapshot must still report the pre-burst value.
+            assertThat(((Number) attr(name, "Completed")).longValue())
+                    .as("attributes inside one refresh window must come from one snapshot")
+                    .isEqualTo(completedBefore);
+
+            // A later read (after the window) refreshes and catches up with the burst.
+            waitUntil(() -> {
+                try {
+                    return ((Number) attr(name, "Completed")).longValue()
+                            >= afterBurst.ring().completed();
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+            }, 5_000L);
+        } finally {
+            if (handle != null) {
+                handle.close();
+            }
+            shard.close(1_000L);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // group registration rollback on partial failure
     // ------------------------------------------------------------------
 

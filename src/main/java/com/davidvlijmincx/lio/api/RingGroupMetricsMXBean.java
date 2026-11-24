@@ -3,9 +3,13 @@ package com.davidvlijmincx.lio.api;
 /**
  * JMX MXBean view of one {@link RingGroup} aggregate.
  *
- * <p>Attributes are <b>pull-based</b>: every getter takes a fresh
- * {@link RingGroup#aggregateMetrics()} snapshot at read time (no exporter thread, no
- * background cost) and never throws, including after the group was closed. Counters are
+ * <p>Attributes are <b>pull-based</b> and never throw, including after the group was closed.
+ * A bean serves every attribute from one coherent cached {@link RingGroup#aggregateMetrics()}
+ * snapshot per short refresh window (50 ms, see {@link MetricsJmx}), so the aggregated counters
+ * and the merged dispatch-latency histogram of a single scrape describe one instant instead of
+ * being recomputed per getter. Values are therefore at most one window old, and a scrape that
+ * spans a window boundary can mix two adjacent snapshots; there is no exporter thread and no
+ * background work — refreshes happen on the reading thread. Counters are
  * {@code long}s, latency values are <b>microseconds</b> as {@code double} (exactly
  * {@code 0.0} when no dispatch-latency sample was recorded).
  *

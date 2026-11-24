@@ -520,10 +520,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length number of bytes to read, {@code 0 <= length <= buffer.byteSize()}
      * @param buffer native memory segment (must be writable)
      * @return the operation handle to pass to {@link #await(long)}
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareRead(long offset, int length, MemorySegment buffer) throws JuringException {
+    public long prepareRead(long offset, int length, MemorySegment buffer) {
         ensureOpen("read");
         validateReadArguments(offset, length, buffer);
         ensureCapacity();
@@ -544,10 +542,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length      number of bytes to read
      * @param bufferIndex registered buffer index
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareReadFixed(long offset, int length, int bufferIndex) throws JuringException {
+    public long prepareReadFixed(long offset, int length, int bufferIndex) {
         ensureOpen("readFixed");
         if (offset < 0 || length < 0 || bufferIndex < 0) {
             throw new IllegalArgumentException("invalid readFixed arguments: offset=" + offset
@@ -569,10 +565,8 @@ public final class JuringFile implements AutoCloseable {
      * @param offset file offset
      * @param buffer native memory segment containing the bytes to write
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareWrite(long offset, MemorySegment buffer) throws JuringException {
+    public long prepareWrite(long offset, MemorySegment buffer) {
         ensureOpen("write");
         if (offset < 0) {
             throw new IllegalArgumentException("negative offset: " + offset);
@@ -595,10 +589,8 @@ public final class JuringFile implements AutoCloseable {
      * @param length      number of bytes to write, {@code 0 <= length <= buffer size}
      * @param bufferIndex registered buffer index
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareWriteFixed(long offset, int length, int bufferIndex) throws JuringException {
+    public long prepareWriteFixed(long offset, int length, int bufferIndex) {
         ensureOpen("writeFixed");
         if (offset < 0 || length < 0 || bufferIndex < 0) {
             throw new IllegalArgumentException("invalid writeFixed arguments: offset=" + offset
@@ -618,10 +610,8 @@ public final class JuringFile implements AutoCloseable {
      *
      * @param dataOnly {@code true} for {@code fdatasync} semantics
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareFsync(boolean dataOnly) throws JuringException {
+    public long prepareFsync(boolean dataOnly) {
         ensureOpen("fsync");
         int flags = dataOnly ? JUring.IORING_FSYNC_DATASYNC : 0;
         ensureCapacity();
@@ -672,11 +662,9 @@ public final class JuringFile implements AutoCloseable {
      *               {@link #FALLOC_FL_PUNCH_HOLE}, {@link #FALLOC_FL_ZERO_RANGE}, or a
      *               combination supported by the filesystem)
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_FALLOCATE}
      */
-    public long prepareFallocate(long offset, long length, int mode) throws JuringException {
+    public long prepareFallocate(long offset, long length, int mode) {
         ensureOpen("fallocate");
         if (offset < 0 || length < 0) {
             throw new IllegalArgumentException("invalid fallocate arguments: offset=" + offset + ", length=" + length);
@@ -701,10 +689,8 @@ public final class JuringFile implements AutoCloseable {
      * @param offset file offset
      * @param length number of bytes
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      */
-    public long prepareDiscard(long offset, long length) throws JuringException {
+    public long prepareDiscard(long offset, long length) {
         return prepareFallocate(offset, length, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE);
     }
 
@@ -723,11 +709,9 @@ public final class JuringFile implements AutoCloseable {
      *
      * @param timeoutMillis relative timeout in milliseconds, {@code >= 0}
      * @return the operation handle
-     * @throws JuringException retained for API compatibility; preparation-time failures are
-     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      */
-    public long prepareTimeout(long timeoutMillis) throws JuringException {
+    public long prepareTimeout(long timeoutMillis) {
         ensureOpen("timeout");
         if (timeoutMillis < 0) {
             throw new IllegalArgumentException("timeoutMillis must be >= 0: " + timeoutMillis);
@@ -779,13 +763,10 @@ public final class JuringFile implements AutoCloseable {
      * @param buffer      native writable segment
      * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return the read operation handle
-     * @throws JuringException retained by the frozen signature; preparation-time failures
-     *                         (including ledger exhaustion and a full submission queue) are
-     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      *                                       or {@code IORING_OP_LINK_TIMEOUT}
      */
-    public long prepareRead(long offset, int length, MemorySegment buffer, long timeoutMillis) throws JuringException {
+    public long prepareRead(long offset, int length, MemorySegment buffer, long timeoutMillis) {
         ensureOpen("read");
         validateReadArguments(offset, length, buffer);
         requireLinkedTimeout("read", timeoutMillis);
@@ -826,13 +807,10 @@ public final class JuringFile implements AutoCloseable {
      * @param buffer      native segment with the bytes to write
      * @param timeoutMillis kernel timeout in milliseconds, {@code >= 0}
      * @return the write operation handle
-     * @throws JuringException retained by the frozen signature; preparation-time failures
-     *                         (including ledger exhaustion and a full submission queue) are
-     *                         reported as unchecked exceptions
      * @throws UnsupportedOperationException when the kernel lacks {@code IORING_OP_TIMEOUT}
      *                                       or {@code IORING_OP_LINK_TIMEOUT}
      */
-    public long prepareWrite(long offset, MemorySegment buffer, long timeoutMillis) throws JuringException {
+    public long prepareWrite(long offset, MemorySegment buffer, long timeoutMillis) {
         ensureOpen("write");
         if (offset < 0) {
             throw new IllegalArgumentException("negative offset: " + offset);
@@ -1799,7 +1777,7 @@ public final class JuringFile implements AutoCloseable {
         }
     }
 
-    private void validateReadArguments(long offset, int length, MemorySegment buffer) throws JuringException {
+    private void validateReadArguments(long offset, int length, MemorySegment buffer) {
         if (offset < 0) {
             throw new IllegalArgumentException("negative offset: " + offset);
         }

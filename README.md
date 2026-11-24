@@ -48,7 +48,7 @@ That turned into a library. It's pre-1.0, but it's not a prototype.
 | Registered files and fixed buffers | Kernel-side pins that remove per-operation descriptor and buffer lookups. |
 | `JuringFile` | A file handle on top of a ring: offset I/O, truncate, allocate, discard, `fadvise`, durability modes, and typed errors. |
 | `JuringInputStream` / `JuringOutputStream` | Buffered streams with bounded read-ahead and write-behind. Each stream allocates a fixed set of buffers when it opens and reports its footprint. |
-| `GroupCommit` | Batches durability for concurrent writers, so a group shares one `fdatasync` instead of paying for one each. |
+| `GroupCommit` | Batches durability for a group of writes on one owner thread: one `fdatasync` covers the whole batch instead of one per write. |
 | `JUringBlocking` | Ordinary blocking calls for virtual threads. A few poller threads submit and reap while callers park without pinning a carrier. |
 | `IoShard` / `RingGroup` | One ring per core, with work spread across them, affinity, backpressure, and cross-thread-safe statistics. |
 | Metrics | Per-ring and per-shard counters, latency histograms, and JMX MXBeans. |
@@ -327,7 +327,9 @@ Full tables, raw methodology, and reproduction commands are in
   into a mapping. JUring maps it with `mmap` and touches submission and completion
   entries through `VarHandle` accesses. The kernel reads and writes the same cache
   lines, so publishing the submission tail and consuming the completion head need
-  the right fences; a jcstress profile exists to keep that ordering honest.
+  the right fences; the jcstress profile models those store/load orderings and
+  drives the real MPSC handoff queue, while the live ring path is covered by the
+  concurrency and integration tests.
 - **One syscall per batch.** Requests are prepared into the submission queue, then a
   single `io_uring_enter` submits the batch and reaps completions. The fast path uses
   `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN`, which keeps the kernel from waking
@@ -344,12 +346,18 @@ Full tables, raw methodology, and reproduction commands are in
 ## How I test it
 
 The correctness story matters more than the throughput story, because a fast I/O
-library that corrupts one completion is worse than a slow one. The suite has 478
-tests across 66 test classes: conformance against `java.nio`, lifecycle and
+library that corrupts one completion is worse than a slow one. The suite has 489
+tests across 67 test classes: conformance against `java.nio`, lifecycle and
 use-after-close, cancellation, timeouts, registered-buffer lifetimes, bounded stream
 memory, zero allocation, and per-handle completion routing. A separate jcstress
-profile exercises the memory model of the handoff between poller threads and parked
-virtual threads. CI builds and runs the suite on JDK 25 and 26, checks Javadoc with
+profile models the store/load orderings the wake path relies on — publish/consume
+fences and slot handoff — and drives the real package-private `MpscQueue` through
+concurrent offers and a single consumer. The live poller/park wake path itself is
+covered by concurrency integration tests, not jcstress: `HandoffTest` wakes an idle
+shard through its inbound queue, and `BlockingVtConcurrencyTest` and
+`JUringBlockingScaleTest` run 128 and 10,000 virtual threads respectively through
+concurrent `JUringBlocking` calls (park/unpark against the pollers, with no lost
+wakeups). CI builds and runs the suite on JDK 25 and 26, checks Javadoc with
 doclint, and verifies the release artifacts.
 
 The benchmark side is built the same way. A harness under `bench/` drives `fio`,

@@ -400,4 +400,74 @@ class JUringOpcodeOperationsTest {
             assertArrayEquals(content, actual);
         }
     }
+
+    @Test
+    void rawAddressWriteFixedWritesRegisteredBuffer() throws IOException {
+        byte[] content = "raw-address-write".getBytes(StandardCharsets.UTF_8);
+        Path file = writeFile("raw-address-write.bin", new byte[content.length]);
+        MemorySegment[] buffers = ring.registerBuffers(64, 2);
+        MemorySegment.copy(content, 0, buffers[0], JAVA_BYTE, 0, content.length);
+
+        try (FileDescriptor fd = new FileDescriptor(file, WRITE)) {
+            long handle = ring.prepareWriteFixed(fd, buffers[0].address(), content.length, 0, 0);
+            ring.submit();
+            Result result = ring.waitForResult();
+
+            assertEquals(handle, result.id());
+            assertTrue(result.isSuccess(), "raw-address fixed write failed: " + result.result());
+            assertEquals(content.length, result.result());
+            assertArrayEquals(content, Files.readAllBytes(file));
+        }
+        assertEquals(0, ring.inFlightCount());
+    }
+
+    @Test
+    void rawAddressWriteFixedRejectsEveryInvalidArgument() throws IOException {
+        byte[] content = "validated".getBytes(StandardCharsets.UTF_8);
+        Path file = writeFile("raw-address-validated.bin", new byte[content.length]);
+        MemorySegment[] buffers = ring.registerBuffers(64, 2);
+        MemorySegment.copy(content, 0, buffers[0], JAVA_BYTE, 0, content.length);
+        long registeredAddress = buffers[0].address();
+
+        try (FileDescriptor fd = new FileDescriptor(file, WRITE)) {
+            // bufferIndex out of range
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, registeredAddress, content.length, 0, 2));
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, registeredAddress, content.length, 0, -1));
+
+            // writeSize out of range
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, registeredAddress, 65, 0, 0),
+                    "a write larger than the registered buffer must be rejected");
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, registeredAddress, -1, 0, 0),
+                    "a negative write size must be rejected");
+
+            // address is not the registered base address of that index
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, buffers[1].address(), content.length, 0, 0),
+                    "another registered buffer's address must not be accepted for this index");
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, registeredAddress + 1, content.length, 0, 0),
+                    "an address inside the buffer that is not its base address must be rejected");
+            assertThrows(IllegalArgumentException.class,
+                    () -> ring.prepareWriteFixed(fd, 0L, content.length, 0, 0),
+                    "an arbitrary address must be rejected");
+        }
+        assertEquals(0, ring.inFlightCount(), "rejected prepares must not consume SQEs");
+    }
+
+    @Test
+    void rawAddressWriteFixedRejectsWhenNoBuffersAreRegistered() throws IOException {
+        byte[] content = "no-buffers".getBytes(StandardCharsets.UTF_8);
+        Path file = writeFile("raw-address-no-buffers.bin", new byte[content.length]);
+
+        try (JUring fresh = new JUring(8, IORING_SETUP_SINGLE_ISSUER);
+             FileDescriptor fd = new FileDescriptor(file, WRITE)) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> fresh.prepareWriteFixed(fd, 0L, content.length, 0, 0));
+            assertEquals(0, fresh.inFlightCount(), "a rejected prepare must not consume an SQE");
+        }
+    }
 }

@@ -141,6 +141,27 @@ The rerun reproduces the published picture: JUring is `−1.8%` at QD 64 and `+1
 
 *Mean of the per-repetition p50/p99 from the rerun. JUring has the lowest median at both depths; its QD 128 p99 (`919` µs) is higher than fio's (`714` µs).*
 
+### Post-review hardening check, 2026-11-24
+
+The pre-release code review was followed by a hardening pass that changed the native
+dispatcher (thread-safe `strerror_r`, checked allocation, non-`critical` `malloc`/`free`/
+`sched_setaffinity`, a variadic `open(2)` annotation), the blocking facade's registration
+publication and rollback, and the JMX snapshot path. It changed **no measured read or write
+hot path**: the raw engine (`JUring`/`JuringFile`/`IoShard` and the benchmark harness) is
+untouched, the blocking facade is not part of any throughput table in this document, and the
+native calls that moved off `critical` are setup, registration and teardown paths, not
+per-I/O. The `JuringFile`/`GroupCommit` signature cleanups are bytecode-neutral.
+
+Rather than re-run the full tables on a dirty tree, I repeated the per-op cost check used
+for the previous hardening batch (`bench/read-write/run-perf-cells.sh`, same 10 s warmup +
+40 s measured, 30 s `perf stat` window, CPU 2, one repetition of the 4 KiB random-read QD 64
+cell): **326,454 IOPS** against `327,371 ± 280` in the 0.1.0 table, **11,505 cycles/op** and
+**0.338 syscalls/op** against `11,438` / `0.327` from the release-candidate check, with p50
+`170.7` µs / p99 `478.2` µs against `169.6` / `481.9`. With one repetition that is
+run-to-run variation, not a regression: the read path's syscall count and batching are
+unchanged in the diff. The published tables therefore remain the 0.1.0 measurements; a full
+re-run belongs to the next measurement campaign, on a clean tagged tree.
+
 ### How much does the fio configuration matter?
 
 If the `fio` reference is sensitive to configuration, a single unmatched reference is a weak opponent. So I swept it at the two deep queue depths. Bracket variants use three repetitions; the matched reference is the five-repetition row from the main table.
@@ -532,7 +553,7 @@ I use the FFM API for every syscall, so I wanted to know what each invocation st
 | `methodHandleProxies_asInterfaceInstance` | `MethodHandleProxies` / Record | 8.24 ± 0.12 ns/op |
 | `record_instance_proxy` | `MethodHandleProxies` / Record | 8.64 ± 0.07 ns/op |
 
-The winner is a `critical(true)` handle invoked through a static final `invokeExact`: `2.62 ± 0.01 ns/op`. The proxy-based strategies are slower, up to `8.64 ± 0.07 ns/op` for a record instance proxy. In a hot path that makes one downcall per I/O the difference is real, so I use the static final `invokeExact` form. The proxies are for API shapes where convenience matters more than invocation cost.
+The fastest measured form is a `critical(true)` handle invoked through a static final `invokeExact`: `2.62 ± 0.01 ns/op`. That is a lower bound, not the form JUring uses: `critical` requires a downcall that cannot block or allocate, and these calls may enter a syscall or allocate, so the library uses the ordinary static final `invokeExact` form — `5.92 ± 0.02 ns/op` in the same table. The proxy-based strategies are slower, up to `8.64 ± 0.07 ns/op` for a record instance proxy, and are for API shapes where convenience matters more than invocation cost.
 
 ## How to reproduce
 

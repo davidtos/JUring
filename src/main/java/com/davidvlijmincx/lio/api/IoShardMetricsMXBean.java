@@ -3,9 +3,13 @@ package com.davidvlijmincx.lio.api;
 /**
  * JMX MXBean view of one {@link IoShard}.
  *
- * <p>Attributes are <b>pull-based</b>: every getter takes a fresh {@link IoShard#metrics()}
- * snapshot at read time, so there is no exporter thread and no background memory cost. Reads
- * never throw, including for a closed or failed shard. Counters are {@code long}s, latency
+ * <p>Attributes are <b>pull-based</b> and never throw, including for a closed or failed shard.
+ * A bean serves every attribute from one coherent cached {@link IoShard#metrics()} snapshot per
+ * short refresh window (50 ms, see {@link MetricsJmx}), so the attributes of a single scrape
+ * describe one instant instead of each getter re-snapshotting the shard. Values are therefore at
+ * most one window old, and a scrape that spans a window boundary can mix two adjacent
+ * snapshots; there is no exporter thread and no background work — refreshes happen on the
+ * reading thread. Counters are {@code long}s, latency
  * values are <b>microseconds</b> as {@code double} (exactly {@code 0.0} when sampling is
  * disabled or no sample was recorded), booleans are booleans. Accessor names follow the
  * JavaBean convention, so the JMX attribute names are e.g. {@code Submitted}, {@code CqReady}

@@ -226,7 +226,9 @@
                                         <argument>-r</argument>
                                         <argument>target/jcstress-results</argument>
                                         <argument>-t</argument>
-                                        <argument>com.davidvlijmincx.lio.api.WakePollerStoreLoadTest.*</argument>
+                                        <!-- Every @JCStressTest in the exported package: the
+                                             wake-path orderings plus the real MpscQueue handoff. -->
+                                        <argument>com.davidvlijmincx.lio.api.*</argument>
                                     </arguments>
                                 </configuration>
                             </execution>

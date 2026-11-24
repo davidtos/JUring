@@ -800,7 +800,7 @@ public final class JuringInputStream implements AutoCloseable {
                             + "readAhead+2 and call JuringFile.withInFlightCapacity(readAhead+2) before the "
                             + "first operation (" + again.getMessage() + ")", again);
                 }
-            } catch (JuringException | RuntimeException | Error e) {
+            } catch (RuntimeException | Error e) {
                 freeDescriptors[freeDescriptorTop++] = descriptor;
                 freeBuffers[freeBufferTop++] = buffer;
                 throw e;

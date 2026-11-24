@@ -55,8 +55,11 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * Methods are safe to call from multiple threads and from virtual threads.
  *
  * <p>Registered buffers and files are installed on every worker ring, so the {@code *Fixed}
- * and {@code indexFD} overloads work from any calling thread. {@link #close()} is bounded
- * and idempotent, and the instance must not be used after it.
+ * and {@code indexFD} overloads work from any calling thread. Registration and direct-open
+ * calls are best effort across the rings: a call that fails on a later ring rolls back the rings
+ * it already mutated where the kernel primitive allows it (and documents on each method where it
+ * does not). {@link #close()} is bounded and idempotent, and the instance must not be used after
+ * it.
  */
 public class JUringBlocking implements AutoCloseable {
 
@@ -104,7 +107,11 @@ public class JUringBlocking implements AutoCloseable {
     private final int recordsPerWorker;
     private final int maxConcurrentCalls;
     private final Object closeLock = new Object();
-    private boolean closed;
+    /**
+     * Lifecycle flag. Written only under {@link #closeLock}; {@code volatile} so the reads that
+     * do not take the lock ({@link #getRegisteredBuffer(int)}) cannot observe a stale value.
+     */
+    private volatile boolean closed;
 
     // Registered buffer state & lock-free MPMC buffer index pool
     /**
@@ -114,18 +121,52 @@ public class JUringBlocking implements AutoCloseable {
      */
     private final Arena registeredBufferArena = Arena.ofShared();
     private volatile boolean registeredBufferArenaClosed;
-    private volatile MemorySegment[] registeredBuffers;
-    private volatile long[] registeredBufferAddresses;
-    private volatile long[] registeredBufferSizes;
-    private volatile int registeredBufMask;
-    private volatile int[] freeBufBuffer;
-    private volatile long[] freeBufSeq;
+
     /**
-     * Per-index ownership ledger for the registered-buffer pool (1 = checked out). Prevents a
-     * double check-in from duplicating an index in the free queue and handing the same buffer
-     * to two concurrent callers.
+     * Immutable snapshot of one registration's buffer configuration and free-index pool.
+     *
+     * <p>Every field a fixed-buffer operation needs is a {@code final} field of the snapshot and
+     * the snapshot is published through the single volatile {@link #bufferState} reference. A
+     * reader therefore observes either "no buffers registered" or the complete, consistent
+     * registration: it can never see, for example, a non-null buffer array with a null ownership
+     * ledger, which the previous per-field publication allowed.
+     *
+     * <p>The free-list head/tail stay on the outer instance because they are mutated by the
+     * lock-free check-out/check-in paths; they are written before the snapshot is published.
      */
-    private volatile AtomicIntegerArray bufferInUse;
+    private static final class BufferState {
+        final MemorySegment[] buffers;
+        final long[] addresses;
+        final long[] sizes;
+        final int mask;
+        final int[] freeBuffer;
+        final long[] freeSeq;
+        /**
+         * Per-index ownership ledger for the registered-buffer pool (1 = checked out). Prevents
+         * a double check-in from duplicating an index in the free queue and handing the same
+         * buffer to two concurrent callers.
+         */
+        final AtomicIntegerArray inUse;
+
+        BufferState(MemorySegment[] buffers, long[] addresses, long[] sizes, int mask,
+                    int[] freeBuffer, long[] freeSeq, AtomicIntegerArray inUse) {
+            this.buffers = buffers;
+            this.addresses = addresses;
+            this.sizes = sizes;
+            this.mask = mask;
+            this.freeBuffer = freeBuffer;
+            this.freeSeq = freeSeq;
+            this.inUse = inUse;
+        }
+    }
+
+    /**
+     * The registered-buffer configuration, or {@code null} when none is registered. Written once,
+     * last, by {@link #registerBuffers(int, int)} after the free-list bounds are initialised, and
+     * cleared atomically by {@link #close(long)}. Every method that touches fixed-buffer state
+     * reads this field first, which supplies the happens-before edge for the whole snapshot.
+     */
+    private volatile BufferState bufferState;
     @SuppressWarnings("unused")
     private volatile long freeBufHead;
     @SuppressWarnings("unused")
@@ -1703,60 +1744,115 @@ public class JUringBlocking implements AutoCloseable {
      * Registers {@code nrOfBuffers} off-heap buffers of {@code size} bytes on every worker
      * ring.
      *
-     * <p>The buffers must stay valid until the instance is closed and should be registered
-     * only once per instance; the returned segments are indexed by the buffer index used by
-     * the {@code *Fixed} methods.
+     * <p>The buffers must stay valid until the instance is closed and can be registered only
+     * once per instance; the returned segments are indexed by the buffer index used by the
+     * {@code *Fixed} methods.
+     *
+     * <p><b>Publication and lifetime.</b> The registration is serialized against a concurrent
+     * {@link #close()} and against another {@code registerBuffers} call by {@link #closeLock},
+     * and the buffer state is published as a single immutable snapshot after every worker ring
+     * accepted it. Concurrent readers therefore see either an unregistered instance or a fully
+     * initialised one, never a partially published registration. The candidate buffers are
+     * allocated from an instance-wide shared arena; if the kernel rejects the registration on a
+     * later worker ring, the rings already mutated by this call are unregistered again before the
+     * failure propagates, but the candidate memory itself cannot be released individually and is
+     * retained until the instance is closed (a bounded cost of a failed registration).
      *
      * @param size        size of one buffer in bytes
      * @param nrOfBuffers number of buffers to register
      * @return the registered buffer segments, in index order
-     * @throws IllegalStateException when this instance is closed
+     * @throws IllegalArgumentException when {@code size} or {@code nrOfBuffers} is not positive
+     * @throws IllegalStateException    when this instance is closed or buffers are already
+     *                                  registered
+     * @throws RuntimeException         when a worker ring rejects the registration; it is thrown
+     *                                  after the rings already mutated by this call have been
+     *                                  unregistered on a best-effort basis
      */
     public MemorySegment[] registerBuffers(int size, int nrOfBuffers) {
         if (size <= 0 || nrOfBuffers <= 0) {
             throw new IllegalArgumentException("Invalid registered buffer configuration: size=" + size + ", nrOfBuffers=" + nrOfBuffers);
         }
-        if (registeredBuffers != null) {
-            throw new IllegalStateException("Buffers are already registered on this JUringBlocking instance");
+        synchronized (closeLock) {
+            // Both checks happen under the same lock as close()/other registrations, so a second
+            // call cannot race past the "already registered" check.
+            if (closed) {
+                throw new IllegalStateException("JUringBlocking is closed");
+            }
+            if (bufferState != null) {
+                throw new IllegalStateException("Buffers are already registered on this JUringBlocking instance");
+            }
+            var iovecStructure = libc.allocateIovec(registeredBufferArena, size, nrOfBuffers);
+            registerIovecOnEveryWorker(iovecStructure, nrOfBuffers);
+            MemorySegment[] buffers = iovecStructure.buffers();
+            long[] addrs = new long[buffers.length];
+            long[] sizes = new long[buffers.length];
+            for (int i = 0; i < buffers.length; i++) {
+                addrs[i] = buffers[i].address();
+                sizes[i] = buffers[i].byteSize();
+            }
+            int poolCap = Integer.highestOneBit(Math.max(2, nrOfBuffers) - 1) << 1;
+            int[] bufArr = new int[poolCap];
+            long[] seqArr = new long[poolCap];
+            for (int i = 0; i < poolCap; i++) {
+                if (i < nrOfBuffers) {
+                    bufArr[i] = i;
+                    seqArr[i] = i + 1;
+                } else {
+                    seqArr[i] = i;
+                }
+            }
+            BufferState state = new BufferState(buffers, addrs, sizes, poolCap - 1,
+                    bufArr, seqArr, new AtomicIntegerArray(nrOfBuffers));
+            // Free-list bounds first, then the volatile snapshot write. That write is the
+            // release edge: every write above (including the snapshot's final fields) is
+            // visible to a reader that observes a non-null bufferState.
+            this.freeBufHead = 0L;
+            this.freeBufTail = nrOfBuffers;
+            this.bufferState = state;
+            return buffers;
         }
-        if (closed) {
-            throw new IllegalStateException("JUringBlocking is closed");
+    }
+
+    /**
+     * Registers the shared iovec structure on every worker ring. If a ring rejects it, the rings
+     * already mutated by this call are unregistered again (best effort) and the original failure
+     * is rethrown.
+     *
+     * <p>The rollback assumes the earlier rings had no registered-buffer table before this call,
+     * which holds for the public API: nothing can have registered buffers on these rings without
+     * going through this method. The caller holds {@link #closeLock}, so no concurrent
+     * registration or close can interleave.
+     */
+    private void registerIovecOnEveryWorker(LibCDispatcher.IovecStructure iovecStructure, int nrOfIovecs) {
+        int registeredWorkers = 0;
+        try {
+            for (Worker w : workers) {
+                w.runOnPoller(() -> {
+                    w.dispatcher.registerExistingIovecStructure(iovecStructure, nrOfIovecs);
+                    return null;
+                });
+                registeredWorkers++;
+            }
+        } catch (RuntimeException e) {
+            rollbackRegisteredBuffers(registeredWorkers, e);
+            throw e;
         }
-        var iovecStructure = libc.allocateIovec(registeredBufferArena, size, nrOfBuffers);
-        for (Worker w : workers) {
-            w.runOnPoller(() -> {
-                w.dispatcher.registerExistingIovecStructure(iovecStructure, nrOfBuffers);
-                return null;
-            });
-        }
-        MemorySegment[] buffers = iovecStructure.buffers();
-        long[] addrs = new long[buffers.length];
-        long[] sizes = new long[buffers.length];
-        for (int i = 0; i < buffers.length; i++) {
-            addrs[i] = buffers[i].address();
-            sizes[i] = buffers[i].byteSize();
-        }
-        int poolCap = Integer.highestOneBit(Math.max(2, nrOfBuffers) - 1) << 1;
-        int[] bufArr = new int[poolCap];
-        long[] seqArr = new long[poolCap];
-        for (int i = 0; i < poolCap; i++) {
-            if (i < nrOfBuffers) {
-                bufArr[i] = i;
-                seqArr[i] = i + 1;
-            } else {
-                seqArr[i] = i;
+    }
+
+    /** Unregisters the buffers from the first {@code registeredWorkers} workers, best effort. */
+    private void rollbackRegisteredBuffers(int registeredWorkers, RuntimeException failure) {
+        for (int i = 0; i < registeredWorkers; i++) {
+            Worker w = workers[i];
+            try {
+                Integer ret = w.runOnPoller(() -> w.dispatcher.unregisterBuffers());
+                if (ret != null && ret < 0) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "Failed to roll back registered buffers on worker " + i + ": errno " + (-ret)));
+                }
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
             }
         }
-        this.registeredBuffers = buffers;
-        this.registeredBufferAddresses = addrs;
-        this.registeredBufferSizes = sizes;
-        this.registeredBufMask = poolCap - 1;
-        this.freeBufBuffer = bufArr;
-        this.freeBufSeq = seqArr;
-        this.bufferInUse = new AtomicIntegerArray(nrOfBuffers);
-        this.freeBufHead = 0L;
-        this.freeBufTail = nrOfBuffers;
-        return buffers;
     }
 
     /**
@@ -1765,16 +1861,19 @@ public class JUringBlocking implements AutoCloseable {
      * @param bufferIndex index of the registered buffer
      * @return the buffer's memory segment
      * @throws IllegalArgumentException when no buffers are registered or the index is out of range
+     * @throws IllegalStateException    when this instance is closed
      */
     public MemorySegment getRegisteredBuffer(int bufferIndex) {
         if (closed) {
             throw new IllegalStateException("JUringBlocking is closed");
         }
-        MemorySegment[] bufs = this.registeredBuffers;
-        if (bufs == null || bufferIndex < 0 || bufferIndex >= bufs.length) {
+        // First read of the publication field: the acquire edge makes the complete snapshot
+        // (including buffers) visible.
+        final BufferState state = this.bufferState;
+        if (state == null || bufferIndex < 0 || bufferIndex >= state.buffers.length) {
             throw new IllegalArgumentException("Invalid registered buffer index: " + bufferIndex);
         }
-        return bufs[bufferIndex];
+        return state.buffers[bufferIndex];
     }
 
     /**
@@ -1784,12 +1883,15 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalStateException when no buffers are registered
      */
     public int checkOutBuffer() {
-        final int[] bufArr = this.freeBufBuffer;
-        final long[] seqArr = this.freeBufSeq;
-        if (bufArr == null || seqArr == null) {
+        // Read the publication snapshot before any companion state so a concurrent
+        // registration cannot expose a half-initialised pool to this method.
+        final BufferState state = this.bufferState;
+        if (state == null) {
             throw new IllegalStateException("Buffers have not been registered");
         }
-        final int mask = this.registeredBufMask;
+        final int[] bufArr = state.freeBuffer;
+        final long[] seqArr = state.freeSeq;
+        final int mask = state.mask;
         final int cap = mask + 1;
         int spins = 0;
         while (true) {
@@ -1801,8 +1903,7 @@ public class JUringBlocking implements AutoCloseable {
                 if (VH_FREE_BUF_HEAD.compareAndSet(this, pos, pos + 1)) {
                     int bufIdx = bufArr[idx];
                     VH_LONG_ARRAY.setRelease(seqArr, idx, pos + cap);
-                    AtomicIntegerArray inUse = this.bufferInUse;
-                    if (inUse == null || !inUse.compareAndSet(bufIdx, 0, 1)) {
+                    if (!state.inUse.compareAndSet(bufIdx, 0, 1)) {
                         throw new IllegalStateException("Registered buffer " + bufIdx + " is already checked out");
                     }
                     return bufIdx;
@@ -1824,25 +1925,23 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalArgumentException when the index is out of range
      */
     public void checkInBuffer(int bufferIndex) {
-        final MemorySegment[] bufs = this.registeredBuffers;
-        final int[] bufArr = this.freeBufBuffer;
-        final long[] seqArr = this.freeBufSeq;
-        if (bufs == null || bufArr == null || seqArr == null) {
+        // Publication snapshot first: see checkOutBuffer().
+        final BufferState state = this.bufferState;
+        if (state == null) {
             throw new IllegalStateException("Buffers have not been registered");
         }
-        final int totalBuffers = bufs.length;
+        final int totalBuffers = state.buffers.length;
         if (bufferIndex < 0 || bufferIndex >= totalBuffers) {
             throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
-        final AtomicIntegerArray inUse = this.bufferInUse;
-        if (inUse == null) {
-            throw new IllegalStateException("Buffers have not been registered");
-        }
+        final AtomicIntegerArray inUse = state.inUse;
         if (!inUse.compareAndSet(bufferIndex, 1, 0)) {
             throw new IllegalStateException("Buffer index " + bufferIndex
                     + " is not checked out (double or foreign check-in)");
         }
-        final int mask = this.registeredBufMask;
+        final int[] bufArr = state.freeBuffer;
+        final long[] seqArr = state.freeSeq;
+        final int mask = state.mask;
         int spins = 0;
         try {
             while (true) {
@@ -1878,16 +1977,21 @@ public class JUringBlocking implements AutoCloseable {
         }
     }
 
-    private long validateRegisteredBuffer(int bufferIndex, int ioSize) {
-        long[] addrs = this.registeredBufferAddresses;
-        long[] sizes = this.registeredBufferSizes;
-        if (addrs == null || sizes == null || bufferIndex < 0 || bufferIndex >= addrs.length) {
+    /**
+     * Validates a fixed-buffer index/size pair and returns the published buffer snapshot.
+     *
+     * <p>The volatile snapshot is read first: the acquire edge publishes the address/size arrays
+     * even if a registration completed concurrently with this call.
+     */
+    private BufferState validateRegisteredBuffer(int bufferIndex, int ioSize) {
+        final BufferState state = this.bufferState;
+        if (state == null || bufferIndex < 0 || bufferIndex >= state.addresses.length) {
             throw new IllegalArgumentException("Invalid buffer index: " + bufferIndex);
         }
-        if (ioSize < 0 || ioSize > sizes[bufferIndex]) {
-            throw new IllegalArgumentException("I/O size " + ioSize + " exceeds registered buffer capacity " + sizes[bufferIndex]);
+        if (ioSize < 0 || ioSize > state.sizes[bufferIndex]) {
+            throw new IllegalArgumentException("I/O size " + ioSize + " exceeds registered buffer capacity " + state.sizes[bufferIndex]);
         }
-        return addrs[bufferIndex];
+        return state;
     }
 
     /**
@@ -1902,7 +2006,7 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalArgumentException when the index or size is out of range
      */
     public long readFixed(FileDescriptor fd, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long bufAddr = validateRegisteredBuffer(bufferIndex, readSize);
+        long bufAddr = validateRegisteredBuffer(bufferIndex, readSize).addresses[bufferIndex];
         return getWorker().submitAndAwaitSlot(
                 IORING_OP_READ_FIXED,
                 SqeOptions.combineOptions(sqeOptions),
@@ -1929,7 +2033,7 @@ public class JUringBlocking implements AutoCloseable {
      * @return the number of bytes read, or the negative errno
      */
     public long readFixed(int indexFD, int readSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long bufAddr = validateRegisteredBuffer(bufferIndex, readSize);
+        long bufAddr = validateRegisteredBuffer(bufferIndex, readSize).addresses[bufferIndex];
         return getWorker().submitAndAwaitSlot(
                 IORING_OP_READ_FIXED,
                 (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
@@ -1956,7 +2060,7 @@ public class JUringBlocking implements AutoCloseable {
      * @throws IllegalArgumentException when the index or size is out of range
      */
     public long writeFixed(FileDescriptor fd, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize);
+        long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize).addresses[bufferIndex];
         return getWorker().submitAndAwaitSlot(
                 IORING_OP_WRITE_FIXED,
                 SqeOptions.combineOptions(sqeOptions),
@@ -1983,7 +2087,7 @@ public class JUringBlocking implements AutoCloseable {
      * @return the number of bytes written, or the negative errno
      */
     public long writeFixed(int indexFD, int writeSize, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize);
+        long bufAddr = validateRegisteredBuffer(bufferIndex, writeSize).addresses[bufferIndex];
         return getWorker().submitAndAwaitSlot(
                 IORING_OP_WRITE_FIXED,
                 (byte) (SqeOptions.combineOptions(sqeOptions) | SqeOptions.IOSQE_FIXED_FILE.value),
@@ -2010,8 +2114,8 @@ public class JUringBlocking implements AutoCloseable {
      * @return the number of bytes written, or the negative errno
      */
     public long writeFixed(FileDescriptor fd, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        validateRegisteredBuffer(bufferIndex, bytes.length);
-        MemorySegment.copy(bytes, 0, this.registeredBuffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
+        BufferState state = validateRegisteredBuffer(bufferIndex, bytes.length);
+        MemorySegment.copy(bytes, 0, state.buffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
         return writeFixed(fd, bytes.length, offset, bufferIndex, sqeOptions);
     }
 
@@ -2027,8 +2131,8 @@ public class JUringBlocking implements AutoCloseable {
      * @return the number of bytes written, or the negative errno
      */
     public long writeFixed(int indexFD, byte[] bytes, long offset, int bufferIndex, SqeOptions... sqeOptions) {
-        validateRegisteredBuffer(bufferIndex, bytes.length);
-        MemorySegment.copy(bytes, 0, this.registeredBuffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
+        BufferState state = validateRegisteredBuffer(bufferIndex, bytes.length);
+        MemorySegment.copy(bytes, 0, state.buffers[bufferIndex], JAVA_BYTE, 0, bytes.length);
         return writeFixed(indexFD, bytes.length, offset, bufferIndex, sqeOptions);
     }
 
@@ -2255,36 +2359,94 @@ public class JUringBlocking implements AutoCloseable {
      * <p>The slot index of each descriptor is its position in the argument list, matching the
      * {@code indexFD} overloads.
      *
+     * <p><b>Failure semantics.</b> Registration is applied worker by worker. If a worker ring
+     * rejects the table, every ring already mutated by this call is unregistered again before
+     * the exception propagates, so a failed call does not leave the rings diverged. The rollback
+     * unregisters whole tables, so it assumes the earlier rings had no registered-file table
+     * before this call (true for the public API, which only installs tables through this method);
+     * the user's file descriptors themselves are never closed.
+     *
      * @param fileDescriptors files to register, in slot order
-     * @return {@code 0} on success, otherwise the first negative kernel result
+     * @return {@code 0} on success
+     * @throws RuntimeException when a worker ring rejects the registration; the rings already
+     *                          mutated by this call are rolled back first, and any rollback
+     *                          failure is attached as a suppressed exception
      */
     public int registerFiles(FileDescriptor... fileDescriptors) {
         int[] fds = Arrays.stream(fileDescriptors).mapToInt(FileDescriptor::getFd).toArray();
-        for (Worker w : workers) {
-            int ret = w.runOnPoller(() -> w.dispatcher.registerFiles(fds));
-            if (ret != 0) {
-                return ret;
+        int registeredWorkers = 0;
+        try {
+            for (Worker w : workers) {
+                int ret = w.runOnPoller(() -> w.dispatcher.registerFiles(fds));
+                if (ret != 0) {
+                    throw new IllegalStateException("Unexpected io_uring registerFiles result: " + ret);
+                }
+                registeredWorkers++;
+            }
+            return 0;
+        } catch (RuntimeException e) {
+            rollbackRegisteredFiles(registeredWorkers, e);
+            throw e;
+        }
+    }
+
+    /** Unregisters the whole file table from the first {@code registeredWorkers} workers, best effort. */
+    private void rollbackRegisteredFiles(int registeredWorkers, RuntimeException failure) {
+        for (int i = 0; i < registeredWorkers; i++) {
+            Worker w = workers[i];
+            try {
+                int ret = w.runOnPoller(() -> w.dispatcher.unregisterFiles());
+                if (ret < 0) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "Failed to roll back registered files on worker " + i + ": errno " + (-ret)));
+                }
+            } catch (RuntimeException rollbackFailure) {
+                failure.addSuppressed(rollbackFailure);
             }
         }
-        return 0;
     }
 
     /**
      * Replaces a range of the registered-file table on every worker ring.
      *
+     * <p><b>Failure semantics.</b> Every worker ring is attempted even when one rejects the
+     * update, then the first failure is rethrown. An update cannot be rolled back: the wrapper
+     * does not track the descriptors that occupied the slots, so a partial success leaves the
+     * rings holding the new descriptors on the rings that accepted them and the old ones on the
+     * rings that did not. Callers that need atomicity must unregister and register the whole
+     * table (see {@link #registerFiles(FileDescriptor...)}) instead.
+     *
      * @param offset          first slot to update
      * @param fileDescriptors new descriptors, one per slot
-     * @return {@code 0} on success, otherwise the first negative kernel result
+     * @return the kernel's update count (the number of descriptors written, one per slot) on
+     *         success
+     * @throws RuntimeException when a worker ring rejects the update; every worker ring has
+     *                          been attempted when the first failure is rethrown
      */
     public int registerFilesUpdate(int offset, int[] fileDescriptors) {
-        int ret = 0;
+        int updated = 0;
+        RuntimeException firstFailure = null;
         for (Worker w : workers) {
-            ret = w.runOnPoller(() -> w.dispatcher.registerFilesUpdate(offset, fileDescriptors));
-            if (ret < 0) {
-                return ret;
+            try {
+                int ret = w.runOnPoller(() -> w.dispatcher.registerFilesUpdate(offset, fileDescriptors));
+                if (ret >= 0) {
+                    updated = ret;
+                } else if (firstFailure == null) {
+                    firstFailure = new IllegalStateException(
+                            "Failed to update registered files: errno " + (-ret));
+                }
+            } catch (RuntimeException e) {
+                if (firstFailure == null) {
+                    firstFailure = e;
+                } else {
+                    firstFailure.addSuppressed(e);
+                }
             }
         }
-        return ret;
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+        return updated;
     }
 
     /**
@@ -2312,7 +2474,7 @@ public class JUringBlocking implements AutoCloseable {
                 flags | 0x80000 /* O_CLOEXEC */,
                 (short) 0,
                 0,
-                pathAddr.address()
+                pathAddr.address() // freed by the poller once the openat CQE is consumed
         );
     }
 
@@ -2383,11 +2545,22 @@ public class JUringBlocking implements AutoCloseable {
      * direct-descriptor open. On success the slot can be used with the {@code indexFD}
      * overloads.
      *
+     * <p><b>Failure semantics.</b> The open is attempted on the workers in order. If a worker
+     * ring rejects it, the slot is closed again (with {@code IORING_OP_CLOSE}) on every ring
+     * that this call had already opened it on, and only descriptors opened by this call are
+     * closed. Because a direct open installs the file straight into the registered-file slot, a
+     * descriptor that occupied that slot before the call has already been replaced and cannot be
+     * restored by the rollback. A rollback close that itself fails is reported as a suppressed
+     * exception on the original failure and leaves that ring's slot holding the opened
+     * descriptor until the ring is closed (the kernel releases it then). The user's own file
+     * descriptors are never touched.
+     *
      * @param filePath   path to open
      * @param flags      Linux {@code open(2)} flags
      * @param mode       permission bits used when the file is created
      * @param fileIndex  registered-file slot to install the opened file into
-     * @param sqeOptions SQE flags, combined with bitwise OR
+     * @param sqeOptions SQE flags, combined with bitwise OR; applied to the opens only, not to
+     *                   the rollback closes
      * @return {@code 0} on success, otherwise the first negative kernel result
      * @throws IllegalArgumentException when {@code fileIndex} is negative
      */
@@ -2396,28 +2569,77 @@ public class JUringBlocking implements AutoCloseable {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
         }
         int directFlags = flags & ~0x80000 /* Strip O_CLOEXEC for direct fixed file open */;
-        int res = 0;
-        for (Worker w : workers) {
-            byte[] pathBytes = LibCDispatcher.encodePath(filePath);
-            MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
-            MemorySegment.copy(pathBytes, 0, pathAddr, JAVA_BYTE, 0, pathBytes.length);
-            res = (int) w.submitAndAwaitSlot(
-                    IORING_OP_OPENAT,
-                    SqeOptions.combineOptions(sqeOptions),
-                    AT_FDCWD,
-                    0L,
-                    pathAddr.address(),
-                    mode,
-                    directFlags,
-                    (short) 0,
-                    fileIndex + 1,
-                    pathAddr.address()
-            );
-            if (res < 0) {
-                return res;
+        byte sqeFlags = SqeOptions.combineOptions(sqeOptions);
+        int openedWorkers = 0;
+        try {
+            for (Worker w : workers) {
+                int res = openDirectOnWorker(w, filePath, mode, directFlags, fileIndex, sqeFlags);
+                if (res < 0) {
+                    rollbackOpenedDirectSlots(openedWorkers, fileIndex, null);
+                    return res;
+                }
+                openedWorkers++;
+            }
+            return 0;
+        } catch (RuntimeException e) {
+            rollbackOpenedDirectSlots(openedWorkers, fileIndex, e);
+            throw e;
+        }
+    }
+
+    /** Submits one direct fixed-file open on the given worker and waits for it. */
+    private int openDirectOnWorker(Worker w, String filePath, int mode, int directFlags,
+                                   int fileIndex, byte sqeFlags) {
+        byte[] pathBytes = LibCDispatcher.encodePath(filePath);
+        MemorySegment pathAddr = libc.calloc(pathBytes.length + 1);
+        MemorySegment.copy(pathBytes, 0, pathAddr, JAVA_BYTE, 0, pathBytes.length);
+        return (int) w.submitAndAwaitSlot(
+                IORING_OP_OPENAT,
+                sqeFlags,
+                AT_FDCWD,
+                0L,
+                pathAddr.address(),
+                mode,
+                directFlags,
+                (short) 0,
+                fileIndex + 1,
+                pathAddr.address() // freed by the poller once the openat CQE is consumed
+        );
+    }
+
+    /**
+     * Closes the direct-open slot on the worker rings that a failed open already mutated.
+     * Best effort: a failing rollback close is supposed to be reported on {@code failure} when
+     * one is supplied (for the retry/exception path); otherwise it is ignored because the slot is
+     * released when the ring is torn down.
+     */
+    private void rollbackOpenedDirectSlots(int openedWorkers, int fileIndex, RuntimeException failure) {
+        for (int i = 0; i < openedWorkers; i++) {
+            Worker w = workers[i];
+            try {
+                int ret = (int) w.submitAndAwaitSlot(
+                        IORING_OP_CLOSE,
+                        (byte) 0,
+                        0,
+                        0L,
+                        0L,
+                        0,
+                        0,
+                        (short) 0,
+                        fileIndex + 1,
+                        0L
+                );
+                if (ret < 0 && failure != null) {
+                    failure.addSuppressed(new IllegalStateException(
+                            "Failed to roll back direct-open slot " + fileIndex + " on worker " + i
+                                    + ": errno " + (-ret)));
+                }
+            } catch (RuntimeException rollbackFailure) {
+                if (failure != null) {
+                    failure.addSuppressed(rollbackFailure);
+                }
             }
         }
-        return res;
     }
 
     /**
@@ -2470,6 +2692,13 @@ public class JUringBlocking implements AutoCloseable {
      * Closes a file held in a registered-file slot on every worker ring, blocking until the
      * closes complete.
      *
+     * <p><b>Failure semantics.</b> Every worker ring is attempted even when one of them fails,
+     * so a single bad ring does not strand the slot open on the remaining rings. The first
+     * negative kernel result is returned after all workers have been attempted. The close is
+     * therefore not atomic: on a partial failure some rings have the slot closed and others still
+     * have it open. If a worker ring cannot be reached because the wrapper is closing, the first
+     * such exception is thrown after the remaining workers have been attempted.
+     *
      * @param fileIndex  registered-file slot to close
      * @param sqeOptions SQE flags, combined with bitwise OR
      * @return {@code 0} on success, otherwise the first negative kernel result
@@ -2479,25 +2708,38 @@ public class JUringBlocking implements AutoCloseable {
         if (fileIndex < 0) {
             throw new IllegalArgumentException("Invalid fileIndex: " + fileIndex);
         }
-        int res = 0;
+        byte sqeFlags = SqeOptions.combineOptions(sqeOptions);
+        int firstError = 0;
+        RuntimeException firstFailure = null;
         for (Worker w : workers) {
-            res = (int) w.submitAndAwaitSlot(
-                    IORING_OP_CLOSE,
-                    SqeOptions.combineOptions(sqeOptions),
-                    0,
-                    0L,
-                    0L,
-                    0,
-                    0,
-                    (short) 0,
-                    fileIndex + 1,
-                    0L
-            );
-            if (res < 0) {
-                return res;
+            try {
+                int res = (int) w.submitAndAwaitSlot(
+                        IORING_OP_CLOSE,
+                        sqeFlags,
+                        0,
+                        0L,
+                        0L,
+                        0,
+                        0,
+                        (short) 0,
+                        fileIndex + 1,
+                        0L
+                );
+                if (res < 0 && firstError == 0) {
+                    firstError = res;
+                }
+            } catch (RuntimeException e) {
+                if (firstFailure == null) {
+                    firstFailure = e;
+                } else {
+                    firstFailure.addSuppressed(e);
+                }
             }
         }
-        return res;
+        if (firstFailure != null) {
+            throw firstFailure;
+        }
+        return firstError;
     }
 
     /**
@@ -2566,17 +2808,17 @@ public class JUringBlocking implements AutoCloseable {
             // than free memory a still-running ring could touch (a bounded leak beats a UAF).
             if (!registeredBufferArenaClosed && group.awaitTermination(0)) {
                 registeredBufferArenaClosed = true;
+                // Atomically unpublish the buffer snapshot before the memory backing it is
+                // released. Because the snapshot is immutable and cleared with a single
+                // volatile write, a concurrent reader observes either the complete snapshot or
+                // "not registered"; it can never observe a torn one (a reader that grabbed the
+                // snapshot before this write is in the "must not use after close" window that
+                // the volatile closed=true above already documents).
+                bufferState = null;
                 try {
                     registeredBufferArena.close();
                 } catch (RuntimeException ignored) {
                     // Bounded close is best effort; a failed arena close leaks, never crashes.
-                } finally {
-                    registeredBuffers = null;
-                    registeredBufferAddresses = null;
-                    registeredBufferSizes = null;
-                    freeBufBuffer = null;
-                    freeBufSeq = null;
-                    bufferInUse = null;
                 }
             }
         }

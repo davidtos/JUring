@@ -631,12 +631,9 @@ public final class JUringDurabilityBench {
                 GroupCommitOptions options = GroupCommitOptions.defaults()
                         .withDurabilityMode(cfg.durability)
                         .withMaxBatchSize(cfg.batch);
-                GroupCommit group;
-                try {
-                    group = GroupCommit.open(file, options);
-                } catch (JuringException e) {
-                    throw new BenchException("GroupCommit.open failed: " + describe(e));
-                }
+                // GroupCommit.open performs no I/O and is not declared to throw a checked
+                // exception; construction failures are unchecked.
+                GroupCommit group = GroupCommit.open(file, options);
                 try {
                     return runGrouped(cfg, st, group, runIndex);
                 } finally {
