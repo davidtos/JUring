@@ -34,8 +34,8 @@ import static org.junit.jupiter.api.Assertions.fail;
  * <p><b>Disclosure:</b> the test file lives on a {@code @TempDir} (tmpfs), so this proves
  * <strong>process-restart visibility</strong> of the committed bytes, not media durability
  * after a power loss (explicit non-goal). The "one fsync for the batch" claim is proven by the
- * counters in {@link GroupCommitTest}; the device-backed fresh-process re-read is the W25
- * benchmark ({@code --verify-only}). The test only skips via an explicit
+ * counters in {@link GroupCommitTest}; the device-backed fresh-process re-read lives in the
+ * group-commit benchmark ({@code --verify-only}). The test only skips via an explicit
  * {@link Assumptions#assumeTrue} when the environment cannot spawn a JVM.
  */
 class GroupCommitCrashTest {

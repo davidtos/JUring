@@ -71,7 +71,7 @@ The harnesses live under `bench/`, and the write-ups are
 They need a dedicated NVMe device and root-only host state (`perf`, `drop_caches`, SMART).
 Please don't add CI jobs that pretend to measure performance.
 
-Before you change anything under `bench/*.py`, run the analyzer regression tests:
+Before you change anything under `bench/*.py`, run the analyzer unit tests:
 
 ```sh
 python3 bench/analysis/selftest.py --unit

@@ -127,7 +127,7 @@ taskset -c 1 fio --name=fio-uring-qd64-b1 --filename=/mnt/TestData/read_files/si
   --readonly --direct=1 --rw=randread --bs=4k --iodepth=64 --numjobs=1 --ioengine=io_uring \
   --iodepth_batch_submit=1 --ramp_time=10 --runtime=30 --time_based=1 --group_reporting=1 \
   --percentile_list=50:99:99.9:100 --clocksource=clock_gettime \
-  --output-format=json --output=bench/results/2026-11-13/fio-uring-b1-qd64-r1.json
+  --output-format=json --output=bench/results/<read-session>/fio-uring-b1-qd64-r1.json
 ```
 
 Writes use the same command with `--rw=randwrite --filename=.../write_files/...` and without
@@ -381,9 +381,10 @@ reason and the outlier count. The manifest records kernel, CPU, device, mount op
 JDK, fio and perf versions, governor, hugepage total, load average, CPU pinning, the exact command
 line, session start and the run's order in the session.
 
-Raw outputs live under `bench/results/YYYY-MM-DD/`, named with workload, engine, backend, block
-size, queue depth, thread count and rep, next to `manifest.txt`, a `notes.md` for anomalies and
-order, an `aggregate/` directory and a frozen hash of this document. `bench/parse_results.py`
+Raw outputs live under a descriptive session directory such as `bench/results/read-write/` or
+`bench/results/write-matrix/`, named with workload, engine, backend, block size, queue depth,
+thread count and rep, next to `manifest.txt`, a `notes.md` for anomalies and order, an
+`aggregate/` directory and a frozen hash of this document. `bench/parse_results.py`
 normalises fio JSON, `io_tester` YAML and JUring JSON into that schema.
 
 A run is only citable if its results file has all of that; missing anything and it is marked

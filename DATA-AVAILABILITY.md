@@ -5,7 +5,7 @@ I publish numbers, so I owe you a way to check them. Every claim in [BENCHMARK.m
 ## What is committed
 
 - `bench/` — the runnable harness: run scripts, analyzers, the `fio` / Seastar / JUring drivers, the measurement protocol in [docs/benchmark-methodology.md](docs/benchmark-methodology.md), and the quick start in [bench/README.md](bench/README.md).
-- `bench/analysis/golden/` — normalized stdout, stderr and aggregate output of the analyzers, committed as regression fixtures so a refactor cannot silently move a number. They are not the release archive: the raw sessions behind them are gitignored, so the golden comparison skips unless you have those session directories.
+- `bench/analysis/selftest.py` — the analyzer's unit regression tests (`python3 bench/analysis/selftest.py --unit`). The tables are rebuilt from a raw session directory; regression fixtures can be re-captured on a host that has those session directories.
 - `BENCHMARK.md` — the published tables, each labeled with its workload, engine configuration and number of repetitions.
 - `docs/benchmark-methodology.md` — the measurement protocol, the rules I use to count a run, device-state checks, statistics and what could still be wrong.
 - [`docs/design-notes.md`](docs/design-notes.md) — the engineering decisions behind the measurements, including why the write path is published as inconclusive.
@@ -25,7 +25,7 @@ Reproduction path:
 # Full protocol and prerequisites:
 sed -n '1,120p' docs/benchmark-methodology.md
 # Re-generate aggregates from a raw session directory (no device I/O):
-python3 bench/read-write/analyze_read_write.py --dir bench/results/<session> [--out-prefix ...]
+python3 bench/read-write/analyze_read_write.py --dir bench/results/<read-session> [--out-prefix ...]
 # One-command comparison quick start (writes under bench/results/):
 ./bench/run-comparison.sh
 ```

@@ -1,16 +1,12 @@
 # Interleaved write bracket — fallback protocol (fixed before the run, 2026-11-23)
 
-> **Identifier changes, 2026-11-24.** Names only: `W7` → 4 KiB random write QD 64,
-> `W8` → 4 KiB random write QD 128, `g1`–`g8` → `pass1`–`pass8`, `G1` → the frozen gate,
-> `G2` → the four-arm state gate. Protocol wording, thresholds and results are unchanged.
-
 ## Why this exists
 
 The primary state-controlled 3-way campaign (`bench/write/run-write-3way.sh`, protocol in
 [write-state-3way-protocol.md](write-state-3way-protocol.md)) requires one freshly preconditioned
-pass (the protocol's *generation*) in which JUring and both `fio` references are single-state and
-within `max/min <= 1.25` per cell. On 2026-11-23 that gate failed in both completed passes (both
-rows are 4 KiB random writes; the columns are queue depths 64 and 128):
+pass in which JUring and both `fio` references are single-state and within `max/min <= 1.25` per
+cell. On 2026-11-23 that gate failed in both completed passes (both rows are 4 KiB random writes;
+the columns are queue depths 64 and 128):
 
 | pass | QD 64 | QD 128 | frozen result |
 |---|---|---|---|
@@ -18,14 +14,14 @@ rows are 4 KiB random writes; the columns are queue depths 64 and 128):
 | pass 2 | 104k / 141k / 178k / 132k (`max/min` 1.71) | 38k Seastar, then stopped | `PILOT_PASS 0` |
 
 The drive was in a low, drifting steady state (roughly 70k–300k IOPS with multi-second GC cliffs),
-so no generation was homogeneous. Rather than spend the remaining budget on more generations that
+so no pass was homogeneous. Rather than spend the remaining budget on more passes that
 the gate was likely to reject, the campaign was stopped after two attempts and this fallback was
 specified **before it ran**. It is a descriptive bracket, not a resurrection of the frozen gate.
 
 ## Design: measure all engines over the same drifting state
 
 If the device state moves, the fix is to make every engine sample the same state distribution
-instead of pretending one generation is a single state. This bracket alternates the three engines
+instead of pretending one pass is a single state. This bracket alternates the three engines
 at short, fixed windows:
 
 | Parameter | Value |
@@ -67,7 +63,7 @@ Expected wall time: 30 runs x ~47 s = ~24 min.
   `< 0.95`; otherwise "no measurable difference at this power".
 - If an arm's CV > 20% or its 95% CI half-width > 15%, the table is still published but labelled
   *descriptive only*: the device moves too much to rank that cell.
-- This bracket is **not** pooled with the primary campaign or with the 2026-11-13/16 write sessions,
+- This bracket is **not** pooled with the primary campaign or with the earlier write sessions,
   and it is not a frozen-gate PASS/FAIL. It exists so the README can show measured write numbers
   for all three engines, with the state caveat attached.
 

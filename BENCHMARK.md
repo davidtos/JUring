@@ -83,7 +83,7 @@ Ten seconds of warmup, thirty seconds measured, five repetitions, CPU 2:
 
 The table above ran the engines in a fixed order and used `fio`'s default submit batching, which is a fair thing to be suspicious of. So for the 0.1.0 release I re-ran the two deep-queue workloads with the engine order rotated per repetition, added a second `fio` reference whose batching matches how JUring submits, and used the release-candidate code (`5202e88`). The command was `REPS=5 bench/read-write/run-claims-0.1.sh`.
 
-Each `fio` variant writes to its own sub-session, `bench/results/claims-0.1-20261117/read-matrix-{matched,matchedbatch}`, with aggregates generated next to it by `bench/read-write/analyze_read_write.py`. Same host, `performance` governor, five repetitions, 10 s warmup + 30 s measured. Preflight `loadavg(1m)` was 0.74 for the matched run and 0.29 for the batching-matched run.
+Each `fio` variant writes to its own sub-session, `bench/results/<read-session>/read-matrix-{matched,matchedbatch}`, with aggregates generated next to it by `bench/read-write/analyze_read_write.py`. Same host, `performance` governor, five repetitions, 10 s warmup + 30 s measured. Preflight `loadavg(1m)` was 0.74 for the matched run and 0.29 for the batching-matched run.
 
 Matched reference:
 
@@ -115,7 +115,7 @@ The release-candidate hardening batch changed no read-path code, and the per-op 
 
 ### Re-running the claims, 2026-11-23
 
-I re-ran the two deep-queue read cells on 2026-11-23 with the same protocol as the rotated run: three engines, five repetitions, 10 s warmup + 30 s measured, a fresh process per repetition, engine order rotated per repetition, every engine pinned to CPU 2, the same host, the same 10 GiB `O_DIRECT` file. The command was `WARMUP=10 DURATION=30 REPS=5 QDS="64 128" ENGINES="juring seastar fio-io_uring" FIO_VARIANT=matched ROTATE_ENGINES=1 bench/read-write/run-read-matrix.sh` with `MATRIX_RESULTS=bench/results/rerun-2026-11-23/read`; Seastar is the same-file runner. All 30 cell runs returned `status=ok`.
+I re-ran the two deep-queue read cells on 2026-11-23 with the same protocol as the rotated run: three engines, five repetitions, 10 s warmup + 30 s measured, a fresh process per repetition, engine order rotated per repetition, every engine pinned to CPU 2, the same host, the same 10 GiB `O_DIRECT` file. The command was `WARMUP=10 DURATION=30 REPS=5 QDS="64 128" ENGINES="juring seastar fio-io_uring" FIO_VARIANT=matched ROTATE_ENGINES=1 bench/read-write/run-read-matrix.sh` with `MATRIX_RESULTS=bench/results/<read-session>`; Seastar is the same-file runner. All 30 cell runs returned `status=ok`.
 
 | Workload | QD | Engine | n | IOPS mean ± 95% CI | p50 (µs) | p99 (µs) | CV% | Paired vs fio | Paired vs Seastar |
 |---|---|---|---|---|---|---|---|---|---|
@@ -387,8 +387,7 @@ Seastar, 60 s warmup + 60 s measured, engine order rotated per pass, no rests, C
 All 40 runs returned `status=ok`. All rows are 4 KiB random writes; the cell column gives the
 queue depth. To keep the figure and table readable without internal labels, each pass is
 identified by its measurement start time (CET); the session directories are `pass1`–`pass5` in
-the same order (older sessions and notes say `g1`–`g5`, which the analyzers still accept as
-legacy aliases). Two behaviours show up:
+the same order. Two behaviours show up:
 
 | started (CET) | cell | JUring | fio matched | fio matchedbatch | Seastar |
 |---|---|---|---|---|---|
@@ -542,26 +541,26 @@ Everything above is scripted; none of it was typed in by hand.
 ```bash
 # run from the repository root, no device I/O
 
-# Re-generate aggregate tables from a raw session directory. The session directory names
-# are the ones recorded in the release data archive; <read-session>, <write-session>,
-# <stream-session>, <shard-session> and <host-session> stand in for them here.
+# Re-generate aggregate tables from a raw session directory. <read-session>, <write-session>,
+# <stream-session>, <scale-out-session> and <host-setup-session> stand in for the session
+# directories recorded in the release data archive.
 python3 bench/read-write/analyze_read_write.py --dir bench/results/<read-session>
 python3 bench/read-write/analyze_read_write.py --dir bench/results/<write-session> \
-    --out-prefix bench/results/<write-session>/aggregate/write
+    --out-prefix bench/results/<write-session>/aggregate/write-matrix
 python3 bench/stream/analyze_stream.py --session <stream-session>
-python3 bench/shard/analyze_scale_out.py --session <shard-session>
-python3 bench/host-setup/analyze_host_setup.py --dir bench/results/<host-session>/host-setup
+python3 bench/shard/analyze_scale_out.py --session <scale-out-session>
+python3 bench/host-setup/analyze_host_setup.py --dir bench/results/<host-setup-session>/host-setup
 python3 bench/host-setup/analyze_write_state.py \
-    --session bench/results/<host-session>/write-state \
+    --session bench/results/<host-setup-session>/write-state \
     --passes pass1,pass2,pass3,pass4,pass5 \
-    --out bench/results/<host-session>/write-state/analysis
+    --out bench/results/<host-setup-session>/write-state/analysis
 
 # 2026-11-23 reruns (the session directories are gitignored; these are the commands):
 WARMUP=10 DURATION=30 REPS=5 QDS="64 128" \
     ENGINES="juring seastar fio-io_uring" FIO_VARIANT=matched ROTATE_ENGINES=1 \
     bench/read-write/run-read-matrix.sh
 python3 bench/read-write/analyze_read_write.py --dir bench/results/<read-session> \
-    --out-prefix bench/results/<read-session>/aggregate/claims
+    --out-prefix bench/results/<read-session>/aggregate/read-write
 python3 bench/read-write/plot_read_claims.py --session bench/results/<read-session> --out-dir docs/figures
 
 # write attempt: pre-registered state-controlled campaign, then the interleaved bracket
