@@ -21,11 +21,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.5/§12.6/§12.11: task and handler exception isolation, completion dispatch
+ * Task and handler exception isolation, completion dispatch
  * (exactly once, shard thread, CQ order, unattributed accounting) and batched reaping.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4CompletionTest {
+class CompletionTest {
 
     @TempDir
     Path tempDir;

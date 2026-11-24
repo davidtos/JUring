@@ -14,13 +14,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §9 (revised): package-private loop-body seam used by the {@code JUringBlocking}
+ * Package-private loop-body seam used by the {@code JUringBlocking}
  * integration. A body runs on the shard thread with ring/dispatcher access, IoShard keeps
  * ownership of ring creation, bounded close and stats, and generic-loop entry points are
  * rejected for body-hosted shards.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4BodySeamTest {
+class BodySeamTest {
 
     @Test
     void ringGroupHostsOneBodyPerUnstartedShard() throws Exception {

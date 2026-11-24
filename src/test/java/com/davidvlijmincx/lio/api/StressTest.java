@@ -11,11 +11,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.12: 10k mixed operations across 4 shards with tasks and handoffs — no loss,
+ * 10k mixed operations across 4 shards with tasks and handoffs — no loss,
  * no hang, exactly one dispatch per operation.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4StressTest {
+class StressTest {
 
     @Test
     void tenThousandMixedOperationsAcrossFourShards() throws Exception {

@@ -11,8 +11,7 @@ import java.util.Locale;
  * {@link com.davidvlijmincx.lio.api.JuringFile} opened with either flag reports
  * {@link com.davidvlijmincx.lio.api.DurabilityMode#DSYNC} from
  * {@link com.davidvlijmincx.lio.api.JuringFile#durability()}; explicit
- * {@code fsync}/{@code fdatasync} calls on such a file are redundant but harmless
- * (B6, see {@code docs/b6-design.md} §2.2).
+ * {@code fsync}/{@code fdatasync} calls on such a file are redundant but harmless.
  */
 public enum LinuxOpenOptions implements OpenOption {
     /** {@code O_RDONLY}: open for reading only. */

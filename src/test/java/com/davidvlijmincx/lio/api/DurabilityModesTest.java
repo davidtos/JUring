@@ -24,17 +24,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Conformance tests for the B6 durability-mode report and sync observability
- * ({@code docs/b6-design.md} §2.2, §2.3 and §7.2): the mode derived from the open flags,
+ * Conformance tests for the durability-mode report and sync observability: the mode
+ * derived from the open flags,
  * {@code O_DSYNC}/{@code O_SYNC} data visibility after reopen, the unchanged explicit
  * {@code fsync}/{@code fdatasync} behaviour, the additive
  * {@link JuringFile#syncOperations()}/{@link JuringFile#syncCompletions()} classification
  * and {@link JuringFile#inFlightCapacity()}.
  *
- * <p>Stream/group-commit durability points are covered by {@code B6StreamDurabilityTest}
- * and {@code B6GroupCommitTest}; this class exercises the {@link JuringFile} layer itself.
+ * <p>Stream/group-commit durability points are covered by {@code StreamDurabilityTest}
+ * and {@code GroupCommitTest}; this class exercises the {@link JuringFile} layer itself.
  */
-class B6DurabilityModesTest {
+class DurabilityModesTest {
 
     private static final int BLOCK = 4096;
 

@@ -22,11 +22,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.13: a {@link JuringFile} created, used and closed inside one shard task
+ * A {@link JuringFile} created, used and closed inside one shard task
  * (single owner) reads and writes correctly.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4JuringFileTaskTest {
+class JuringFileTaskTest {
 
     @TempDir
     Path tempDir;

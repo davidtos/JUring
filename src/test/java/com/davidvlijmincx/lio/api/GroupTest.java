@@ -17,11 +17,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.14: {@link RingGroup} lifecycle — stats sizes/ids, affinity base CPU,
+ * {@link RingGroup} lifecycle — stats sizes/ids, affinity base CPU,
  * bounded close with idle and in-flight work, rejection after close.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4GroupTest {
+class GroupTest {
 
     @Test
     void sizeIdsAndStatsSnapshots() {

@@ -20,18 +20,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * B6 stream durability tests (frozen contract: {@code docs/b6-design.md} §2.4-§2.6, §3.1,
- * §3.2 and §7.3).
+ * Stream durability tests (frozen contract).
  *
  * <p>Every test uses an isolated {@link JUring} and a {@code @TempDir} file. The sync-count
  * claims are proven with <strong>two independent observables</strong>:
  * {@link JuringOutputStream#syncs()} and the {@link JuringFile#syncOperations()}/
  * {@link JuringFile#syncCompletions()} deltas, with {@link JuringFile#issuedOperations()}
  * as the ordering cross-check. {@code @TempDir} is tmpfs, so the visibility assertions prove
- * page-cache visibility across a fresh open, not media durability (disclosed in the B6
- * report/status).
+ * page-cache visibility across a fresh open, not media durability (disclosed in the stream
+ * durability report/status).
  */
-class B6StreamDurabilityTest {
+class StreamDurabilityTest {
 
     private static final int BLOCK = 4096;
     private static final int KIB = 1024;
@@ -52,14 +51,14 @@ class B6StreamDurabilityTest {
     }
 
     // ==================================================================
-    // option value objects (§2.4, §2.5)
+    // option value objects
     // ==================================================================
 
     @Test
     void outputOptionsNewDefaultsAndRoundTrips() {
         OutputStreamOptions defaults = OutputStreamOptions.defaults();
-        assertThat(defaults.durability()).as("B2 default durability").isEqualTo(DurabilityMode.WRITEBACK);
-        assertThat(defaults.fadvise()).as("B2 default fadvise").isEqualTo(FadviseAdvice.NORMAL);
+        assertThat(defaults.durability()).as("default durability").isEqualTo(DurabilityMode.WRITEBACK);
+        assertThat(defaults.fadvise()).as("default fadvise").isEqualTo(FadviseAdvice.NORMAL);
         assertThat(defaults.syncOnClose()).isFalse();
 
         OutputStreamOptions custom = defaults
@@ -72,7 +71,7 @@ class B6StreamDurabilityTest {
         assertThat(defaults.durability()).isEqualTo(DurabilityMode.WRITEBACK);
         assertThat(defaults.fadvise()).isEqualTo(FadviseAdvice.NORMAL);
 
-        // the other with*() copies preserve the B6 fields
+        // the other with*() copies preserve the new fields
         assertThat(custom.withBufferSize(2 * KIB).durability()).isEqualTo(DurabilityMode.FSYNC);
         assertThat(custom.withBufferSize(2 * KIB).fadvise()).isEqualTo(FadviseAdvice.SEQUENTIAL);
         assertThat(custom.withWriteBehind(4).durability()).isEqualTo(DurabilityMode.FSYNC);
@@ -100,7 +99,7 @@ class B6StreamDurabilityTest {
     @Test
     void inputOptionsFadviseDefaultsAndRoundTrips() {
         InputStreamOptions defaults = InputStreamOptions.defaults();
-        assertThat(defaults.fadvise()).as("B2 default fadvise").isEqualTo(FadviseAdvice.NORMAL);
+        assertThat(defaults.fadvise()).as("default fadvise").isEqualTo(FadviseAdvice.NORMAL);
 
         InputStreamOptions custom = defaults
                 .withFadvise(FadviseAdvice.RANDOM)
@@ -126,7 +125,7 @@ class B6StreamDurabilityTest {
     }
 
     // ==================================================================
-    // DSYNC assertion at open (§2.6, §3.2)
+    // DSYNC assertion at open
     // ==================================================================
 
     @Test
@@ -192,7 +191,7 @@ class B6StreamDurabilityTest {
     }
 
     // ==================================================================
-    // WRITEBACK reproduces B2 exactly (§3.2)
+    // WRITEBACK reproduces the frozen writeback behaviour exactly
     // ==================================================================
 
     @Test
@@ -231,7 +230,7 @@ class B6StreamDurabilityTest {
             assertThat(file.syncOperations() - syncOpsBefore).isZero();
             issuedBefore = file.issuedOperations();
             out.close();
-            assertThat(out.syncs()).as("one B2 fdatasync on close").isEqualTo(1);
+            assertThat(out.syncs()).as("one writeback fdatasync on close").isEqualTo(1);
             assertThat(file.syncOperations() - syncOpsBefore).isEqualTo(1);
             assertThat(file.syncCompletions() - syncCompBefore).isEqualTo(1);
             assertThat(file.issuedOperations() - issuedBefore).as("close issues exactly the sync").isEqualTo(1);
@@ -258,7 +257,7 @@ class B6StreamDurabilityTest {
     }
 
     // ==================================================================
-    // FDATASYNC / FSYNC durability points (§3.1, §3.2)
+    // FDATASYNC / FSYNC durability points
     // ==================================================================
 
     @Test
@@ -393,7 +392,7 @@ class B6StreamDurabilityTest {
     }
 
     // ==================================================================
-    // stream fadvise applied at open (§2.4, §2.6, §7.3)
+    // stream fadvise applied at open
     // ==================================================================
 
     @Test

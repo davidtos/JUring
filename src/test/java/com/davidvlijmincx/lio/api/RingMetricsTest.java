@@ -33,12 +33,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B5 §11 tests 1-7: {@link RingMetrics} exact counters, error accounting, occupancy,
+ * {@link RingMetrics} exact counters, error accounting, occupancy,
  * enter/batch/retry/SQ-full counters, lifecycle (before/after close, no throw), cross-thread
  * snapshots and zero allocation on the metrics-on hot path.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B5RingMetricsTest {
+class RingMetricsTest {
 
     private static final int ECANCELED = 125;
     private static final int ETIME = 62;
@@ -242,7 +242,7 @@ class B5RingMetricsTest {
 
     @Test
     void kernelTimeoutIsCountedAsTimedOut() {
-        // Amendment A1.1: the raw ring's IORING_OP_TIMEOUT completion is -ETIME (62); the
+        // The raw ring's IORING_OP_TIMEOUT completion is -ETIME (62); the
         // JuringFile layer maps it to ETIMEDOUT (110), which never reaches raw ring metrics.
         try (Arena arena = Arena.ofConfined()) {
             ring.prepareTimeout(relative(arena, 1_000_000L), 0, 0);
@@ -392,7 +392,7 @@ class B5RingMetricsTest {
         assertEquals(open.cqEntries(), closed.cqEntries());
         assertEquals(closed, ring.ringMetrics(), "repeated snapshots of a closed ring are frozen");
 
-        // The B1 use-after-close contract for native paths is unchanged.
+        // The original use-after-close contract for native paths is unchanged.
         assertThrows(IllegalStateException.class, ring::prepareNop);
         assertThrows(IllegalStateException.class, ring::submit);
 
@@ -440,7 +440,7 @@ class B5RingMetricsTest {
             } catch (Throwable t) {
                 failure.set(t);
             }
-        }, "b5-ring-metrics-sampler");
+        }, "ring-metrics-sampler");
         sampler.start();
         try {
             for (int round = 0; round < 200; round++) {
@@ -475,7 +475,7 @@ class B5RingMetricsTest {
         try {
             FileDescriptor fd = new FileDescriptor(eventFd);
             // Blocking reads on an empty eventfd stay in flight; bounded close(0) may abandon
-            // their completions (design §2.1: reaped == completed + failed must still hold).
+            // their completions (reaped == completed + failed must still hold).
             for (int i = 0; i < 4; i++) {
                 ring.prepareRead(fd, 8, 0);
             }
@@ -537,7 +537,7 @@ class B5RingMetricsTest {
                 } catch (Throwable t) {
                     failure.set(t);
                 }
-            }, "b5-ring-metrics-close-sampler");
+            }, "ring-metrics-close-sampler");
             sampler.start();
             Thread.sleep(20L);
 

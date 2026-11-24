@@ -4,9 +4,9 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
 /**
- * Dependency-free fixed-bucket latency histogram in nanoseconds (B5).
+ * Dependency-free fixed-bucket latency histogram in nanoseconds.
  *
- * <p><b>Layout (frozen, B5 design §2.2 as amended by A1.2).</b> 512 bucket slots:
+ * <p><b>Layout (frozen).</b> 512 bucket slots:
  * bucket <em>i</em> for {@code i in [0, 15]} is the exact value <em>i</em> ns;
  * slots {@code [16, 63]} are unused padding; for values {@code v >= 16} let
  * {@code mag = floor(log2(v))}, {@code w = 2^(mag-4)}, {@code base = 2^mag} and
@@ -74,7 +74,7 @@ public final class LatencyHistogram {
         }
         int index = bucketIndex(nanos);
         // Opaque (atomic) writes: record() is owner-thread-only, but snapshot()/merge() may
-        // read concurrently from any thread and must never tear a 64-bit element (design §5).
+        // read concurrently from any thread and must never tear a 64-bit element.
         addOpaque(buckets, index, 1L);
         long count = (long) VH_LONG.getOpaque(stats, S_COUNT);
         if (count == 0L) {
@@ -210,7 +210,7 @@ public final class LatencyHistogram {
     }
 
     // ------------------------------------------------------------------
-    // Bucket arithmetic (frozen layout, see class documentation / design A1.2)
+    // Bucket arithmetic (frozen layout, see class documentation)
     // ------------------------------------------------------------------
 
     /** Maps a clamped nanosecond value to its bucket slot. */

@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * JMX MXBean view of one {@link RingGroup} aggregate (B5 design §2.7).
+ * JMX MXBean view of one {@link RingGroup} aggregate.
  *
  * <p>Attributes are <b>pull-based</b>: every getter takes a fresh
  * {@link RingGroup#aggregateMetrics()} snapshot at read time (no exporter thread, no

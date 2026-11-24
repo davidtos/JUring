@@ -9,8 +9,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 /**
  * Buffered, write-behind output stream over a {@link JuringFile}.
  *
- * <p>This is the B2 L1 stream layer (see {@code SEASTAR-PLAN.md} §4 B2 and
- * {@code docs/b2-design.md}): a byte stream on top of the asynchronous file handle with a
+ * <p>This is the L1 stream layer: a byte stream on top of the asynchronous file handle with a
  * configurable buffer size, configurable write-behind depth, complete-until-done writes,
  * alignment padding for O_DIRECT files, an optional preallocation hint and
  * {@link #flush()}, backed by a fixed-size buffer set (bounded memory).
@@ -39,25 +38,25 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * oldest in-flight write before reusing its buffer, and short writes are retried from the
  * last completed byte.
  *
- * <h2>Durability (B6)</h2>
+ * <h2>Durability</h2>
  * <p>{@link OutputStreamOptions#durability()} makes {@link #flush()} and {@link #close()}
- * durability points (see {@code docs/b6-design.md} §2.5/§3.1): for
+ * durability points: for
  * {@link DurabilityMode#FDATASYNC}/{@link DurabilityMode#FSYNC} each point issues exactly
- * one {@code fdatasync}/{@code fsync}; {@link DurabilityMode#WRITEBACK} keeps the frozen B2
- * behaviour (no sync in {@code flush()}, one {@code fdatasync} in {@code close()} iff
+ * one {@code fdatasync}/{@code fsync}; {@link DurabilityMode#WRITEBACK} keeps the frozen
+ * writeback behaviour (no sync in {@code flush()}, one {@code fdatasync} in {@code close()} iff
  * {@link OutputStreamOptions#syncOnClose()}); {@link DurabilityMode#DSYNC} never syncs
  * explicitly because it asserts the file was opened with {@code O_DSYNC}.
  * {@link #syncs()} reports the successful sync operations issued so far.
  *
  * <h2>Lifecycle</h2>
  * <p>{@link #close()} performs one flush (hence at most one mode sync), optionally calls
- * the B2 {@code fdatasync}-on-close, releases the buffers and is idempotent. Drain, final
+ * the {@code fdatasync}-on-close shortcut, releases the buffers and is idempotent. Drain, final
  * truncate and durability sync all share one hard deadline; a write that cannot be drained
  * in time is abandoned with its buffer kept alive (a bounded leak, never a use-after-free)
  * and counted by {@link #abandonedAtClose()}. It does <strong>not</strong> close the
  * underlying {@link JuringFile}. Writing after {@code close()} throws
  * {@link IllegalStateException}.
- * The stream is <strong>not thread-safe</strong> and inherits the B10a ring-ownership rule:
+ * The stream is <strong>not thread-safe</strong> and inherits the shared-ring ownership rule:
  * it may share its {@link JUring} with sibling handles on the same thread; only raw
  * un-reaped ring work is rejected.
  */
@@ -152,7 +151,7 @@ public final class JuringOutputStream implements AutoCloseable {
     /**
      * Opens an output stream that writes the file from offset 0.
      *
-     * <p>B6 validation and hints (see {@code docs/b6-design.md} §2.6): a
+     * <p>Validation and hints: a
      * {@link DurabilityMode#DSYNC} request asserts that the backing file was opened with
      * {@code O_DSYNC} ({@link LinuxOpenOptions#DSYNC}/{@link LinuxOpenOptions#SYNC}) and
      * fails with {@link IllegalArgumentException} <em>before</em> any write is accepted;
@@ -246,7 +245,7 @@ public final class JuringOutputStream implements AutoCloseable {
 
     /**
      * Number of durability sync operations ({@code fdatasync}/{@code fsync}) this stream has
-     * successfully issued so far (B6, see {@code docs/b6-design.md} §3.1).
+     * successfully issued so far.
      *
      * <p>It is {@code 0} for {@link DurabilityMode#WRITEBACK} (without
      * {@link OutputStreamOptions#syncOnClose()}) and for {@link DurabilityMode#DSYNC}; it
@@ -351,7 +350,7 @@ public final class JuringOutputStream implements AutoCloseable {
      * Flushes the pending partial buffer (alignment-padded), waits for all in-flight
      * write-behind operations and, when the durability mode is
      * {@link DurabilityMode#FDATASYNC}/{@link DurabilityMode#FSYNC}, issues exactly one
-     * {@code fdatasync}/{@code fsync} before returning (a B6 durability point). For
+     * {@code fdatasync}/{@code fsync} before returning (a durability point). For
      * {@link DurabilityMode#WRITEBACK} (and {@link DurabilityMode#DSYNC}) no sync is issued
      * here; {@code WRITEBACK} optionally syncs once on {@link #close()} when
      * {@link OutputStreamOptions#syncOnClose()} is set.
@@ -414,7 +413,7 @@ public final class JuringOutputStream implements AutoCloseable {
         }
     }
 
-    /** Issues one {@code fdatasync}/{@code fsync}, latching the first sync failure (B2 rule). */
+    /** Issues one {@code fdatasync}/{@code fsync}, latching the first sync failure. */
     private void issueSync(boolean metadata) throws JuringException {
         try {
             if (metadata) {
@@ -563,9 +562,9 @@ public final class JuringOutputStream implements AutoCloseable {
                     }
                 }
             }
-            // Exactly one close durability point (B6 §3.2): FDATASYNC/FSYNC issue one mode sync
+            // Exactly one close durability point: FDATASYNC/FSYNC issue one mode sync
             // (syncOnClose is then redundant and never adds a second one), DSYNC none, and
-            // WRITEBACK keeps the frozen B2 fdatasync-on-close shortcut.
+            // WRITEBACK keeps the frozen fdatasync-on-close shortcut.
             boolean closeSync = false;
             if (durability == DurabilityMode.FDATASYNC) {
                 closeSync = true;

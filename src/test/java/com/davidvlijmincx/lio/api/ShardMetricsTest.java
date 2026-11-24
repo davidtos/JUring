@@ -25,17 +25,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B5 design §11 tests 12–16 (runtime): {@link ShardMetrics}/{@link GroupMetrics} shape and
+ * {@link ShardMetrics}/{@link GroupMetrics} shape and
  * consistency across the shard lifecycle, deterministic dispatch-latency sampling,
  * group aggregation/merging, any-thread/never-throw reads (including body-hosted shards) and
  * zero-allocation registration+dispatch recording.
  *
- * <p>Percentile assertions use only the safe frozen contract (A1.2): {@code p50 <= p90 <= p99
+ * <p>Percentile assertions use only the safe frozen contract: {@code p50 <= p90 <= p99
  * <= p999 <= max}, count/sum exact per the sampling rule; they never assume a particular
- * bucket layout or errno mapping (A1.1).
+ * bucket layout or errno mapping.
  */
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
-class B5ShardMetricsTest {
+class ShardMetricsTest {
 
     private static final CompletionHandler NO_OP_HANDLER = result -> {
     };
@@ -44,7 +44,7 @@ class B5ShardMetricsTest {
     Path tempDir;
 
     // ------------------------------------------------------------------
-    // §11.12 — snapshot shape/consistency across lifecycle + per-shard isolation
+    // snapshot shape/consistency across lifecycle + per-shard isolation
     // ------------------------------------------------------------------
 
     @Test
@@ -53,7 +53,7 @@ class B5ShardMetricsTest {
         RingGroup group = RingGroup.create(nops.length,
                 ShardOptions.defaults().withLatencySampleEvery(1));
         try {
-            // Never-started shards (A1.3): ring counters 0, occupancy 0, entries 0, empty latency.
+            // Never-started shards: ring counters 0, occupancy 0, entries 0, empty latency.
             List<ShardMetrics> beforeStart = group.metrics();
             assertThat(beforeStart).hasSize(nops.length);
             for (int i = 0; i < nops.length; i++) {
@@ -116,7 +116,7 @@ class B5ShardMetricsTest {
         }
 
         // After close the counters are frozen, occupancy is 0 and the effective entries are
-        // retained (§2.1 after-close rule); metrics() stays readable and total.
+        // retained (after-close rule); metrics() stays readable and total.
         List<ShardMetrics> afterClose = group.metrics();
         List<ShardMetrics> afterCloseAgain = group.metrics();
         assertThat(afterClose).hasSize(nops.length);
@@ -138,7 +138,7 @@ class B5ShardMetricsTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.13 — dispatch latency sampling
+    // dispatch latency sampling
     // ------------------------------------------------------------------
 
     @Test
@@ -183,7 +183,7 @@ class B5ShardMetricsTest {
 
     @Test
     void dispatchLatencyEveryFourthSamplesExactlyDispatchedOverFour() throws Exception {
-        // A2.1: timed registrations are 1-based indices N, 2N, ... of successful registrations,
+        // Timed registrations are 1-based indices N, 2N, ... of successful registrations,
         // so a drained run with R registrations has exactly floor(R/N) samples (64/4 = 16 here).
         int dispatchedNops = 64;
         IoShard shard = IoShard.create(0,
@@ -237,7 +237,7 @@ class B5ShardMetricsTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.14 — group metrics + aggregation
+    // group metrics + aggregation
     // ------------------------------------------------------------------
 
     @Test
@@ -327,7 +327,7 @@ class B5ShardMetricsTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.15 — no-throw / any-thread reads, closed shard, body-hosted shard
+    // no-throw / any-thread reads, closed shard, body-hosted shard
     // ------------------------------------------------------------------
 
     @Test
@@ -337,7 +337,7 @@ class B5ShardMetricsTest {
         AtomicReference<Throwable> failure = new AtomicReference<>();
         AtomicLong reads = new AtomicLong();
         AtomicBoolean stop = new AtomicBoolean();
-        Thread sampler = Thread.ofPlatform().name("b5-sampler").daemon(true).start(() -> {
+        Thread sampler = Thread.ofPlatform().name("sampler").daemon(true).start(() -> {
             try {
                 while (!stop.get()) {
                     for (IoShard shard : new IoShard[]{group.shard(0), group.shard(1),
@@ -391,11 +391,11 @@ class B5ShardMetricsTest {
 
     @Test
     void bodyHostedShardHasEmptyDispatchLatencyAndRealRingMetrics() throws Exception {
-        Path file = tempDir.resolve("b5-body-data");
+        Path file = tempDir.resolve("body-data");
         byte[] content = {1, 2, 3, 4, 5, 6, 7, 8};
         Files.write(file, content);
         RingGroup group = RingGroup.create(1, ShardOptions.defaults()
-                .withName("b5-body-hosted")
+                .withName("body-hosted")
                 .withRingEntries(64)
                 .withRingOptions(IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_COOP_TASKRUN,
                         IORING_SETUP_DEFER_TASKRUN)
@@ -427,7 +427,7 @@ class B5ShardMetricsTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.16 — zero-allocation registration + dispatch path with sampling enabled
+    // zero-allocation registration + dispatch path with sampling enabled
     // ------------------------------------------------------------------
 
     @Test
@@ -539,8 +539,8 @@ class B5ShardMetricsTest {
     }
 
     // ------------------------------------------------------------------
-    // CompletionTable timestamp bookkeeping (§4: timestamps survive backward-shift deletion
-    // and F1 full-table semantics; a failed put leaves no timestamp behind).
+    // CompletionTable timestamp bookkeeping (timestamps survive backward-shift deletion
+    // and full-table put/remove semantics; a failed put leaves no timestamp behind).
     // ------------------------------------------------------------------
 
     @Test

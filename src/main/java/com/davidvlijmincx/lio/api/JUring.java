@@ -123,14 +123,14 @@ public class JUring implements AutoCloseable {
     private short defaultIoprio;
     private long lastSqeAddress;
     private long previousSqeAddress;
-    /** B10: {@code JuringFile} handles attached to this ring (grows at open, shrinks at close). */
+    /** {@code JuringFile} handles attached to this ring (grows at open, shrinks at close). */
     private JuringFile[] attachedFiles = new JuringFile[0];
     private int attachedFileCount;
     private volatile Thread ownerThread;
     private volatile boolean closed;
     private long cancelledAtClose;
     private int abandonedAtClose;
-    /** B5: final frozen ring-metrics snapshot captured on close (design §2.1 after-close rule). */
+    /** Final frozen ring-metrics snapshot captured on close (after-close rule). */
     private volatile RingMetrics frozenRingMetrics;
 
     /**
@@ -1406,7 +1406,7 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * B10 F1 fix: prepares a non-fixed read whose {@code user_data} is a unique operation id
+     * Prepares a non-fixed read whose {@code user_data} is a unique operation id
      * instead of the buffer address, so concurrent reads into the same segment are
      * distinguishable. Used by {@link JuringFile} and by the public
      * {@link #prepareReadUnique(FileDescriptor, MemorySegment, long)} overloads; the other
@@ -1776,12 +1776,12 @@ public class JUring implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // B4 shard-runtime helpers (package-private; reserved internal user_data)
+    // Shard-runtime helpers (package-private; reserved internal user_data)
     // ------------------------------------------------------------------
 
     /**
      * Prepares an {@code IORING_OP_READ} of 8 bytes from a raw file descriptor into
-     * {@code buffer}, using a caller-supplied (reserved) {@code user_data}. Used by the B4
+     * {@code buffer}, using a caller-supplied (reserved) {@code user_data}. Used by the
      * shard loop to keep an eventfd wakeup read armed on its own ring.
      *
      * <p>The completion is reported by {@code Result.id() == userData}; the reserved
@@ -1825,7 +1825,7 @@ public class JUring implements AutoCloseable {
         return ioUring.pendingSqes();
     }
 
-    /** The underlying dispatcher (B4 loop-body seam; shard-thread confined). */
+    /** The underlying dispatcher (loop-body seam; shard-thread confined). */
     IoUringDispatcher dispatcher() {
         return ioUring;
     }
@@ -2207,7 +2207,7 @@ public class JUring implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // Linked timeouts (B3)
+    // Linked timeouts
     // ------------------------------------------------------------------
 
     /**
@@ -2367,7 +2367,7 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * B10b: {@link #getSqe} for the read/write opcode family, where {@code sqe->ioprio}
+     * {@link #getSqe} for the read/write opcode family, where {@code sqe->ioprio}
      * carries the block-layer priority. Other opcodes reject a non-zero {@code ioprio} on
      * current kernels (verified: {@code -EINVAL} for NOP/FSYNC/STATX), so the ring default is
      * applied only here.
@@ -2901,7 +2901,7 @@ public class JUring implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // B10: shared file multiplexing and block-layer I/O priority
+    // Shared file multiplexing and block-layer I/O priority
     // ------------------------------------------------------------------
 
     /**
@@ -2991,7 +2991,7 @@ public class JUring implements AutoCloseable {
 
     /**
      * Attaches a {@link JuringFile} handle so its completions are routed to its own ledger
-     * when any handle on this ring reaps (B10a). Called by {@code JuringFile.open} on the
+     * when any handle on this ring reaps. Called by {@code JuringFile.open} on the
      * owner thread; allocates only when the registry grows (open-time, never per request).
      */
     void attachFile(JuringFile file) {
@@ -3025,7 +3025,7 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Routes one reaped completion to the attached {@link JuringFile} that issued it (B10a).
+     * Routes one reaped completion to the attached {@link JuringFile} that issued it.
      *
      * <p>The reaping file is tried first (single-file fast path); siblings are scanned only
      * when the handle is not in the caller's ledger. A completion that matches no handle is
@@ -3047,7 +3047,7 @@ public class JUring implements AutoCloseable {
         }
         OperationType type = result.type();
         if (type == OperationType.TIMEOUT || type == OperationType.LINK_TIMEOUT) {
-            // Stray timer completions carry no file operation and are ignored (B1 behaviour).
+            // Stray timer completions carry no file operation and are ignored (original behaviour).
             return;
         }
         if (reapingFile != null) {
@@ -3082,12 +3082,12 @@ public class JUring implements AutoCloseable {
     }
 
     /**
-     * Immutable snapshot of this ring's counters and occupancy (B5).
+     * Immutable snapshot of this ring's counters and occupancy.
      *
      * <p>Readable from any thread, before/while the ring is open and after
-     * {@link #close()}; unlike the native-touching B1 paths it does not call
+     * {@link #close()}; unlike the native-touching paths it does not call
      * {@code ensureOpen()} and never throws for a closed ring. While open, the snapshot is a
-     * best-effort telemetry view (design §5). After close it returns the final frozen
+     * best-effort telemetry view. After close it returns the final frozen
      * snapshot: counters keep their final values, {@code sqQueued}/{@code cqReady} are
      * {@code 0} and the effective ring depths are retained.
      *

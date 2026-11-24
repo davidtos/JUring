@@ -12,11 +12,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.1: shard lifecycle (create/start/execute/close, idempotency, misuse,
+ * Shard lifecycle (create/start/execute/close, idempotency, misuse,
  * stats before/after, {@code call} before/after start and after close).
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4LifecycleTest {
+class LifecycleTest {
 
     @Test
     void createStartExecuteCloseAndStats() throws Exception {

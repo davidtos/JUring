@@ -13,12 +13,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.9 / §4 backpressure table: foreign {@code execute} blocks while the
+ * Backpressure policy: foreign {@code execute} blocks while the
  * inbound queue is full (then rejects after stop) and a shard-thread {@code execute} that
  * would block on itself throws {@link IllegalStateException} and is counted.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4BackpressureTest {
+class BackpressureTest {
 
     @Test
     void tinyInboundBlocksForeignProducersButLosesNothing() throws Exception {

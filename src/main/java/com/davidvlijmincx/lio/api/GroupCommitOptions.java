@@ -3,7 +3,7 @@ package com.davidvlijmincx.lio.api;
 import java.util.Objects;
 
 /**
- * Immutable options for {@link GroupCommit} (B6, see {@code docs/b6-design.md} §2.8).
+ * Immutable options for {@link GroupCommit}.
  *
  * <p>Defaults are {@link DurabilityMode#FDATASYNC} (a commit is durable: one
  * {@code fdatasync} per non-empty batch) and a maximum batch size of
@@ -27,7 +27,7 @@ public final class GroupCommitOptions {
     /** Smallest allowed maximum batch size. */
     private static final int MIN_BATCH_SIZE = 1;
 
-    /** Largest allowed maximum batch size (frozen by {@code docs/b6-design.md} §2.8). */
+    /** Largest allowed maximum batch size. */
     private static final int MAX_BATCH_SIZE = 4096;
 
     private static final GroupCommitOptions DEFAULTS =

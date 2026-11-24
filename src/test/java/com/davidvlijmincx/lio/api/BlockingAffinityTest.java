@@ -18,13 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.19 — {@code JUringBlocking(RingGroup)} inherits the group's CPU pinning.
- * Affinity is best-effort (§3.5/§11.6), so the hard assertions are the requested CPU and the
+ * {@code JUringBlocking(RingGroup)} inherits the group's CPU pinning.
+ * Affinity is best-effort, so the hard assertions are the requested CPU and the
  * running/closed lifecycle; {@code currentCpu == requestedCpu} is asserted when the kernel
  * accepted the affinity mask.
  */
 @Timeout(30)
-class B4BlockingAffinityTest {
+class BlockingAffinityTest {
 
     private static final int BASE_CPU = 2;
 
@@ -37,7 +37,7 @@ class B4BlockingAffinityTest {
         Files.write(file, "Hello, World!".getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
         RingGroup group = RingGroup.create(2, ShardOptions.defaults()
-                .withName("b4-blocking-affinity")
+                .withName("blocking-affinity")
                 .withRingEntries(64)
                 .withRingOptions(IORING_SETUP_SINGLE_ISSUER,
                         IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN)

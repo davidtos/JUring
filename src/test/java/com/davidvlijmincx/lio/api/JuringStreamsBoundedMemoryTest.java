@@ -23,8 +23,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Bounded-memory tests for {@link JuringInputStream} / {@link JuringOutputStream}
- * against {{@code docs/b2-design.md} §2 and §5 item 10.
+ * Bounded-memory tests for {@link JuringInputStream} / {@link JuringOutputStream}.
  *
  * <p>With {@code A = alignUp(bufferSize, alignment)} the frozen bounds are
  * {@code bufferMemoryBytes() <= (readAhead + 1) * (A + alignment)} for input and
@@ -115,7 +114,7 @@ class JuringStreamsBoundedMemoryTest {
                 consumed += chunk.byteSize();
                 if (++samples % 500 == 0) {
                     long current = in.bufferMemoryBytes();
-                    assertThat(current).as("input buffer memory must stay within §2 bounds")
+                    assertThat(current).as("input buffer memory must stay within the frozen bounds")
                             .isLessThanOrEqualTo(bound);
                     assertThat(current).as("input buffer memory must not grow with bytes processed")
                             .isEqualTo(settledMemory);
@@ -160,7 +159,7 @@ class JuringStreamsBoundedMemoryTest {
                 assertThat(in.currentBufferSize()).isBetween(1, bufferSize);
                 assertThat(in.currentReadAhead()).isBetween(0, readAhead);
                 long memory = in.bufferMemoryBytes();
-                assertThat(memory).as("adaptive readahead must respect the §2 bound")
+                assertThat(memory).as("adaptive readahead must respect the frozen bound")
                         .isGreaterThan(0)
                         .isLessThanOrEqualTo(bound);
             }
@@ -240,7 +239,7 @@ class JuringStreamsBoundedMemoryTest {
                         out.write(source);
                         if (i % 25 == 0) {
                             long current = out.bufferMemoryBytes();
-                            assertThat(current).as("output buffer memory must stay within §2 bounds")
+                            assertThat(current).as("output buffer memory must stay within the frozen bounds")
                                     .isLessThanOrEqualTo(bound);
                             assertThat(current).as("output buffer memory must not grow with bytes processed")
                                     .isEqualTo(settledMemory);

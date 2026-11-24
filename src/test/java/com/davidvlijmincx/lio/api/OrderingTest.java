@@ -11,11 +11,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.4: per-producer FIFO ordering and no task loss for bursts from one thread
+ * Per-producer FIFO ordering and no task loss for bursts from one thread
  * (cross-producer total order is unspecified by contract).
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4OrderingTest {
+class OrderingTest {
 
     @Test
     void perProducerFifoOrderAndAllTasksExecuted() throws Exception {

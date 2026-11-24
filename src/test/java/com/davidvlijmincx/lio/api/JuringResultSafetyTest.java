@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 {@code user_data}/Result safety audit tests: timeout/cancel/linked-timeout completions
+ * {@code user_data}/Result safety audit tests: timeout/cancel/linked-timeout completions
  * own no user buffer; a cancelled legacy read still frees its ring buffer exactly once;
  * caller-provided segments and registered fixed buffers are never freed by a {@code Result}.
  */

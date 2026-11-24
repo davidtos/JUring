@@ -30,7 +30,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises the optional engine opcodes added for B1 through the raw {@link JUring} API:
+ * Exercises the optional engine opcodes through the raw {@link JUring} API:
  * {@code IORING_OP_FALLOCATE}, {@code IORING_OP_FTRUNCATE}, {@code IORING_OP_STATX} and
  * {@code IORING_OP_TIMEOUT}.
  */
@@ -65,7 +65,7 @@ class JUringOpcodeOperationsTest {
 
     @Test
     void thisKernelAdvertisesAllOptionalOpcodes() {
-        // Verified environment fact for docs/b1-design.md §1: kernel 7.0.12 supports all four.
+        // Verified environment fact: kernel 7.0.12 supports all four.
         assertTrue(ring.supportsFallocate(), "IORING_OP_FALLOCATE must be advertised by the probe");
         assertTrue(ring.supportsFtruncate(), "IORING_OP_FTRUNCATE must be advertised by the probe");
         assertTrue(ring.supportsStatx(), "IORING_OP_STATX must be advertised by the probe");

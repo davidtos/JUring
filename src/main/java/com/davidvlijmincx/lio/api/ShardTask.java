@@ -8,8 +8,6 @@ package com.davidvlijmincx.lio.api;
  * They must not block that thread (e.g. wait on another shard) — a blocked task stalls the
  * whole shard. Exceptions thrown by a task are caught, counted in
  * {@link ShardStats#taskFailures()} and never kill the shard.
- *
- * <p>See {@code docs/b4-design.md} §2.2.
  */
 @FunctionalInterface
 public interface ShardTask {

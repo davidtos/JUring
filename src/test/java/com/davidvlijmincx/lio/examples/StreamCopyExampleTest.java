@@ -39,7 +39,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * while {@code write} copies into internal buffers and may leave write-behind operations
  * in flight until {@code flush()}. Each stream owns a fixed, option-bounded native buffer
  * set and never closes the underlying {@link JuringFile}. Like seastar's single reactor,
- * several file-based handles can share one ring: since B10a the reader and writer are
+ * several file-based handles can share one ring: the reader and writer are
  * multiplexed on the same {@link JUring}, with each completion routed to the handle that
  * issued it, so this example opens one ring for both directions.
  *

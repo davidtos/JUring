@@ -16,18 +16,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * F1 verifier regression: removal from a full {@link CompletionTable} must be bounded and
+ * Full-table put/remove regression: removal from a full {@link CompletionTable} must be bounded and
  * correct (the previous cluster re-insertion implementation could cycle forever when the
  * table was full and the next probe slot was occupied), plus the IoShard-level scenario where
  * completions are dispatched while the handler table is exactly full.
  *
- * <p>Design contract (§4/§5/§9.3 amended 2026-11-14): table-full registration is
+ * <p>Design contract (amended 2026-11-14): table-full registration is
  * {@link IllegalStateException}; earlier-prepared-but-unregistered SQEs may still complete as
  * counted {@code completionsUnattributed}; handler-table probes are bounded and always
  * terminate.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4CompletionTableTest {
+class CompletionTableTest {
 
     private static CompletionHandler newHandler() {
         return new CompletionHandler() {
@@ -164,7 +164,7 @@ class B4CompletionTableTest {
     }
 
     // ------------------------------------------------------------------
-    // IoShard-level regression (verifier F1 scenario, small scale)
+    // IoShard-level regression (full-table put/remove scenario, small scale)
     // ------------------------------------------------------------------
 
     private static ShardOptions tableFullOptions() {

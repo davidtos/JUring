@@ -22,13 +22,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B5 design §11 tests 17–19 + §2.7/§6 (JMX runtime): standalone and group registration
+ * JMX runtime tests: standalone and group registration
  * (deterministic ObjectNames, pull-based attributes matching the snapshots, microsecond
  * latency units), duplicate registration, idempotent close, mid-flight/after-close reads,
  * group rollback on a partial failure, and no thread/fd leak across cycles.
  */
 @Timeout(value = 120, unit = TimeUnit.SECONDS)
-class B5JmxTest {
+class JmxTest {
 
     private static final MBeanServer SERVER = ManagementFactory.getPlatformMBeanServer();
 
@@ -54,7 +54,7 @@ class B5JmxTest {
     };
 
     // ------------------------------------------------------------------
-    // §11.17 — register(IoShard)
+    // register(IoShard)
     // ------------------------------------------------------------------
 
     @Test
@@ -122,16 +122,16 @@ class B5JmxTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.18 — register(RingGroup)
+    // register(RingGroup)
     // ------------------------------------------------------------------
 
     @Test
     void groupBeansNamesOrderAggregatesAndDistinctInstanceIds() throws Exception {
         RingGroup group = RingGroup.create(2, ShardOptions.defaults()
-                .withName("b5-jmx-group")
+                .withName("jmx-group")
                 .withRingEntries(128)
                 .withLatencySampleEvery(1));
-        RingGroup otherGroup = RingGroup.create(1, ShardOptions.defaults().withName("b5-jmx-other"));
+        RingGroup otherGroup = RingGroup.create(1, ShardOptions.defaults().withName("jmx-other"));
         MetricsJmx.Handle handle = null;
         MetricsJmx.Handle otherHandle = null;
         try {
@@ -209,7 +209,7 @@ class B5JmxTest {
     @Test
     void liveAttributeReadsDuringLoadNeverThrowAndDisabledLatencyIsZero() throws Exception {
         RingGroup group = RingGroup.create(2, ShardOptions.defaults()
-                .withName("b5-jmx-live")
+                .withName("jmx-live")
                 .withRingEntries(512)
                 .withLatencySampleEvery(1));
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -220,7 +220,7 @@ class B5JmxTest {
             group.start();
             handle = MetricsJmx.register(group);
             List<ObjectName> names = handle.names();
-            Thread sampler = Thread.ofPlatform().name("b5-jmx-sampler").daemon(true).start(() -> {
+            Thread sampler = Thread.ofPlatform().name("jmx-sampler").daemon(true).start(() -> {
                 try {
                     while (!stop.get()) {
                         for (ObjectName name : names) {
@@ -263,7 +263,7 @@ class B5JmxTest {
 
         // Disabled sampling => all latency attributes exactly 0.
         RingGroup noSampling = RingGroup.create(2, ShardOptions.defaults()
-                .withName("b5-jmx-nosampling").withRingEntries(64));
+                .withName("jmx-nosampling").withRingEntries(64));
         MetricsJmx.Handle noSamplingHandle = null;
         try {
             noSampling.start();
@@ -284,13 +284,13 @@ class B5JmxTest {
     }
 
     // ------------------------------------------------------------------
-    // §2.7 — group registration rollback on partial failure
+    // group registration rollback on partial failure
     // ------------------------------------------------------------------
 
     @Test
     void failedGroupRegistrationRollsBackAlreadyRegisteredBeans() throws Exception {
         RingGroup group = RingGroup.create(2, ShardOptions.defaults()
-                .withName("b5-jmx-rollback").withRingEntries(64));
+                .withName("jmx-rollback").withRingEntries(64));
         ObjectName colliding = null;
         try {
             // Instance ids are allocated strictly monotonically by one on each registration, so
@@ -345,7 +345,7 @@ class B5JmxTest {
     }
 
     // ------------------------------------------------------------------
-    // §11.19 — no thread/fd leak across register/unregister cycles
+    // no thread/fd leak across register/unregister cycles
     // ------------------------------------------------------------------
 
     @Test
@@ -353,7 +353,7 @@ class B5JmxTest {
         IoShard shard = IoShard.create(0, ShardOptions.defaults().withRingEntries(64));
         IoShard standalone = IoShard.create(7, ShardOptions.defaults().withRingEntries(64));
         RingGroup group = RingGroup.create(1, ShardOptions.defaults()
-                .withName("b5-jmx-leak").withRingEntries(64));
+                .withName("jmx-leak").withRingEntries(64));
         try {
             // Warm up platform-MBeanServer/class-loading one-offs before taking the baselines.
             MetricsJmx.register(shard).close();

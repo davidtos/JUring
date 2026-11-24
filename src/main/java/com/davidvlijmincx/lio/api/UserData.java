@@ -14,11 +14,11 @@ final class UserData {
     public static final long FIXED_OP_ID_MASK = (1L << BUFFER_INDEX_SHIFT) - 1;
 
     /**
-     * B10 F1 fix: internal {@code user_data} type for unique-id non-fixed reads (used by
+     * Internal {@code user_data} type for unique-id non-fixed reads (used by
      * {@code JuringFile} and {@code JUring.prepareReadUnique}). It
      * carries a unique operation id (no buffer address), is decoded back to
      * {@link OperationType#READ_EXT} by the ring dispatcher, and never reaches raw users.
-     * Index 21 is unused by {@link OperationType} (0..20) and by the B4 shard's reserved
+     * Index 21 is unused by {@link OperationType} (0..20) and by the shard runtime's reserved
      * {@code 0xFF} wakeup reads.
      */
     static final int INTERNAL_READ_EXT_TYPE = 21;

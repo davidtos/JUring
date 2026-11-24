@@ -8,14 +8,14 @@ package com.davidvlijmincx.lio.api;
  * called on the shard thread. Prepared operations are flushed by the loop; call
  * {@link #submit()} only when a task needs an explicit flush.
  *
- * <h2>B3 limitation preserved for raw operations</h2>
+ * <h2>Raw-operation limitation</h2>
  * <p>Concurrent <b>raw</b> non-fixed {@code READ_EXT} submissions into the same
  * {@link java.lang.foreign.MemorySegment} share one {@code user_data} (the buffer address)
  * and can therefore confuse a completion-handler registration. Do not issue two concurrent
  * raw non-fixed reads into the same segment from one shard; use fixed-buffer I/O or distinct
- * segments. ({@link JuringFile} reads are not affected: since B10 they carry a unique
- * internal operation id — see {@code docs/b10-design.md} §2.6.) This is the B3 §11.9/F1
- * limitation and is deliberately not changed by B4.
+ * segments. ({@link JuringFile} reads are not affected: since the shared-ring multiplexing
+ * work they carry a unique internal operation id.) This is the pre-existing
+ * duplicate-{@code user_data} limitation and is deliberately not changed by the shard runtime.
  *
  * <h2>JuringFile blocking helpers</h2>
  * <p>{@link JuringFile}'s blocking helpers ({@code read}/{@code write}/{@code await}/
@@ -27,7 +27,8 @@ package com.davidvlijmincx.lio.api;
  * an idle shard is safe; a task queued behind an already-running batch can hit the window.
  * Inside shard tasks prefer raw {@code ring.prepare*} + {@link #onCompletion(long,
  * CompletionHandler)}, or run the file work from a task that starts when the shard is idle.
- * This is the pre-existing B3 §11.9/F1 class of limitation, deliberately not changed by B4.
+ * This is the pre-existing duplicate-{@code user_data} class of limitation, deliberately not
+ * changed by the shard runtime.
  */
 public interface ShardContext {
 

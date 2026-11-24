@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Immutable aggregate of a {@link RingGroup}'s shard metrics (B5 design §2.6).
+ * Immutable aggregate of a {@link RingGroup}'s shard metrics.
  *
  * <p>Counters are sums over the group's shards: {@code submitted/reaped/completed/failed/
  * cancelled/timedOut} are summed ring counters, and {@code inFlight}, {@code sqQueued} and
@@ -11,7 +11,7 @@ package com.davidvlijmincx.lio.api;
  * and {@link LatencySnapshot#empty()}.
  *
  * <p>Like all snapshots the aggregate is best effort and not linearizable with respect to
- * concurrent traffic ({@code docs/b5-design.md} §5).
+ * concurrent traffic.
  *
  * @param shards          number of shards in the group
  * @param submitted       summed ring {@link RingMetrics#submitted()}

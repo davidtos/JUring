@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Package-private loop-body seam (B4 design §9): a shard can host a custom event loop
+ * Package-private loop-body seam: a shard can host a custom event loop
  * instead of the generic task/handoff loop. Used by the {@code JUringBlocking} integration
  * so its tuned per-worker slot protocol runs on top of {@code IoShard}'s ring, thread,
  * affinity, lifecycle and bounded close.

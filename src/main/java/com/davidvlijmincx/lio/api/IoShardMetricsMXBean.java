@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * JMX MXBean view of one {@link IoShard} (B5 design §2.7).
+ * JMX MXBean view of one {@link IoShard}.
  *
  * <p>Attributes are <b>pull-based</b>: every getter takes a fresh {@link IoShard#metrics()}
  * snapshot at read time, so there is no exporter thread and no background memory cost. Reads
@@ -199,7 +199,7 @@ public interface IoShardMetricsMXBean {
      */
     long getCqOverflowEvents();
 
-    // --- shard counters (B4 ShardStats) ---
+    // --- shard counters (ShardStats) ---
 
     /**
      * Returns the number of accepted {@link ShardTask}s (generic loop only).

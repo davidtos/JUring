@@ -17,13 +17,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.10: graceful bounded shutdown — accepted tasks drained, in-flight requests
+ * Graceful bounded shutdown — accepted tasks drained, in-flight requests
  * cancelled with their handlers receiving {@code -ECANCELED}, {@code close(0)} bounded,
  * idempotent close, {@code requestStop}+{@code awaitTermination}, {@code closeTimedOut} only
  * for a stuck user task, and fd/thread resources released.
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4ShutdownTest {
+class ShutdownTest {
 
     private static final int ECANCELED = 125;
 

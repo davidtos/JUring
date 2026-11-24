@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 bounded-shutdown contract: {@link JuringFile#close(long)} and
+ * Bounded-shutdown contract: {@link JuringFile#close(long)} and
  * {@link JUring#close(long)} must never hang, cancel and reconcile what they can, and count
  * (never silently drop) what they cannot. Wall-clock assertions use generous slack over the
  * documented bound ({@code timeoutMillis + 250 ms}).
@@ -154,7 +154,7 @@ class JuringFileBoundedCloseTest {
             assertEquals(4, handle.abandonedOperations(),
                     "the handle's 4 requests are abandoned and counted (foreign work cannot be reaped)");
             assertEquals(5, ring.inFlightCount(),
-                    "B3 must NOT inflate the ring in-flight counter with unreapable cancel requests");
+                    "bounded close must NOT inflate the ring in-flight counter with unreapable cancel requests");
 
             // The ring still owns all 5 completions and reaps them in its own bounded close.
             ring.close(1000);

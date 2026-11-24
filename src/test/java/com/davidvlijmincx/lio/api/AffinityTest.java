@@ -9,11 +9,11 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * B4 design §12.2: CPU affinity is applied on the shard thread and reported through
+ * CPU affinity is applied on the shard thread and reported through
  * {@link ShardStats}; invalid CPUs are a non-fatal, recorded best-effort failure.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4AffinityTest {
+class AffinityTest {
 
     @Test
     void shardPinsToRequestedCpuAndReportsIt() {

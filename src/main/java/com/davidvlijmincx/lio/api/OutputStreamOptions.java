@@ -4,14 +4,13 @@ import java.util.Objects;
 
 /**
  * Immutable options for {@link JuringOutputStream}, modelled on seastar's
- * {@code file_output_stream_options} (see {@code SEASTAR-PLAN.md} §4 B2 and
- * {@code docs/b2-design.md} §1.2).
+ * {@code file_output_stream_options}.
  *
  * <p>Defaults mirror seastar: a 64 KiB buffer, write-behind depth 1, no preallocation
  * hint, no {@code fdatasync} on close and 4096-byte alignment (safe for O_DIRECT on this
  * host's ext4 data NVMe and on tmpfs test files).
  *
- * <p>B6 adds two durability dimensions (see {@code docs/b6-design.md} §2.5): a
+ * <p>Two durability dimensions are available: a
  * {@link DurabilityMode} that makes {@code flush()}/{@code close()} durability points, and
  * an optional {@code posix_fadvise(2)} page-cache hint applied once at {@code open}. Both
  * default to today's behaviour ({@link DurabilityMode#WRITEBACK},
@@ -119,9 +118,9 @@ public final class OutputStreamOptions {
     }
 
     /**
-     * Returns the durability mode of the stream (B6, see {@code docs/b6-design.md} §2.5/§3.1).
+     * Returns the durability mode of the stream.
      *
-     * <p>{@link DurabilityMode#WRITEBACK} reproduces the frozen B2 behaviour: no sync in
+     * <p>{@link DurabilityMode#WRITEBACK} reproduces the frozen writeback behaviour: no sync in
      * {@link JuringOutputStream#flush()}, one {@code fdatasync} in
      * {@link JuringOutputStream#close()} iff {@link #syncOnClose()}. Any other mode makes
      * every {@code flush()}/{@code close()} a durability point.
@@ -134,7 +133,7 @@ public final class OutputStreamOptions {
 
     /**
      * Returns the {@code posix_fadvise(2)} hint applied once to the whole file when the
-     * stream is opened (B6, see {@code docs/b6-design.md} §2.6).
+     * stream is opened.
      *
      * @return the configured page-cache advice; {@link FadviseAdvice#NORMAL} issues no syscall
      */
@@ -193,7 +192,7 @@ public final class OutputStreamOptions {
     }
 
     /**
-     * Returns a copy with a different durability mode (B6). The mode makes every
+     * Returns a copy with a different durability mode. The mode makes every
      * {@link JuringOutputStream#flush()} and {@link JuringOutputStream#close()} a durability
      * point; {@link DurabilityMode#DSYNC} additionally asserts that the backing file was
      * opened with {@code O_DSYNC} (checked by {@link JuringOutputStream#open}).
@@ -207,7 +206,7 @@ public final class OutputStreamOptions {
 
     /**
      * Returns a copy with a different {@code posix_fadvise(2)} hint, applied once to the whole
-     * file when the stream is opened (B6).
+     * file when the stream is opened.
      *
      * @param advice the hint, must not be {@code null}; {@link FadviseAdvice#NORMAL} disables it
      * @return a new options object

@@ -12,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * JDK-only JMX binding for the B5 shard metrics (design §2.7/§6).
+ * JDK-only JMX binding for the shard metrics.
  *
  * <p>Registers one {@link IoShardMetricsMXBean} per standalone shard and, for a group, one
  * {@link RingGroupMetricsMXBean} plus one shard bean per shard on the platform

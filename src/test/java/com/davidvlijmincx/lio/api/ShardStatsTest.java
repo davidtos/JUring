@@ -11,11 +11,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.15: {@link ShardStats} invariants — counters are monotone, non-negative and
+ * {@link ShardStats} invariants — counters are monotone, non-negative and
  * {@code inFlightRequests} returns to 0 after draining (excluding the internal wakeup read).
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4StatsTest {
+class ShardStatsTest {
 
     @Test
     void countersAreMonotoneAndInFlightDrainsToZero() throws Exception {

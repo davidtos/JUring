@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * Conformance tests for {@link JuringInputStream} and {@link JuringOutputStream}
- * against the frozen contract in {@code docs/b2-design.md} §1/§2/§5 (items 1-9).
+ * against the frozen stream contract.
  *
  * <p>Every test uses an isolated {@link JUring} created in {@link #setUp()} and closed in
  * {@link #tearDown()}, and {@link TempDir} scratch files, mirroring
@@ -609,7 +609,7 @@ class JuringStreamsConformanceTest {
                     fillPattern(source, 0, (int) source.byteSize());
 
                     // Write exactly N whole buffers, flush (no partial buffer, position is
-                    // alignment-aligned) and keep writing: must be legal per §1.4/§5.6.
+                    // alignment-aligned) and keep writing: must be legal per the frozen contract.
                     out.write(source.asSlice(0, chunk));
                     assertThat(out.position()).isEqualTo(chunk);
                     out.flush();
@@ -802,7 +802,7 @@ class JuringStreamsConformanceTest {
                     .isGreaterThan(0);
             in.close();
             assertThat(in.bufferMemoryBytes())
-                    .as("§1.3: close() releases the input buffers, so bufferMemoryBytes() must report 0")
+                    .as("close() releases the input buffers, so bufferMemoryBytes() must report 0")
                     .isZero();
         } finally {
             if (in != null) {
@@ -820,7 +820,7 @@ class JuringStreamsConformanceTest {
             out.write(patternBytes(0, 100), 0, 100);
             out.close();
             assertThat(out.bufferMemoryBytes())
-                    .as("§1.3: close() releases the output buffers, so bufferMemoryBytes() must report 0")
+                    .as("close() releases the output buffers, so bufferMemoryBytes() must report 0")
                     .isZero();
         } finally {
             if (out != null) {
@@ -1112,7 +1112,7 @@ class JuringStreamsConformanceTest {
                 });
                 assertThat(failure.errno()).isEqualTo(JuringException.EBADF);
 
-                // §1.4: after an I/O error the first failure is latched and rethrown.
+                // After an I/O error the first failure is latched and rethrown.
                 JuringException latched = assertThrows(JuringException.class, stream::close);
                 assertThat(latched.errno()).isEqualTo(JuringException.EBADF);
             } finally {

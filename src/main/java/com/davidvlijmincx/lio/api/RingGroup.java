@@ -24,11 +24,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the group's lifetime. Per-producer FIFO ordering holds within one shard's inbound queue;
  * cross-producer total order is unspecified.
  *
- * <p>B5 observability: {@link #metrics()} returns per-shard {@link ShardMetrics} snapshots in
- * shard-id order and {@link #aggregateMetrics()} returns their frozen aggregation
- * ({@code docs/b5-design.md} §2.6); both are safe from any thread at any life stage.
- *
- * <p>See {@code docs/b4-design.md} §2.4/§8.
+ * <p>Observability: {@link #metrics()} returns per-shard {@link ShardMetrics} snapshots in
+ * shard-id order and {@link #aggregateMetrics()} returns their frozen aggregation;
+ * both are safe from any thread at any life stage.
  */
 public final class RingGroup implements AutoCloseable {
 
@@ -204,7 +202,7 @@ public final class RingGroup implements AutoCloseable {
     }
 
     /**
-     * Per-shard B5 metrics in shard-id order (unstarted and closed shards included). Safe
+     * Per-shard metrics in shard-id order (unstarted and closed shards included). Safe
      * from any thread; never throws.
      *
      * @return an immutable list of per-shard metrics snapshots
@@ -219,7 +217,7 @@ public final class RingGroup implements AutoCloseable {
 
     /**
      * Aggregate of the group's shard metrics: summed ring counters/occupancy and the
-     * bucket-wise merged dispatch-latency histogram ({@code docs/b5-design.md} §2.6). Safe
+     * bucket-wise merged dispatch-latency histogram. Safe
      * from any thread; never throws. A group of unstarted shards aggregates to zeroes and
      * {@link LatencySnapshot#empty()}.
      *
@@ -340,7 +338,7 @@ public final class RingGroup implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // Package-private body-install seam (B4 §9, JUringBlocking integration)
+    // Package-private body-install seam (JUringBlocking integration)
     // ------------------------------------------------------------------
 
     /**

@@ -1,8 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Package-private shard-thread-confined context handed to a {@link ShardBody}
- * (B4 design §9). All accessors are valid only on the shard thread.
+ * Package-private shard-thread-confined context handed to a {@link ShardBody}.
+ * All accessors are valid only on the shard thread.
  */
 final class ShardLoopContext {
 

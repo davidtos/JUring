@@ -1,8 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Immutable statistics of one {@link GroupCommit} instance (B6, see
- * {@code docs/b6-design.md} §2.9).
+ * Immutable statistics of one {@link GroupCommit} instance.
  *
  * <p>All components are non-negative and monotone non-decreasing except
  * {@code maxObservedBatch}, which is monotone non-decreasing and bounded by

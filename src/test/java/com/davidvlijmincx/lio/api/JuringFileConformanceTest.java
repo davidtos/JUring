@@ -34,7 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Conformance tests for {@link JuringFile} against docs/b1-design.md §4/§5.
+ * Conformance tests for {@link JuringFile}.
  *
  * <p>Covers open flags and typed open errors, sequential and random-offset round
  * trips (plain-fd and registered-file + fixed-buffer, plus O_DIRECT), EOF and short

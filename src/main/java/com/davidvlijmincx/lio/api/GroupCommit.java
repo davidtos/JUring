@@ -4,8 +4,7 @@ import java.lang.foreign.MemorySegment;
 import java.util.Objects;
 
 /**
- * Caller-controlled group commit over a {@link JuringFile} (B6, see
- * {@code docs/b6-design.md} §2.7).
+ * Caller-controlled group commit over a {@link JuringFile}.
  *
  * <p>A group commit turns many asynchronous writes into <strong>one</strong> durability
  * sync: {@link #write(long, MemorySegment)} queues a write asynchronously (it may still be
@@ -30,7 +29,7 @@ import java.util.Objects;
  * <p>The group does <strong>not</strong> copy the bytes. The memory of every
  * {@code source} passed to {@link #write(long, MemorySegment)} must remain valid and
  * unmodified until the enclosing {@link #commit()} (or {@link #close()}) has returned.
- * This mirrors the B1 {@code JuringFile.prepareWrite} contract.
+ * This mirrors the {@code JuringFile.prepareWrite} contract.
  *
  * <h2>Durability</h2>
  * <p>{@link #durabilityMode()} defaults to {@link DurabilityMode#FDATASYNC}: a successful
@@ -56,8 +55,8 @@ import java.util.Objects;
  *
  * <h2>Threading / ownership</h2>
  * <p>Not thread-safe: exactly like {@link JuringFile}, one owner thread per handle and ring.
- * A batch can leave up to {@code maxBatchSize} operations in flight on the file's ring; since
- * B10a that ring may be shared with sibling {@code JuringFile}-based handles, whose
+ * A batch can leave up to {@code maxBatchSize} operations in flight on the file's ring; that
+ * ring may be shared with sibling {@code JuringFile}-based handles, whose
  * completions are routed to their own ledgers. Only raw un-reaped ring work is rejected.
  * This is a caller-driven batch, not a daemon.
  *
@@ -112,7 +111,7 @@ public final class GroupCommit implements AutoCloseable {
      * @return a new group commit
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
-     * @throws JuringException          retained by the frozen B6 signature; this overload
+     * @throws JuringException          retained by the frozen group-commit signature; this overload
      *                                  performs no I/O and does not normally throw it
      */
     public static GroupCommit open(JuringFile file) throws JuringException {
@@ -133,7 +132,7 @@ public final class GroupCommit implements AutoCloseable {
      * @throws NullPointerException     if {@code file} or {@code options} is {@code null}
      * @throws IllegalArgumentException if the batch-size/capacity or {@code DSYNC} check fails
      * @throws IllegalStateException    if the file is closed
-     * @throws JuringException          retained by the frozen B6 signature; construction
+     * @throws JuringException          retained by the frozen group-commit signature; construction
      *                                  performs no I/O and does not normally throw it
      */
     public static GroupCommit open(JuringFile file, GroupCommitOptions options) throws JuringException {
@@ -240,7 +239,7 @@ public final class GroupCommit implements AutoCloseable {
         if (size > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("source too large for a group-commit write: " + size);
         }
-        // Offset/segment validation and in-flight bookkeeping are B1's (JuringFile.prepareWrite).
+        // Offset/segment validation and in-flight bookkeeping happen in JuringFile.prepareWrite.
         long handle = file.prepareWrite(offset, source);
         handles[pendingWrites] = handle;
         lengths[pendingWrites] = (int) size;

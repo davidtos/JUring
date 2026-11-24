@@ -1,12 +1,12 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Immutable snapshot of a {@link LatencyHistogram} in nanoseconds (B5).
+ * Immutable snapshot of a {@link LatencyHistogram} in nanoseconds.
  *
  * <p>{@code minNanos}/{@code maxNanos}/{@code totalNanos}/{@code samples} are exact over the
  * recorded observations. The percentiles are the inclusive maximum of the fixed log-linear
- * bucket that contains the requested quantile (see {@link LatencyHistogram} and the B5
- * design §2.2/A1.2): values {@code 0..15 ns} and every bucket maximum are exact, for larger
+ * bucket that contains the requested quantile (see {@link LatencyHistogram}): values
+ * {@code 0..15 ns} and every bucket maximum are exact, for larger
  * values the reported percentile is {@code >=} the true quantile value and its relative
  * over-estimate is {@code <= 1/16} (6.25 %). Use the percentiles for telemetry/trend
  * reporting, not for per-request SLO enforcement.

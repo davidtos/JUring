@@ -28,9 +28,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 raw-engine linked-timeout contract ({@code IORING_OP_LINK_TIMEOUT}, opcode 15) on the
+ * Raw-engine linked-timeout contract ({@code IORING_OP_LINK_TIMEOUT}, opcode 15) on the
  * live kernel: both CQE orders, exactly one completion per request, ABS flag behaviour,
- * target-failure case, prepare validation. Semantics verified by {@code scratch/b3/Probe.java}.
+ * target-failure case, prepare validation.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class JUringLinkTimeoutTest {

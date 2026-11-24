@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 high-level timed operations on {@link JuringFile}: kernel linked-timeout reads
+ * High-level timed operations on {@link JuringFile}: kernel linked-timeout reads
  * (deterministic {@code ETIMEDOUT} vs explicit-cancel {@code ECANCELED}), the documented
  * difference to caller-side {@code await(handle, timeout)} (operation stays in flight), and
  * {@code prepareTimeout} timers. A named pipe (FIFO) provides a controllable blocking read.
@@ -80,7 +80,7 @@ class JuringFileTimeoutTest {
     void timedWriteCompletesBeforeKernelTimeout() throws Exception {
         Path file = tempDir.resolve("timed-write.bin");
         Files.write(file, new byte[16]);
-        byte[] payload = "hello-b3-timed".getBytes();
+        byte[] payload = "hello-timed".getBytes();
         try (JuringFile handle = JuringFile.open(ring, file, RDWR, CREATE);
              Arena arena = Arena.ofConfined()) {
             MemorySegment buffer = arena.allocate(payload.length);
@@ -247,7 +247,7 @@ class JuringFileTimeoutTest {
             this.fifo = fifo;
             this.delayMs = delayMs;
             this.payload = payload;
-            setName("b3-fifo-writer");
+            setName("fifo-writer");
             setDaemon(true);
         }
 

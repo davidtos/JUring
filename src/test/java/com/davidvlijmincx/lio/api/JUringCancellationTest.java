@@ -22,10 +22,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 raw-engine cancellation contract: cancel by {@code user_data}, by fd (plain and fixed
+ * Raw-engine cancellation contract: cancel by {@code user_data}, by fd (plain and fixed
  * slot), ring-wide bulk cancel, statuses ({@code 0}/{@code -ENOENT}), and the guarantee that
- * both the target and the cancel request get exactly one completion. Semantics verified by
- * {@code scratch/b3/Probe.java} E1-E6/H1.
+ * both the target and the cancel request get exactly one completion.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
 class JUringCancellationTest {

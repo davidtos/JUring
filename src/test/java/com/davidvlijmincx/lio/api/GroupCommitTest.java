@@ -28,16 +28,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B6 group-commit tests (frozen contract: {@code docs/b6-design.md} §2.7-§2.9, §3.1, §7.4).
+ * Group-commit tests (frozen contract).
  *
  * <p>The "one sync per batch" claim is proven with two independent observables:
  * {@link GroupCommitStats#syncs()} and the {@link JuringFile#syncOperations()}/
  * {@link JuringFile#syncCompletions()} deltas; {@link JuringFile#issuedOperations()} is the
  * ordering cross-check ({@code n} writes + at most one sync per committed batch).
  * {@code @TempDir} is tmpfs, so the visibility assertions prove page-cache visibility across
- * a fresh open, not media durability (disclosed in the B6 report/status).
+ * a fresh open, not media durability (disclosed in the group-commit report/status).
  */
-class B6GroupCommitTest {
+class GroupCommitTest {
 
     private static final int BLOCK = 4096;
     private static final int KIB = 1024;
@@ -108,7 +108,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // open / validation (§2.7)
+    // open / validation
     // ==================================================================
 
     @Test
@@ -174,7 +174,7 @@ class B6GroupCommitTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("negative offset");
             assertThatThrownBy(() -> group.write(0L, MemorySegment.ofArray(new byte[8])))
-                    .as("a heap segment is not a B1 native buffer")
+                    .as("a heap segment is not a native buffer")
                     .isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> group.write(0L, null)).isInstanceOf(NullPointerException.class);
             // rejected writes are not queued
@@ -185,7 +185,7 @@ class B6GroupCommitTest {
 
     @Test
     void nonDsyncModeOnDsyncFileIsAllowed(@TempDir Path dir) throws Exception {
-        // A redundant explicit sync on an O_DSYNC file is allowed (harmless), per §2.2.
+        // A redundant explicit sync on an O_DSYNC file is allowed (harmless).
         Path path = dir.resolve("fdatasync-on-dsync-file.bin");
         byte[] expected = patternBytes(0, BLOCK);
         try (JuringFile file = JuringFile.open(ring, path, 0644, RDWR, CREATE, TRUNCATE, DSYNC);
@@ -205,7 +205,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // caller-controlled batches: no auto-commit (§2.7)
+    // caller-controlled batches: no auto-commit
     // ==================================================================
 
     @Test
@@ -242,7 +242,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // basic batch: N writes -> 1 commit -> exactly one sync (§2.7, §3.5)
+    // basic batch: N writes -> 1 commit -> exactly one sync
     // ==================================================================
 
     @Test
@@ -357,7 +357,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // durability modes (§2.2, §3.1)
+    // durability modes
     // ==================================================================
 
     @Test
@@ -544,7 +544,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // error latching (§2.7, §8)
+    // error latching
     // ==================================================================
 
     @Test
@@ -584,7 +584,7 @@ class B6GroupCommitTest {
     }
 
     // ==================================================================
-    // allocation-free steady state (§2.7, §7.4)
+    // allocation-free steady state
     // ==================================================================
 
     @Test

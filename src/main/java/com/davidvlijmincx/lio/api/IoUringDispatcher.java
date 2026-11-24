@@ -53,9 +53,9 @@ final class IoUringDispatcher implements AutoCloseable {
 
     private static final int EBADF = 9;
     private static final int EINTR = 4;
-    /** Kernel {@code ETIME}: a fired {@code IORING_OP_TIMEOUT}/{@code LINK_TIMEOUT} completion (B5 A1.1). */
+    /** Kernel {@code ETIME}: a fired {@code IORING_OP_TIMEOUT}/{@code LINK_TIMEOUT} completion. */
     private static final int ETIME = 62;
-    /** libc {@code ETIMEDOUT}; counted defensively by B5 ring metrics (A1.1). */
+    /** libc {@code ETIMEDOUT}; counted defensively by the ring metrics' timeout-completion errno accounting. */
     private static final int ETIMEDOUT = 110;
     private static final int ECANCELED = 125;
 
@@ -93,8 +93,8 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     /**
-     * B5 ring counters (design §2.1/§3, amendment A1.1): twelve monotone {@code long}
-     * counters plus the CQE classification rule. All updates happen on the ring owner
+     * Ring counters including the timeout-completion errno accounting: twelve monotone
+     * {@code long} counters plus the CQE classification rule. All updates happen on the ring owner
      * thread as opaque (atomic, non-tearing) array-element writes; snapshots read the
      * elements with acquire semantics, so the frozen "cross-thread snapshots never tear"
      * contract holds by the JMM. The classification is a package-private static rule so it
@@ -214,7 +214,7 @@ final class IoUringDispatcher implements AutoCloseable {
     private int cqRingEntries;
 
     // ------------------------------------------------------------------
-    // B5 ring metrics (design §§2.1, 3, 5)
+    // Ring metrics
     // ------------------------------------------------------------------
 
     /** All ring counters; owner-thread writes, acquire reads from snapshots. */
@@ -742,7 +742,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     /**
-     * B5-instrumented {@code io_uring_enter}: counts the enter call and, after the syscall,
+     * Instrumented {@code io_uring_enter}: counts the enter call and, after the syscall,
      * accounts for kernel SQ {@code khead} progress (submitted SQEs). Never allocates.
      */
     private long enterObserved(long fd, long toSubmit, long minComplete, long flags) {
@@ -1214,7 +1214,7 @@ final class IoUringDispatcher implements AutoCloseable {
         this.cqRingMask = cq_mask;
         this.cqRingEntries = cq_ents;
 
-        // B5 ring metrics: the ring is owned by the creating thread; the initial kernel
+        // Ring metrics: the ring is owned by the creating thread; the initial kernel
         // heads are the baseline for the "submitted" (SQ khead progress) counter.
         this.ownerThread = Thread.currentThread();
         this.observedSqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sq_khead);
@@ -1859,7 +1859,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
             }
             case UserData.INTERNAL_READ_EXT_TYPE -> {
-                // B10 F1 fix: unique-id non-fixed read (JuringFile / prepareReadUnique)
+                // Unique-id completion fix: non-fixed read (JuringFile / prepareReadUnique)
                 // carrying an op id instead of the buffer address, so concurrent same-buffer
                 // reads stay distinguishable. No Result.validBuffer (the caller owns the
                 // buffer); reported as READ_EXT.
@@ -1955,14 +1955,14 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // B5 ring metrics (design §§2.1, 2.3, 3, 5)
+    // Ring metrics (counters, occupancy and the CQE classification rule)
     // ------------------------------------------------------------------
 
     /**
      * Immutable snapshot of this ring's counters and occupancy for {@code JUring.ringMetrics()}.
      * Safe from any thread before/while the ring is open and (returning the frozen final
      * snapshot) after close; never throws and never blocks on the ring owner. Snapshots are a
-     * best-effort telemetry view, not linearizable (design §5).
+     * best-effort telemetry view, not linearizable.
      */
     RingMetrics ringMetrics() {
         synchronized (metricsLock) {
@@ -2051,7 +2051,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // Bounded shutdown (B3)
+    // Bounded shutdown
     // ------------------------------------------------------------------
 
     /** Default deadline for {@link #close()} before the ring is force-closed. */
@@ -2233,7 +2233,7 @@ final class IoUringDispatcher implements AutoCloseable {
                 abandonedAtClose = Math.max(0, inFlightCount);
             }
         } finally {
-            // B5: capture the final metrics snapshot while the ring memory is still mapped;
+            // Capture the final metrics snapshot while the ring memory is still mapped;
             // freezeMetrics() also serialises with concurrent snapshots, so the munmap below
             // can never race a foreign-thread ringMetrics() read.
             freezeMetrics();

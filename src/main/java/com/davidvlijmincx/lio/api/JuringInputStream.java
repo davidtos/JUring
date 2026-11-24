@@ -9,8 +9,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 /**
  * Buffered, prefetching input stream over a {@link JuringFile}.
  *
- * <p>This is the B2 L1 stream layer (see {@code SEASTAR-PLAN.md} §4 B2 and
- * {@code docs/b2-design.md}): a byte stream on top of the asynchronous file handle with a
+ * <p>This is the L1 stream layer: a byte stream on top of the asynchronous file handle with a
  * configurable buffer size, configurable readahead depth, optional seastar-style adaptive
  * readahead (slow start + 4 MiB unused-ratio windows), zero-copy chunk reads,
  * complete-until-done {@link #read(MemorySegment)} and bounded memory.
@@ -41,7 +40,7 @@ import static java.lang.foreign.ValueLayout.JAVA_BYTE;
  * {@link JuringFile}). It uses {@link JuringFile}'s blocking helpers, so it may share one
  * {@link JUring} with other {@link JuringFile}-based handles (files, output streams, group
  * commits) on the same thread; completions are routed to their issuing handle. Only raw
- * un-reaped ring work on the shared ring is rejected (B10a).
+ * un-reaped ring work on the shared ring is rejected.
  *
  * <h2>Lifecycle</h2>
  * <p>{@link #close()} drains the stream's own in-flight reads within a hard deadline,
@@ -222,7 +221,7 @@ public final class JuringInputStream implements AutoCloseable {
     /**
      * Opens an input stream over an explicit window of the file.
      *
-     * <p>The B6 {@link InputStreamOptions#fadvise()} hint (when not
+     * <p>The {@link InputStreamOptions#fadvise()} hint (when not
      * {@link FadviseAdvice#NORMAL}) is applied once, after the arguments are validated and
      * before the first read: the declared window is hinted ({@code (offset, length)}, with
      * {@code 0} meaning "to EOF"). A hint failure propagates out of this method.
@@ -987,8 +986,8 @@ public final class JuringInputStream implements AutoCloseable {
     private static int minimalBufferSize(int configuredBufferSize, int alignment) {
         long minimal = Math.min(Math.max(configuredBufferSize / 4L, MIN_ADAPTIVE_BUFFER), configuredBufferSize);
         int rounded = alignUp(minimal, alignment);
-        // The adaptive chunk size must never exceed the configured maximum buffer size
-        // (docs/b2-design.md §1.3/§4.2); only the internal aligned read length may exceed it.
+        // The adaptive chunk size must never exceed the configured maximum buffer size;
+        // only the internal aligned read length may exceed it.
         return (int) Math.max(1L, Math.min(rounded, configuredBufferSize));
     }
 

@@ -13,7 +13,7 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * writes (plain and fixed-buffer), metadata operations, bounded close-with-drain, typed
  * {@code -errno} errors and short-I/O / {@code EAGAIN} policy.
  *
- * <p>This is the first layer of the JUring L1 API (see {@code SEASTAR-PLAN.md} §4 B1).
+ * <p>This is the first layer of the JUring L1 API.
  * It keeps the raw-SQE fast path available through the {@code prepare*} methods, which
  * perform no heap allocation per operation, and adds blocking convenience methods on top
  * ({@link #read}, {@link #write}, {@link #length}, {@link #truncate}, ...) that drive the
@@ -84,13 +84,13 @@ public final class JuringFile implements AutoCloseable {
     private static final long POLL_SLICE_NANOS = 100_000L;
 
     /**
-     * B6: the {@code O_DSYNC} bit of the combined open flags. It is set by both
+     * The {@code O_DSYNC} bit of the combined open flags. It is set by both
      * {@link LinuxOpenOptions#DSYNC} ({@code 0x1000}) and {@link LinuxOpenOptions#SYNC}
      * ({@code 0x101000}).
      */
     private static final int O_DSYNC = 0x1000;
 
-    /** B6: ledger kind of an {@code fsync}/{@code fdatasync} request. */
+    /** Ledger kind of an {@code fsync}/{@code fdatasync} request. */
     private static final byte FSYNC_KIND = (byte) OperationType.FSYNC.getIndex();
 
     private static final byte FREE = 0;
@@ -122,7 +122,7 @@ public final class JuringFile implements AutoCloseable {
     private final FileDescriptor fileDescriptor;
     private final int openFlags;
     private final ResultConsumer completionConsumer;
-    /** B10b: per-handle block-layer I/O priority ({@code 0} = no handle override). */
+    /** Per-handle block-layer I/O priority ({@code 0} = no handle override). */
     private short ioPriority;
 
     private IoPolicy policy = IoPolicy.defaults();
@@ -136,7 +136,7 @@ public final class JuringFile implements AutoCloseable {
     private int[] freeSlots;
     private int freeTop;
 
-    // B3 lifecycle bookkeeping (allocated with the ledger; no per-op allocation on the normal path).
+    // Lifecycle bookkeeping (allocated with the ledger; no per-op allocation on the normal path).
     private long[] companionHandles;   // target slot -> linked-timeout handle (0 = none)
     private byte[] roles;              // ROLE_* for the slot
     private long[] timespecAddresses;  // malloc'd __kernel_timespec owned by the slot (0 = none)
@@ -154,7 +154,7 @@ public final class JuringFile implements AutoCloseable {
     private long cancelledOperations;
     private long controlOperations;
     private long controlCompletions;
-    // B6: fsync/fdatasync requests prepared/completed through this handle (owner-thread counters).
+    // Fsync/fdatasync requests prepared/completed through this handle (owner-thread counters).
     private long syncOperations;
     private long syncCompletions;
 
@@ -317,7 +317,7 @@ public final class JuringFile implements AutoCloseable {
         return ioPriority;
     }
 
-    /** B10b: applies the handle priority to the SQE most recently prepared by the ring. */
+    /** Applies the handle priority to the SQE most recently prepared by the ring. */
     private void applyIoPriority() {
         if (ioPriority != 0) {
             ring.setLastSqeIoprio(ioPriority);
@@ -390,7 +390,7 @@ public final class JuringFile implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // durability and advisory page-cache hints (B6)
+    // durability and advisory page-cache hints
     // ------------------------------------------------------------------
 
     /**
@@ -400,8 +400,8 @@ public final class JuringFile implements AutoCloseable {
      * set by {@link LinuxOpenOptions#DSYNC} and by {@link LinuxOpenOptions#SYNC}, so both
      * report {@link DurabilityMode#DSYNC}; every other open reports
      * {@link DurabilityMode#WRITEBACK}. This is a report only: {@code JuringFile} never
-     * issues an implicit sync (B1 contract; the B6 durability points live on the buffered
-     * streams and group commit).
+     * issues an implicit sync (the original handle contract; the durability points live on
+     * the buffered streams and group commit).
      *
      * @return {@link DurabilityMode#DSYNC} or {@link DurabilityMode#WRITEBACK}; readable
      *         after {@link #close()} (it reports the frozen open-time value)
@@ -412,13 +412,13 @@ public final class JuringFile implements AutoCloseable {
 
     /**
      * Issues {@code posix_fadvise(fd, offset, length, advice.value())} as a blocking,
-     * advisory page-cache hint (B6, §2.3). It never changes file content, stream position
+     * advisory page-cache hint. It never changes file content, stream position
      * or ring state, is <b>not</b> a ring request (it does not touch the in-flight ledger or
      * the operation counters) and therefore does not require the ring-ownership invariant
      * of the blocking helpers. The owner-thread rule still applies.
      *
      * <p>{@code length == 0} means "to the end of the file" (POSIX). {@code WILLNEED} and
-     * {@code DONTNEED} can do real work and must not be called from a B4 shard task; the
+     * {@code DONTNEED} can do real work and must not be called from a shard task; the
      * other advices are cheap.
      *
      * @param advice the hint, must not be {@code null}
@@ -509,7 +509,7 @@ public final class JuringFile implements AutoCloseable {
      *
      * <p><b>Non-fixed buffers:</b> a {@code JuringFile} read uses a unique internal operation
      * id as the ring {@code user_data}, so concurrent reads into the same
-     * {@code MemorySegment} get distinct handles and are routed independently (the B3 F1
+     * {@code MemorySegment} get distinct handles and are routed independently (the
      * duplicate-{@code user_data} limitation is fixed for this path). Overlapping reads still
      * write the same memory, so the caller owns the resulting data race. The raw
      * {@link JUring#prepareRead(FileDescriptor, MemorySegment, long)} API keeps the buffer
@@ -630,7 +630,7 @@ public final class JuringFile implements AutoCloseable {
                 : ring.prepareFsync(fileDescriptor, flags);
         // fsync does not carry ioprio (the kernel rejects it), so no applyIoPriority() here.
         track(handle);
-        // B6: count only OperationType.FSYNC requests prepared through this handle.
+        // Count only OperationType.FSYNC requests prepared through this handle.
         syncOperations++;
         return handle;
     }
@@ -800,7 +800,7 @@ public final class JuringFile implements AutoCloseable {
                     : ring.prepareReadNoBuffer(fileDescriptor, buffer, length, offset,
                             SqeOptions.IOSQE_IO_LINK.value);
             targetPrepared = true;
-            // B10b: tag the target SQE now, before the linked-timeout companion becomes the
+            // Tag the target SQE now, before the linked-timeout companion becomes the
             // most recently prepared SQE.
             applyIoPriority();
             long companion = ring.prepareLinkTimeout(timespecSegment(timespecAddress), 0);
@@ -848,7 +848,7 @@ public final class JuringFile implements AutoCloseable {
                     ? ring.prepareWrite(registeredSlot, buffer, offset, SqeOptions.IOSQE_IO_LINK)
                     : ring.prepareWrite(fileDescriptor, buffer, offset, SqeOptions.IOSQE_IO_LINK);
             targetPrepared = true;
-            // B10b: tag the target SQE before preparing the LINK_TIMEOUT companion.
+            // Tag the target SQE before preparing the LINK_TIMEOUT companion.
             applyIoPriority();
             long companion = ring.prepareLinkTimeout(timespecSegment(timespecAddress), 0);
             track(target, companion, timespecAddress, ROLE_NORMAL);
@@ -1657,7 +1657,7 @@ public final class JuringFile implements AutoCloseable {
                 fdClosed = true;
                 fileDescriptor.close();
             }
-            // B10a: a closed handle must stop receiving routed sibling completions.
+            // A closed handle must stop receiving routed sibling completions.
             ring.detachFile(this);
         }
     }
@@ -1675,7 +1675,7 @@ public final class JuringFile implements AutoCloseable {
             // Raw un-reaped ring work (or completions reaped outside the attached handles):
             // reaping would steal/miss completions, and cancelling would create cancel CQEs
             // that cannot be reconciled. Count our own requests as abandoned and leave their
-            // completions to the ring's owner (B1 foreign-work rule).
+            // completions to the ring's owner (foreign-work rule).
             abandonRemaining();
             return;
         }
@@ -1900,7 +1900,7 @@ public final class JuringFile implements AutoCloseable {
     }
 
     /**
-     * Delivers a reaped completion into this handle's ledger (B10a shared-ring dispatch).
+     * Delivers a reaped completion into this handle's ledger (shared-ring dispatch).
      *
      * @return {@code true} when the completion's handle belongs to this ledger (including
      *         already-recorded duplicate completions); {@code false} when it does not, in
@@ -1931,7 +1931,7 @@ public final class JuringFile implements AutoCloseable {
             }
             completedOperations++;
             if (kind == FSYNC_KIND) {
-                // B6: a terminal fsync/fdatasync completion reaped through this handle.
+                // A terminal fsync/fdatasync completion reaped through this handle.
                 syncCompletions++;
             }
             if (value < 0) {

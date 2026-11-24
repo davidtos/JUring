@@ -21,7 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * B6 group-commit crash/restart test (frozen contract: {@code docs/b6-design.md} §3.3, §7.5).
+ * Group-commit crash/restart test (frozen contract).
  *
  * <p>A child JVM opens a fresh file, queues deterministic records in a
  * {@link GroupCommit} ({@link DurabilityMode#FDATASYNC}), calls {@link GroupCommit#commit()}
@@ -33,12 +33,12 @@ import static org.junit.jupiter.api.Assertions.fail;
  *
  * <p><b>Disclosure:</b> the test file lives on a {@code @TempDir} (tmpfs), so this proves
  * <strong>process-restart visibility</strong> of the committed bytes, not media durability
- * after a power loss (§0 non-goals). The "one fsync for the batch" claim is proven by the
- * counters in {@link B6GroupCommitTest}; the device-backed fresh-process re-read is the W25
+ * after a power loss (explicit non-goal). The "one fsync for the batch" claim is proven by the
+ * counters in {@link GroupCommitTest}; the device-backed fresh-process re-read is the W25
  * benchmark ({@code --verify-only}). The test only skips via an explicit
  * {@link Assumptions#assumeTrue} when the environment cannot spawn a JVM.
  */
-class B6GroupCommitCrashTest {
+class GroupCommitCrashTest {
 
     private static final int BLOCK = 4096;
     private static final int RECORDS = 6;

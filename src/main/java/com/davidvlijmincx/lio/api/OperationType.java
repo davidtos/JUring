@@ -44,7 +44,7 @@ public enum OperationType {
     FTRUNCATE(18),
     /** Retrieve file status ({@code statx}). */
     STATX(19),
-    /** B3: {@code IORING_OP_LINK_TIMEOUT} (opcode 15); appended, never renumber existing indices. */
+    /** {@code IORING_OP_LINK_TIMEOUT} (opcode 15); appended, never renumber existing indices. */
     LINK_TIMEOUT(20);
 
     private static final OperationType[] VALUES = values();

@@ -25,19 +25,19 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * ({@link ShardOptions#cpuAffinity()}) on a best-effort basis; a denied or out-of-range
  * CPU is recorded in {@link ShardStats#affinityApplied()} and does not fail the shard.
  *
- * <p>Loop shape (see {@code docs/b4-design.md} §4): reap/dispatch up to
+ * <p>Loop shape: reap/dispatch up to
  * {@link ShardOptions#cqeBatch()} completions, run up to
  * {@link ShardOptions#taskBatch()} inbound tasks, submit prepared SQEs once, repeat; when
  * idle, spin {@link ShardOptions#spinIterations()} times and then block inside
  * {@code io_uring_enter} with an armed eventfd wakeup read. Completions are always
  * serviced before the next task batch, so a submission flood cannot starve handlers.
  *
- * <p>Backpressure/handoff overflow follow the frozen table in §4: foreign
+ * <p>Backpressure/handoff overflow follow a fixed policy: foreign
  * {@code execute} blocks while the inbound queue is full, shard-thread {@code execute}
  * throws {@link IllegalStateException}, and a handoff whose target queue stays full runs
  * the continuation inline and counts {@link ShardStats#handoffsInlineFallback()}.
  *
- * <p>Shutdown ({@code §7}) is a bounded graceful drain: accepted tasks run while the
+ * <p>Shutdown is a bounded graceful drain: accepted tasks run while the
  * budget allows, in-flight requests are cancelled ring-wide, their {@code -ECANCELED}
  * completions are dispatched to handlers, then the ring is closed with the remaining
  * budget. {@link #close()} is idempotent, never throws for an operation failure, and may
@@ -46,15 +46,15 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
  * <p>Inside tasks, prefer raw {@code ring.prepare*} + {@link ShardContext#onCompletion(long, CompletionHandler)} for
  * asynchronous file I/O: {@link JuringFile} blocking helpers assert single-owner ring
  * ownership and can observe the loop's internal armed eventfd wakeup {@code READ} as foreign
- * in-flight work when a task starts behind an already-running batch (the pre-existing B3
- * §11.9/F1 class of limitation; see {@link ShardContext}). A task that starts from an idle
+ * in-flight work when a task starts behind an already-running batch (the pre-existing
+ * duplicate-{@code user_data} limitation; see {@link ShardContext}). A task that starts from an idle
  * shard is safe because the wakeup read is consumed to deliver it.
  *
- * <p>B5 observability: {@link #metrics()} returns a {@link ShardMetrics} snapshot
+ * <p>Observability: {@link #metrics()} returns a {@link ShardMetrics} snapshot
  * ({@link ShardStats} + ring {@link RingMetrics} + dispatch {@link LatencySnapshot}) from any
  * thread at any life stage; dispatch latency is sampled deterministically every Nth successful
  * completion registration when {@link ShardOptions#withLatencySampleEvery(int)} is enabled
- * (disabled by default). See {@code docs/b5-design.md} §2.5/§4/§5.
+ * (disabled by default).
  *
  * <p>Instances are created with {@link #create(int, ShardOptions)}; {@link #execute} and
  * {@link #handoff} lazily start the shard. See {@link RingGroup} for a fixed pool with
@@ -79,7 +79,7 @@ public final class IoShard implements AutoCloseable {
 
     /**
      * All-zero {@link RingMetrics} used before the shard has created its ring (or if the ring
-     * snapshot is unavailable). Frozen shape of B5 design §2.1: zero counters, zero occupancy,
+     * snapshot is unavailable). Frozen shape: zero counters, zero occupancy,
      * zero effective entries.
      */
     private static final RingMetrics ZERO_RING_METRICS = new RingMetrics(
@@ -130,9 +130,9 @@ public final class IoShard implements AutoCloseable {
     private volatile long cancelledAtClose;
     private volatile long abandonedAtClose;
 
-    // B5 dispatch-latency sampling state: the histogram is allocated only when sampling is
+    // Dispatch-latency sampling state: the histogram is allocated only when sampling is
     // enabled (>= 1), recorded on the shard thread only, and snapshotted from any thread as a
-    // best-effort telemetry read (design §4/§5).
+    // best-effort telemetry read.
     private final int latencySampleEvery;
     private final LatencyHistogram dispatchLatencyHistogram;
     /** Last ring snapshot captured before the ring reference is dropped on teardown. */
@@ -220,7 +220,7 @@ public final class IoShard implements AutoCloseable {
     }
 
     /**
-     * Package-private body seam (B4 design §9): installs the event loop this shard should
+     * Package-private body seam: installs the event loop this shard should
      * run instead of the generic task/handoff loop. Must be called before {@link #start()}.
      */
     void setBody(ShardBody loopBody) {
@@ -707,11 +707,10 @@ public final class IoShard implements AutoCloseable {
     }
 
     /**
-     * Snapshot of the shard's B4 lifecycle/counters, B5 ring metrics and B5 dispatch latency.
+     * Snapshot of the shard's lifecycle/counters, ring metrics and dispatch latency.
      * Safe from any thread, before start, while running and after close; never throws.
      *
-     * <p>The three components are three separate best-effort snapshots, not an atomic view
-     * (design §2.5/§5). {@code dispatchLatency} is {@link LatencySnapshot#empty()} when
+     * <p>The three components are three separate best-effort snapshots, not an atomic view. {@code dispatchLatency} is {@link LatencySnapshot#empty()} when
      * sampling is disabled, for body-hosted shards, and until a sampled registration has been
      * dispatched. Ring metrics stay readable after close (the final ring snapshot is cached
      * before the ring reference is released).
@@ -864,7 +863,7 @@ public final class IoShard implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // Generic event loop (frozen behaviour, design §4)
+    // Generic event loop (frozen behaviour)
     // ------------------------------------------------------------------
 
     private void genericLoop() {
@@ -1004,7 +1003,7 @@ public final class IoShard implements AutoCloseable {
             if (histogram != null) {
                 long registeredAtNanos = completions.lastRemovedTimestamp();
                 if (registeredAtNanos != 0L) {
-                    // B5 dispatch-latency window: registration -> immediately before the
+                    // Dispatch-latency window: registration -> immediately before the
                     // handler body runs. Recorded on the shard thread; Handler exceptions are
                     // recorded too (the record happens before invoking the handler).
                     histogram.record(System.nanoTime() - registeredAtNanos);
@@ -1079,7 +1078,7 @@ public final class IoShard implements AutoCloseable {
     }
 
     // ------------------------------------------------------------------
-    // Shutdown (design §7)
+    // Shutdown
     // ------------------------------------------------------------------
 
     private void shutdownAndCloseRing() {
@@ -1115,7 +1114,7 @@ public final class IoShard implements AutoCloseable {
             JUring lastRing = ring;
             if (lastRing != null) {
                 try {
-                    // B5: keep ring metrics readable after close (frozen final snapshot).
+                    // Keep ring metrics readable after close (frozen final snapshot).
                     frozenRingMetrics = lastRing.ringMetrics();
                 } catch (Throwable ignored) {
                     // Best effort; metrics() falls back to the zero snapshot.
@@ -1324,7 +1323,7 @@ public final class IoShard implements AutoCloseable {
             long registrationIndex = completionsRegistered + 1L;
             long registeredAtNanos = 0L;
             if (sampleEvery > 0 && registrationIndex % sampleEvery == 0L) {
-                // B5: only every Nth successful registration pays System.nanoTime(); the
+                // Only every Nth successful registration pays System.nanoTime(); the
                 // timestamp is stored with the registration itself (no extra table).
                 registeredAtNanos = System.nanoTime();
             }

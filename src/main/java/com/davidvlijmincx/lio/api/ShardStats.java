@@ -8,7 +8,7 @@ package com.davidvlijmincx.lio.api;
  *
  * <h2>Body-hosted shards</h2>
  * <p>A shard whose loop is provided by an internal {@code ShardBody} (the {@code
- * JUringBlocking} integration path, B4 §9) runs no generic task/handoff loop: for those
+ * JUringBlocking} integration path) runs no generic task/handoff loop: for those
  * shards {@code tasksSubmitted/Executed/Rejected/Failures},
  * {@code completionsRegistered/Dispatched/Unattributed/Failures},
  * {@code handoffsSent/handoffsInlineFallback}, {@code eventfdWrites} and {@code

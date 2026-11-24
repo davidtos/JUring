@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Exercises the B1 registration lifecycle on the raw {@link JUring}: the sparse fixed-file table
+ * Exercises the registration lifecycle on the raw {@link JUring}: the sparse fixed-file table
  * ({@code registerFileAdd}/{@code unregisterFileSlot}/{@code initFileTable}), ring-level
  * {@code unregisterFiles}/{@code unregisterBuffers}, and the best-effort
  * {@code IORING_REGISTER_BUFFERS_UPDATE} path.
@@ -220,7 +220,7 @@ class JUringRegistrationLifecycleTest {
             try {
                 ring.updateRegisteredBuffers(0, replacement);
             } catch (UnsupportedOperationException e) {
-                // Kernel-dependent (docs/b1-design.md §8): skip on kernels without BUFFERS_UPDATE.
+                // Kernel-dependent: skip on kernels without BUFFERS_UPDATE.
                 Assumptions.assumeTrue(false, "kernel does not support IORING_REGISTER_BUFFERS_UPDATE: " + e.getMessage());
             }
 

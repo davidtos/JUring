@@ -4,8 +4,7 @@ import java.util.Objects;
 
 /**
  * Immutable options for {@link JuringInputStream}, modelled on seastar's
- * {@code file_input_stream_options} (see {@code SEASTAR-PLAN.md} §4 B2 and
- * {@code docs/b2-design.md} §1.1).
+ * {@code file_input_stream_options}.
  *
  * <p>Defaults mirror seastar: an 8 KiB buffer, no extra readahead (one read in flight),
  * adaptive adjustments disabled and 4096-byte alignment (safe on this host's ext4 data
@@ -104,8 +103,7 @@ public final class InputStreamOptions {
     }
 
     /**
-     * Returns the {@code posix_fadvise(2)} hint applied once at {@link JuringInputStream#open}
-     * (B6, see {@code docs/b6-design.md} §2.4).
+     * Returns the {@code posix_fadvise(2)} hint applied once at {@link JuringInputStream#open}.
      *
      * <p>{@link FadviseAdvice#NORMAL} is the "no hint" sentinel: it issues no syscall.
      *
@@ -157,7 +155,7 @@ public final class InputStreamOptions {
 
     /**
      * Returns a copy with a different {@code posix_fadvise(2)} page-cache hint, applied once
-     * when the stream is opened (B6, see {@code docs/b6-design.md} §2.4).
+     * when the stream is opened.
      *
      * @param advice the hint, must not be {@code null}; {@link FadviseAdvice#NORMAL} disables it
      * @return a new options object

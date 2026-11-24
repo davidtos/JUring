@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 /**
- * B4 design §12.18 — bounded close with in-flight requests: returns within
+ * Bounded close with in-flight requests: returns within
  * {@code timeout + 250 ms} (+ small test slack), unblocks every caller (real
  * {@code -ECANCELED} completion or {@link IllegalStateException}), and leaks no shard
  * threads / file descriptors.
@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * the read stays pending until the eventfd is signalled or cancelled).
  */
 @Timeout(60)
-class B4BlockingBoundedCloseTest {
+class BlockingBoundedCloseTest {
 
     private static final int IN_FLIGHT = 32;
 
@@ -47,7 +47,7 @@ class B4BlockingBoundedCloseTest {
 
     private static RingGroup newGroup() {
         return RingGroup.create(2, ShardOptions.defaults()
-                .withName("b4-blocking-close")
+                .withName("blocking-close")
                 .withRingEntries(64)
                 .withRingOptions(IORING_SETUP_SINGLE_ISSUER,
                         IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN));

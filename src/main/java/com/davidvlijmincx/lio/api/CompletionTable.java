@@ -6,7 +6,7 @@ import java.util.Objects;
 /**
  * Shard-thread-local open-addressing {@code long -> CompletionHandler} map.
  *
- * <p>Backed by flat parallel arrays (keys, handlers, B5 registration timestamps; no boxing,
+ * <p>Backed by flat parallel arrays (keys, handlers, registration timestamps; no boxing,
  * no per-operation allocation). Insertion uses
  * linear probing; removal uses <b>backward-shift deletion</b> (Knuth TAOCP vol. 3, Algorithm
  * R): after clearing a slot, later entries of the probe cluster are shifted back into the
@@ -28,7 +28,7 @@ final class CompletionTable {
     private final long[] keys;
     private final CompletionHandler[] values;
     /**
-     * B5 dispatch-latency registration timestamps, parallel to {@link #keys}/{@link #values}:
+     * Dispatch-latency registration timestamps, parallel to {@link #keys}/{@link #values}:
      * {@link System#nanoTime()} of a sampled registration, or {@code 0} for an unsampled one.
      * Carried through backward-shift deletion so a registration keeps its timestamp.
      */
@@ -84,7 +84,7 @@ final class CompletionTable {
 
     /**
      * Registers {@code handler} for {@code key}, storing {@code timestampNanos} alongside the
-     * registration (B5 dispatch-latency window start; {@code 0} = unsampled). The timestamp is
+     * registration (dispatch-latency window start; {@code 0} = unsampled). The timestamp is
      * stored atomically with the registration: a failed {@code put} (duplicate key or full
      * table) neither mutates the table nor leaves a timestamp behind.
      *

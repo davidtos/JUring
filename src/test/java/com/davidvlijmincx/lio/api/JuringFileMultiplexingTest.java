@@ -25,9 +25,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B10a tests: multiple {@link JuringFile}/{@link JuringInputStream}/{@link JuringOutputStream}/
- * {@link GroupCommit} handles multiplexed on one {@link JUring} (frozen contract:
- * {@code docs/b10-design.md} §2).
+ * Multiple {@link JuringFile}/{@link JuringInputStream}/{@link JuringOutputStream}/
+ * {@link GroupCommit} handles multiplexed on one {@link JUring} (frozen contract).
  *
  * <p>Covers interleaved completion routing, stream copy on one ring, group commit with a
  * sibling read, scoped {@code cancel}/{@code cancelAll}/{@code close}, and the surviving
@@ -167,7 +166,8 @@ class JuringFileMultiplexingTest {
         Path sourcePath = patternFile(dir.resolve("same-buffer.bin"), 2 * BLOCK, 7);
 
         // two handles, one ring, one shared caller buffer: JuringFile reads use a unique
-        // internal op id, so the completions stay distinguishable (B3 F1 fixed for this path)
+        // internal op id, so the completions stay distinguishable (the unique-id completion
+        // fix applies to this path)
         try (JuringFile fileA = JuringFile.open(ring, sourcePath, READ);
              JuringFile fileB = JuringFile.open(ring, sourcePath, READ);
              Arena arena = Arena.ofConfined()) {

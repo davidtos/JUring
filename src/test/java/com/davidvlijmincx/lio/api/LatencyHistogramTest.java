@@ -11,11 +11,11 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B5 §11 tests 8-11: {@link LatencyHistogram} exact statistics, brute-force percentile
+ * {@link LatencyHistogram} exact statistics, brute-force percentile
  * oracle, boundaries/clamping/merge/snapshot immutability, and allocation-free recording.
- * The bucket layout is the frozen one from design §2.2 as pinned by amendment A1.2.
+ * The bucket layout is the frozen one documented on {@link LatencyHistogram}.
  */
-class B5LatencyHistogramTest {
+class LatencyHistogramTest {
 
     private static final long MAX_NANOS = 0xFFFF_FFFFL;
     private static final long[] QUANTILES_NUM = {1L, 9L, 99L, 999L};
@@ -308,7 +308,7 @@ class B5LatencyHistogramTest {
         return rank - 1L;
     }
 
-    /** Inclusive maximum of the frozen A1.2 bucket that contains {@code value}. */
+    /** Inclusive maximum of the frozen bucket that contains {@code value}. */
     private static long bucketMaximum(long value) {
         if (value < 0L) {
             return 0L;

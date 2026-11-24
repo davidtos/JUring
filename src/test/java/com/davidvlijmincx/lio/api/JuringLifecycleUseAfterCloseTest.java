@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 use-after-close hardening: every public entry point that touches the native ring must
+ * Use-after-close hardening: every public entry point that touches the native ring must
  * throw {@link IllegalStateException} after close instead of dereferencing freed memory.
- * Regression test for the verifier's baseline SIGSEGV in {@code IoUringDispatcher.getSqe()}
+ * Regression test for the baseline SIGSEGV in {@code IoUringDispatcher.getSqe()}
  * ({@code JUring.prepareNop()} after {@code close()}).
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
@@ -137,7 +137,7 @@ class JuringLifecycleUseAfterCloseTest {
 
     @Test
     void prepareLinkTimeoutAfterRingCloseThrowsIllegalStateNotSegfault() {
-        // Verifier regression (hs_err pid6/42/46/80/116/274): prepareLinkTimeout's same-batch
+        // Regression (hs_err pid6/42/46/80/116/274): prepareLinkTimeout's same-batch
         // validation used to read the SQ ring through lastQueuedSqe() before checking closed,
         // SIGSEGV-ing on the unmapped SQ mmap. Every call now fails fast.
         JUring ring = new JUring(8, IORING_SETUP_SINGLE_ISSUER);

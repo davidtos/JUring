@@ -2,8 +2,7 @@ package com.davidvlijmincx.lio.api;
 
 /**
  * POSIX {@code posix_fadvise(2)} advice values, forwarded verbatim to the kernel by
- * {@link JuringFile#fadvise(FadviseAdvice, long, long)} (B6, see {@code docs/b6-design.md}
- * §2.1).
+ * {@link JuringFile#fadvise(FadviseAdvice, long, long)}.
  *
  * <p>The constants are the Linux {@code fadvise.h} advice values:
  * {@code NORMAL=0, RANDOM=1, SEQUENTIAL=2, WILLNEED=3, DONTNEED=4, NOREUSE=5}.

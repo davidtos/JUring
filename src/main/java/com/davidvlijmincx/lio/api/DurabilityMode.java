@@ -1,8 +1,8 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Durability mode of a {@link JuringFile} and of the B6 durability points on the buffered
- * streams / group commit (see {@code docs/b6-design.md} §2.2 and §3.1).
+ * Durability mode of a {@link JuringFile} and of the durability points on the buffered
+ * streams and group commit.
  *
  * <table>
  *   <caption>Durability semantics</caption>

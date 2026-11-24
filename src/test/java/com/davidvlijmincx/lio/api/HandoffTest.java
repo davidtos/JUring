@@ -12,12 +12,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.7/§12.8: cross-thread completion handoff (idle wake, FIFO, counters,
+ * Cross-thread completion handoff (idle wake, FIFO, counters,
  * completion→handoff continuation) and handoff overflow inline fallback (never blocks,
  * never drops).
  */
 @Timeout(value = 60, unit = TimeUnit.SECONDS)
-class B4HandoffTest {
+class HandoffTest {
 
     @Test
     void handoffWakesAnIdleTargetAndRunsOnItsThread() throws Exception {

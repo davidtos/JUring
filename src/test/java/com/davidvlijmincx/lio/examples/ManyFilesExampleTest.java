@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * by the calling thread; many {@link JuringFile} handles can live on that ring and the
  * application decides the batch. Each handle is opened and registered as a fixed-file
  * slot (the descriptor then costs no SQE field per operation), and the whole cross-file
- * batch is prepared with the raw {@link JUring} API and submitted once. Since B10a those handles can also be
+ * batch is prepared with the raw {@link JUring} API and submitted once. Those handles can also be
  * driven through their blocking helpers on the same ring — completions are routed to the
  * issuing handle — but this example deliberately keeps the batch at the raw
  * {@code prepare*} + ring-level reaping level to show the lowest-overhead batch submission;

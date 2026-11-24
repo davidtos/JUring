@@ -14,8 +14,6 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSU
  * <p>Instances are built either with {@link #defaults()} plus {@code with*} copy methods or,
  * for the default values, through the public constants. Every {@code with*} method returns
  * a new instance; validation failures are {@link IllegalArgumentException}s.
- *
- * <p>See {@code docs/b4-design.md} §2.1 for the frozen contract.
  */
 public final class ShardOptions {
 
@@ -33,7 +31,7 @@ public final class ShardOptions {
     public static final long DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 2000L;
     /** Sentinel for "no CPU affinity". */
     public static final int NO_CPU_AFFINITY = -1;
-    /** Default dispatch-latency sampling interval: {@code 0} = disabled (B5 design §2.4). */
+    /** Default dispatch-latency sampling interval: {@code 0} = disabled. */
     public static final int DEFAULT_LATENCY_SAMPLE_EVERY = 0;
 
     private static final IoUringOptions[] DEFAULT_RING_OPTIONS = {
@@ -185,7 +183,7 @@ public final class ShardOptions {
      * Dispatch-latency sampling interval: {@code 0} = disabled; {@code 1} = measure every
      * registered completion; {@code N >= 2} = measure every Nth successful
      * {@link ShardContext#onCompletion(long, CompletionHandler)} registration (deterministic,
-     * 1-based, per shard). See {@code docs/b5-design.md} §2.4/§4.
+     * 1-based, per shard).
      *
      * @return the sampling interval ({@code 0} = disabled)
      */

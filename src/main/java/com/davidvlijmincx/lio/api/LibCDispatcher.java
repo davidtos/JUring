@@ -53,7 +53,7 @@ final class LibCDispatcher {
     static final MethodHandle MH_SCHED_SETAFFINITY;
     static final MethodHandle MH_SCHED_GETCPU;
     /**
-     * B6: {@code posix_fadvise(2)}. The glibc wrapper returns the error number
+     * {@code posix_fadvise(2)}. The glibc wrapper returns the error number
      * <b>directly</b> ({@code 0} on success, a positive {@code errno} on failure), so this
      * downcall deliberately has no {@code captureCallState("errno")} option.
      */
@@ -159,7 +159,7 @@ final class LibCDispatcher {
                 Linker.Option.firstVariadicArg(2)
         );
 
-        // B4: best-effort CPU affinity for shard threads (probe scratch/b4-lead/AffinityProbe).
+        // Best-effort CPU affinity for shard threads.
         MH_SCHED_SETAFFINITY = linker.downcallHandle(
                 lookup.findOrThrow("sched_setaffinity"),
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS),
@@ -174,7 +174,7 @@ final class LibCDispatcher {
                 .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT)))
                 .orElse(null);
 
-        // B6: advisory page-cache hint; returns errno directly (no -1/errno convention, no
+        // Advisory page-cache hint; returns errno directly (no -1/errno convention, no
         // captureCallState) and needs no arena (all arguments are scalars).
         MH_POSIX_FADVISE = lookup.find("posix_fadvise")
                 .map(sym -> linker.downcallHandle(sym,
@@ -431,7 +431,7 @@ final class LibCDispatcher {
 
     /**
      * {@code sched_setaffinity(2)}. Returns the raw libc return code ({@code 0} on success,
-     * {@code -1} on failure); affinity is best effort in B4 and a failure is never fatal.
+     * {@code -1} on failure); affinity is best effort and a failure is never fatal.
      */
     int schedSetAffinity(int pid, long cpusetsize, MemorySegment mask) {
         try {

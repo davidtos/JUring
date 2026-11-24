@@ -18,17 +18,16 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Conformance tests for the B6 {@code posix_fadvise} support
- * ({@code docs/b6-design.md} §2.1, §2.3 and §7.1): enum constants and values, argument
- * validation, closed-handle errors, every advice on buffered and {@code O_DIRECT}
+ * Conformance tests for the {@code posix_fadvise} support: enum constants and values,
+ * argument validation, closed-handle errors, every advice on buffered and {@code O_DIRECT}
  * read-only/read-write files, the whole-file convenience overload, the "advisory only"
  * contract (no content/length/counter change) and the dispatcher's direct-errno
  * convention.
  *
- * <p>Stream-level {@code withFadvise} hints are covered by {@code B6StreamDurabilityTest}
- * (design §2.4/§2.5/§7.3); this class exercises the {@link JuringFile} layer itself.
+ * <p>Stream-level {@code withFadvise} hints are covered by {@code StreamDurabilityTest};
+ * this class exercises the {@link JuringFile} layer itself.
  */
-class B6FadviseTest {
+class FadviseTest {
 
     private static final int BLOCK = 4096;
 

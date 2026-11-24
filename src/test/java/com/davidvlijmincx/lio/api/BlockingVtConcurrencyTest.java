@@ -23,16 +23,16 @@ import static com.davidvlijmincx.lio.api.LinuxOpenOptions.RDWR;
 import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** B4 design §12.17 — virtual-thread concurrency on the group constructor. */
+/** Virtual-thread concurrency on the group constructor. */
 @Timeout(30)
-class B4BlockingVtConcurrencyTest {
+class BlockingVtConcurrencyTest {
 
     @TempDir
     Path tempDir;
 
     private static RingGroup newGroup() {
         return RingGroup.create(2, ShardOptions.defaults()
-                .withName("b4-blocking-vt")
+                .withName("blocking-vt")
                 .withRingEntries(64)
                 .withRingOptions(IORING_SETUP_SINGLE_ISSUER,
                         IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN));

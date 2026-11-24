@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B3 {@link JuringFile} cancellation contract: deterministic {@link JuringFile.CancelStatus}
+ * {@link JuringFile} cancellation contract: deterministic {@link JuringFile.CancelStatus}
  * matrix, await-after-cancel determinism, bulk {@code cancelAll()}, and counter consistency.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)

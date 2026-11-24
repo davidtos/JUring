@@ -1,7 +1,7 @@
 package com.davidvlijmincx.lio.api;
 
 /**
- * Immutable snapshot of one {@code io_uring} ring's counters and occupancy (B5).
+ * Immutable snapshot of one {@code io_uring} ring's counters and occupancy.
  *
  * <p>Counters count every SQE/CQE that passes through the ring, including runtime-internal
  * operations (for example the shard runtime's eventfd wakeup {@code READ} and the ring-wide
@@ -16,7 +16,7 @@ package com.davidvlijmincx.lio.api;
  * {@code 0} (the ring memory is unmapped) and {@code sqEntries}/{@code cqEntries} keep
  * their effective values.
  *
- * <p>Per the B5 design (amendment A1.1), {@code timedOut} counts reaped completions whose
+ * <p>{@code timedOut} counts reaped completions whose
  * result is {@code -ETIME (-62)} — the raw ring's io_uring timeout result — or
  * {@code -ETIMEDOUT (-110)} (defensive; the {@code JuringFile} mapping layer never reaches
  * raw ring metrics). {@code cancelled} counts {@code -ECANCELED (-125)}.

@@ -23,10 +23,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B10b tests: {@link IoPriority} encoding, ring/handle wiring into the SQE, and kernel
+ * {@link IoPriority} tests: encoding, ring/handle wiring into the SQE, and kernel
  * acceptance. No latency/throughput assertions are made: the host NVMe device runs the
- * {@code none} scheduler, where {@code ioprio} is accepted but has no ordering effect
- * (see {@code docs/b10-design.md}).
+ * {@code none} scheduler, where {@code ioprio} is accepted but has no ordering effect.
  */
 class IoPriorityTest {
 

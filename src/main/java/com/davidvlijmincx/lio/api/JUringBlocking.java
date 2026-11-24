@@ -315,7 +315,7 @@ public class JUringBlocking implements AutoCloseable {
         }
 
         // ------------------------------------------------------------------
-        // ShardBody seam (B4 §9): the tuned worker loop runs on the IoShard thread.
+        // ShardBody seam: the tuned worker loop runs on the IoShard thread.
         // ------------------------------------------------------------------
 
     /**
@@ -637,8 +637,8 @@ public class JUringBlocking implements AutoCloseable {
 
             runPendingControlTask();
 
-            // Bounded shutdown drain (B4 §9.4): cancel every in-flight request and dispatch
-            // the resulting completions so parked callers unblock. Unlike the pre-B4 loop this
+            // Bounded shutdown drain: cancel every in-flight request and dispatch
+            // the resulting completions so parked callers unblock. Unlike the earlier loop this
             // never blocks indefinitely on a cancellation completion that never arrives: the
             // drain is bounded by shutdownDeadlineNanos (set by JUringBlocking.close, or the
             // shard's shutdown budget) and uses non-blocking enters + short parks only.
@@ -1248,7 +1248,7 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     /**
-     * Adopts a caller-supplied, <b>unstarted</b> {@link RingGroup} (B4 §9.1): its shards become
+     * Adopts a caller-supplied, <b>unstarted</b> {@link RingGroup}: its shards become
      * the worker rings, {@code group.size()} is the worker/poller count and the group's CPU
      * pinning is inherited. Ownership transfers to this instance: {@link #close()} closes the
      * group.
@@ -2510,11 +2510,11 @@ public class JUringBlocking implements AutoCloseable {
     }
 
     /**
-     * Bounded, idempotent close (B4 §9.4): stops accepting new operations, cancels in-flight
+     * Bounded, idempotent close: stops accepting new operations, cancels in-flight
      * requests and dispatches the cancellations so parked callers unblock, then closes the
      * shard group against a shared deadline bounded by {@code timeoutMillis + 250 ms}. A
      * cancellation completion that never arrives is abandoned and counted by the ring's
-     * bounded close instead of blocking forever (fixes the B3 §4.5 residual hazard).
+     * bounded close instead of blocking forever.
      *
      * @param timeoutMillis graceful-shutdown budget in milliseconds ({@code >= 0})
      * @throws IllegalArgumentException when {@code timeoutMillis < 0}

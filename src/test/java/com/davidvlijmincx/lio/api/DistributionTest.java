@@ -13,11 +13,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.3: round-robin and hash distribution, stable {@code shardFor(key)},
+ * Round-robin and hash distribution, stable {@code shardFor(key)},
  * {@code floorMod} edge keys, single-shard group.
  */
 @Timeout(value = 30, unit = TimeUnit.SECONDS)
-class B4DistributionTest {
+class DistributionTest {
 
     @Test
     void roundRobinCoversAllShardsEvenly() {

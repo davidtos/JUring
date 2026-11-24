@@ -21,11 +21,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * B4 design §12.16/§12.20 — {@code new JUringBlocking(RingGroup)} parity with the existing
+ * {@code new JUringBlocking(RingGroup)} parity with the existing
  * constructors, ownership and constructor validation. Existing {@code JUringBlockingTest}
  * stays untouched.
  */
-class B4BlockingGroupConstructorTest {
+class BlockingGroupConstructorTest {
 
     private static final String CONTENT = "Hello, World!"; // 13 bytes
 
@@ -34,7 +34,7 @@ class B4BlockingGroupConstructorTest {
 
     private static RingGroup newGroup(int shards) {
         return RingGroup.create(shards, ShardOptions.defaults()
-                .withName("b4-blocking-group")
+                .withName("blocking-group")
                 .withRingEntries(64)
                 .withRingOptions(IORING_SETUP_SINGLE_ISSUER,
                         IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN));
@@ -66,7 +66,7 @@ class B4BlockingGroupConstructorTest {
             }
 
             try (FileDescriptor writeFd = new FileDescriptor(writePath, WRITE, 0)) {
-                byte[] payload = "B4 parity".getBytes(StandardCharsets.UTF_8);
+                byte[] payload = "parity ok".getBytes(StandardCharsets.UTF_8);
                 results[2] = blocking.write(writeFd, payload, 0);
                 assertEquals(payload.length, results[2]);
             }
@@ -75,7 +75,7 @@ class B4BlockingGroupConstructorTest {
                 try (FileDescriptor writeFd = new FileDescriptor(writePath, READ, 0)) {
                     results[3] = blocking.read(writeFd, buffer, 9, 0);
                 }
-                assertEquals("B4 parity", readString(buffer, results[3]));
+                assertEquals("parity ok", readString(buffer, results[3]));
             }
 
             assertEquals(0, blocking.registerFiles(readFd));
