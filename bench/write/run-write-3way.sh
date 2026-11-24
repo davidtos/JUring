@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bench/write/run-write-3way.sh -- pre-registered 3-way write rerun.
 #
-# Protocol: docs/write-state-3way-protocol.md (frozen before the first run).
+# Protocol: frozen options in this runner; see BENCHMARK.md, "The 2026-11-23 write rerun".
 # Frozen lineage: bench/host-setup/run-write-chain.sh gate campaign + the continuous
 # state-control variant.
 # Deviations, all pre-registered: 60/60 windows (bench/write/README.md allows the
@@ -60,15 +60,15 @@ else
     [[ -n "$(git status --porcelain 2>/dev/null | head -n1)" ]] && dirty=true
     {
         echo "# Pre-registered state-controlled write rerun, 3-way (continuous, 60/60)"
-        echo "# protocol: docs/write-state-3way-protocol.md"
+        echo "# protocol: frozen options in this runner (BENCHMARK.md, 'The 2026-11-23 write rerun')"
         echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "session=$S"
         echo "host=$(hostname) kernel=$(uname -r) user=$(id -un)"
         echo "git_head=$(git rev-parse HEAD 2>/dev/null || echo unknown) git_dirty=$dirty"
-        echo "protocol_sha256=$(sha256sum docs/write-state-3way-protocol.md | awk '{print $1}')"
         echo "harness_sha256:"
         sha256sum "$WRC" bench/write/precondition.sh bench/write/sample-device-iops.sh \
-            "$ANALYZER" "$ANALYZER3" bench/juring/run-juring.sh 2>/dev/null | sed 's/^/  /' || true
+            "$ANALYZER" "$ANALYZER3" bench/write/run-write-3way.sh \
+            bench/juring/run-juring.sh 2>/dev/null | sed 's/^/  /' || true
         echo "write_file=$(stat -c 'size=%s blocks=%b mtime=%y' -- "$WRITE_FILE" 2>/dev/null || echo missing)"
         echo "device_stat=$DEVICE_STAT allow_any_path=${ALLOW_ANY_PATH:-0}"
         echo "read_file=$(stat -c 'size=%s mtime=%y' -- "$READ_FILE" 2>/dev/null || echo missing)"

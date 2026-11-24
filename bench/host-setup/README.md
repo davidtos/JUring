@@ -1,6 +1,6 @@
 # Host-representativeness and write-state runs (bench/host-setup/)
 
-I wanted proof that the hugepage choice and the memlock limit don't change the read answer, and one more honest attempt at the write path. The numbers I quote are in [`BENCHMARK.md`](../../BENCHMARK.md); the protocol is in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md).
+I wanted proof that the hugepage choice and the memlock limit don't change the read answer, and one more honest attempt at the write path. The numbers I quote and the protocol are in [BENCHMARK.md](../../BENCHMARK.md#how-i-measured), and the `run-host-setup.sh` header records the run-specific steps.
 
 ### Identifiers
 

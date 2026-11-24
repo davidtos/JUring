@@ -2,7 +2,7 @@
 
 A ring is not much use if reading a file through it is slower than a buffered `InputStream`. So I built `JuringInputStream` and `JuringOutputStream` and compared them against Seastar's `fstream`. It also has two write-side protocols: a durability A/B with matched sync settings on both engines, and a JUring-only group-commit benchmark.
 
-The results are in [`BENCHMARK.md`](../../BENCHMARK.md); the protocol and statistics are in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md); the stream design is in [`docs/design-notes.md`](../../docs/design-notes.md).
+The results are in [`BENCHMARK.md`](../../BENCHMARK.md); the protocol and statistics are in its [How I measured](../../BENCHMARK.md#how-i-measured) section; the stream design is documented on [`JuringInputStream`](../../src/main/java/com/davidvlijmincx/lio/api/JuringInputStream.java) and [`JuringOutputStream`](../../src/main/java/com/davidvlijmincx/lio/api/JuringOutputStream.java).
 
 ### Identifiers
 
@@ -67,7 +67,7 @@ The driver refuses to start unless both datasets exist with the right permission
 
 What the comparison does not hide:
 
-1. The defaults are preliminary: three repetitions and 60 s rests, not the five repetitions and 300 s rests in the methodology. `manifest.txt` records the values used.
+1. The defaults are preliminary: three repetitions and 60 s rests, not the five repetitions and 300 s rests used for the final session. `manifest.txt` records the values used.
 2. The writable dataset is overwritten in place, exactly `dataset` bytes per pass, and its size never changes. Multi-file layouts are out of scope, and the 128 KiB and 1 MiB buffer sizes are reported separately.
 3. The buffered JUring row is exploratory only. It exists to quantify the `O_DIRECT` asymmetry, because Seastar's fstream is DMA here.
 4. No cache drop and no root. `O_DIRECT` on the primary rows makes that mostly moot, and the files are far larger than a 30 s working set.

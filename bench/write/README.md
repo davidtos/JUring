@@ -2,7 +2,7 @@
 
 The write path is the honest failure in this project. This is the harness I used: a matrix of 4 KiB random writes and 1 MiB sequential writes, with device preconditioning before every configuration and a 1 s device IOPS series during the run, so a run that crosses the SLC cliff is visible. The result is in [`BENCHMARK.md`](../../BENCHMARK.md#the-write-path-i-could-not-measure-fairly): no write-parity ranking, because the drive's state moves under the run. The follow-up state-controlled chain is in [`bench/host-setup/`](../host-setup/README.md) (`run-write-chain.sh` and `analyze_write_state.py`), and it also came out inconclusive.
 
-Everything writes to `nvme-data/write_files/single_file_bench_w.bin`; `/mnt/TestData` stays read-only. The protocol is in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md), and the decision to stop at inconclusive is in [`docs/design-notes.md`](../../docs/design-notes.md).
+Everything writes to `nvme-data/write_files/single_file_bench_w.bin`; `/mnt/TestData` stays read-only. The protocol is in [BENCHMARK.md](../../BENCHMARK.md#the-write-path-i-could-not-measure-fairly) and the per-configuration order below; the decision to stop at inconclusive is in the same section.
 
 A real matrix takes the NVMe for hours. Start with `--dry-run`, confirm it prints a plan instead of touching the device, and check that no other benchmark process is running; the preflight does that.
 
@@ -34,7 +34,7 @@ CLI values are `pass1`..`pass8`, the analyzer flag is `--passes`, and the state 
 | `analyze_write_steady.py` | separates sustained vs cache-assisted windows and reports the sustained-state comparison |
 | `create-write-file.sh` | create or verify the non-sparse 10 GiB `O_DIRECT` write file (`fallocate`, `dd oflag=direct`, fsync, `stat`, `filefrag`); idempotent, `--force`, `--dry-run` |
 | `precondition.sh` | the preconditioning burst: 4K random write at QD 64 in 4 GiB chunks until `3 x` file size, then fsync; records the pass and device state; `--condition and` reproduces the old rule; `--dry-run` |
-| `run-write-cells.sh` | the matrix for JUring and fio, Seastar opt-in: methodology windows, three repetitions by default, `--reps-by-cell`, `--resume`, `--dry-run` |
+| `run-write-cells.sh` | the matrix for JUring and fio, Seastar opt-in: protocol windows, three repetitions by default, `--reps-by-cell`, `--resume`, `--dry-run` |
 | `run-write-campaign.sh` | one-command driver for the full 130-run session in three blocks, with a recorded 300 s rest between blocks, preflight, `--resume` and `--dry-run` |
 | `sample-device-iops.sh` | 1 s series from `/sys/block/nvme1n1/stat` to TSV; backgrounded by the driver or run standalone |
 
@@ -107,7 +107,7 @@ slug is rejected. The workload tables below use plain descriptions.
 | Sequential write | 1 MiB | 8 | 60 / 60 s | 3 | JUring, fio io_uring, Seastar (bracket) |
 | Sequential write | 1 MiB | 32 | 60 / 60 s | 3 | JUring, fio io_uring, Seastar (bracket) |
 
-Seastar is a bracket, never a pass or fail. `fio-libaio` is available with `--fio-variants libaio` but is not in the default session. Warmups follow the methodology: the QD 16 to 128 random writes use 120 s, the others 60 s. `--warmup-sec N` overrides for a uniform 60/60 session; record the deviation in `notes.md`.
+Seastar is a bracket, never a pass or fail. `fio-libaio` is available with `--fio-variants libaio` but is not in the default session. Warmups follow the per-configuration protocol below: the QD 16 to 128 random writes use 120 s, the others 60 s. `--warmup-sec N` overrides for a uniform 60/60 session; record the deviation in `notes.md`.
 
 The per-configuration protocol:
 
@@ -120,7 +120,7 @@ Preconditioning defaults to per configuration. `--precondition session-once` cos
 
 ## State-controlled 3-way rerun (JUring / fio / Seastar)
 
-`bench/write/run-write-3way.sh` is the pre-registered continuous-state protocol behind the state-controlled write table in BENCHMARK.md: the two 4 KiB random-write cells (`randwrite-4k-qd64` and `randwrite-4k-qd128`), one preconditioned pass per attempt, no rests inside a pass, 60 s warmup + 60 s measured, JUring + `fio` matched/matchedbatch + Seastar, engine order rotated per pass, and stop as soon as four passes pass the frozen `analyze_write_state.py` gate. The protocol, the deviations and the validity/ranking rules are frozen in [docs/write-state-3way-protocol.md](../../docs/write-state-3way-protocol.md). The Seastar arm is opt-in in the generic harness, so the wrapper passes `--allow-seastar-write`; the write path is validated in [bench/seastar/build-and-run.md](../seastar/build-and-run.md).
+`bench/write/run-write-3way.sh` is the pre-registered continuous-state protocol behind the state-controlled write table in BENCHMARK.md: the two 4 KiB random-write cells (`randwrite-4k-qd64` and `randwrite-4k-qd128`), one preconditioned pass per attempt, no rests inside a pass, 60 s warmup + 60 s measured, JUring + `fio` matched/matchedbatch + Seastar, engine order rotated per pass, and stop as soon as four passes pass the frozen `analyze_write_state.py` gate. The protocol, the deviations and the validity/ranking rules are frozen in `run-write-3way.sh` and its analyzers; [BENCHMARK.md](../../BENCHMARK.md#the-2026-11-23-write-rerun-still-no-ranking) reports the result. The Seastar arm is opt-in in the generic harness, so the wrapper passes `--allow-seastar-write`; the write path is validated in [bench/seastar/build-and-run.md](../seastar/build-and-run.md).
 
 ```bash
 # zero-I/O structural check first
@@ -161,7 +161,7 @@ python3 bench/write/plot_write_modes.py --session "$S" --passes "$PASSES" \
 
 ### Interleaved fallback bracket
 
-When the drive cannot hold a pass homogeneous — the primary state-controlled campaign failed the gate in both completed passes — `bench/write/run-write-interleaved.sh` alternates the three engines in short cycles (15 s warmup + 30 s measured, 5 cycles per cell, order rotated) so all of them sample the same drifting state. It is a descriptive bracket, not a frozen-gate PASS/FAIL, and it is documented in [docs/write-state-interleaved-protocol.md](../../docs/write-state-interleaved-protocol.md). It runs 30 measured runs in about 24 minutes.
+When the drive cannot hold a pass homogeneous — the primary state-controlled campaign failed the gate in both completed passes — `bench/write/run-write-interleaved.sh` alternates the three engines in short cycles (15 s warmup + 30 s measured, 5 cycles per cell, order rotated) so all of them sample the same drifting state. It is a descriptive bracket, not a frozen-gate PASS/FAIL, and its fixed options are in the runner's header; [BENCHMARK.md](../../BENCHMARK.md#the-2026-11-23-write-rerun-still-no-ranking) reports the result. It runs 30 measured runs in about 24 minutes.
 
 ```bash
 bash bench/write/run-write-interleaved.sh --dry-run   # zero-I/O plan check

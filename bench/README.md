@@ -2,7 +2,7 @@
 
 The harness tables in [BENCHMARK.md](../BENCHMARK.md) come from this directory. The harness drives JUring, `fio` and Seastar through the same workloads on the same file, records the raw output of every repetition, and the analyzers rebuild those tables from it. If you want to check a claim, this is where you start.
 
-I keep three things separate. The measuring rules are in [docs/benchmark-methodology.md](../docs/benchmark-methodology.md). The decisions about what I chose not to build are in [docs/design-notes.md](../docs/design-notes.md). What is and isn't committed is in [DATA-AVAILABILITY.md](../DATA-AVAILABILITY.md). The 2026-11-23 sanity check of the `fio` and Seastar invocations — what was verified, what was broken in the one-command driver, and what changed — is in [docs/benchmark-harness-audit-2026-11-23.md](../docs/benchmark-harness-audit-2026-11-23.md).
+The measuring rules, the device-state caveats and the statistics are in [BENCHMARK.md](../BENCHMARK.md); the analyzers in this directory implement them. The decisions about what I chose not to build are summarized in [Limitations](../README.md#limitations). Raw sessions are not committed: every session writes a manifest with the host, command line and hashes, and the tables can be rebuilt from a session directory.
 
 ## Identifiers
 
@@ -68,7 +68,7 @@ If `RLIMIT_MEMLOCK` is small, the fixed-buffer path is unavailable and the JUrin
 --ioengine=io_uring --direct=1 --registerfiles=1 --fixedbufs=1
 ```
 
-fio can't set JUring's three ring flags or fuse submit and wait, so this is a capability comparison, not an equal-config race. BENCHMARK.md also reports a batching sweep (`--iodepth_batch_submit=1,8,16,32`), a libaio reference and a `--sqthread_poll=1` bracket, so you can see how sensitive the reference is to its configuration. The exact commands are in [docs/benchmark-methodology.md](../docs/benchmark-methodology.md).
+fio can't set JUring's three ring flags or fuse submit and wait, so this is a capability comparison, not an equal-config race. BENCHMARK.md also reports a batching sweep (`--iodepth_batch_submit=1,8,16,32`), a libaio reference and a `--sqthread_poll=1` bracket, so you can see how sensitive the reference is to its configuration. The exact commands are in the runner scripts under [`bench/read-write/`](read-write/) and in [BENCHMARK.md](../BENCHMARK.md#how-to-reproduce).
 
 ### Seastar
 
@@ -94,7 +94,7 @@ The cases the driver runs:
 
 ## Where results go
 
-`bench/results/` is gitignored. It holds the session directories behind the published tables: per-repetition JSON and YAML, per-run metadata, manifests, device series, logs and aggregates. The directory is not committed because the files are large and specific to this host. [DATA-AVAILABILITY.md](../DATA-AVAILABILITY.md) explains what the release archive contains.
+`bench/results/` is gitignored. It holds the session directories behind the published tables: per-repetition JSON and YAML, per-run metadata, manifests, device series, logs and aggregates. The directory is not committed because the files are large and specific to this host. Each session's manifest records the host, command line and hashes; [BENCHMARK.md](../BENCHMARK.md) explains what is committed and what the numbers cover.
 
 `run-comparison.sh` defaults to `./bench-results`; set `RESULTS_DIR=bench/results/<name>` to keep a run next to the existing sessions. The per-harness drivers write under `bench/results/<session>/`; `bench/write/` takes the session directory as an argument instead.
 
@@ -109,7 +109,7 @@ The CSV columns are `case, engine, workload, bs, qd, threads, iops, mibs, p50_us
 
 ## Analyzers
 
-The analyzers are thin CLIs: each one owns its campaign's policy — which cells, which bar, which verdict — and writes the tables BENCHMARK.md cites. What more than one needs lives in `bench/analysis/`: `cells.py` (the cell/pass identifier map), `stats.py` (Student-t intervals, paired ratios, gate verdicts), `jsonio.py` (tolerant cell-JSON and manifest loading), `md.py` (the number and markdown formats) and `cli.py` (session resolution and output writing). The package docstring explains the two statistics conventions it keeps side by side on purpose, because the published tables were produced with each. The write campaign's state-controlled 3-way rerun has its own runner, `bench/write/run-write-3way.sh`, and analyzer, `bench/write/analyze_write_3way.py`, with the pre-registered protocol in [docs/write-state-3way-protocol.md](../docs/write-state-3way-protocol.md); the interleaved fallback used when a pass will not hold homogeneous is `bench/write/run-write-interleaved.sh` with `bench/write/analyze_write_interleaved.py` and [docs/write-state-interleaved-protocol.md](../docs/write-state-interleaved-protocol.md). The figures embedded in README.md and BENCHMARK.md are generated from the same sessions by `bench/write/plot_write_modes.py` and `bench/read-write/plot_read_claims.py`, using the shared SVG primitives in `bench/analysis/svg.py`.
+The analyzers are thin CLIs: each one owns its campaign's policy — which cells, which bar, which verdict — and writes the tables BENCHMARK.md cites. What more than one needs lives in `bench/analysis/`: `cells.py` (the cell/pass identifier map), `stats.py` (Student-t intervals, paired ratios, gate verdicts), `jsonio.py` (tolerant cell-JSON and manifest loading), `md.py` (the number and markdown formats) and `cli.py` (session resolution and output writing). The package docstring explains the two statistics conventions it keeps side by side on purpose, because the published tables were produced with each. The write campaign's state-controlled 3-way rerun has its own runner, `bench/write/run-write-3way.sh`, and analyzer, `bench/write/analyze_write_3way.py`, with the frozen options and gates in the runner and analyzer; the interleaved fallback used when a pass will not hold homogeneous is `bench/write/run-write-interleaved.sh` with `bench/write/analyze_write_interleaved.py`. [bench/write/README.md](write/README.md) documents both campaigns, and [BENCHMARK.md](../BENCHMARK.md#the-2026-11-23-write-rerun-still-no-ranking) reports the results. The figures embedded in README.md and BENCHMARK.md are generated from the same sessions by `bench/write/plot_write_modes.py` and `bench/read-write/plot_read_claims.py`, using the shared SVG primitives in `bench/analysis/svg.py`.
 
 `selftest.py` is the regression harness for that package and the analyzers:
 ```bash

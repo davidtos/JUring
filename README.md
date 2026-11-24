@@ -3,32 +3,44 @@
 **Asynchronous file I/O for Java, directly on Linux `io_uring`.**
 
 [![CI](https://github.com/davidtos/JUring/actions/workflows/ci.yml/badge.svg)](https://github.com/davidtos/JUring/actions/workflows/ci.yml)
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.davidtos/juring.svg)](https://central.sonatype.com/artifact/io.github.davidtos/juring)
 ![Java 25+](https://img.shields.io/badge/Java-25%2B-orange)
 ![Linux](https://img.shields.io/badge/platform-Linux-important)
 ![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-Java's file I/O is still synchronous. A read on a local file ends in a syscall that
-keeps the thread inside the kernel until the disk answers, so keeping fast storage
-busy costs you many threads. Virtual threads don't fix it either. When a Virtual thread
-blocks in a file syscall it stays mounted on its carrier, and in the background it quietly grows the
-carrier pool to compensate.
+JUring is a Java library for asynchronous file I/O on Linux, built directly on
+`io_uring`. It gives you a raw ring, a file API, bounded-memory streams, group commit
+and a blocking facade for virtual threads, with no JNI, no C glue, no `liburing`, and
+no runtime dependencies beyond the JDK.
 
-I built JUring to get around that. It drives Linux's `io_uring` from Java with
-the Foreign Function & Memory API: no JNI, no C glue, no `liburing`, and no (runtime)
-dependencies beyond the JDK.
+Java's main file API, `FileChannel`, is blocking. A read on a local file keeps the
+thread inside the kernel until the disk answers, so keeping fast storage busy costs
+you threads. `AsynchronousFileChannel` moves that blocking work to a thread pool, and
+virtual threads still pin their carrier in a file syscall. `io_uring` fixes the
+kernel side: user space and the kernel share submission and completion queues, so one
+thread can keep many operations in flight and reap them in batches.
 
-One ring reaches about **412,000 4 KiB random reads per second** on a consumer NVMe
-with 128 requests in flight. That's roughly 21% more than `fio` and 5% more than
-Seastar on the same machine, and it uses about a quarter fewer CPU cycles per request at
-64 requests in flight.
+I built JUring to get that interface into Java without the usual native layer. The
+rings are mapped with the Foreign Function & Memory API and driven through `VarHandle`
+accesses. On one consumer NVMe, a single ring reached **412,000 4 KiB random reads per
+second** with 128 requests in flight: about 21% ahead of `fio` and 5% ahead of Seastar,
+with about a quarter fewer CPU cycles per request at 64 in flight.
 
-If you run a Java app that spends a lot of its time waiting on `read()` or `write()`. This library could help you get some better performance out of it.
+**Status:** 0.1.0. Pre-1.0, so the API can still change. Linux only; JDK 25+; the fast
+path targets kernel 6.1+.
+
+**Use it if** you have file I/O on local NVMe that can keep more than one request in
+flight, or many virtual threads doing file I/O and you want to avoid pinning carriers.
+**Don't use it if** you need a drop-in `FileChannel` replacement, Windows or macOS, or
+1.0 API stability.
 
 ## Why I built it
-Like any other Java dev, I like virtual threads, but there is one thing they can't do, and it's unmounting on file I/O. So a virtual thread blocked on a read stays stuck on its carrier. The kernel already has an interface to fix this `io_uring`. User space and the kernel share two queues, one for submissions and one for completions, so a single thread can keep many operations in flight and reap finished ones in batches.
 
-The problem was how to use it from Java without much overhead. So I mapped the rings into Java, wrote the
-submission and completion paths with `VarHandle`s, and kept tweaking it to the library its today.
+I wanted to know whether `io_uring` could be driven from Java without JNI, a C shim, or
+`liburing`. The FFM API made that possible: mapped rings, `VarHandle` accesses, and a
+downcall for `io_uring_enter`. The first version was a raw ring; the rest of the
+library grew from what a real file API needs, like registered files and buffers,
+bounded streams, and a blocking facade that doesn't pin virtual threads.
 
 ## What's in it
 
@@ -47,18 +59,7 @@ Everything lives in `com.davidvlijmincx.lio.api`, exported by the `JUring` modul
 
 ## Install
 
-0.1.0 is the current version, but it isn't on Maven Central yet. Build it from source
-for now:
-
-```sh
-git clone https://github.com/davidtos/JUring.git
-cd JUring
-mvn install
-```
-
-A machine without io_uring can still build the library with `mvn -DskipTests package`.
-
-Once the release is published, the dependency will be:
+0.1.0 is on Maven Central.
 
 ```xml
 <dependency>
@@ -67,6 +68,25 @@ Once the release is published, the dependency will be:
     <version>0.1.0</version>
 </dependency>
 ```
+
+Gradle:
+
+```groovy
+implementation("io.github.davidtos:juring:0.1.0")
+```
+
+You need Linux with `io_uring` enabled, JDK 25 or newer, and `RLIMIT_MEMLOCK` headroom
+if you want the registered-buffer path.
+
+To build from source:
+
+```sh
+git clone https://github.com/davidtos/JUring.git
+cd JUring
+mvn install
+```
+
+A machine without `io_uring` can still build the library with `mvn -DskipTests package`.
 
 ## Quick start
 
@@ -140,15 +160,23 @@ public class VirtualThreadReads {
 Both snippets read a file named `data.bin` with `O_DIRECT`. Create one of at least 4 MB
 on a filesystem that supports direct I/O, for example `fallocate -l 4M data.bin`.
 
-## Performance
-The benchmark ran with a fresh process per repetition, five repetitions, 10s warmup, and
-30s measured, engines interleaved with their order rotated per repetition, on an
-aged 10 GiB file opened with `O_DIRECT`. The write block below is from a second,
-near-empty NVMe of the same model. A 400 GB steady-state burn-in, then 60 s warmup + 60 s measured continuous passes. The 1 MiB sequential, stream, shard, and group-commit rows are the 0.1.0 measurements. The host is an AMD Ryzen 9 3950X with a 1 TB PCIe 4.0 NVMe, Fedora 44, kernel 7.0.12, OpenJDK 26.
+## Correctness
 
-The comparison points are `fio` (its io_uring engine, configured with the same
-registered files and fixed buffers) and Seastar, a mature C++ storage framework. Its
-io_uring reactor is a great piece of battle-tested engineering. 
+The correctness story matters more than the throughput story. The suite has 489 tests
+across 67 test classes: conformance against `java.nio`, lifecycle and use-after-close,
+cancellation, timeouts, registered-buffer lifetimes, bounded stream memory, zero
+allocation, and per-handle completion routing. A jcstress profile models the wake
+path's store/load orderings; CI runs the suite on JDK 25 and 26 and checks Javadoc with
+doclint. The details, including what the tests do not prove, are in [TESTING.md](TESTING.md).
+
+## Performance
+
+These are single-host numbers: AMD Ryzen 9 3950X, 1 TB PCIe 4.0 NVMe, Fedora 44,
+kernel 7.0.12, OpenJDK 26. Reads use a 10 GiB aged file opened with `O_DIRECT`; writes
+use a second, near-empty NVMe of the same model. Each read row is five repetitions in
+a fresh process, with the engine order rotated. `fio` runs its `io_uring` engine with
+registration matched; Seastar is a mature C++ storage framework with a battle-tested
+`io_uring` reactor.
 
 | Workload                             | JUring      | fio matched (io_uring) | Seastar     | Result                                                                   |
 |--------------------------------------|-------------|------------------------|-------------|--------------------------------------------------------------------------|
@@ -159,102 +187,44 @@ io_uring reactor is a great piece of battle-tested engineering.
 | 8 rings, 4 KiB random read           | 473k IOPS   | 459k IOPS              | 466k IOPS   | 1.48× its own one-shard baseline (321k), within ~3% of both              |
 | Durable 4 KiB writes, batches of 128 | 721 MiB/s   | -                      | -           | one `fdatasync` per batch, verified                                      |
 
-The first two rows are the interesting ones, and the honest reading is narrower
-than the raw IOPS gap suggests. At 64 requests in flight, JUring is about 5% ahead
-of `fio` and level with Seastar: the 90% CI of the JUring/fio ratio is
-`[1.019, 1.089]` and JUring/Seastar is `[0.980, 1.031]`. At 128 it pulls further
-ahead: about 21% over `fio` (`[1.159, 1.252]`) and about 5% over Seastar
-(`[1.035, 1.073]`). The gap isn't magic. `fio` doesn't set the same flags as JUring's or does
-fuse submissions, so this is a capability comparison, not an equal-config race;
-Seastar's io_uring reactor has no taskrun flags and no registration, so it is a
-bracket as well. The idea being that each contender should go all out on performance.
+The first two rows are the headline. At 64 in flight JUring is about 5% ahead
+of `fio` and level with Seastar; at 128 it is about 21% ahead of `fio` and 5% ahead of
+Seastar. QD 1 is parity: one request is one round trip for every engine (see the
+[queue-depth sweep](BENCHMARK.md#queue-depth-sweep)). `fio` cannot
+set JUring's three ring flags or batch submissions the way JUring does, and Seastar
+cannot set the taskrun flags or use registered files and buffers, so these are
+capability comparisons, not equal-config races. The full intervals and per-run data are
+in [BENCHMARK.md](BENCHMARK.md).
 
 ![4 KiB random read throughput: JUring vs fio vs Seastar at QD 64 and QD 128](docs/figures/read-throughput.svg)
 
 *JUring leads fio at both depths and is level with Seastar at QD 64.*
 
-![Paired read ratios with 90% confidence intervals against the ±5% parity band](docs/figures/read-ratios.svg)
-
-*The paired ratios are the sharper view: at QD 128 JUring/fio sits entirely above the
-±5% parity band, while the QD 64 intervals and both Seastar intervals overlap it.*
-
 At 64 in flight, `perf` puts JUring at **11.3k CPU cycles per operation** against
-15.2k for `fio`, with **0.33 syscalls per operation** against 1.01. That's consistent with one `io_uring_enter` doing a batch instead of one
-enter per request.
+15.2k for `fio`, with **0.33 syscalls per operation** against 1.01: one
+`io_uring_enter` doing a batch instead of one per request. The trade-off is tail
+latency. At QD 128 JUring's p99 is about 919 µs against 714 µs for `fio`, even though
+its median is lower. The dedicated tail run and the p999 numbers are in
+[BENCHMARK.md](BENCHMARK.md).
 
-Queue depth 1 is the honest check. One request is one round trip for everyone, and
-all three engines land around 11k IOPS. Async I/O buys queue depth. It does not make
-a single request faster.
+### Writes
 
-Tail latency from the same run, at 64 in flight: p99 is 513 µs for JUring, 490 µs
-for `fio`, and 483 µs for Seastar; at 128 in flight they are 919, 714, and 814 µs.
-JUring has the lowest median at both depths, but its QD 128 p99 is about 29% above
-`fio`'s. The dedicated 120s tail-latency run behind the p999 numbers was not repeated, so its p99 values in BENCHMARK.md differ from these.
-
-![4 KiB random read latency: p50 and p99 for JUring, fio and Seastar](docs/figures/read-latency.svg)
-
-*Mean of the per-repetition percentiles from the same rerun. JUring has the lowest
-median at both queue depths; its QD 128 p99 is higher than fio's.*
-
-### Write throughput
-
-The short version: in the drive's sustained state all three engines perform the same
-within a few percent; it is the hardware that makes a finer ranking difficult. I ran the comparison on a second, almost empty NVME of the same model (6% used), because the main drive's 81% fill made its write state unusable. After a 400 GiB steady-state burn-in, five passes ran back-to-back (60 s warmup + 60 s measured each), with the engine order rotated between passes.
-
-| 4 KiB random write | JUring                   | fio matched (io_uring)   | Seastar                  |
-|--------------------|--------------------------|--------------------------|--------------------------|
-| QD 64, sustained   | 193.8k ± 3.9k IOPS (n=3) | 198.2k IOPS (n=1)        | 195.1k ± 1.0k IOPS (n=3) |
-| QD 128, sustained  | 192.3k ± 1.3k IOPS (n=3) | 198.6k ± 2.4k IOPS (n=2) | 195.0k ± 0.4k IOPS (n=3) |
-
-![Sustained 4 KiB write throughput for JUring, fio and Seastar](docs/figures/write-steady-parity.svg)
-
-*Sustained-state means with 95% confidence intervals on the near-empty second NVMe.
-The shaded band is the drive's sustained ceiling; all three engines sit inside it.*
-
-The drive also has a cache-assisted mode: it intermittently absorbs writes into its
-SLC cache, lifting any engine above the sustained ceiling. That mode is the drive's,
-not the engine's. A probe on this drive, the same `fio` command,
-`--iodepth_batch_submit` from 1 to 128, run twice flipped between 220k and 320k
-These runs are are excluded from the sustained comparison and not
-used for ranking; every run is listed in BENCHMARK.md.
-
-![Write throughput by measurement start time against the drive's sustained and cache-assisted bands](docs/figures/write-operating-modes.svg)
-
-Columns are the five consecutive passes, labelled by start time. Each point is one
-60 s measured window (QD 64 left, QD 128 right). Every engine moves between the same two
-bands; both bands are the drive's, so the fast windows are not used for ranking. 
-
-The benchmarking somewhat shows that on this NVME all three engines reach the same 192–199k IOPS sustained ceiling on this drive, and that the higher windows are cache-assisted on all three. Full per-run data, the probe, and the mode analysis are in
-[BENCHMARK.md](BENCHMARK.md#second-drive-steady-state-run-2026-11-23).
+On the test drive, all three engines converge at ~192–199k IOPS in the sustained
+state. The faster windows are the drive's SLC cache, not an engine difference, so I
+don't rank writes. The 400 GiB burn-in, the cache-mode probe and the per-run table are
+in [BENCHMARK.md](BENCHMARK.md#second-drive-steady-state-run-2026-11-23).
 
 ### Virtual threads
 
-The interesting part of `JUringBlocking` is what it does to thread counts. Callers
-write ordinary blocking calls, while a small number of platform poller threads submit
-requests and unpark the virtual threads when completions arrive.
+With Loom's default carrier pool, `FileChannel` already saturates the device:
+`FileChannel` did about 445k ops/s and `JUringBlocking` 441k. With a four-platform-thread
+budget the gap opens. `FileChannel` managed about 43k ops/s from four carriers, while
+`JUringBlocking` reached about 452k ops/s from two carriers and two pollers: the same
+throughput `FileChannel` needed roughly 250 carriers for. The JMH caveats are in
+[BENCHMARK.md](BENCHMARK.md#same-platform-thread-budget).
 
-With Loom's default carrier pool, `FileChannel` already hits the ceiling of the device: in a 250-virtual-thread run. `FileChannel` did about 445k operations per second and
-`JUringBlocking` 441k. With a four platform thread budget, the gap opens. In the
-JMH run, `FileChannel` managed about 43k ops/s from four carriers, while
-`JUringBlocking` reached about 452k ops/s from two carriers and two pollers. That's four threads doing the same work as 250 platform threads.
-
-### What the numbers don't say
-Two things you should know before quoting these numbers. First, `fio` doesn't set
-JUring's ring flags (`SINGLE_ISSUER`, `COOP_TASKRUN`, `DEFER_TASKRUN`) or fuse
-submissions, so the read comparison is a capability comparison, not an equal-config
-race. Second, this is one host and one consumer NVMe. Absolute IOPS depend on drive
-state, so treat the numbers as evidence, not a specification.
-
-The write path is still not ranked, and the second-drive run shows why. The main
-drive was 81% full and could not keep its write state stable for a whole pass. On
-the near-empty same-model drive, all three engines settle at ~192–199k IOPS, and
-all three also show cache-assisted windows. A controlled probe ran the same `fio`
-command with `--iodepth_batch_submit` from 1 to 128 and flipped between 220k and
-320k independently of batch size, so those fast windows are the drive's
-write-cache/GC mode, not a `fio` configuration advantage.
-
-Full tables:
-[BENCHMARK.md](BENCHMARK.md)
+The harness and analyzers are under [`bench/`](bench/README.md); the raw per-repetition
+JSON is produced there, and every harness table is rebuilt from it.
 
 ## How it works
 
@@ -262,9 +232,7 @@ Full tables:
   into a mapping. JUring maps it with `mmap` and touches submission and completion
   entries through `VarHandle` accesses. The kernel reads and writes the same cache
   lines, so publishing the submission tail and consuming the completion head need
-  the right fences; the jcstress profile models those store/load orderings and
-  drives the real MPSC handoff queue, while the live ring path is covered by the
-  concurrency and integration tests.
+  the right fences.
 - **One syscall per batch.** Requests are prepared into the submission queue, then a
   single `io_uring_enter` submits the batch and reaps completions. The fast path uses
   `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN`, which keeps the kernel from waking
@@ -278,40 +246,29 @@ Full tables:
 - **Virtual threads park, carriers stay free.** `JUringBlocking` parks callers while
   their request is in flight and never creates extra platform threads.
 
-## How I test it
+## Limitations
 
-The correctness story matters more than the throughput story, because a fast I/O
-library that corrupts one completion is worse than a slow one. The suite has 489
-tests across 67 test classes: conformance against `java.nio`, lifecycle and
-use-after-close, cancellation, timeouts, registered-buffer lifetimes, bounded stream
-memory, zero allocation, and per-handle completion routing. A separate jcstress
-profile models the store/load orderings the wake path relies on publish/consume
-fences and slot handoff and drives the real package-private `MpscQueue` through
-concurrent offers and a single consumer. The live poller/park wake path itself is
-covered by concurrency integration tests, not jcstress: `HandoffTest` wakes an idle
-shard through its inbound queue, and `BlockingVtConcurrencyTest` and
-`JUringBlockingScaleTest` run 128 and 10,000 virtual threads respectively through
-concurrent `JUringBlocking` calls (park/unpark against the pollers, with no lost
-wakeups). CI builds and runs the suite on JDK 25 and 26, checks Javadoc with
-doclint, and verifies the release artifacts.
-
-The benchmark side is built the same way. A harness under `bench/` drives `fio`,
-Seastar, and JUring through the same workloads, records raw JSON per repetition, and
-analyzes paired ratios with confidence intervals.
-
-## What it doesn't do
-
-I left QoS and fair queuing out on purpose. If you need priorities, partition work across separate rings or shards, or use `io.weight` and `ionice`. The `IoPriority` hint is passed through to the block layer, where it's only as good as the configured scheduler.
+- **Linux only.** The fast path targets kernel 6.1+.
+- **`io_uring` must be available.** Some container seccomp profiles and
+  `kernel.io_uring_disabled` settings block it.
+- **Registered buffers need `RLIMIT_MEMLOCK` headroom.** Without it, the
+  registered-buffer path is unavailable; the benchmark harness falls back to
+  unregistered arena buffers.
+- **Not a drop-in `FileChannel` replacement.** You opt into JUring's API; existing
+  `FileChannel` code keeps its current behavior.
+- **No write ranking.** On the test drive all three engines converge at the same
+  sustained write ceiling; the faster windows are the drive's cache, not an engine
+  difference. See [BENCHMARK.md](BENCHMARK.md).
+- **No QoS or fair queuing.** If you need priorities, partition work across separate
+  rings or shards, or use `io.weight` and `ionice`. The `IoPriority` hint is passed
+  through to the block layer, where it's only as good as the configured scheduler.
+- **0.1.0 is pre-1.0.** The API can still change.
 
 ## About me
 
 I'm David Vlijmincx, an Oracle ACE who writes about Java performance and concurrency at
-[davidvlijmincx.com](https://davidvlijmincx.com). I speak at conferences and build JVM
-systems projects in the open. JUring started as a way to understand `io_uring` from
-the inside.
-
-If your team builds storage infrastructure or works close to the JVM and you're
-hiring, I'd be glad to talk. Reach me on
+[davidvlijmincx.com](https://davidvlijmincx.com). JUring started as a way to understand
+`io_uring` from the inside. Reach me on
 [LinkedIn](https://www.linkedin.com/in/david-vlijmincx/) or
 [@davidtos](https://github.com/davidtos) on GitHub.
 

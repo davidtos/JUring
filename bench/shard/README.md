@@ -2,7 +2,7 @@
 
 One ring on one thread has a ceiling. I measured whether sharding work across rings scales cleanly, on the same workload, against `fio numjobs=N` and Seastar `--smp N`. It also measures what the per-ring metrics cost when you turn them on, in a paired A/B of the same code with metrics enabled and disabled.
 
-The results I trust are in [`BENCHMARK.md`](../../BENCHMARK.md#multi-ring-scale-out). The protocol and statistics are in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md), and the decision not to build a shard runtime with work stealing or QoS is in [`docs/design-notes.md`](../../docs/design-notes.md).
+The results I trust are in [`BENCHMARK.md`](../../BENCHMARK.md#multi-ring-scale-out). The protocol and statistics are in its [How I measured](../../BENCHMARK.md#how-i-measured) section. The shard runtime deliberately stops at static sharding: no work stealing and no QoS scheduler; the QoS reasoning is in [Limitations](../../README.md#limitations).
 
 ### Identifiers
 

@@ -26,8 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Scale evidence for the blocking facade: {@code juring.scale.vt} virtual threads (10,000 by
  * default) all block in one {@link JUringBlocking} at the same time against a pre-sized record
- * pool, so roughly half of them take the admission saturation path. Every call must complete
- * with the expected result and no lost wakeups.
+ * pool. Every call must complete with the expected result and no lost wakeups.
+ *
+ * <p>The admission saturation path itself is covered deterministically by
+ * {@link JUringBlockingAdmissionTest}; this test is about scale and resource release.
  *
  * <p>The committed suite runs the default 10,000. The 1,000,000-thread run is opt-in (it needs
  * a large heap and a few minutes):
@@ -55,9 +57,8 @@ class JUringBlockingScaleTest {
 
         int pollers = POLLERS > 0 ? POLLERS : Math.max(1, Math.min(4, Integer.highestOneBit(
                 Math.max(1, Runtime.getRuntime().availableProcessors() / 4))));
-        // By default deliberately small: every virtual thread except the first few thousand must
-        // take the admission saturation path (the "more callers than records" case). An explicit
-        // budget sizes the pool for direct admission instead.
+        // A small pool relative to the thread count: the scale run should have far more callers
+        // than records. An explicit budget is a diagnostic configuration.
         int budget = BUDGET > 0 ? BUDGET : pollers * 256;
         BlockingOptions options = BlockingOptions.defaults()
                 .withQueueDepth(256)
@@ -91,12 +92,6 @@ class JUringBlockingScaleTest {
             for (Future<Long> future : futures) {
                 assertEquals(8L, future.get(300, TimeUnit.SECONDS),
                         "every blocked call must complete");
-            }
-            if (BUDGET == 0) {
-                // The default deliberately-small pool must exercise the admission path; an
-                // explicit budget is a diagnostic configuration and may not need to wait.
-                assertTrue(io.overflowWaits() > 0,
-                        "the run must exercise the admission saturation path");
             }
             System.out.printf("JUringBlockingScaleTest: overflowWaits=%d, parkedCallers=%d%n",
                     io.overflowWaits(), io.parkedCallers());

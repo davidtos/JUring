@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bench/write/run-write-interleaved.sh -- interleaved write bracket (fallback).
 #
-# Protocol: docs/write-state-interleaved-protocol.md (fixed before the run).
+# Protocol: fixed options in this runner; see BENCHMARK.md, "The 2026-11-23 write rerun".
 # Why: the primary state-controlled 3-way campaign failed its homogeneity gate
 # in both completed passes on this drive, so this bracket alternates the
 # engines in short cycles instead of claiming a single homogeneous state.
@@ -57,15 +57,15 @@ dirty=false
 [[ -n "$(git status --porcelain 2>/dev/null | head -n1)" ]] && dirty=true
 {
     echo "# Interleaved write bracket (fallback), protocol fixed before the run"
-    echo "# protocol: docs/write-state-interleaved-protocol.md"
+    echo "# protocol: fixed options in this runner (BENCHMARK.md, 'The 2026-11-23 write rerun')"
     echo "started_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "session=$S"
     echo "host=$(hostname) kernel=$(uname -r) user=$(id -un)"
     echo "git_head=$(git rev-parse HEAD 2>/dev/null || echo unknown) git_dirty=$dirty"
-    echo "protocol_sha256=$(sha256sum docs/write-state-interleaved-protocol.md | awk '{print $1}')"
     echo "harness_sha256:"
     sha256sum "$WRC" bench/write/precondition.sh bench/write/sample-device-iops.sh \
-        "$ANALYZER" bench/juring/run-juring.sh 2>/dev/null | sed 's/^/  /' || true
+        "$ANALYZER" bench/write/run-write-interleaved.sh \
+        bench/juring/run-juring.sh 2>/dev/null | sed 's/^/  /' || true
     echo "write_file=$(stat -c 'size=%s blocks=%b mtime=%y' -- "$WRITE_FILE" 2>/dev/null || echo missing)"
     echo "device_stat=$DEVICE_STAT allow_any_path=${ALLOW_ANY_PATH:-0}"
     echo "governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)"
