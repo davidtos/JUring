@@ -7,8 +7,7 @@ the JVM at once, then argue about which part moved. So I split the comparison in
 never mix them in one table.
 
 I froze this design on 2026-11-13, against JUring `4526338` (branch `kafka-engine`) and Seastar
-`04b1c04d` (`seastar-25.05.0-1392-g04b1c04d`, read-only clone at
-`/home/david/projects/seastar`).
+`04b1c04d` (`seastar-25.05.0-1392-g04b1c04d`, read-only clone at a local checkout).
 
 ## The machine and the data
 
@@ -161,7 +160,7 @@ directory is not XFS; on ext4 that warning is expected and recorded, not "fixed"
 Build and run template for the host:
 
 ```bash
-cd /home/david/projects/seastar
+cd /path/to/seastar
 ./configure.py --mode=release --disable-tests --enable-apps  # not verified on a clean host
 ninja -C build/release io_tester fstream_perf
 sudo mkdir -p /dev/hugepages && sudo mount -t hugetlbfs none /dev/hugepages  # if not present
@@ -248,7 +247,7 @@ size has been written — a 30 GiB target for the 10 GiB write file — then `fs
 [BENCHMARK.md](../BENCHMARK.md). The 120 seconds in the original protocol is a time cap, not a
 floor: a burst that has not reached the target by then is recorded as capped, and on this host the
 target is reached in 40–67 s. I never start a measured write run on a fresh file or after a long
-idle, and I record the write generation and bytes since the last idle.
+idle, and I record the write pass and bytes since the last idle.
 
 The first write block on 2026-11-13 predates the target rule and stopped only when the target *and*
 the 120 s minimum were both met, which wrote 128.8 GiB (12 chunks) instead of 32 GiB. That block is
@@ -264,14 +263,14 @@ preconditioning burst, and the idle duration is recorded.
 
 The state-controlled write attempt in [BENCHMARK.md](../BENCHMARK.md) is a deliberate deviation
 from that rest rule, not an oversight: it drops the 600 s post-preconditioning rest and the 300 s
-between-run rest so that all three engines in a generation see the same device state. A
-partially-recovered SLC burst exhausts mid-generation and systematically penalises whichever engine
+between-run rest so that all three engines in a pass see the same device state. A
+partially-recovered SLC burst exhausts mid-pass and systematically penalises whichever engine
 runs last, which is exactly what the first pilot measured (`max/min = 2.0921` at 4 KiB QD 64). Both
 protocols record their rest decisions, and results from one are never pooled with the other.
 
-On 2026-11-23 the continuous protocol itself could not hold a generation: two completed generations
+On 2026-11-23 the continuous protocol itself could not hold a pass: two completed passes
 failed the frozen gate (within-cell `max/min` 1.71–2.61, with one Seastar run at 38k IOPS). I
-stopped that campaign rather than pick a flattering generation, and ran a time-multiplexed
+stopped that campaign rather than pick a flattering pass, and ran a time-multiplexed
 interleaved bracket whose protocol was fixed before it ran
 ([write-state-interleaved-protocol.md](write-state-interleaved-protocol.md)): alternate the three
 engines in 15 s warmup + 30 s measured cycles, five cycles per queue depth, rotate the order every
@@ -365,7 +364,7 @@ One caveat. The 0.1.0 read-path report used fio with registration
 taskrun flags or fuse submits the same way. Those read runs are a best-config capability
 comparison, not an equal-config one. I reran the read matrix on 2026-11-17 with rotated engine
 order and matched and matchedbatch fio references (`--iodepth_batch_submit=qd`), using
-`bench/m1/run-claims-0.1.sh`; the 0.1.0 verification run reproduced the published JUring numbers within about
+`bench/read-write/run-claims-0.1.sh`; the 0.1.0 verification run reproduced the published JUring numbers within about
 1 %, and the paired JUring/fio ratios were 1.0655–1.0693 at QD 64 and 1.2183–1.2306 at QD 128
 (matched and batching-matched references; the same numbers as BENCHMARK.md). The write
 runs follow the original protocol and remain inconclusive.
@@ -416,7 +415,7 @@ comparison is rerun on any kernel change.
 
 ## Before you trust any number
 
-Run these on the host, from `/home/david/projects/JUring`:
+Run these on the host, from the repository root:
 
 ```bash
 # 1. Identity + kernel + CPU topology (SMT pairs, NUMA)

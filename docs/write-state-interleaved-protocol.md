@@ -1,16 +1,21 @@
 # Interleaved write bracket — fallback protocol (fixed before the run, 2026-11-23)
 
+> **Identifier changes, 2026-11-24.** Names only: `W7` → 4 KiB random write QD 64,
+> `W8` → 4 KiB random write QD 128, `g1`–`g8` → `pass1`–`pass8`, `G1` → the frozen gate,
+> `G2` → the four-arm state gate. Protocol wording, thresholds and results are unchanged.
+
 ## Why this exists
 
 The primary state-controlled 3-way campaign (`bench/write/run-write-3way.sh`, protocol in
 [write-state-3way-protocol.md](write-state-3way-protocol.md)) requires one freshly preconditioned
-generation in which JUring and both `fio` references are single-state and within `max/min <= 1.25`
-per cell. On 2026-11-23 that gate failed in both completed generations:
+pass (the protocol's *generation*) in which JUring and both `fio` references are single-state and
+within `max/min <= 1.25` per cell. On 2026-11-23 that gate failed in both completed passes (both
+rows are 4 KiB random writes; the columns are queue depths 64 and 128):
 
-| generation | W7 (4 KiB randwrite QD 64) | W8 (QD 128) | frozen result |
+| pass | QD 64 | QD 128 | frozen result |
 |---|---|---|---|
-| g1 | 171k JUring, 198k fio-matched, 302k fio-matchedbatch, 132k Seastar (`max/min` 1.77) | 130k / 180k / 69k / 71k (`max/min` 2.61) | `PILOT_PASS 0` |
-| g2 | 104k / 141k / 178k / 132k (`max/min` 1.71) | 38k Seastar, then stopped | `PILOT_PASS 0` |
+| pass 1 | 171k JUring, 198k fio-matched, 302k fio-matchedbatch, 132k Seastar (`max/min` 1.77) | 130k / 180k / 69k / 71k (`max/min` 2.61) | `PILOT_PASS 0` |
+| pass 2 | 104k / 141k / 178k / 132k (`max/min` 1.71) | 38k Seastar, then stopped | `PILOT_PASS 0` |
 
 The drive was in a low, drifting steady state (roughly 70k–300k IOPS with multi-second GC cliffs),
 so no generation was homogeneous. Rather than spend the remaining budget on more generations that
@@ -25,7 +30,7 @@ at short, fixed windows:
 
 | Parameter | Value |
 |---|---|
-| Cells | W7 = 4 KiB random write QD 64; W8 = 4 KiB random write QD 128 |
+| Cells | 4 KiB random write QD 64; 4 KiB random write QD 128 |
 | Engines | JUring (registered file + fixed buffers, taskrun flags), `fio` io_uring `matched` (`--registerfiles=1 --fixedbufs=1`), Seastar `seastar_file_bench` (stock 200-ring, no registration; bracket) |
 | Cycles (repetitions) | 5 per cell; one run per engine per cycle |
 | Windows | 15 s warmup + 30 s measured, fresh process per run, `--seed 20261113` |
@@ -41,8 +46,8 @@ Command:
 bash bench/write/run-write-interleaved.sh
 # which runs:
 bash bench/write/run-write-cells.sh \
-  --cells W7,W8 --engines "juring fio seastar" --allow-seastar-write \
-  --fio-variants matched --no-w7-sweep --reps 5 \
+  --cells randwrite-4k-qd64,randwrite-4k-qd128 --engines "juring fio seastar" --allow-seastar-write \
+  --fio-variants matched --no-batching-sweep --reps 5 \
   --warmup-sec 15 --measured-sec 30 \
   --precondition none --rest-sec 0 --rest-scope runs \
   --seed 20261113 --cpu 2 \

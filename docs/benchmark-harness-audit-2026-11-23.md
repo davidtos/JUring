@@ -17,7 +17,7 @@ notes; this file records what was checked and what changed.
 - `--ramp_time` excludes the ramp from the reported statistics and matches JUring's
   `--warmup-sec`; JSON percentiles are in `clat_ns` and both parsers convert ns to µs exactly
   once; write runs overwrite the existing file in place (size and allocated blocks unchanged).
-- `bench/m1/lib.sh` and `bench/write/run-write-cells.sh` build correct, matched `fio` commands.
+- `bench/read-write/lib.sh` and `bench/write/run-write-cells.sh` build correct, matched `fio` commands.
   The one-command driver `bench/run-comparison.sh` did not: its `run_fio()` passed
   `--fixedbufs=1` unconditionally, so `seqread_1m_qd8` (1 MiB x QD 8 of pinned buffers against an
   8 MiB memlock limit) made `fio` exit 1 with JSON `error=12` and no message; it also omitted
@@ -52,7 +52,7 @@ There are two paths and they were audited separately.
 
 ## Net effect
 
-The read comparison as published (same file, `bench/m1/lib.sh` with `seastar_file_bench`) was
+The read comparison as published (same file, `bench/read-write/lib.sh` with `seastar_file_bench`) was
 already using correct invocations; the rerun in BENCHMARK.md used that path and all 30 cells
 returned `status=ok`. The one-command driver is now usable on this host instead of failing its
 Seastar half and the 1 MiB `fio` case. The write experiment's problem is not invocation

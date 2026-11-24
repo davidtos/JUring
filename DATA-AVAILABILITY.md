@@ -25,7 +25,7 @@ Reproduction path:
 # Full protocol and prerequisites:
 sed -n '1,120p' docs/benchmark-methodology.md
 # Re-generate aggregates from a raw session directory (no device I/O):
-python3 bench/m1/analyze_read_write.py --dir bench/results/<session> [--out-prefix ...]
+python3 bench/read-write/analyze_read_write.py --dir bench/results/<session> [--out-prefix ...]
 # One-command comparison quick start (writes under bench/results/):
 ./bench/run-comparison.sh
 ```

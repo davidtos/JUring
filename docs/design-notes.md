@@ -187,7 +187,7 @@ The write path is the honest failure. The consumer NVMe in this machine has an S
 cache that folds into TLC under sustained writes, and sustained throughput moves
 between roughly 40k and 195k IOPS depending on where the drive is in that cycle. I
 ran a state-controlled benchmark and still couldn't get enough homogeneous
-generations to rank the engines fairly. So [BENCHMARK.md](../BENCHMARK.md) says the
+passes to rank the engines fairly. So [BENCHMARK.md](../BENCHMARK.md) says the
 write path is inconclusive. It would have been easy to publish the good run.
 
 The `fio` comparison has a known asymmetry: `fio` can't set JUring's ring flags or

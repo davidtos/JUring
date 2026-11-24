@@ -50,7 +50,7 @@ jcstress-results*
 .tools/
 .sysroot/
 
-### Seastar reference checkout (own git; pinned in SEASTAR-PLAN.md) ###
+### Seastar reference checkout (own git; pinned in the Seastar comparison plan) ###
 SeaStarRef/
 
 ### Writable NVMe benchmark dir (bind-mounted from /mnt/TestData, local only) ###
