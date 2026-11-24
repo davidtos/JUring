@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (JDK ${{ matrix.java }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        java: ["25", "26"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      # GitHub-hosted Ubuntu 24.04 restricts unprivileged io_uring through AppArmor and the
+      # runner image may set kernel.io_uring_disabled. The suite needs io_uring; relax both
+      # best-effort (a hardened bypass would show up as a clear test failure).
+      - name: Enable io_uring for the test suite
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_io_uring=0 || true
+          sudo sysctl -w kernel.io_uring_disabled=0 || true
+          sysctl kernel.apparmor_restrict_unprivileged_io_uring kernel.io_uring_disabled || true
+
+      # GitHub-hosted runner IPs are occasionally rate-limited by Maven Central (HTTP 429)
+      # while build plugins are resolved; the retry wrapper only retries those network
+      # failures, not genuine compile/test failures.
+      - name: Test
+        run: .github/scripts/mvn-retry.sh -B -ntp clean test
+
+      - name: Analyzer selftest
+        run: python3 bench/analysis/selftest.py --unit
+
+      - name: Javadoc (strict, doclint=all)
+        run: .github/scripts/mvn-retry.sh -B -ntp javadoc:javadoc
+
+      - name: Package (unsigned; verifies sources/javadoc attachment)
+        run: .github/scripts/mvn-retry.sh -B -ntp -Prelease -DskipTests -Dgpg.skip=true package
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-jdk${{ matrix.java }}
+          path: |
+            target/surefire-reports/
+            target/*.dumpstream
+          if-no-files-found: ignore
+
+  jcstress:
+    name: jcstress (wake-path and handoff memory model)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Enable io_uring
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_io_uring=0 || true
+          sudo sysctl -w kernel.io_uring_disabled=0 || true
+      - name: Run jcstress
+        run: mvn -B -ntp -Pjcstress test -DskipTests

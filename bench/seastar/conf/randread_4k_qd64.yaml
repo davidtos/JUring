@@ -1,0 +1,27 @@
+# seastar io_tester config: 4 KiB random read, parallelism (queue depth) 64 per shard.
+#
+# Maps to JUring:
+#   bench/juring/run-juring.sh --workload randread --file <10GiB file> \
+#       --bs 4k --qd 64 --threads 1 --seconds 10 --warmup-sec 1 --readonly \
+#       --label randread_4k_qd64
+#
+# Run with:
+#   build/release/apps/io_tester/io_tester --storage <writable-dir> \
+#       --conf bench/seastar/conf/randread_4k_qd64.yaml --duration 10 \
+#       --smp 1 --reactor-backend io_uring
+#
+# Schema reference: seastar/apps/io_tester/io_tester.cc (job_config::decode,
+# shard_info::decode, byte_size::decode, duration_time::decode).
+- name: randread_4k_qd64
+  type: randread
+  # "all" = every seastar shard (compare with --smp N vs JUring --threads N).
+  shards: all
+  # Total dataset for this job; each shard gets data_size / smp, aligned to 1 MiB.
+  # 10GB = 10 GiB = 10737418240 B, same as the JUring benchmark file.
+  data_size: 10GB
+  shard_info:
+    # parallelism == outstanding requests per shard == JUring --qd
+    parallelism: 64
+    reqsize: 4kB
+    shares: 10
+    think_time: 0

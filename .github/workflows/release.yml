@@ -1,0 +1,64 @@
+name: Release
+
+# Manual release workflow. Requires:
+#   - a vX.Y.Z tag on the commit being released
+#   - repository secrets: CENTRAL_USERNAME, CENTRAL_PASSWORD (Sonatype Central token),
+#     GPG_PRIVATE_KEY (ASCII-armoured secret key), GPG_PASSPHRASE
+#   - a verified namespace for io.github.davidtos in Sonatype Central
+# The central-publishing-maven-plugin is configured with autoPublish=false, so the
+# deployment lands in the Central Portal staging area and must be published manually
+# (or flip autoPublish to true once the release process is trusted).
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to release"
+        required: true
+        type: string
+
+jobs:
+  release:
+    name: Deploy ${{ inputs.tag }} to Maven Central
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_USERNAME
+          server-password: CENTRAL_PASSWORD
+
+      - name: Import GPG signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+
+      - name: Verify the tag matches the POM version
+        run: |
+          POM_VERSION=$(mvn -B -ntp -q help:evaluate -Dexpression=project.version -DforceStdout)
+          if [ "v$POM_VERSION" != "${{ inputs.tag }}" ]; then
+            echo "Tag ${{ inputs.tag }} does not match POM version $POM_VERSION" >&2
+            exit 1
+          fi
+
+      - name: Test before deploying
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_io_uring=0 || true
+          sudo sysctl -w kernel.io_uring_disabled=0 || true
+          mvn -B -ntp clean test
+
+      - name: Deploy to Maven Central staging
+        env:
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -ntp -Prelease deploy -DskipTests

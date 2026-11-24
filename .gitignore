@@ -9,9 +9,14 @@ target/
 *.iml
 *.ipr
 
+### Python bytecode (bench analyzers) ###
+__pycache__/
+*.py[cod]
+
 ### Benchmark Outputs ###
 results/
 bench-data/
+scratch/
 
 ### Eclipse ###
 .apt_generated
@@ -40,3 +45,15 @@ build/
 
 ### JCStress ###
 jcstress-results*
+
+### Local sandbox build plumbing (seastar reference build) ###
+.tools/
+.sysroot/
+
+### Seastar reference checkout (own git; pinned in the Seastar comparison plan) ###
+SeaStarRef/
+
+### Writable NVMe benchmark dir (bind-mounted from /mnt/TestData, local only) ###
+nvme-data/
+nvme-write/
+.m2repo/

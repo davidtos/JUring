@@ -9,6 +9,20 @@ import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 
+/**
+ * jcstress models of the store/load orderings the wake path relies on: the submitter/poller
+ * handshake, SQPOLL wakeup, slot and payload publication, SQE/CQE visibility, buffer-pool
+ * check-in and the completion→parked-virtual-thread handoff. These states use standalone
+ * fields and {@link VarHandle} access modes to isolate which ordering is required where; they
+ * are deliberately models, not a live ring (a real ring needs an io_uring instance and kernel
+ * scheduling, which makes the memory-model question untestable in isolation).
+ *
+ * <p>{@link MpscQueueJcStressTest} adds the real library to the jcstress profile: it drives the
+ * production package-private {@code MpscQueue} handoff queue through concurrent
+ * {@code offer}/{@code poll} calls. The live poller/park wake path itself is covered by the
+ * integration tests, not by jcstress — see {@code HandoffTest},
+ * {@code BlockingVtConcurrencyTest} and {@code JUringBlockingScaleTest}.
+ */
 @JCStressTest
 @Outcome(id = "0, 1", expect = Expect.ACCEPTABLE, desc = "Poller noticed task before entering kernel (no unpark/eventfd write needed).")
 @Outcome(id = "1, 0", expect = Expect.ACCEPTABLE, desc = "Submitter observed inKernel poller and signals eventfd/unpark.")

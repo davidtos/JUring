@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="500" viewBox="0 0 940 500">
+<rect x="0.0" y="0.0" width="940.0" height="500.0" rx="0" fill="#ffffff"/>
+<text x="470.0" y="32.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read latency — p50 and p99</text>
+<text x="470.0" y="54.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#57606a" text-anchor="middle">mean of the per-repetition percentiles; lower is better</text>
+<line x1="90.0" y1="380.0" x2="900.0" y2="380.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="384.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">0</text>
+<line x1="90.0" y1="324.0" x2="900.0" y2="324.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="328.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">200</text>
+<line x1="90.0" y1="268.0" x2="900.0" y2="268.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="272.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">400</text>
+<line x1="90.0" y1="212.0" x2="900.0" y2="212.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="216.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">600</text>
+<line x1="90.0" y1="156.0" x2="900.0" y2="156.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="160.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">800</text>
+<line x1="90.0" y1="100.0" x2="900.0" y2="100.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="104.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">1000</text>
+<line x1="90.0" y1="380.0" x2="900.0" y2="380.0" stroke="#1f2328" stroke-width="1.2"/>
+<text x="64.0" y="70.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="start">µs</text>
+<rect x="100.0" y="332.2" width="44.0" height="47.8" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="122.0" y="326.2" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">171</text>
+<rect x="156.0" y="329.0" width="44.0" height="51.0" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="178.0" y="323.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">182</text>
+<rect x="212.0" y="330.6" width="44.0" height="49.4" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="234.0" y="324.6" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">176</text>
+<text x="178.0" y="400.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#1f2328" text-anchor="middle">64 in flight p50</text>
+<rect x="311.3" y="236.4" width="44.0" height="143.6" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="333.3" y="230.4" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">513</text>
+<rect x="367.3" y="242.8" width="44.0" height="137.2" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="389.3" y="236.8" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">490</text>
+<rect x="423.3" y="244.8" width="44.0" height="135.2" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="445.3" y="238.8" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">483</text>
+<text x="389.3" y="400.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#1f2328" text-anchor="middle">64 in flight p99</text>
+<rect x="522.7" y="306.9" width="44.0" height="73.1" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="544.7" y="300.9" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">261</text>
+<rect x="578.7" y="284.2" width="44.0" height="95.8" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="600.7" y="278.2" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">342</text>
+<rect x="634.7" y="299.6" width="44.0" height="80.4" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="656.7" y="293.6" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">287</text>
+<text x="600.7" y="400.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#1f2328" text-anchor="middle">128 in flight p50</text>
+<rect x="734.0" y="122.8" width="44.0" height="257.2" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="756.0" y="116.8" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">919</text>
+<rect x="790.0" y="180.2" width="44.0" height="199.8" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="812.0" y="174.2" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">714</text>
+<rect x="846.0" y="152.0" width="44.0" height="228.0" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="868.0" y="146.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#1f2328" text-anchor="middle" font-weight="bold">814</text>
+<text x="812.0" y="400.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#1f2328" text-anchor="middle">128 in flight p99</text>
+<rect x="90.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#1f6feb"/>
+<text x="108.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">JUring</text>
+<rect x="240.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#e3742a"/>
+<text x="258.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">fio matched</text>
+<rect x="390.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#2ea043"/>
+<text x="408.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">Seastar</text>
+<text x="470.0" y="470.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">JUring has the lowest median at both depths; its QD 128 p99 is above fio's, which is reported rather than smoothed away.</text>
+</svg>

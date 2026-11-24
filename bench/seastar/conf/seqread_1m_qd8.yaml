@@ -1,0 +1,26 @@
+# seastar io_tester config: 1 MiB sequential read, queue depth 8 per shard.
+#
+# io_tester `seqread` reads the file from position 0 forward, wrapping back to 0
+# on EOF (file_size_overflows counts the wraps).  This is the direct analogue of
+# the JUring seqread workload.
+#
+# Maps to JUring:
+#   bench/juring/run-juring.sh --workload seqread --file <10GiB file> \
+#       --bs 1m --qd 8 --threads 1 --seconds 10 --warmup-sec 1 --readonly \
+#       --label seqread_1m_qd8
+#
+# Note: JUring needs 8 x 1 MiB = 8 MiB of registered buffers. If RLIMIT_MEMLOCK
+# is small the harness automatically falls back to unregistered 4096-aligned
+# buffers and records io_buffer_mode=arena-unregistered in the JSON.
+- name: seqread_1m_qd8
+  type: seqread
+  shards: all
+  data_size: 10GB
+  shard_info:
+    parallelism: 8
+    reqsize: 1MB
+    shares: 10
+    think_time: 0
+  options:
+    # fallocate() the test file before the run (needs a writable data dir).
+    fallocate: false

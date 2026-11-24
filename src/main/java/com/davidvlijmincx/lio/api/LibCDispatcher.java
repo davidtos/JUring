@@ -32,6 +32,9 @@ final class LibCDispatcher {
     static final StructLayout CAPTURE_STATE_LAYOUT = Linker.Option.captureStateLayout();
     private static final VarHandle ERRNO_HANDLE = CAPTURE_STATE_LAYOUT.varHandle(MemoryLayout.PathElement.groupElement("errno"));
 
+    /** Size of the message buffer handed to {@code strerror_r(3)}; larger than any libc message. */
+    private static final int STRERROR_BUFFER_BYTES = 256;
+
     private static final Linker linker = Linker.nativeLinker();
 
     static final MethodHandle MH_FREE_LONG;
@@ -40,7 +43,12 @@ final class LibCDispatcher {
     static final MethodHandle MH_CLOSE;
     static final MethodHandle MH_MALLOC;
     static final MethodHandle MH_MALLOC_ADDRESS;
-    static final MethodHandle MH_STRERROR;
+    /**
+     * {@code strerror_r(3)}, the thread-safe replacement for {@code strerror(3)}. {@code null}
+     * when this libc exposes neither of the two entry points; {@link #strerror(int)} then falls
+     * back to a plain {@code "errno N"} message. See the static initializer for the two ABIs.
+     */
+    static final MethodHandle MH_STRERROR_R;
     static final MethodHandle MH_CALLOC;
     static final MethodHandle MH_MMAP;
     static final MethodHandle MH_MUNMAP;
@@ -50,26 +58,36 @@ final class LibCDispatcher {
     static final MethodHandle MH_EVENTFD;
     static final MethodHandle MH_WRITE;
     static final MethodHandle MH_FCNTL;
+    static final MethodHandle MH_SCHED_SETAFFINITY;
+    static final MethodHandle MH_SCHED_GETCPU;
+    /**
+     * {@code posix_fadvise(2)}. The glibc wrapper returns the error number
+     * <b>directly</b> ({@code 0} on success, a positive {@code errno} on failure), so this
+     * downcall deliberately has no {@code captureCallState("errno")} option.
+     */
+    static final MethodHandle MH_POSIX_FADVISE;
 
     static {
         SymbolLookup lookup = linker.defaultLookup();
 
         MH_FREE_LONG = linker.downcallHandle(
                 lookup.findOrThrow("free"),
-                FunctionDescriptor.ofVoid(JAVA_LONG),
-                Linker.Option.critical(false)
+                FunctionDescriptor.ofVoid(JAVA_LONG)
         );
 
         MH_FREE_SEGMENT = linker.downcallHandle(
                 lookup.findOrThrow("free"),
-                FunctionDescriptor.ofVoid(ADDRESS),
-                Linker.Option.critical(false)
+                FunctionDescriptor.ofVoid(ADDRESS)
         );
 
         MH_OPEN = linker.downcallHandle(
                 lookup.findOrThrow("open"),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT, JAVA_INT),
-                Linker.Option.captureCallState("errno")
+                // open(2) is variadic: its third argument (mode) is only read for O_CREAT and
+                // O_TMPFILE, but the FFM Linker contract still requires it to be declared as
+                // the first variadic argument.
+                Linker.Option.captureCallState("errno"),
+                Linker.Option.firstVariadicArg(2)
         );
 
         MH_CLOSE = linker.downcallHandle(
@@ -79,25 +97,34 @@ final class LibCDispatcher {
 
         MH_MALLOC = linker.downcallHandle(
                 lookup.findOrThrow("malloc"),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG),
-                Linker.Option.critical(false)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG)
         );
 
         MH_MALLOC_ADDRESS = linker.downcallHandle(
                 lookup.findOrThrow("malloc"),
-                FunctionDescriptor.of(JAVA_LONG, JAVA_LONG),
-                Linker.Option.critical(false)
+                FunctionDescriptor.of(JAVA_LONG, JAVA_LONG)
         );
 
-        MH_STRERROR = linker.downcallHandle(
-                lookup.findOrThrow("strerror"),
-                FunctionDescriptor.of(ADDRESS, JAVA_INT)
-        );
+        // strerror_r(3) is the thread-safe replacement for strerror(3), but it exists in two ABI
+        // flavours that differ only in the return type:
+        //  - XSI/POSIX: int strerror_r(int, char *, size_t); fills the caller's buffer
+        //    (glibc exports this as __xpg_strerror_r; it is the only strerror_r on musl).
+        //  - GNU:       char *strerror_r(int, char *, size_t); may return a pointer to some
+        //    static string instead of filling the buffer.
+        // Resolve the XSI entry point first and fall back to the POSIX name. The handle is
+        // invoked below as returning JAVA_INT, which is safe for both ABIs because the return
+        // value is ignored (reading the low return-register bits is valid for either return
+        // type); the message is read only from our own bounded, NUL-terminated buffer, so a
+        // GNU-style pointer return can never be dereferenced.
+        MH_STRERROR_R = lookup.find("__xpg_strerror_r")
+                .or(() -> lookup.find("strerror_r"))
+                .map(sym -> linker.downcallHandle(sym,
+                        FunctionDescriptor.of(JAVA_INT, JAVA_INT, ADDRESS, JAVA_LONG)))
+                .orElse(null);
 
         MH_CALLOC = linker.downcallHandle(
                 lookup.findOrThrow("calloc"),
-                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG),
-                Linker.Option.critical(false)
+                FunctionDescriptor.of(ADDRESS, JAVA_LONG, JAVA_LONG)
         );
 
         MH_MMAP = linker.downcallHandle(
@@ -150,6 +177,42 @@ final class LibCDispatcher {
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT),
                 Linker.Option.firstVariadicArg(2)
         );
+
+        // Best-effort CPU affinity for shard threads. Not a critical downcall: it is a syscall
+        // and may be descheduled, which the critical-call contract does not allow.
+        MH_SCHED_SETAFFINITY = linker.downcallHandle(
+                lookup.findOrThrow("sched_setaffinity"),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS)
+        );
+
+        // Optional libc symbols: sched_getcpu(3) (affinity telemetry) and posix_fadvise(2)
+        // (advisory cache hint) are not available on every libc (e.g. some musl builds). They
+        // are resolved lazily/optionally so class initialization cannot fail on a platform that
+        // simply does not offer them; the feature throws only when actually used.
+        MH_SCHED_GETCPU = lookup.find("sched_getcpu")
+                .map(sym -> linker.downcallHandle(sym, FunctionDescriptor.of(JAVA_INT)))
+                .orElse(null);
+
+        // Advisory page-cache hint; returns errno directly (no -1/errno convention, no
+        // captureCallState) and needs no arena (all arguments are scalars).
+        MH_POSIX_FADVISE = lookup.find("posix_fadvise")
+                .map(sym -> linker.downcallHandle(sym,
+                        FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_INT)))
+                .orElse(null);
+    }
+
+    /**
+     * Reports whether this process runs on a platform JUring can drive: Linux on x86-64 or
+     * aarch64 (the two architectures whose io_uring syscall numbers and mmap constants are
+     * assumed by this implementation). Checked before any native call so a non-Linux JVM gets a
+     * clear {@link UnsupportedOperationException} instead of a link error.
+     */
+    static boolean isSupportedPlatform() {
+        return PlatformSupport.isSupportedPlatform();
+    }
+
+    static String platformDescription() {
+        return PlatformSupport.description();
     }
 
     private static final LibCDispatcher INSTANCE = new LibCDispatcher();
@@ -237,36 +300,96 @@ final class LibCDispatcher {
         }
     }
 
+    /**
+     * Allocates {@code size} bytes with {@code malloc(3)}. The caller owns the memory and must
+     * release it with {@link #free(long)}. A zero-byte request is rounded up to one byte so the
+     * result is always a usable, non-NULL segment: some call sites pass zero-length buffers and
+     * still hand the returned address to the kernel, where a zero byte count makes the access
+     * harmless.
+     *
+     * @throws OutOfMemoryError when {@code malloc(3)} returns {@code NULL}
+     */
     MemorySegment malloc(long size) {
+        long requested = Math.max(1L, size);
+        MemorySegment segment;
         try {
-            return ((MemorySegment) MH_MALLOC.invokeExact(size)).reinterpret(size);
+            segment = (MemorySegment) MH_MALLOC.invokeExact(requested);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+        if (segment.address() == 0L) {
+            throw new OutOfMemoryError("malloc(" + requested + ") returned NULL");
+        }
+        return segment.reinterpret(requested);
     }
 
+    /**
+     * Address-only variant of {@link #malloc(long)}; see there for the null/size handling.
+     *
+     * @throws OutOfMemoryError when {@code malloc(3)} returns {@code NULL}
+     */
     long mallocAddress(long size) {
+        long requested = Math.max(1L, size);
+        long address;
         try {
-            return (long) MH_MALLOC_ADDRESS.invokeExact(size);
+            address = (long) MH_MALLOC_ADDRESS.invokeExact(requested);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+        if (address == 0L) {
+            throw new OutOfMemoryError("malloc(" + requested + ") returned NULL");
+        }
+        return address;
     }
 
+    /**
+     * Returns the libc description of {@code errno}, or {@code "errno N"} when no thread-safe
+     * description is available. Uses {@code strerror_r(3)} into a bounded, NUL-terminated buffer
+     * and never dereferences a pointer returned by the C function.
+     */
     String strerror(int errno) {
-        try {
-            return ((MemorySegment) MH_STRERROR.invokeExact(Math.abs(errno))).reinterpret(Long.MAX_VALUE).getString(0);
-        } catch (Throwable e) {
-            throw new RuntimeException(e);
+        int err = errno < 0 ? -errno : errno;
+        MethodHandle strerrorR = MH_STRERROR_R;
+        if (strerrorR == null) {
+            // libc exposes neither strerror_r entry point; the errno itself is still useful.
+            return "errno " + err;
+        }
+        try (Arena arena = Arena.ofConfined()) {
+            // One spare byte beyond the length passed to strerror_r: a truncated XSI message
+            // need not be NUL-terminated, and this byte keeps getString() inside the segment.
+            MemorySegment buffer = arena.allocate(STRERROR_BUFFER_BYTES + 1L);
+            buffer.set(JAVA_BYTE, STRERROR_BUFFER_BYTES, (byte) 0);
+            try {
+                int rc = (int) strerrorR.invokeExact(err, buffer, (long) STRERROR_BUFFER_BYTES);
+                // rc is intentionally not used: it is 0/errno for the XSI ABI and a pointer for
+                // the GNU ABI. The buffer is authoritative; see the static initializer.
+                String message = buffer.getString(0L);
+                return message.isEmpty() ? "errno " + err : message;
+            } catch (Throwable e) {
+                // A diagnostic helper must never mask the error that is being reported.
+                return "errno " + err;
+            }
         }
     }
 
+    /**
+     * Allocates {@code size} zero-filled bytes with {@code calloc(3)}; see
+     * {@link #malloc(long)} for the zero-byte and allocation-failure handling.
+     *
+     * @throws OutOfMemoryError when {@code calloc(3)} returns {@code NULL}
+     */
     MemorySegment calloc(long size) {
+        long requested = Math.max(1L, size);
+        MemorySegment segment;
         try {
-            return ((MemorySegment) MH_CALLOC.invokeExact(1L, size)).reinterpret(size);
+            segment = (MemorySegment) MH_CALLOC.invokeExact(1L, requested);
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }
+        if (segment.address() == 0L) {
+            throw new OutOfMemoryError("calloc(1, " + requested + ") returned NULL");
+        }
+        return segment.reinterpret(requested);
     }
 
     long mmap(long length, int prot, int flags, int fd, long offset) {
@@ -347,6 +470,28 @@ final class LibCDispatcher {
         }
     }
 
+    /**
+     * {@code posix_fadvise(fd, offset, length, advice)}.
+     *
+     * <p>Returns the libc result <b>as-is</b>: {@code 0} on success, the positive
+     * {@code errno} on failure (glibc's {@code posix_fadvise} returns errno directly; it is
+     * not the {@code -1 + errno} convention). {@code length == 0} means "to the end of the
+     * file" (POSIX). This is an advisory call: it does not read or write file data and is
+     * not a ring request.
+     */
+    int posixFadvise(int fd, long offset, long length, int advice) {
+        MethodHandle fadvise = MH_POSIX_FADVISE;
+        if (fadvise == null) {
+            // libc does not expose posix_fadvise; report ENOSYS like a kernel without it.
+            return 38;
+        }
+        try {
+            return (int) fadvise.invokeExact(fd, offset, length, advice);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     int eventfd(int initval, int flags) {
         try {
             return (int) MH_EVENTFD.invokeExact(initval, flags);
@@ -358,6 +503,33 @@ final class LibCDispatcher {
     long write(int fd, long buf, long count) {
         try {
             return (long) MH_WRITE.invokeExact(fd, buf, count);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * {@code sched_setaffinity(2)}. Returns the raw libc return code ({@code 0} on success,
+     * {@code -1} on failure); affinity is best effort and a failure is never fatal.
+     */
+    int schedSetAffinity(int pid, long cpusetsize, MemorySegment mask) {
+        try {
+            return (int) MH_SCHED_SETAFFINITY.invokeExact(pid, cpusetsize, mask);
+        } catch (Throwable e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /** {@code sched_getcpu(3)}: the CPU the calling thread is running on, {@code -1} on failure. */
+    /** {@code sched_getcpu(3)}: the CPU the calling thread is running on, {@code -1} on failure. */
+    int schedGetCpu() {
+        MethodHandle getcpu = MH_SCHED_GETCPU;
+        if (getcpu == null) {
+            // Optional libc symbol (some musl builds omit it); affinity telemetry is best effort.
+            return -1;
+        }
+        try {
+            return (int) getcpu.invokeExact();
         } catch (Throwable e) {
             throw new RuntimeException(e);
         }

@@ -3,6 +3,7 @@ package com.davidvlijmincx.lio.api;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.lang.foreign.Arena;
@@ -23,6 +24,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class JUringTest {
 
     JUring jUring;
+
+    @TempDir
+    Path tempDir;
+
+    private Path writeFile() {
+        return tempDir.resolve("write_file");
+    }
 
     @BeforeEach
     void setUp() {
@@ -102,7 +110,7 @@ class JUringTest {
 
     @Test
     void mixedReadAndWrite() throws IOException {
-        Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
+        Files.write(writeFile(), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
@@ -111,7 +119,7 @@ class JUringTest {
         List<Long> completedIds = new ArrayList<>();
 
         try(FileDescriptor fd = new FileDescriptor("src/test/resources/read_file", READ, 0);
-            FileDescriptor writeFd = new FileDescriptor("src/test/resources/write_file", WRITE, 0)) {
+            FileDescriptor writeFd = new FileDescriptor(writeFile().toString(), WRITE, 0)) {
 
 
         ids.add(jUring.prepareRead(fd, 14, 0));
@@ -140,7 +148,7 @@ class JUringTest {
 
     @Test
     void multipleWrites() throws IOException {
-        Files.write(Path.of("src/test/resources/write_file"), "Clean content".getBytes());
+        Files.write(writeFile(), "Clean content".getBytes());
 
         String input = "Hello, from Java";
         var inputBytes = input.getBytes();
@@ -148,7 +156,7 @@ class JUringTest {
         List<Long> ids = new ArrayList<>();
         List<Long> completedIds = new ArrayList<>();
 
-        try(FileDescriptor fd = new FileDescriptor("src/test/resources/write_file", WRITE, 0)) {
+        try(FileDescriptor fd = new FileDescriptor(writeFile().toString(), WRITE, 0)) {
 
             ids.add(jUring.prepareWrite(fd, inputBytes, 0));
             ids.add(jUring.prepareWrite(fd, inputBytes, 0));
@@ -186,7 +194,7 @@ class JUringTest {
 
     @Test
     void writeToFile() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content : ".getBytes());
 
         String input = "Hello, from Java";
@@ -214,7 +222,7 @@ class JUringTest {
 
     @Test
     void writeToFileAtOffset() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Big ".getBytes());
 
         String input = "hello, from Java";
@@ -259,7 +267,7 @@ class JUringTest {
 
     @Test
     void writeToRegisteredFile() throws IOException {
-        String path = "src/test/resources/write_file";
+        String path = writeFile().toString();
         Files.write(Path.of(path), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -463,7 +471,7 @@ class JUringTest {
 
     @Test
     void prepareWriteFixedWithRegisteredBuffer() throws IOException {
-        String path = "src/test/resources/write_file";
+        String path = writeFile().toString();
         Files.write(Path.of(path), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -487,7 +495,7 @@ class JUringTest {
 
     @Test
     void prepareWriteFixedWithRegisteredFileAndBuffer() throws IOException {
-        String path = "src/test/resources/write_file";
+        String path = writeFile().toString();
         Files.write(Path.of(path), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -513,7 +521,7 @@ class JUringTest {
 
     @Test
     void prepareWriteFixedWithMemorySegmentAndRegisteredBuffer() throws IOException {
-        String path = "src/test/resources/write_file";
+        String path = writeFile().toString();
         Files.write(Path.of(path), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -599,7 +607,7 @@ class JUringTest {
 
     @Test
     void writeWithCheckedOutBuffer() throws IOException {
-        String path = "src/test/resources/write_file";
+        String path = writeFile().toString();
         Files.write(Path.of(path), "Clean content".getBytes());
 
         String input = "Hello, from Java";
@@ -682,7 +690,7 @@ class JUringTest {
 
     @Test
     void prepareWriteFixedZeroCopyOverloads() throws IOException {
-        Path path = Path.of("src/test/resources/write_file");
+        Path path = writeFile();
         Files.write(path, "Clean content".getBytes());
 
         String firstInput = "Zero-copy FD write!";
@@ -835,6 +843,31 @@ class JUringTest {
                 assertEquals(OperationType.NOP, res.type());
             });
             assertEquals(2, reaped);
+        }
+    }
+
+    @Test
+    void testFsyncAndDatasync() throws IOException {
+        Path tempFile = Files.createTempFile("fsync_test", ".tmp");
+        try {
+            try (FileDescriptor fd = new FileDescriptor(tempFile, 0644, LinuxOpenOptions.RDWR, LinuxOpenOptions.CREATE)) {
+                byte[] data = "Testing fsync and datasync in JUring!".getBytes();
+                long writeId = jUring.prepareWrite(fd, data, 0);
+                long fsyncId = jUring.prepareFsync(fd, JUring.IORING_FSYNC_DATASYNC);
+
+                jUring.submit();
+
+                Result writeResult = jUring.waitForResult();
+                assertEquals(writeId, writeResult.id());
+                assertEquals(data.length, writeResult.result());
+
+                Result fsyncResult = jUring.waitForResult();
+                assertEquals(fsyncId, fsyncResult.id());
+                assertEquals(OperationType.FSYNC, fsyncResult.type());
+                assertEquals(0, fsyncResult.result());
+            }
+        } finally {
+            Files.deleteIfExists(tempFile);
         }
     }
 }

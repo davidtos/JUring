@@ -1,0 +1,20 @@
+# seastar io_tester config: 4 KiB random read, queue depth 1 (latency floor).
+#
+# Maps to JUring:
+#   bench/juring/run-juring.sh --workload randread --file <10GiB file> \
+#       --bs 4k --qd 1 --threads 1 --seconds 10 --warmup-sec 1 --readonly \
+#       --label randread_4k_qd1
+#
+# Run with:
+#   build/release/apps/io_tester/io_tester --storage <writable-dir> \
+#       --conf bench/seastar/conf/randread_4k_qd1.yaml --duration 10 \
+#       --smp 1 --reactor-backend io_uring
+- name: randread_4k_qd1
+  type: randread
+  shards: all
+  data_size: 10GB
+  shard_info:
+    parallelism: 1
+    reqsize: 4kB
+    shares: 10
+    think_time: 0

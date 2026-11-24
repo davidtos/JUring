@@ -1,0 +1,25 @@
+# seastar io_tester config: isolated 4 KiB random read latency probe.
+#
+# Purpose: tail-latency comparison without any competing job.  Pinned to a single
+# shard ([0]) with parallelism 1 so that neither other shards nor other classes
+# can create queueing.  Pair it with --smp 1 and a narrow --cpuset.
+#
+# Maps to JUring (pinned to one CPU for an equivalent setup):
+#   taskset -c 2 bench/juring/run-juring.sh --workload randread \
+#       --file <10GiB file> --bs 4k --qd 1 --threads 1 --seconds 20 \
+#       --warmup-sec 2 --readonly --label latency_isolated_4k_qd1
+#
+# Run with:
+#   build/release/apps/io_tester/io_tester --storage <writable-dir> \
+#       --conf bench/seastar/conf/latency_isolated_4k_qd1.yaml --duration 20 \
+#       --smp 1 --cpuset 2 --reactor-backend io_uring
+- name: latency_isolated_4k_qd1
+  type: randread
+  shards: [0]
+  data_size: 10GB
+  shard_info:
+    parallelism: 1
+    reqsize: 4kB
+    # high weight: this class should never be starved by io_tester internals
+    shares: 100
+    think_time: 0

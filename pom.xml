@@ -4,9 +4,57 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.davidvlijmincx.lio</groupId>
-    <artifactId>JUring</artifactId>
-    <version>0.1-SNAPSHOT</version>
+    <groupId>io.github.davidtos</groupId>
+    <artifactId>juring</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>JUring</name>
+    <description>Direct asynchronous file I/O on Linux io_uring for Java, using the Foreign
+        Function &amp; Memory API (no JNI, no liburing).</description>
+    <url>https://github.com/davidtos/JUring</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>davidtos</id>
+            <name>David Vlijmincx</name>
+            <url>https://github.com/davidtos</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/davidtos/JUring.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/davidtos/JUring.git</developerConnection>
+        <url>https://github.com/davidtos/JUring</url>
+        <tag>v0.1.0</tag>
+    </scm>
+
+    <properties>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+        <maven.source.plugin.version>3.4.0</maven.source.plugin.version>
+        <maven.javadoc.plugin.version>3.12.0</maven.javadoc.plugin.version>
+        <maven.gpg.plugin.version>3.2.8</maven.gpg.plugin.version>
+        <maven.enforcer.plugin.version>3.6.3</maven.enforcer.plugin.version>
+        <central.publishing.plugin.version>0.12.0</central.publishing.plugin.version>
+        <!-- Resolved from the release workflow environment; keep a defined default so the
+             plugin parameter is never an unresolved ${...} expression. -->
+        <skipPublishing>false</skipPublishing>
+        <!-- Extra JVM arguments for the forked test JVM (for example
+             -Djuring.surefire.argLine="-Xmx6g -Djuring.scale.vt=1000000" to run the
+             opt-in 10^6-virtual-thread scale test). Empty by default. -->
+        <juring.surefire.argLine></juring.surefire.argLine>
+    </properties>
 
     <dependencies>
         <dependency>
@@ -53,18 +101,12 @@
         </dependency>
     </dependencies>
 
-    <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-
     <build>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.13.0</version>
+                <version>3.16.0</version>
                 <configuration>
                     <compilerArgs>
                         <arg>-proc:full</arg>
@@ -85,11 +127,98 @@
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-legal-files</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                        <include>NOTICE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>--enable-native-access=ALL-UNNAMED</argLine>
+                    <argLine>--enable-native-access=ALL-UNNAMED ${juring.surefire.argLine}</argLine>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <version>${maven.javadoc.plugin.version}</version>
+                <configuration>
+                    <doclint>all</doclint>
+                    <failOnWarnings>true</failOnWarnings>
+                    <failOnError>true</failOnError>
+                    <additionalOptions>
+                        <additionalOption>-Xmaxerrs</additionalOption>
+                        <additionalOption>5000</additionalOption>
+                        <additionalOption>-Xmaxwarns</additionalOption>
+                        <additionalOption>5000</additionalOption>
+                    </additionalOptions>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>attach-javadocs</id>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-source-plugin</artifactId>
+                <version>${maven.source.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>attach-sources</id>
+                        <goals>
+                            <goal>jar-no-fork</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${maven.enforcer.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-build-requirements</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[25,)</version>
+                                    <message>JUring requires JDK 25 or newer to build (FFM-based module).</message>
+                                </requireJavaVersion>
+                                <requireMavenVersion>
+                                    <version>[3.9,)</version>
+                                </requireMavenVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
@@ -123,7 +252,9 @@
                                         <argument>-r</argument>
                                         <argument>target/jcstress-results</argument>
                                         <argument>-t</argument>
-                                        <argument>com.davidvlijmincx.lio.api.WakePollerStoreLoadTest.*</argument>
+                                        <!-- Every @JCStressTest in the exported package: the
+                                             wake-path orderings plus the real MpscQueue handoff. -->
+                                        <argument>com.davidvlijmincx.lio.api.*</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -132,6 +263,44 @@
                 </plugins>
             </build>
         </profile>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>${maven.gpg.plugin.version}</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                                <configuration>
+                                    <passphrase>${env.GPG_PASSPHRASE}</passphrase>
+                                    <gpgArguments>
+                                        <arg>--pinentry-mode</arg>
+                                        <arg>loopback</arg>
+                                    </gpgArguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central.publishing.plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                            <skipPublishing>${skipPublishing}</skipPublishing>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
-
 </project>

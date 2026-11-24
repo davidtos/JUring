@@ -1,0 +1,40 @@
+# TEMPLATE ONLY - DO NOT PASS THIS FILE TO A BENCHMARK UNCHANGED.
+#
+# The numbers below are placeholders and the mountpoint is an example. Seastar
+# stat()s every configured mountpoint at startup: a missing path aborts the
+# process, and a path that exists but was not measured silently installs a
+# fictional io_queue scheduler model. Measure the device with
+# build/release/apps/iotune/iotune on the host, put the real mountpoint that
+# backs --storage in the file, and only then pass it with --io-properties-file.
+#
+# Example seastar --io-properties-file, describing THIS host's NVMe device.
+#
+# Purpose: seastar's I/O scheduler models the disk it runs on.  Without this
+# file it probes/guesses, which can make the fair queue behave very differently
+# from JUring's kernel queue.  Fill in measured numbers (fio/iotune) for the
+# device that backs --storage, then pass:
+#
+#   --io-properties-file bench/seastar/io-properties.example.yaml
+#
+# Format: seastar/doc/io-properties-file.md.  All four values are required per
+# mount point; suffixes k/M/G/T are allowed.  The values below are placeholders
+# for a typical consumer NVMe (roughly the class of the 1 TB drive in this
+# machine) - replace them with numbers measured on YOUR device, otherwise the
+# scheduler model is fiction.
+#
+# Tips:
+#  * iotune (build/release/apps/iotune/iotune) can measure these values:
+#      build/release/apps/iotune/iotune --evaluation-directory <writable-dir>
+#  * Use the mountpoint that contains --storage.  block devices can also be
+#    used as mountpoint values in recent seastar versions, but a mount point is
+#    the portable form.
+#  * read/write saturation lengths: request size at which the device reaches
+#    peak bandwidth (often 64k-128k on NVMe).
+disks:
+  - mountpoint: /mnt/testdata-writable
+    read_iops: 400000
+    read_bandwidth: 3000M
+    write_iops: 250000
+    write_bandwidth: 2500M
+    read_saturation_length: 128k
+    write_saturation_length: 128k

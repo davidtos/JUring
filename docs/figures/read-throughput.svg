@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="540" viewBox="0 0 920 540">
+<rect x="0.0" y="0.0" width="920.0" height="540.0" rx="0" fill="#ffffff"/>
+<text x="460.0" y="32.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="19" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read — JUring vs fio vs Seastar</text>
+<text x="460.0" y="54.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#57606a" text-anchor="middle">bars = mean IOPS, whiskers = 95% CI, 5 repetitions, engine order rotated per repetition</text>
+<line x1="90.0" y1="390.0" x2="880.0" y2="390.0" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="394.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">0k</text>
+<line x1="90.0" y1="325.6" x2="880.0" y2="325.6" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="329.6" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">100k</text>
+<line x1="90.0" y1="261.1" x2="880.0" y2="261.1" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="265.1" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">200k</text>
+<line x1="90.0" y1="196.7" x2="880.0" y2="196.7" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="200.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">300k</text>
+<line x1="90.0" y1="132.2" x2="880.0" y2="132.2" stroke="#d0d7de" stroke-width="1"/>
+<text x="80.0" y="136.2" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="end">400k</text>
+<line x1="90.0" y1="390.0" x2="880.0" y2="390.0" stroke="#1f2328" stroke-width="1.2"/>
+<rect x="195.0" y="185.0" width="58.0" height="205.0" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="224.0" y="177.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">318k</text>
+<line x1="224.0" y1="178.4" x2="224.0" y2="191.5" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="217.0" y1="178.4" x2="231.0" y2="178.4" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="217.0" y1="191.5" x2="231.0" y2="191.5" stroke="#1f2328" stroke-width="1.2"/>
+<text x="224.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<rect x="271.0" y="195.3" width="58.0" height="194.7" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="300.0" y="187.3" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">302k</text>
+<line x1="300.0" y1="190.1" x2="300.0" y2="200.5" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="293.0" y1="190.1" x2="307.0" y2="190.1" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="293.0" y1="200.5" x2="307.0" y2="200.5" stroke="#1f2328" stroke-width="1.2"/>
+<text x="300.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<rect x="347.0" y="186.1" width="58.0" height="203.9" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="376.0" y="178.1" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">316k</text>
+<line x1="376.0" y1="180.8" x2="376.0" y2="191.3" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="369.0" y1="180.8" x2="383.0" y2="180.8" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="369.0" y1="191.3" x2="383.0" y2="191.3" stroke="#1f2328" stroke-width="1.2"/>
+<text x="376.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<text x="300.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read, 64 in flight</text>
+<text x="300.0" y="458.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#e3742a" text-anchor="middle">JUring/fio 1.054  [90% 1.019–1.088]</text>
+<text x="300.0" y="476.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#2ea043" text-anchor="middle">JUring/Seastar 1.006  [90% 0.980–1.031]</text>
+<rect x="565.0" y="124.5" width="58.0" height="265.5" rx="0" fill="#1f6feb" opacity="0.88"/>
+<text x="594.0" y="116.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">412k</text>
+<line x1="594.0" y1="116.0" x2="594.0" y2="133.1" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="587.0" y1="116.0" x2="601.0" y2="116.0" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="587.0" y1="133.1" x2="601.0" y2="133.1" stroke="#1f2328" stroke-width="1.2"/>
+<text x="594.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<rect x="641.0" y="169.7" width="58.0" height="220.3" rx="0" fill="#e3742a" opacity="0.88"/>
+<text x="670.0" y="161.7" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">342k</text>
+<line x1="670.0" y1="165.1" x2="670.0" y2="174.4" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="663.0" y1="165.1" x2="677.0" y2="165.1" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="663.0" y1="174.4" x2="677.0" y2="174.4" stroke="#1f2328" stroke-width="1.2"/>
+<text x="670.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<rect x="717.0" y="138.1" width="58.0" height="251.9" rx="0" fill="#2ea043" opacity="0.88"/>
+<text x="746.0" y="130.1" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">391k</text>
+<line x1="746.0" y1="130.9" x2="746.0" y2="145.3" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="739.0" y1="130.9" x2="753.0" y2="130.9" stroke="#1f2328" stroke-width="1.2"/>
+<line x1="739.0" y1="145.3" x2="753.0" y2="145.3" stroke="#1f2328" stroke-width="1.2"/>
+<text x="746.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
+<text x="670.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read, 128 in flight</text>
+<text x="670.0" y="458.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#e3742a" text-anchor="middle">JUring/fio 1.206  [90% 1.159–1.252]</text>
+<text x="670.0" y="476.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#2ea043" text-anchor="middle">JUring/Seastar 1.054  [90% 1.035–1.073]</text>
+<rect x="90.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#1f6feb"/>
+<text x="108.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">JUring</text>
+<rect x="240.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#e3742a"/>
+<text x="258.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">fio matched</text>
+<rect x="390.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#2ea043"/>
+<text x="408.0" y="82.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="start">Seastar</text>
+<text x="460.0" y="508.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">Aged 10 GiB file, O_DIRECT, pinned CPU 2; fio is registration-matched (fixed file + fixed buffers).</text>
+<text x="460.0" y="525.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">fio cannot set JUring's taskrun flags or fuse submits, so this is a capability comparison, not an equal-config race.</text>
+</svg>

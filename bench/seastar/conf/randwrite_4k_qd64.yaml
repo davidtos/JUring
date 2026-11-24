@@ -1,0 +1,28 @@
+# seastar io_tester config: 4 KiB random write, queue depth 64 per shard.
+#
+# io_tester type `randwrite` overwrites random blocks of an existing
+# pre-created file (files are created and filled with random bytes during
+# startup unless --keep-files reuses them).  This is NOT O_DSYNC: completion
+# means the write reached the device cache; --keep-files reuses the file.
+#
+# Maps to JUring (needs a WRITABLE file, not /mnt/TestData):
+#   bench/juring/run-juring.sh --workload randwrite --file <writable-file> \
+#       --size 10g --bs 4k --qd 64 --threads 1 --seconds 10 --warmup-sec 1 \
+#       --label randwrite_4k_qd64
+#
+# Run with:
+#   build/release/apps/io_tester/io_tester --storage /mnt/writable-data \
+#       --conf bench/seastar/conf/randwrite_4k_qd64.yaml --duration 10 \
+#       --smp 1 --reactor-backend io_uring --keep-files false
+- name: randwrite_4k_qd64
+  type: randwrite
+  shards: all
+  data_size: 10GB
+  shard_info:
+    parallelism: 64
+    reqsize: 4kB
+    shares: 10
+    think_time: 0
+  options:
+    # false is the io_tester default; explicit for reproducibility.
+    fallocate: false

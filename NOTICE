@@ -1,0 +1,13 @@
+JUring
+Copyright 2024-2026 David Vlijmincx
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+JUring implements the Linux io_uring userspace ABI directly through the Java
+Foreign Function & Memory API. It does not include or link liburing, JNI glue, or
+Seastar source code. The Seastar checkout under SeaStarRef/ is used only as a
+local, gitignored benchmark reference and is not part of the distributed
+artifact.
+
+The benchmark corpus under bench/ is original work unless a script header says
+otherwise.

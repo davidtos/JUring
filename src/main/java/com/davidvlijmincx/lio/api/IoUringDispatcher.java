@@ -2,9 +2,11 @@ package com.davidvlijmincx.lio.api;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.LockSupport;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_ATTACH_WQ;
 import static java.lang.foreign.ValueLayout.*;
@@ -17,13 +19,19 @@ final class IoUringDispatcher implements AutoCloseable {
     static final byte IORING_OP_NOP = 0;
     static final byte IORING_OP_READV = 1;
     static final byte IORING_OP_WRITEV = 2;
+    static final byte IORING_OP_FSYNC = 3;
     static final byte IORING_OP_READ_FIXED = 4;
     static final byte IORING_OP_WRITE_FIXED = 5;
+    static final byte IORING_OP_TIMEOUT = 11;
     static final byte IORING_OP_ASYNC_CANCEL = 14;
+    static final byte IORING_OP_LINK_TIMEOUT = 15;
+    static final byte IORING_OP_FALLOCATE = 17;
     static final byte IORING_OP_OPENAT = 18;
     static final byte IORING_OP_CLOSE = 19;
+    static final byte IORING_OP_STATX = 21;
     static final byte IORING_OP_READ = 22;
     static final byte IORING_OP_WRITE = 23;
+    static final byte IORING_OP_FTRUNCATE = 55;
 
     // Enter flags
     private static final int IORING_ENTER_GETEVENTS = 1;
@@ -37,8 +45,19 @@ final class IoUringDispatcher implements AutoCloseable {
     // Ring flags
     private static final int IORING_SQ_NEED_WAKEUP = 1;
 
+    // IORING_OP_ASYNC_CANCEL sqe->cancel_flags values (uapi/linux/io_uring.h).
+    static final int IORING_ASYNC_CANCEL_ALL = 1;
+    static final int IORING_ASYNC_CANCEL_FD = 1 << 1;
+    static final int IORING_ASYNC_CANCEL_ANY = 1 << 2;
+    static final int IORING_ASYNC_CANCEL_FD_FIXED = 1 << 3;
+
     private static final int EBADF = 9;
     private static final int EINTR = 4;
+    /** Kernel {@code ETIME}: a fired {@code IORING_OP_TIMEOUT}/{@code LINK_TIMEOUT} completion. */
+    private static final int ETIME = 62;
+    /** libc {@code ETIMEDOUT}; counted defensively by the ring metrics' timeout-completion errno accounting. */
+    private static final int ETIMEDOUT = 110;
+    private static final int ECANCELED = 125;
 
     private static final int IORING_FEAT_SINGLE_MMAP = 1;
     private static final long IORING_OFF_SQ_RING = 0L;
@@ -46,8 +65,11 @@ final class IoUringDispatcher implements AutoCloseable {
     private static final long IORING_OFF_SQES = 0x10000000L;
 
     private static final int IORING_REGISTER_BUFFERS = 0;
+    private static final int IORING_UNREGISTER_BUFFERS = 1;
     private static final int IORING_REGISTER_FILES = 2;
+    private static final int IORING_UNREGISTER_FILES = 3;
     private static final int IORING_REGISTER_FILES_UPDATE = 6;
+    private static final int IORING_REGISTER_BUFFERS_UPDATE = 16;
     private static final int IORING_REGISTER_IOWQ_MAX_WORKERS = 19;
 
     private static final LibCDispatcher libCDispatcher = NativeDispatcher.C;
@@ -70,6 +92,72 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Ring counters including the timeout-completion errno accounting: twelve monotone
+     * {@code long} counters plus the CQE classification rule. All updates happen on the ring owner
+     * thread as opaque (atomic, non-tearing) array-element writes; snapshots read the
+     * elements with acquire semantics, so the frozen "cross-thread snapshots never tear"
+     * contract holds by the JMM. The classification is a package-private static rule so it
+     * can be unit-tested deterministically (a live raw ring cannot produce every errno,
+     * e.g. {@code -ETIMEDOUT}).
+     */
+    static final class RingCounters {
+
+        static final int SQES_PREPARED = 0;
+        static final int SUBMITTED = 1;
+        static final int REAPED = 2;
+        static final int COMPLETED = 3;
+        static final int FAILED = 4;
+        static final int CANCELLED = 5;
+        static final int TIMED_OUT = 6;
+        static final int ENTERS = 7;
+        static final int SUBMIT_BATCHES = 8;
+        static final int SUBMIT_ERRORS = 9;
+        static final int SUBMIT_RETRIES = 10;
+        static final int SQ_FULL_EVENTS = 11;
+        /** Non-blocking {@code enter(GETEVENTS, min_complete=0)} flushes (overflow/deferred task work). */
+        static final int CQ_FLUSH_ENTERS = 12;
+        static final int COUNT = 13;
+
+        private static final VarHandle VH = MethodHandles.arrayElementVarHandle(long[].class);
+
+        private final long[] values = new long[COUNT];
+
+        long get(int index) {
+            return (long) VH.getAcquire(values, index);
+        }
+
+        void inc(int index) {
+            // Opaque (atomic, non-reordering) write: the frozen "cross-thread snapshots never
+            // tear" contract then holds by the JMM, not just on x86 (the owner is the single
+            // writer, so no CAS is needed). Acquire reads pair with opaque/atomic writes.
+            VH.setOpaque(values, index, values[index] + 1L);
+        }
+
+        void add(int index, long delta) {
+            VH.setOpaque(values, index, values[index] + delta);
+        }
+
+        /**
+         * Classifies one consumed CQE: every CQE is {@code reaped}; a non-negative result is
+         * {@code completed}, a negative one is {@code failed} plus {@code cancelled}
+         * ({@code -ECANCELED}) or {@code timedOut} ({@code -ETIME}/{@code -ETIMEDOUT}).
+         */
+        void classifyCqe(int res) {
+            inc(REAPED);
+            if (res >= 0) {
+                inc(COMPLETED);
+                return;
+            }
+            inc(FAILED);
+            if (res == -ECANCELED) {
+                inc(CANCELLED);
+            } else if (res == -ETIME || res == -ETIMEDOUT) {
+                inc(TIMED_OUT);
+            }
+        }
+    }
+
     private static final VarHandle VH_INT = JAVA_INT.varHandle();
     private static final MemorySegment GLOBAL_MEMORY = MemorySegment.ofAddress(0L).reinterpret(Long.MAX_VALUE);
     private final Arena arena;
@@ -79,6 +167,11 @@ final class IoUringDispatcher implements AutoCloseable {
     private final Result reusableResult = new Result();
     private MemorySegment[] registeredBuffers;
     private long[] registeredBufferAddresses;
+
+    // Optional-opcode support cache, a 256-bit set filled by probeSupportedOpcodes().
+    private final long[] opcodeSupport = new long[4];
+    // Lazily allocated single NUL byte in the ring arena, used as the statx AT_EMPTY_PATH pathname.
+    private long emptyPathAddress;
 
     // Cached Ring Fields
     private int ringFd = -1;
@@ -103,14 +196,37 @@ final class IoUringDispatcher implements AutoCloseable {
     private int sqeHead;
     private int sqeTail;
     private int inFlightCount;
+    /**
+     * Sticky "the kernel may be holding completions in its CQ-overflow list" flag. Set when
+     * more requests are outstanding than the CQ can hold, or when a full CQ is observed; cleared
+     * only when a non-blocking flush finds nothing left or all in-flight work is reaped. It must
+     * not be cleared after a single flush: deep overflow needs one flush per CQ-worth of entries.
+     */
+    private boolean overflowRisk;
 
     private long cqRingPtr;
     private long cqRingSz;
     private long cqKheadAddr;
     private long cqKtailAddr;
     private long cqCqesAddr;
+    private long cqOverflowAddr;
     private int cqRingMask;
     private int cqRingEntries;
+
+    // ------------------------------------------------------------------
+    // Ring metrics
+    // ------------------------------------------------------------------
+
+    /** All ring counters; owner-thread writes, acquire reads from snapshots. */
+    private final RingCounters counters = new RingCounters();
+    /** Thread that created/owns the ring; used to take owner-thread SQ-head observations. */
+    private Thread ownerThread;
+    /** Last kernel SQ {@code khead} observed on the owner thread, in the ring's u32 space. */
+    private int observedSqHead;
+    /** Guards the live-read / freeze transition so a snapshot can never read unmapped ring memory. */
+    private final Object metricsLock = new Object();
+    /** Final snapshot captured before the ring mapping is torn down (after-close contract). */
+    private RingMetrics frozenMetrics;
 
     public static final int AT_FDCWD = -100;
 
@@ -163,11 +279,16 @@ final class IoUringDispatcher implements AutoCloseable {
             case IORING_OP_WRITEV -> "IORING_OP_WRITEV";
             case IORING_OP_READ_FIXED -> "IORING_OP_READ_FIXED";
             case IORING_OP_WRITE_FIXED -> "IORING_OP_WRITE_FIXED";
+            case IORING_OP_TIMEOUT -> "IORING_OP_TIMEOUT";
             case IORING_OP_ASYNC_CANCEL -> "IORING_OP_ASYNC_CANCEL";
+            case IORING_OP_LINK_TIMEOUT -> "IORING_OP_LINK_TIMEOUT";
+            case IORING_OP_FALLOCATE -> "IORING_OP_FALLOCATE";
             case IORING_OP_OPENAT -> "IORING_OP_OPENAT";
             case IORING_OP_CLOSE -> "IORING_OP_CLOSE";
+            case IORING_OP_STATX -> "IORING_OP_STATX";
             case IORING_OP_READ -> "IORING_OP_READ";
             case IORING_OP_WRITE -> "IORING_OP_WRITE";
+            case IORING_OP_FTRUNCATE -> "IORING_OP_FTRUNCATE";
             default -> "OP_" + Byte.toUnsignedInt(op);
         };
     }
@@ -183,6 +304,17 @@ final class IoUringDispatcher implements AutoCloseable {
                 throw new UnsupportedOperationException("Kernel does not support IORING_REGISTER_PROBE (Linux 5.6+ required): errno=" + err + " - " + libCDispatcher.strerror(err));
             }
             int opsLen = Byte.toUnsignedInt(probeBuf.get(JAVA_BYTE, 1L));
+            opcodeSupport[0] = 0L;
+            opcodeSupport[1] = 0L;
+            opcodeSupport[2] = 0L;
+            opcodeSupport[3] = 0L;
+            for (int opIndex = 0; opIndex < opsLen; opIndex++) {
+                long opOffset = 16L + (long) opIndex * 8L;
+                short flags = probeBuf.get(JAVA_SHORT, opOffset + 2L);
+                if ((flags & IO_URING_OP_SUPPORTED) != 0) {
+                    opcodeSupport[opIndex >>> 6] |= 1L << (opIndex & 63);
+                }
+            }
             for (byte op : REQUIRED_OPCODES) {
                 int opIndex = Byte.toUnsignedInt(op);
                 if (opIndex >= opsLen) {
@@ -199,14 +331,24 @@ final class IoUringDispatcher implements AutoCloseable {
         }
     }
 
+    /**
+     * Reports whether the kernel advertised support for an opcode in the probe performed at ring
+     * creation. Only the optional opcodes outside {@link #REQUIRED_OPCODES} should be queried;
+     * required opcodes already caused ring creation to fail when unsupported.
+     */
+    boolean isOpcodeSupported(byte op) {
+        int index = Byte.toUnsignedInt(op);
+        return (opcodeSupport[index >>> 6] & (1L << (index & 63))) != 0L;
+    }
+
     static IoUringDispatcher create(int queueDepth, IoUringOptions... ioUringOptions) {
         return create(queueDepth, 0, ioUringOptions);
     }
 
     static IoUringDispatcher create(int queueDepth, int sqThreadIdleMs, IoUringOptions... ioUringOptions) {
-        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
-
         int combinedFlags = IoUringOptions.combineOptions(ioUringOptions);
+        validateSetupFlags(combinedFlags);
+        IoUringDispatcher dispatcher = getDispatcher(queueDepth);
         int ret = dispatcher.queueInit(queueDepth, sqThreadIdleMs, combinedFlags);
         if (ret < 0) {
             dispatcher.close();
@@ -230,6 +372,42 @@ final class IoUringDispatcher implements AutoCloseable {
         return dispatcher;
     }
 
+    /**
+     * Validates the public setup-flag surface before the kernel sees it, and rejects combinations
+     * or flags this implementation cannot honour. The enum intentionally mirrors the kernel's
+     * flag set, but exposing a flag that is silently ignored or only produces a cryptic
+     * {@code EINVAL} from {@code io_uring_setup} is worse than a clear error.
+     */
+    private static void validateSetupFlags(int flags) {
+        if ((flags & IoUringOptions.IORING_SETUP_DEFER_TASKRUN.value) != 0
+                && (flags & IoUringOptions.IORING_SETUP_SINGLE_ISSUER.value) == 0) {
+            throw new IllegalArgumentException(
+                    "IORING_SETUP_DEFER_TASKRUN requires IORING_SETUP_SINGLE_ISSUER");
+        }
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_SQ_AFF,
+                "SQPOLL CPU pinning has no setter in this API yet");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_CQSIZE,
+                "an explicit cq_entries value has no setter in this API yet");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_NO_MMAP,
+                "application-provided ring memory is not supported");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_REGISTERED_FD_ONLY,
+                "a registered-fd-only ring has no usable mapping");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_HYBRID_IOPOLL,
+                "hybrid IOPOLL is not implemented");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_IOPOLL,
+                "IOPOLL is not supported/tested in 0.1.0");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_R_DISABLED,
+                "a disabled ring has no enable API in this library");
+        rejectFlag(flags, IoUringOptions.IORING_SETUP_ATTACH_WQ,
+                "use getSharedWorkerRing(); ATTACH_WQ is set internally by that API");
+    }
+
+    private static void rejectFlag(int flags, IoUringOptions option, String reason) {
+        if ((flags & option.value) != 0) {
+            throw new IllegalArgumentException("Unsupported io_uring setup flag " + option.name() + ": " + reason);
+        }
+    }
+
     private static IoUringDispatcher getDispatcher(int queueDepth) {
         Arena arena = Arena.ofShared();
         MemorySegment callState = arena.allocate(LibCDispatcher.CAPTURE_STATE_LAYOUT);
@@ -241,12 +419,16 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     public IoUringDispatcher getSharedWorkerRing(int queueDepth, IoUringOptions... ioUringOptions) {
+        int result = IoUringOptions.combineOptions(ioUringOptions);
+        validateSetupFlags(result);
+        if ((result & IoUringOptions.IORING_SETUP_SQPOLL.value) != 0) {
+            throw new IllegalArgumentException(
+                    "IORING_SETUP_SQPOLL cannot be combined with IORING_SETUP_ATTACH_WQ on a shared-worker ring");
+        }
         IoUringDispatcher dispatcher = getDispatcher(queueDepth);
         MemorySegment params = NativeDispatcher.C.calloc(io_uring_params.layout().byteSize());
         try {
             int ring_fd = this.ringFd;
-
-            var result = IoUringOptions.combineOptions(ioUringOptions);
 
             io_uring_params.flags(params, result | IORING_SETUP_ATTACH_WQ.value);
             io_uring_params.wq_fd(params, ring_fd);
@@ -255,6 +437,16 @@ final class IoUringDispatcher implements AutoCloseable {
             if (ret < 0) {
                 dispatcher.close();
                 throw new RuntimeException("ret = " + ret + " " + NativeDispatcher.C.strerror(-ret));
+            }
+
+            // Probe the attached ring itself: the opcode-support cache is per dispatcher, so
+            // without this every optional opcode would be reported unsupported on the new ring
+            // (timeouts, statx, fallocate, ftruncate) even though the parent supports it.
+            try {
+                dispatcher.probeSupportedOpcodes();
+            } catch (Throwable t) {
+                dispatcher.close();
+                throw t;
             }
 
             return dispatcher;
@@ -276,6 +468,7 @@ final class IoUringDispatcher implements AutoCloseable {
         int tail = sqeTail;
 
         if (tail - head >= sqRingEntries) {
+            counters.inc(RingCounters.SQ_FULL_EVENTS);
             return 0L;
         }
 
@@ -284,6 +477,10 @@ final class IoUringDispatcher implements AutoCloseable {
 
         sqeTail = tail + 1;
         inFlightCount++;
+        if (inFlightCount > cqRingEntries) {
+            overflowRisk = true;
+        }
+        counters.inc(RingCounters.SQES_PREPARED);
 
         Sqe.zero(sqe_addr);
         if (sqeShift > 6) {
@@ -381,18 +578,196 @@ final class IoUringDispatcher implements AutoCloseable {
         Sqe.setLen(sqe, nrVecs);
     }
 
-    void prepareCancel(long sqe, long userDataToCancel, int flags) {
+    void prepareFsync(long sqe, int fd, int fsyncFlags) {
+        Sqe.setOpcode(sqe, IORING_OP_FSYNC);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, fsyncFlags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that matches the target request by its
+     * {@code user_data} value. SQE field mapping follows liburing
+     * ({@code io_uring_prep_cancel}): {@code fd=-1}, {@code addr=target user_data},
+     * {@code off=len=0}, {@code rw_flags=cancel_flags}.
+     */
+    void prepareCancelByUserData(long sqe, long userDataToCancel) {
         Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
         Sqe.setFd(sqe, -1);
         Sqe.setOff(sqe, 0L);
         Sqe.setAddr(sqe, userDataToCancel);
         Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, 0);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} that matches requests by the file they
+     * operate on ({@code io_uring_prep_cancel_fd}): {@code fd=fdOrSlot}, {@code addr=0} and
+     * {@code IORING_ASYNC_CANCEL_FD} (plus {@code IORING_ASYNC_CANCEL_FD_FIXED} for a
+     * registered-file slot) in {@code rw_flags}. The {@code extraFlags} must only contain
+     * {@code IORING_ASYNC_CANCEL_ALL}.
+     */
+    void prepareCancelFile(long sqe, int fdOrSlot, boolean fixedFile, int extraFlags) {
+        int flags = extraFlags | IORING_ASYNC_CANCEL_FD | (fixedFile ? IORING_ASYNC_CANCEL_FD_FIXED : 0);
+        Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+        Sqe.setFd(sqe, fdOrSlot);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
         Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_ASYNC_CANCEL} with {@code IORING_ASYNC_CANCEL_ALL |
+     * IORING_ASYNC_CANCEL_ANY}: cancel every request currently in flight on this ring.
+     * {@code fd=-1}, {@code addr=0}.
+     */
+    void prepareCancelAny(long sqe) {
+        Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+        Sqe.setFd(sqe, -1);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setAddr(sqe, 0L);
+        Sqe.setLen(sqe, 0);
+        Sqe.setRwFlags(sqe, IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY);
     }
 
     void prepareNop(long sqe) {
         Sqe.setOpcode(sqe, IORING_OP_NOP);
         Sqe.setFd(sqe, -1);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_FALLOCATE} SQE. Field mapping follows liburing:
+     * {@code off=offset}, {@code len=mode}, {@code addr=length}.
+     */
+    void prepareFallocate(long sqe, int fd, int mode, long offset, long length) {
+        Sqe.setOpcode(sqe, IORING_OP_FALLOCATE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, offset);
+        Sqe.setLen(sqe, mode);
+        Sqe.setAddr(sqe, length);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_FTRUNCATE} SQE. The new length travels in {@code off}.
+     */
+    void prepareFtruncate(long sqe, int fd, long length) {
+        Sqe.setOpcode(sqe, IORING_OP_FTRUNCATE);
+        Sqe.setFd(sqe, fd);
+        Sqe.setOff(sqe, length);
+        Sqe.setLen(sqe, 0);
+        Sqe.setAddr(sqe, 0L);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_STATX} SQE. Field mapping follows liburing:
+     * {@code addr=pathname}, {@code len=mask}, {@code off=statxBuffer}, {@code rw_flags=flags}.
+     */
+    void prepareStatx(long sqe, int fd, long pathnameAddr, int flags, int mask, long statxBufAddr) {
+        Sqe.setOpcode(sqe, IORING_OP_STATX);
+        Sqe.setFd(sqe, fd);
+        Sqe.setAddr(sqe, pathnameAddr);
+        Sqe.setLen(sqe, mask);
+        Sqe.setOff(sqe, statxBufAddr);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_TIMEOUT} SQE. Field mapping follows liburing:
+     * {@code fd=-1}, {@code addr=timespec}, {@code len=1}, {@code off=count}, {@code rw_flags=flags}.
+     */
+    void prepareTimeout(long sqe, long timespecAddr, long count, int flags) {
+        Sqe.setOpcode(sqe, IORING_OP_TIMEOUT);
+        Sqe.setFd(sqe, -1);
+        Sqe.setAddr(sqe, timespecAddr);
+        Sqe.setLen(sqe, 1);
+        Sqe.setOff(sqe, count);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Prepares an {@code IORING_OP_LINK_TIMEOUT} SQE. Field mapping follows liburing
+     * ({@code io_uring_prep_link_timeout}): {@code fd=-1}, {@code addr=timespec},
+     * {@code len=1}, {@code off=0}, {@code rw_flags=flags}. The SQE only has an effect when
+     * it immediately follows a submitted SQE that carries {@code IOSQE_IO_LINK}; the kernel
+     * validates that at submission time.
+     */
+    void prepareLinkTimeout(long sqe, long timespecAddr, int flags) {
+        Sqe.setOpcode(sqe, IORING_OP_LINK_TIMEOUT);
+        Sqe.setFd(sqe, -1);
+        Sqe.setAddr(sqe, timespecAddr);
+        Sqe.setLen(sqe, 1);
+        Sqe.setOff(sqe, 0L);
+        Sqe.setRwFlags(sqe, flags);
+    }
+
+    /**
+     * Returns the address of the most recently prepared but not yet submitted SQE, or
+     * {@code 0} when the current submission batch is empty. Used to validate that an
+     * {@code IORING_OP_LINK_TIMEOUT} immediately follows its target in the same batch.
+     */
+    long lastQueuedSqe() {
+        if (closed || sqKheadAddr == 0L) {
+            return 0L;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+        if (sqeTail <= head) {
+            return 0L;
+        }
+        int index = (sqeTail - 1) & sqRingMask;
+        return sqSqesAddr + ((long) index << sqeShift);
+    }
+
+    /**
+     * Allocates a single NUL byte in the ring arena and returns its address. Used as the
+     * {@code AT_EMPTY_PATH} pathname for statx. Allocated once per ring; valid until the ring closes.
+     */
+    long emptyPathAddress() {
+        if (emptyPathAddress == 0L) {
+            MemorySegment path = arena.allocate(1L, 8L);
+            path.set(JAVA_BYTE, 0L, (byte) 0);
+            emptyPathAddress = path.address();
+        }
+        return emptyPathAddress;
+    }
+
+    /**
+     * Reads {@code stx_size} (a {@code __u64} at offset 40) out of a completed 256+ byte statx buffer.
+     * The {@code struct statx} layout is architecture-stable.
+     */
+    long staticxSize(MemorySegment statxBuffer) {
+        return statxBuffer.get(JAVA_LONG, 40L);
+    }
+
+    /**
+     * Instrumented {@code io_uring_enter}: counts the enter call and, after the syscall,
+     * accounts for kernel SQ {@code khead} progress (submitted SQEs). Never allocates.
+     */
+    private long enterObserved(long fd, long toSubmit, long minComplete, long flags) {
+        counters.inc(RingCounters.ENTERS);
+        long res = enter(this.callState, fd, toSubmit, minComplete, flags, MemorySegment.NULL, 0L);
+        observeSqHead();
+        return res;
+    }
+
+    /**
+     * Accounts for SQ {@code khead} progress since the last owner-thread observation, i.e.
+     * the number of SQEs the kernel has consumed. Owner-thread only; the snapshot is only
+     * a best-effort observation and may lag the kernel by one loop pass.
+     */
+    private void observeSqHead() {
+        long address = sqKheadAddr;
+        if (address == 0L) {
+            return;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, address);
+        int consumed = head - observedSqHead;
+        if (consumed > 0) {
+            observedSqHead = head;
+            counters.add(RingCounters.SUBMITTED, consumed);
+        }
     }
 
     void submit() {
@@ -404,8 +779,10 @@ final class IoUringDispatcher implements AutoCloseable {
 
         int toSubmit = tail - head;
         if (toSubmit <= 0) {
+            observeSqHead();
             return;
         }
+        counters.inc(RingCounters.SUBMIT_BATCHES);
 
         boolean sqpoll = this.isSqPoll;
         int enterFlags = this.enterFlagsBase;
@@ -425,8 +802,9 @@ final class IoUringDispatcher implements AutoCloseable {
         }
 
         if (needEnter) {
+            boolean retriedAfterOverflowFlush = false;
             while (true) {
-                long res = enter(this.callState, enterRingFd, toSubmit, 0, enterFlags, MemorySegment.NULL, 0L);
+                long res = enterObserved(enterRingFd, toSubmit, 0, enterFlags);
                 if (res >= 0) {
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -437,9 +815,23 @@ final class IoUringDispatcher implements AutoCloseable {
                 }
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
+                    // The CQ may hold completions parked in the kernel overflow list; a
+                    // non-blocking GETEVENTS flush frees CQ slots so the submit can proceed.
+                    pollCq();
+                    head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+                    toSubmit = Math.max(0, tail - head);
+                    if (toSubmit == 0) {
+                        return;
+                    }
+                    if (!retriedAfterOverflowFlush) {
+                        retriedAfterOverflowFlush = true;
+                        continue;
+                    }
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     if (toSubmit == 0 && !sqpoll) {
@@ -448,6 +840,7 @@ final class IoUringDispatcher implements AutoCloseable {
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
@@ -456,9 +849,12 @@ final class IoUringDispatcher implements AutoCloseable {
                     }
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed to submit queue: " + libCDispatcher.strerror(err));
             }
         }
+        // SQPOLL ring without a needed wakeup: the kernel consumes SQEs asynchronously.
+        observeSqHead();
     }
 
     boolean isDeferTaskrun() {
@@ -466,27 +862,79 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     void flushDeferredTaskrun() {
-        enter(this.callState, enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+        enterObserved(enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase);
+    }
+
+    /**
+     * Rejects a wait count that can never be satisfied: a blocking wait for more than
+     * {@code cqEntries} completions could never return, because the CQ cannot hold more than
+     * that many entries at once. Turning that hang into an {@link IllegalArgumentException}
+     * makes the misuse diagnosable.
+     */
+    private void checkMinComplete(int minComplete) {
+        if (minComplete > cqRingEntries) {
+            throw new IllegalArgumentException("minComplete (" + minComplete
+                    + ") exceeds the CQ ring size (" + cqRingEntries + ")");
+        }
+    }
+
+    /**
+     * Rejects a blocking wait when no completion can possibly arrive: nothing is prepared and
+     * unreaped, or fewer submitted operations are outstanding than the wait requires (prepared
+     * SQEs count as in flight but are not published until {@link #submit()}). Owner-thread state,
+     * so the check is race-free under the single-owner contract.
+     *
+     * @param operation name used in the exception message
+     * @param needed    number of completions the caller is about to wait for
+     */
+    private void ensurePendingWork(String operation, int needed) {
+        if (inFlightCount <= 0) {
+            throw new IllegalStateException(operation + ": no operations are in flight; prepare an "
+                    + "operation and call submit() before waiting for a completion");
+        }
+        int unsubmitted = sqeTail - sqeHead;
+        int submittedOutstanding = inFlightCount - unsubmitted;
+        if (submittedOutstanding < needed) {
+            throw new IllegalStateException(operation + ": only " + submittedOutstanding
+                    + " submitted operation(s) are outstanding but " + needed + " completion(s) are"
+                    + " required; call submit() for prepared operations (or prepare and submit more"
+                    + " work) before waiting");
+        }
     }
 
     int submitAndWait(int waitNr) {
+        checkMinComplete(waitNr);
         int tail = sqeTail;
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int toSubmit = tail - head;
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
             sqeHead = tail;
+            counters.inc(RingCounters.SUBMIT_BATCHES);
         } else {
             toSubmit = 0;
         }
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
+            if (sqpoll) {
+                observeSqHead();
+            }
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
             if (available >= waitNr && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
                 return available;
+            }
+
+            if (hasOverflowRisk() && available < waitNr) {
+                pollCq();
+                cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = cqTail - cqHead;
+                if (available >= waitNr && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
+                    return available;
+                }
             }
 
             int enterFlags = (waitNr > 0 && available < waitNr) ? IORING_ENTER_GETEVENTS : 0;
@@ -512,10 +960,11 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int minComplete = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? waitNr : 0;
-            long res = enter(this.callState, enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, toSubmit, minComplete, enterFlags | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
                     cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
                     cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
                     int avail = cqTail - cqHead;
@@ -525,16 +974,19 @@ final class IoUringDispatcher implements AutoCloseable {
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed in submitAndWait: " + libCDispatcher.strerror(err));
             }
             head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -548,6 +1000,7 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     int waitCqe(MemorySegment cqePtr) {
+        ensurePendingWork("waitForResult", 1);
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -558,12 +1011,21 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (hasOverflowRisk()) {
+                // Completions may be parked in the kernel overflow list; drain it with a
+                // non-blocking GETEVENTS enter before committing to a blocking wait.
+                pollCq();
+                continue;
+            }
+
+            long res = enterObserved(enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 return -err;
             }
         }
@@ -572,11 +1034,18 @@ final class IoUringDispatcher implements AutoCloseable {
     void cqAdvance(int count) {
         if (count <= 0) return;
         inFlightCount -= count;
+        if (inFlightCount <= 0) {
+            overflowRisk = false;
+        }
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + count);
     }
 
     int waitCqeNr(int waitNr) {
+        checkMinComplete(waitNr);
+        if (waitNr > 0) {
+            ensurePendingWork("waitForBatchResult", waitNr);
+        }
         while (true) {
             int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
             int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -585,12 +1054,28 @@ final class IoUringDispatcher implements AutoCloseable {
                 return 0;
             }
 
-            long res = enter(this.callState, enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (hasOverflowRisk()) {
+                // Flush the overflow list, then either return if enough completions became
+                // visible or fall through to the blocking enter. Do NOT `continue` here: when
+                // pollCq leaves the CQ non-empty but below waitNr, a continue would busy-spin
+                // issuing non-blocking enters instead of blocking.
+                pollCq();
+                head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
+                tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = tail - head;
+                if (available >= waitNr) {
+                    return 0;
+                }
+            }
+
+            long res = enterObserved(enterRingFd, 0, waitNr, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 return -err;
             }
         }
@@ -694,6 +1179,7 @@ final class IoUringDispatcher implements AutoCloseable {
         long cq_ktail = cq_ring_ptr + io_cqring_offsets.tail(cq_off);
         long cq_kring_mask = cq_ring_ptr + io_cqring_offsets.ring_mask(cq_off);
         long cq_kring_entries = cq_ring_ptr + io_cqring_offsets.ring_entries(cq_off);
+        long cq_overflow = cq_ring_ptr + io_cqring_offsets.overflow(cq_off);
         long cq_cqes_addr = cq_ring_ptr + io_cqring_offsets.cqes(cq_off);
 
         int cq_mask = (int) VH_INT.get(GLOBAL_MEMORY, cq_kring_mask);
@@ -724,8 +1210,14 @@ final class IoUringDispatcher implements AutoCloseable {
         this.cqKheadAddr = cq_khead;
         this.cqKtailAddr = cq_ktail;
         this.cqCqesAddr = cq_cqes_addr;
+        this.cqOverflowAddr = cq_overflow;
         this.cqRingMask = cq_mask;
         this.cqRingEntries = cq_ents;
+
+        // Ring metrics: the ring is owned by the creating thread; the initial kernel
+        // heads are the baseline for the "submitted" (SQ khead progress) counter.
+        this.ownerThread = Thread.currentThread();
+        this.observedSqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sq_khead);
 
         if (this.isSingleIssuer) {
             registerRingFd();
@@ -850,6 +1342,71 @@ final class IoUringDispatcher implements AutoCloseable {
         return allocateAndRegisterBuffers(bufferSize, nrIovecs).buffers();
     }
 
+    /**
+     * Unregisters all registered buffers. Returns 0 on success or {@code -errno}.
+     * Clears the dispatcher's mirror of the registered buffer table on success.
+     */
+    int unregisterBuffers() {
+        long res = register(this.callState, this.ringFd, IORING_UNREGISTER_BUFFERS, MemorySegment.NULL, 0L);
+        if (res < 0) {
+            return -LibCDispatcher.errno(this.callState);
+        }
+        setRegisteredBuffers(null);
+        return 0;
+    }
+
+    /**
+     * Best-effort update of registered buffers through {@code IORING_REGISTER_BUFFERS_UPDATE}.
+     * The kernel takes a {@code struct io_uring_rsrc_update2} (32 bytes) whose {@code nr_args}
+     * size is {@code sizeof(struct io_uring_rsrc_update2)}, not the number of buffers.
+     * Returns 0 on success or {@code -errno} (never throws for kernel rejection).
+     */
+    int registerBuffersUpdate(int offset, MemorySegment[] buffers) {
+        int count = buffers.length;
+        if (count == 0) {
+            return 0;
+        }
+        try (Arena tempArena = Arena.ofConfined()) {
+            MemorySegment iovecArray = Iovec.allocateArray(count, tempArena);
+            for (int i = 0; i < count; i++) {
+                MemorySegment nthIovec = Iovec.asSlice(iovecArray, i);
+                Iovec.iov_base(nthIovec, buffers[i]);
+                Iovec.iov_len(nthIovec, buffers[i].byteSize());
+            }
+            MemorySegment up = tempArena.allocate(32L, 8L);
+            up.set(JAVA_INT, 0L, offset);
+            up.set(JAVA_INT, 4L, 0);
+            up.set(JAVA_LONG, 8L, iovecArray.address());
+            up.set(JAVA_LONG, 16L, 0L);
+            up.set(JAVA_INT, 24L, count);
+            up.set(JAVA_INT, 28L, 0);
+            long res = register(this.callState, this.ringFd, IORING_REGISTER_BUFFERS_UPDATE, up, 32L);
+            if (res < 0) {
+                return -LibCDispatcher.errno(this.callState);
+            }
+            return (int) res;
+        }
+    }
+
+    /**
+     * Unregisters the whole registered file table. Returns 0 on success or {@code -errno}.
+     */
+    int unregisterFiles() {
+        long res = register(this.callState, this.ringFd, IORING_UNREGISTER_FILES, MemorySegment.NULL, 0L);
+        if (res < 0) {
+            return -LibCDispatcher.errno(this.callState);
+        }
+        return 0;
+    }
+
+    /**
+     * Number of SQEs prepared but not yet completed (the counter also decremented when completions
+     * are reaped). Used by {@code JuringFile}'s ownership guard.
+     */
+    int inFlightCount() {
+        return inFlightCount;
+    }
+
     int registerFiles(MemorySegment fdArray, int count) {
         int fd = this.ringFd;
         long res = register(this.callState, fd, IORING_REGISTER_FILES, fdArray, count);
@@ -935,6 +1492,10 @@ final class IoUringDispatcher implements AutoCloseable {
      * @return number of completions actually reaped
      */
     private int reapAvailable(int head, int available, int maxReap, ResultConsumer consumer) {
+        if (available >= cqRingEntries && cqRingEntries > 0) {
+            // The CQ was full: the kernel may have parked further completions in its overflow list.
+            overflowRisk = true;
+        }
         if (available <= 0) {
             return 0;
         }
@@ -953,10 +1514,14 @@ final class IoUringDispatcher implements AutoCloseable {
 
                 populateResultFromCqe(reusableResult, userData, res, flags);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 consumer.accept(reusableResult);
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -965,7 +1530,17 @@ final class IoUringDispatcher implements AutoCloseable {
     int peekForBatchResult(int batchSize, ResultConsumer consumer) {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-        return reapAvailable(head, tail - head, batchSize, consumer);
+        int reaped = reapAvailable(head, tail - head, batchSize, consumer);
+        if (reaped == 0 && inFlightCount > 0 && hasOverflowRisk()) {
+            // Empty visible CQ but outstanding work may have overflowed; drain the kernel
+            // overflow list with a non-blocking GETEVENTS enter and retry once.
+            if (pollCq() > 0) {
+                head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                reaped = reapAvailable(head, tail - head, batchSize, consumer);
+            }
+        }
+        return reaped;
     }
 
     @FunctionalInterface
@@ -975,6 +1550,15 @@ final class IoUringDispatcher implements AutoCloseable {
 
     int sqRingEntries() {
         return sqRingEntries;
+    }
+
+    /** Number of SQEs prepared but not yet submitted to the kernel. */
+    int pendingSqes() {
+        if (sqKheadAddr == 0L) {
+            return 0;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+        return sqeTail - head;
     }
 
     long[] registeredBufferAddresses() {
@@ -1005,10 +1589,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 int res = Cqe.getRes(address);
                 int flags = Cqe.getFlags(address);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 consumer.accept(userData, res, flags);
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return count;
@@ -1018,6 +1606,13 @@ final class IoUringDispatcher implements AutoCloseable {
         int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
         int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
         int available = tail - head;
+        if (available <= 0 && inFlightCount > 0 && hasOverflowRisk()) {
+            if (pollCq() > 0) {
+                head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = tail - head;
+            }
+        }
         if (available <= 0) {
             return List.of();
         }
@@ -1039,10 +1634,14 @@ final class IoUringDispatcher implements AutoCloseable {
                 r.setRegisteredBuffers(this.registeredBuffers);
                 populateResultFromCqe(r, userData, res, flags);
                 processed = i + 1;
+                counters.classifyCqe(res);
                 ret.add(r);
             }
         } finally {
             inFlightCount -= processed;
+            if (inFlightCount <= 0) {
+                overflowRisk = false;
+            }
             VH_INT.setRelease(GLOBAL_MEMORY, cqKheadAddr, head + processed);
         }
         return ret;
@@ -1067,6 +1666,10 @@ final class IoUringDispatcher implements AutoCloseable {
     }
 
     int waitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        checkMinComplete(minComplete);
+        if (minComplete > 0) {
+            ensurePendingWork("waitForBatchResult", minComplete);
+        }
         while (true) {
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
@@ -1075,35 +1678,66 @@ final class IoUringDispatcher implements AutoCloseable {
                 return reapAvailable(cqHead, available, maxReap, consumer);
             }
 
-            long res = enter(this.callState, enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
+            if (hasOverflowRisk()) {
+                // Outstanding work exceeds the visible CQ: drain the kernel overflow list
+                // before blocking, otherwise a wait with min_complete > 0 can hang forever.
+                pollCq();
+                cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = cqTail - cqHead;
+                if (available >= minComplete) {
+                    return reapAvailable(cqHead, available, maxReap, consumer);
+                }
+            }
+
+            long res = enterObserved(enterRingFd, 0, minComplete, IORING_ENTER_GETEVENTS | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Error while waiting for cqe: " + libCDispatcher.strerror(err));
             }
         }
     }
 
     int submitAndWaitForBatchResult(int minComplete, int maxReap, ResultConsumer consumer) {
+        checkMinComplete(minComplete);
         int tail = sqeTail;
         int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
         int toSubmit = tail - head;
         if (toSubmit > 0) {
             VH_INT.setRelease(GLOBAL_MEMORY, sqKtailAddr, tail);
             sqeHead = tail;
+            counters.inc(RingCounters.SUBMIT_BATCHES);
         } else {
             toSubmit = 0;
         }
 
         boolean sqpoll = this.isSqPoll;
         while (true) {
+            if (sqpoll) {
+                observeSqHead();
+            }
             int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
             int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
             int available = cqTail - cqHead;
             if (available >= minComplete && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
                 return reapAvailable(cqHead, available, maxReap, consumer);
+            }
+
+            if (hasOverflowRisk() && available < minComplete) {
+                // Drain overflow/deferred completions with a non-blocking enter before a
+                // blocking wait, so min_complete can always be satisfied.
+                pollCq();
+                cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                available = cqTail - cqHead;
+                if (available >= minComplete && toSubmit == 0 && (!this.isDeferTaskrun || available > 0)) {
+                    return reapAvailable(cqHead, available, maxReap, consumer);
+                }
             }
 
             int enterFlags = (minComplete > 0 && available < minComplete) ? IORING_ENTER_GETEVENTS : 0;
@@ -1138,15 +1772,17 @@ final class IoUringDispatcher implements AutoCloseable {
             }
 
             int waitEvents = (enterFlags & IORING_ENTER_GETEVENTS) != 0 ? minComplete : 0;
-            long res = enter(this.callState, enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase, MemorySegment.NULL, 0L);
+            long res = enterObserved(enterRingFd, toSubmit, waitEvents, enterFlags | enterFlagsBase);
             if (res < 0) {
                 int err = LibCDispatcher.errno(this.callState);
                 if (err == 16 /* EBUSY */) {
-                    cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
-                    cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-                    int avail = cqTail - cqHead;
-                    if (avail > 0) {
-                        int reaped = reapAvailable(cqHead, avail, maxReap, consumer);
+                    counters.inc(RingCounters.SUBMIT_ERRORS);
+                    // Flush the kernel CQ-overflow list first: it frees CQ slots for the
+                    // completions the kernel is trying to post.
+                    if (pollCq() > 0) {
+                        cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                        cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                        int reaped = reapAvailable(cqHead, cqTail - cqHead, maxReap, consumer);
                         if (reaped > 0) {
                             head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                             toSubmit = Math.max(0, tail - head);
@@ -1156,16 +1792,19 @@ final class IoUringDispatcher implements AutoCloseable {
                     throw new IllegalStateException("Completion queue ring is full (EBUSY); reap completions first");
                 }
                 if (err == 11 /* EAGAIN */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
                 if (err == 4 /* EINTR */) {
+                    counters.inc(RingCounters.SUBMIT_RETRIES);
                     tail = sqeTail;
                     head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
                     toSubmit = Math.max(0, tail - head);
                     continue;
                 }
+                counters.inc(RingCounters.SUBMIT_ERRORS);
                 throw new RuntimeException("Failed in submitAndWaitForBatchResult: " + libCDispatcher.strerror(err));
             }
             head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
@@ -1196,6 +1835,7 @@ final class IoUringDispatcher implements AutoCloseable {
 
         target.setRegisteredBuffers(this.registeredBuffers);
         populateResultFromCqe(target, userData, res, flags);
+        counters.classifyCqe(res);
         cqAdvance(1);
         return target;
     }
@@ -1217,6 +1857,13 @@ final class IoUringDispatcher implements AutoCloseable {
             case 0 /* READ */, 11 /* READ_POOLED */, 14 /* READ_EXT */ -> {
                 long bufferAddr = UserData.getPayload(userData);
                 target.set(userData, result, OperationType.valueOf(typeIndex), bufferAddr, null, -1, null, cqeFlags);
+            }
+            case UserData.INTERNAL_READ_EXT_TYPE -> {
+                // Unique-id completion fix: non-fixed read (JuringFile / prepareReadUnique)
+                // carrying an op id instead of the buffer address, so concurrent same-buffer
+                // reads stay distinguishable. No Result.validBuffer (the caller owns the
+                // buffer); reported as READ_EXT.
+                target.set(userData, result, OperationType.READ_EXT, 0L, null, -1, null, cqeFlags);
             }
             case 1 /* WRITE */ -> {
                 long buffAddr = UserData.getPayload(userData);
@@ -1274,6 +1921,32 @@ final class IoUringDispatcher implements AutoCloseable {
             case 13 /* WRITE_EXT */ -> {
                 target.set(userData, result, OperationType.WRITE_EXT, 0L, null, -1, null, cqeFlags);
             }
+            case 15 /* FSYNC */ -> {
+                target.set(userData, result, OperationType.FSYNC, 0L, null, -1, null, cqeFlags);
+            }
+            case 16 /* TIMEOUT */ -> {
+                target.set(userData, result, OperationType.TIMEOUT, 0L, null, -1, null, cqeFlags);
+            }
+            case 17 /* FALLOCATE */ -> {
+                target.set(userData, result, OperationType.FALLOCATE, 0L, null, -1, null, cqeFlags);
+            }
+            case 18 /* FTRUNCATE */ -> {
+                target.set(userData, result, OperationType.FTRUNCATE, 0L, null, -1, null, cqeFlags);
+            }
+            case 19 /* STATX */ -> {
+                target.set(userData, result, OperationType.STATX, 0L, null, -1, null, cqeFlags);
+            }
+            case 20 /* LINK_TIMEOUT */ -> {
+                // A linked timeout completion owns no user buffer: it only reports the timer
+                // result (-ETIME when it fired, -ECANCELED when the target won the race).
+                target.set(userData, result, OperationType.LINK_TIMEOUT, 0L, null, -1, null, cqeFlags);
+            }
+            default -> {
+                // Unknown/unmatched user_data type (e.g. an internal sentinel): report it as a
+                // NOP-shaped completion with no buffer ownership instead of leaving the reusable
+                // Result populated with stale ownership fields.
+                target.set(userData, result, OperationType.NOP, 0L, null, -1, null, cqeFlags);
+            }
         }
     }
 
@@ -1281,52 +1954,299 @@ final class IoUringDispatcher implements AutoCloseable {
         queueExit();
     }
 
-    private void drainAndCancel() {
-        try {
-            int unsubmitted = sqeTail - sqeHead;
-            if (unsubmitted > 0) {
-                submit();
+    // ------------------------------------------------------------------
+    // Ring metrics (counters, occupancy and the CQE classification rule)
+    // ------------------------------------------------------------------
+
+    /**
+     * Immutable snapshot of this ring's counters and occupancy for {@code JUring.ringMetrics()}.
+     * Safe from any thread before/while the ring is open and (returning the frozen final
+     * snapshot) after close; never throws and never blocks on the ring owner. Snapshots are a
+     * best-effort telemetry view, not linearizable.
+     */
+    RingMetrics ringMetrics() {
+        synchronized (metricsLock) {
+            RingMetrics frozen = frozenMetrics;
+            return frozen != null ? frozen : snapshotLive();
+        }
+    }
+
+    /**
+     * Captures the final snapshot before the ring memory is unmapped. Runs under
+     * {@link #metricsLock}: once it returns, no reader can still be inside
+     * {@link #snapshotLive()} (every later snapshot sees {@link #frozenMetrics}), so the
+     * subsequent munmap can never race a snapshot read.
+     */
+    private void freezeMetrics() {
+        synchronized (metricsLock) {
+            if (frozenMetrics != null) {
+                return;
             }
-            if (inFlightCount > 0) {
-                long cancelSqe = getSqe();
-                if (cancelSqe != 0L) {
-                    Sqe.zero(cancelSqe);
-                    Sqe.setOpcode(cancelSqe, IORING_OP_ASYNC_CANCEL);
-                    Sqe.setFd(cancelSqe, -1);
-                    Sqe.setRwFlags(cancelSqe, 5); // IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY
-                    Sqe.setUserData(cancelSqe, Long.MIN_VALUE + 1);
-                    submit();
-                }
-                while (inFlightCount > 0) {
-                    long res = enter(this.callState, enterRingFd, 0, 1, IORING_ENTER_GETEVENTS | enterFlagsBase, MemorySegment.NULL, 0L);
-                    if (res < 0) {
-                        int err = LibCDispatcher.errno(this.callState);
-                        if (err != 11 /* EAGAIN */ && err != 16 /* EBUSY */ && err != 4 /* EINTR */) {
-                            break;
-                        }
-                    }
-                    int head = (int) VH_INT.get(GLOBAL_MEMORY, cqKheadAddr);
-                    int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
-                    int available = tail - head;
-                    if (available > 0) {
-                        reapAvailable(head, available, available, Result::close);
-                    }
-                }
+            RingMetrics live = snapshotLive();
+            frozenMetrics = new RingMetrics(
+                    live.sqesPrepared(), live.submitted(), live.reaped(), live.completed(),
+                    live.failed(), live.cancelled(), live.timedOut(), live.inFlight(),
+                    live.enters(), live.submitBatches(), live.submitErrors(), live.submitRetries(),
+                    live.sqFullEvents(),
+                    0L, live.sqEntries(), 0L, live.cqEntries(), live.cqOverflowEvents(),
+                    live.cqFlushEnters());
+        }
+    }
+
+    /** Builds the current snapshot; caller holds {@link #metricsLock}. */
+    private RingMetrics snapshotLive() {
+        if (Thread.currentThread() == ownerThread) {
+            // Owner-thread snapshot: fold in any SQ-head progress observed since the last
+            // flush (also covers SQPOLL rings that consume SQEs without an enter call).
+            observeSqHead();
+        }
+        int sqEntries = this.sqRingEntries;
+        int cqEntries = this.cqRingEntries;
+        long sqQueued = 0L;
+        long cqReady = 0L;
+        long cqOverflowEvents = 0L;
+        if (sqKheadAddr != 0L) {
+            int sqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            long queued = (long) sqeTail - sqHead;
+            if (queued < 0L) {
+                queued = 0L;
+            }
+            sqQueued = Math.min(queued, Math.max(0, sqEntries));
+            if (cqKheadAddr != 0L) {
+                int cqHead = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+                int cqTail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+                cqReady = Math.max(0L, (long) cqTail - cqHead);
+            }
+            if (cqOverflowAddr != 0L) {
+                cqOverflowEvents = Integer.toUnsignedLong(
+                        (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqOverflowAddr));
+            }
+        }
+        long submitted = counters.get(RingCounters.SUBMITTED);
+        long reaped = counters.get(RingCounters.REAPED);
+        long inFlight = submitted - reaped;
+        if (inFlight < 0L) {
+            inFlight = 0L;
+        }
+        return new RingMetrics(
+                counters.get(RingCounters.SQES_PREPARED),
+                submitted,
+                reaped,
+                counters.get(RingCounters.COMPLETED),
+                counters.get(RingCounters.FAILED),
+                counters.get(RingCounters.CANCELLED),
+                counters.get(RingCounters.TIMED_OUT),
+                inFlight,
+                counters.get(RingCounters.ENTERS),
+                counters.get(RingCounters.SUBMIT_BATCHES),
+                counters.get(RingCounters.SUBMIT_ERRORS),
+                counters.get(RingCounters.SUBMIT_RETRIES),
+                counters.get(RingCounters.SQ_FULL_EVENTS),
+                sqQueued,
+                sqEntries,
+                cqReady,
+                cqEntries,
+                cqOverflowEvents,
+                counters.get(RingCounters.CQ_FLUSH_ENTERS));
+    }
+
+    // ------------------------------------------------------------------
+    // Bounded shutdown
+    // ------------------------------------------------------------------
+
+    /** Default deadline for {@link #close()} before the ring is force-closed. */
+    static final long DEFAULT_CLOSE_TIMEOUT_MILLIS = 2000L;
+
+    /** Park slice used by the bounded drain loops (100 µs). */
+    private static final long CLOSE_POLL_SLICE_NANOS = 100_000L;
+
+    /** Completions with {@code -ECANCELED} reaped by the most recent bounded close. */
+    private long cancelledAtClose;
+    /** Requests still in flight when the most recent bounded close force-closed the ring. */
+    private int abandonedAtClose;
+
+    long cancelledAtClose() {
+        return cancelledAtClose;
+    }
+
+    int abandonedAtClose() {
+        return abandonedAtClose;
+    }
+
+    /**
+     * Non-blocking CQ poll. Asks the kernel to run deferred task work (needed for
+     * {@code IORING_SETUP_DEFER_TASKRUN} rings, whose completions are only posted while
+     * inside {@code io_uring_enter}) and returns the number of CQEs currently available.
+     * Never blocks: the enter uses {@code min_complete=0}.
+     *
+     * @return number of completions available to reap
+     */
+    int pollCq() {
+        if (closed || ringFd < 0 || cqKheadAddr == 0L) {
+            return 0;
+        }
+        counters.inc(RingCounters.CQ_FLUSH_ENTERS);
+        boolean entered = false;
+        try {
+            if (enterObserved(enterRingFd, 0, 0, IORING_ENTER_GETEVENTS | enterFlagsBase) < 0L) {
+                counters.inc(RingCounters.SUBMIT_ERRORS);
+            } else {
+                entered = true;
             }
         } catch (Throwable ignored) {
-            // Disabled rings (IORING_SETUP_R_DISABLED) or invalid fds can fail submit; proceed to close
+            // A disabled/broken ring is force-closed by the caller; polling is best effort.
         }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        int available = tail - head;
+        if (entered && available <= 0) {
+            // A successful flush with room in the CQ that exposes nothing means the overflow
+            // list was empty; only then is it safe to drop the sticky overflow-risk flag.
+            overflowRisk = false;
+        }
+        return available;
+    }
+
+    /**
+     * Whether the kernel may be holding completions in its CQ-overflow list: completions become
+     * unreapable without an explicit flush when more requests are outstanding than the CQ can
+     * hold. This is computed, not a one-shot flag, because a single flush may expose only one
+     * CQ-worth of entries and deep overflow (more than one CQ size) needs repeated flushes.
+     */
+    private boolean hasOverflowRisk() {
+        return overflowRisk;
+    }
+
+    private final ResultConsumer closeResultConsumer = result -> {        if ((int) result.result() == -ECANCELED) {
+            cancelledAtClose++;
+        }
+        result.close();
+    };
+
+    /** Reaps every completion currently in the CQ ring (non-blocking). */
+    private int reapAllAvailable() {
+        if (cqKheadAddr == 0L) {
+            return 0;
+        }
+        int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKheadAddr);
+        int tail = (int) VH_INT.getAcquire(GLOBAL_MEMORY, cqKtailAddr);
+        return reapAvailable(head, tail - head, Integer.MAX_VALUE, closeResultConsumer);
+    }
+
+    /**
+     * Submits a best-effort {@code IORING_OP_ASYNC_CANCEL} with {@code ALL | ANY}: every
+     * request currently queued/in flight on the ring is cancelled. Idempotent and quiet;
+     * returns {@code true} when a cancel request was submitted.
+     */
+    private boolean submitCancelAllForClose() {
+        try {
+            int head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            if (sqeTail - head >= sqRingEntries) {
+                submit();
+                head = (int) VH_INT.getAcquire(GLOBAL_MEMORY, sqKheadAddr);
+            }
+            long sqe = getSqe();
+            if (sqe == 0L) {
+                submit();
+                sqe = getSqe();
+            }
+            if (sqe == 0L) {
+                return false;
+            }
+            Sqe.setOpcode(sqe, IORING_OP_ASYNC_CANCEL);
+            Sqe.setFd(sqe, -1);
+            Sqe.setOff(sqe, 0L);
+            Sqe.setAddr(sqe, 0L);
+            Sqe.setLen(sqe, 0);
+            Sqe.setRwFlags(sqe, IORING_ASYNC_CANCEL_ALL | IORING_ASYNC_CANCEL_ANY);
+            // A well-formed user_data type keeps populateResultFromCqe's reusable Result clean.
+            Sqe.setUserData(sqe, UserData.encode(OperationType.CANCEL, 0L));
+            submit();
+            return true;
+        } catch (Throwable ignored) {
+            // Disabled rings or a full SQ at teardown: fall through to the bounded drain.
+            return false;
+        }
+    }
+
+    /**
+     * Drains the CQ ring until no request is in flight or the deadline expires. Never blocks
+     * longer than the deadline; uses non-blocking polls + {@code enter(min_complete=0)} (to
+     * flush deferred task work) + short parks.
+     *
+     * @return number of requests still in flight at return (0 on a clean drain)
+     */
+    private int drainToIdleBounded(long deadlineNanos) {
+        while (inFlightCount > 0) {
+            if (reapAllAvailable() > 0) {
+                continue;
+            }
+            if (pollCq() > 0) {
+                continue;
+            }
+            long remaining = deadlineNanos - System.nanoTime();
+            if (remaining <= 0) {
+                break;
+            }
+            LockSupport.parkNanos(Math.min(remaining, CLOSE_POLL_SLICE_NANOS));
+        }
+        return inFlightCount;
+    }
+
+    /**
+     * Bounded ring shutdown: submits queued SQEs, cancels every in-flight request
+     * ({@code ASYNC_CANCEL ALL|ANY}), reaps completions with a deadline enforced by
+     * non-blocking polls and short parks, then force-closes the ring. Never throws and never
+     * waits longer than {@code timeoutMillis} for completions (plus the final force-close
+     * which is syscall-bound and cannot block on I/O).
+     * <p>
+     * When the deadline expires, requests that never completed are counted in
+     * {@link #abandonedAtClose()} and their CQEs are dropped by the munmap; the kernel
+     * releases the requests with the ring fd. Completions with {@code -ECANCELED} reaped
+     * during the drain are counted in {@link #cancelledAtClose()}. Idempotent.
+     *
+     * @param timeoutMillis deadline in milliseconds, {@code >= 0} ({@code 0} = cancel and
+     *                      force-close immediately after one reap pass)
+     * @return number of abandoned requests
+     */
+    int closeBounded(long timeoutMillis) {
+        if (closed) {
+            return abandonedAtClose;
+        }
+        try {
+            if (ringFd >= 0 && sqKheadAddr != 0L) {
+                try {
+                    submit();
+                } catch (Throwable ignored) {
+                    // Best effort: force-close below.
+                }
+                if (inFlightCount > 0) {
+                    submitCancelAllForClose();
+                }
+                long deadline = System.nanoTime() + Math.max(0L, timeoutMillis) * 1_000_000L;
+                drainToIdleBounded(deadline);
+                if (inFlightCount > 0) {
+                    // Last chance: collect completions that are already posted before the
+                    // mmap is torn down, so they are not lost silently.
+                    reapAllAvailable();
+                }
+                abandonedAtClose = Math.max(0, inFlightCount);
+            }
+        } finally {
+            // Capture the final metrics snapshot while the ring memory is still mapped;
+            // freezeMetrics() also serialises with concurrent snapshots, so the munmap below
+            // can never race a foreign-thread ringMetrics() read.
+            freezeMetrics();
+            closed = true;
+            closeRing();
+            iovecBlockPool.close();
+            arena.close();
+        }
+        return abandonedAtClose;
     }
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
-        drainAndCancel();
-        closed = true;
-        closeRing();
-        iovecBlockPool.close();
-        arena.close();
+        closeBounded(DEFAULT_CLOSE_TIMEOUT_MILLIS);
     }
 }
