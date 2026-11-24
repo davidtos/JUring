@@ -14,8 +14,12 @@ docs/write-state-3way-protocol.md ("Run 2 analysis contingency"):
   * paired per-generation ratios with 90%/95% CIs;
   * the ranking is only emitted if every pre-registered check passes.
 
+Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
+(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
+g1 and pass1 forms.
+
 Usage:
-    python3 bench/write/analyze_write_positions.py --session DIR --gens g1,g2,g3,g4,g5 --out DIR
+    python3 bench/write/analyze_write_positions.py --session DIR --passes pass1,pass2 --out DIR
 """
 import argparse
 import csv
@@ -26,15 +30,15 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bench"))
-from analysis import stats  # noqa: E402
+from analysis import cells, stats  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "frozen_write_state", os.path.join(REPO, "bench", "stepd", "analyze_write_state.py"))
+    "frozen_write_state", os.path.join(REPO, "bench", "host-setup", "analyze_write_state.py"))
 aw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aw)
 
-CELLS = ("W7", "W8")
-CELL_QD = {"W7": "64", "W8": "128"}
+CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
+CELL_QD = {cell: str(cells.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 ARMS = [
     ("juring", "std", "JUring"),
@@ -66,54 +70,56 @@ def load_rows(d):
         return list(csv.DictReader(fh, delimiter="\t"))
 
 
-def collect(session, gens):
-    per = {}          # (gen, cell, engine, variant) -> iops
-    slot = {}         # (gen, cell, engine, variant) -> 1-based run slot
-    frozen = {}       # gen -> bool
-    gate_spread = {}  # (gen, cell) -> max/min of the three frozen arms
-    for g in gens:
-        d = os.path.join(session, g)
+def collect(session, passes):
+    per = {}          # (pass, cell, engine, variant) -> iops
+    slot = {}         # (pass, cell, engine, variant) -> 1-based run slot
+    frozen = {}       # pass -> bool
+    gate_spread = {}  # (pass, cell) -> max/min of the three frozen arms
+    for token in passes:
+        name = cells.pass_name(token)
+        d = cells.pass_dir(session, token)
         rows = load_rows(d)
-        frozen[g] = bool(aw.gen_verdict(d)["pass"])
+        frozen[name] = bool(aw.gen_verdict(d)["pass"])
         order = {}
         for r in rows:
-            cell = r["case"]
+            cell = cells.slug(r["case"])
             if cell not in CELLS:
                 continue
             key = (r["engine"], r["variant"])
             order.setdefault(cell, []).append(key)
-            per[(g, cell, r["engine"], r["variant"])] = fnum(r["iops"]) if r["status"] == "ok" else None
+            per[(name, cell, r["engine"], r["variant"])] = (
+                fnum(r["iops"]) if r["status"] == "ok" else None)
         for cell in CELLS:
             for i, (engine, variant) in enumerate(order.get(cell, []), start=1):
-                slot[(g, cell, engine, variant)] = i
-            levels = [per[(g, cell, e, v)] for e, v, _l in ARMS
-                      if (e, v) in order.get(cell, []) and per[(g, cell, e, v)]]
+                slot[(name, cell, engine, variant)] = i
+            levels = [per[(name, cell, e, v)] for e, v, _l in ARMS
+                      if (e, v) in order.get(cell, []) and per[(name, cell, e, v)]]
             if len(levels) == 3:
-                gate_spread[(g, cell)] = max(levels) / min(levels)
+                gate_spread[(name, cell)] = max(levels) / min(levels)
     return per, slot, frozen, gate_spread
 
 
-def summary(per, gens, cell, engine, variant):
-    vals = [per[(g, cell, engine, variant)] for g in gens
-            if per.get((g, cell, engine, variant))]
+def summary(per, passes, cell, engine, variant):
+    vals = [per[(p, cell, engine, variant)] for p in passes
+            if per.get((p, cell, engine, variant))]
     return stats.describe(vals)
 
 
-def position_table(per, slot, gens, cell, engine, variant):
+def position_table(per, slot, passes, cell, engine, variant):
     by_pos = {}
-    for g in gens:
-        iops = per.get((g, cell, engine, variant))
-        pos = slot.get((g, cell, engine, variant))
+    for p in passes:
+        iops = per.get((p, cell, engine, variant))
+        pos = slot.get((p, cell, engine, variant))
         if iops and pos:
             by_pos.setdefault(pos, []).append(iops)
     return by_pos
 
 
-def ratio_for(per, gens, cell, left, right):
+def ratio_for(per, passes, cell, left, right):
     lreps, rreps = [], []
-    for i, g in enumerate(gens):
-        a = per.get((g, cell, *left))
-        b = per.get((g, cell, *right))
+    for i, p in enumerate(passes):
+        a = per.get((p, cell, *left))
+        b = per.get((p, cell, *right))
         if a and b:
             lreps.append({"rep_index": i, "iops": a})
             rreps.append({"rep_index": i, "iops": b})
@@ -133,18 +139,18 @@ def verdict_for(st):
     return "INCONCLUSIVE (interval spans the 5% bar)"
 
 
-def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
+def write_report(outdir, session, passes, per, slot, frozen, gate_spread):
     os.makedirs(outdir, exist_ok=True)
-    n_frozen_valid = sum(1 for g in gens if frozen[g])
-    n_gate_failed = len(gens) - n_frozen_valid
+    n_frozen_valid = sum(1 for p in passes if frozen[p])
+    n_gate_failed = len(passes) - n_frozen_valid
     cell_data = {}
     checks = {"cv_ok": True, "position_ok": True, "gate_failures_ok": n_gate_failed >= MIN_GATE_FAILURES,
               "ratio_ok": True}
     for cell in CELLS:
         cell_data[cell] = {}
         for engine, variant, _label in ARMS:
-            d = summary(per, gens, cell, engine, variant)
-            pos = position_table(per, slot, gens, cell, engine, variant)
+            d = summary(per, passes, cell, engine, variant)
+            pos = position_table(per, slot, passes, cell, engine, variant)
             pos_means = {p: sum(v) / len(v) for p, v in pos.items()}
             pos_var = (max(pos_means.values()) / min(pos_means.values())
                        if len(pos_means) > 1 else 1.0)
@@ -157,7 +163,7 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
                 "position_means": pos_means, "position_variation": pos_var,
             }
         for left, right, name in COMPARATORS:
-            st = ratio_for(per, gens, cell, left, right)
+            st = ratio_for(per, passes, cell, left, right)
             cell_data[cell][name] = st
             if st.get("n_pairs", 0) >= 2 and st.get("ci90_low") is not None:
                 if not (st["ci90_low"] > 1.05 or st["ci90_high"] < 0.95
@@ -169,20 +175,21 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
     lines.append(f"- session: `{session}`")
     lines.append("- protocol: [docs/write-state-3way-protocol.md](../docs/write-state-3way-protocol.md) "
                  "('Run 2 analysis contingency', fixed before this campaign finished)")
-    lines.append(f"- generations: {', '.join(gens)}; frozen state-controlled gate: "
-                 f"**{n_frozen_valid}/{len(gens)} valid**, INCONCLUSIVE because the per-generation "
+    lines.append("- passes: " + ", ".join(cells.pass_label(p) for p in passes)
+                 + "; frozen state-controlled gate: "
+                 f"**{n_frozen_valid}/{len(passes)} valid**, INCONCLUSIVE because the per-pass "
                  f"`max/min` bound rejects the spread")
     lines.append("- windows: 60 s warmup + 60 s measured per arm, fresh process, CPU 2, "
                  "continuous post-burn-in state on a near-empty same-model NVMe "
-                 "(`nvme2n1p1`, 6% used; 400 GiB SLC burn-in before generation 1).")
-    lines.append("- engine order rotated per generation (JUring/fio/Seastar 3-cycle), so each engine "
+                 "(`nvme2n1p1`, 6% used; 400 GiB SLC burn-in before pass 1).")
+    lines.append("- engine order rotated per pass (JUring/fio/Seastar 3-cycle), so each engine "
                  "ran first, middle and last; the position table below is the control for that.")
     lines.append("")
     lines.append(f"**Pre-registered checks:** CV < {CV_MAX:.0f}% for every engine: "
                  f"{'PASS' if checks['cv_ok'] else 'FAIL'}; position variation < "
                  f"{POS_VARIATION_MAX * 100:.0f}%: {'PASS' if checks['position_ok'] else 'FAIL'}; "
-                 f">= {MIN_GATE_FAILURES} generations fail the frozen homogeneity bound: "
-                 f"{'PASS' if checks['gate_failures_ok'] else 'FAIL'} ({n_gate_failed}/{len(gens)}); "
+                 f">= {MIN_GATE_FAILURES} passes fail the frozen homogeneity bound: "
+                 f"{'PASS' if checks['gate_failures_ok'] else 'FAIL'} ({n_gate_failed}/{len(passes)}); "
                  f"paired intervals decisive or parity: {'PASS' if checks['ratio_ok'] else 'FAIL'}.")
     lines.append("")
     if rankable:
@@ -195,7 +202,7 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
                      "ranking is claimed.** The numbers are still published as descriptive.")
     lines.append("")
 
-    lines.append("## Per-engine throughput across generations")
+    lines.append("## Per-engine throughput across passes")
     lines.append("")
     lines.append("| cell | engine | n | IOPS mean ± 95% CI | MiB/s | CV% | min | median | max |")
     lines.append("|---|---|---|---|---|---|---|---|---|")
@@ -209,11 +216,12 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
             min_s = f"{d['min']:,.0f}" if d["min"] is not None else "-"
             med_s = f"{d['median']:,.0f}" if d["median"] is not None else "-"
             max_s = f"{d['max']:,.0f}" if d["max"] is not None else "-"
-            lines.append(f"| {cell} | {label} | {d['n']} | {mean_s}{ci_s} | {mibs} | {cv} | "
+            lines.append(f"| {cells.label(cell)} | {label} | {d['n']} | {mean_s}{ci_s} | "
+                         f"{mibs} | {cv} | "
                          f"{min_s} | {med_s} | {max_s} |")
     lines.append("")
 
-    lines.append("## Position control (slot in the generation)")
+    lines.append("## Position control (slot in the pass)")
     lines.append("")
     lines.append("| cell | engine | slot 1 | slot 2 | slot 3 | slot 4 | slot max/min |")
     lines.append("|---|---|---|---|---|---|---|")
@@ -227,10 +235,11 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
                 cells_s.append(f"{v:,.0f}" if v else "—")
             var = cd["position_variation"]
             var_s = f"{var:.4f}" if len(means) > 1 else "—"
-            lines.append(f"| {cell} | {label} | " + " | ".join(cells_s) + f" | {var_s} |")
+            lines.append(f"| {cells.label(cell)} | {label} | "
+                         + " | ".join(cells_s) + f" | {var_s} |")
     lines.append("")
 
-    lines.append("## Paired ratios (per generation = same device state)")
+    lines.append("## Paired ratios (per pass = same device state)")
     lines.append("")
     lines.append("| cell | ratio | n pairs | mean | 90% CI | 95% CI | verdict |")
     lines.append("|---|---|---|---|---|---|---|")
@@ -242,19 +251,22 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
             ci95 = (f"[{st['ci95_low']:.4f}, {st['ci95_high']:.4f}]"
                     if st.get("ci95_low") is not None else "-")
             mean = f"{st['mean']:.4f}" if st.get("mean") is not None else "-"
-            lines.append(f"| {cell} | {name} | {st.get('n_pairs', 0)} | {mean} | {ci90} | "
+            lines.append(f"| {cells.label(cell)} | {name} | {st.get('n_pairs', 0)} | "
+                         f"{mean} | {ci90} | "
                          f"{ci95} | {verdict_for(st)} |")
     lines.append("")
 
-    lines.append("## Frozen-gate per-generation spread (why it is INCONCLUSIVE)")
+    lines.append("## Frozen-gate per-pass spread (why it is INCONCLUSIVE)")
     lines.append("")
-    lines.append("| generation | cell | max/min of the three frozen arms | frozen PILOT_PASS |")
+    lines.append("| pass | cell | max/min of the three frozen arms | frozen PILOT_PASS |")
     lines.append("|---|---|---|---|")
-    for g in gens:
+    for p in passes:
         for cell in CELLS:
-            sp = gate_spread.get((g, cell))
-            lines.append(f"| {g} | {cell} | {sp:.4f} | {frozen[g]} |" if sp
-                         else f"| {g} | {cell} | — | {frozen[g]} |")
+            sp = gate_spread.get((p, cell))
+            lines.append(f"| {cells.pass_label(p)} | {cells.label(cell)} | {sp:.4f} | "
+                         f"{frozen[p]} |" if sp
+                         else f"| {cells.pass_label(p)} | {cells.label(cell)} | — | "
+                         f"{frozen[p]} |")
     lines.append("")
     lines.append("## Caveats")
     lines.append("")
@@ -273,7 +285,7 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     payload = {
-        "session": session, "gens": gens, "frozen_valid": n_frozen_valid,
+        "session": session, "gens": passes, "frozen_valid": n_frozen_valid,
         "checks": checks, "rankable": rankable,
         "cells": {c: {"engines": {f"{e}|{v}": cd for (e, v), cd in
                                   ((k, cell_data[c][k]) for k in
@@ -289,26 +301,31 @@ def write_report(outdir, session, gens, per, slot, frozen, gate_spread):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--gens", required=True)
+    ap.add_argument("--passes", "--gens", dest="passes", required=True,
+                    help="comma-separated passes (accepts passN and legacy gN); "
+                         "legacy alias: --gens")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    gens = [g for g in args.gens.split(",") if g]
-    per, slot, frozen, gate_spread = collect(args.session, gens)
+    tokens = args.passes.replace(",", " ").split()
+    passes = [cells.pass_name(p) for p in tokens]
+    per, slot, frozen, gate_spread = collect(args.session, tokens)
     md_path, rankable, cell_data, checks, nvalid = write_report(
-        args.out, args.session, gens, per, slot, frozen, gate_spread)
+        args.out, args.session, passes, per, slot, frozen, gate_spread)
     print(f"wrote {md_path}")
-    print(f"frozen valid: {nvalid}/{len(gens)}; checks={checks}; rankable={rankable}")
+    print(f"frozen valid: {nvalid}/{len(passes)}; checks={checks}; rankable={rankable}")
     for cell in CELLS:
         for engine, variant, label in ARMS:
             d = cell_data[cell][(engine, variant)]["summary"]
             if d["mean"] is not None:
                 ci = f" ±{d['ci95_half']:,.0f}" if d["ci95_half"] is not None else ""
-                print(f"  {cell} {label:12s} n={d['n']} mean={d['mean']:,.0f}{ci} "
-                      f"CV={d['cv_pct']:.2f}%")
+                cv = f"{d['cv_pct']:.2f}%" if d["cv_pct"] is not None else "n/a"
+                print(f"  {cells.label(cell)} {label:12s} n={d['n']} "
+                      f"mean={d['mean']:,.0f}{ci} CV={cv}")
         for _l, _r, name in COMPARATORS:
             st = cell_data[cell][name]
             if st.get("mean") is not None:
-                print(f"  {cell} {name:24s} n={st['n_pairs']} ratio={st['mean']:.4f} "
+                print(f"  {cells.label(cell)} {name:24s} n={st['n_pairs']} "
+                      f"ratio={st['mean']:.4f} "
                       f"-> {verdict_for(st)}")
 
 

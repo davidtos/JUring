@@ -1,12 +1,12 @@
-# B2 W21/W22 stream matrix -- aggregate
+# Stream matrix -- aggregate
 
 Session: `m2-final`  
 Source: `<SESSIONS>/m2-final`  
 Generated: <TIMESTAMP>  
-Verdict bar (plan M2): `juring MiB/s >= 0.85 * seastar MiB/s`  
-Contract: `docs/b2-design.md` §3.3. Raw protocol: `<SESSIONS>/m2-final/manifest.txt`.
+Verdict bar: `juring MiB/s >= 0.85 * seastar MiB/s`  
+Contract: frozen before the campaign. Raw protocol: `<SESSIONS>/m2-final/manifest.txt`.
 
-Protocol observed in the cell JSONs: warmup 10s + measured 60s per process, R=5 reps per cell (preliminary; the full M2 campaign uses longer cells/rests).
+Protocol observed in the cell JSONs: warmup 10s + measured 60s per process, R=5 reps per cell (preliminary; the full stream campaign uses longer cells/rests).
 
 ## Verdict
 

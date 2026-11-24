@@ -32,7 +32,7 @@
 <line x1="369.0" y1="133.2" x2="383.0" y2="133.2" stroke="#1f2328" stroke-width="1.2"/>
 <line x1="369.0" y1="135.9" x2="383.0" y2="135.9" stroke="#1f2328" stroke-width="1.2"/>
 <text x="376.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
-<text x="300.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 64 (W7)</text>
+<text x="300.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write, 64 in flight</text>
 <rect x="565.0" y="138.5" width="58.0" height="266.5" rx="0" fill="#1f6feb" opacity="0.88"/>
 <text x="594.0" y="130.5" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="12" fill="#1f2328" text-anchor="middle" font-weight="bold">192.3k</text>
 <line x1="594.0" y1="136.7" x2="594.0" y2="140.3" stroke="#1f2328" stroke-width="1.2"/>
@@ -51,7 +51,7 @@
 <line x1="739.0" y1="134.2" x2="753.0" y2="134.2" stroke="#1f2328" stroke-width="1.2"/>
 <line x1="739.0" y1="135.2" x2="753.0" y2="135.2" stroke="#1f2328" stroke-width="1.2"/>
 <text x="746.0" y="423.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=3</text>
-<text x="670.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 128 (W8)</text>
+<text x="670.0" y="449.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write, 128 in flight</text>
 <text x="460.0" y="470.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">Near-empty second NVMe (nvme2n1, 6% used), 60 s measured windows, 400 GiB burn-in;  fio matched = batch-submit 1.</text>
 <text x="460.0" y="487.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">No ranking is claimed: the intervals overlap and the drive's fast mode is disclosed in BENCHMARK.md.</text>
 <rect x="90.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#1f6feb"/>

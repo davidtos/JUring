@@ -4,6 +4,14 @@ A ring is not much use if reading a file through it is slower than a buffered `I
 
 The results are in [`BENCHMARK.md`](../../BENCHMARK.md); the protocol and statistics are in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md); the stream design is in [`docs/design-notes.md`](../../docs/design-notes.md).
 
+### Identifiers
+
+Cells are named by what they do (`stream-write-128k`, `stream-read-1m`, `durability-write-128k`,
+`groupcommit-4k-batch32`, ...); the mapping and its single source of truth are
+[`bench/analysis/cells.py`](../analysis/cells.py) and [`bench/cells.sh`](../cells.sh). The old
+`W21-128k`/`W22-1M`/`W24-128k`/`W25-4k-b1` codes remain accepted as `--cells` aliases and in
+historical result files, but new runs, manifests and tables use the canonical names.
+
 ## The stream comparison
 
 The workloads are sequential stream read and write at two buffer sizes, 128 KiB and 1 MiB, with concurrency 8. Reads use `/mnt/TestData/read_files/single_file_bench.bin`, a 10 GiB read-only file. Writes use `nvme-data/write_files/single_file_bench_w.bin`, a 10 GiB file that is overwritten in place and never resized.
@@ -36,7 +44,7 @@ bench/stream/run-stream-matrix.sh --dry-run
 
 # short validation with tiny windows
 bench/stream/run-stream-matrix.sh --dry-run --reps 1 --seconds 3 --warmup 1 --rest 0 \
-    --cells "W21-128k W22-128k"
+    --cells "stream-write-128k stream-read-128k"
 
 # full preliminary session, roughly 35-40 minutes
 bench/stream/run-stream-matrix.sh
@@ -49,11 +57,11 @@ bench/stream/run-stream-matrix.sh --session b2-2026-11-13-r2
 python3 bench/stream/analyze_stream.py --session b2-2026-11-13
 ```
 
-Overrides: `--reps N`, `--seconds S`, `--warmup S`, `--rest S`, `--cells "W21-128k,..."`, `--session NAME`, `--force`, `--dry-run`.
+Overrides: `--reps N`, `--seconds S`, `--warmup S`, `--rest S`, `--cells "stream-write-128k,..."`, `--session NAME`, `--force`, `--dry-run`.
 
-The `W21-128k`-style values are the harness's case names, not prose labels: they are the
-arguments `--cells` expects and the names that show up in raw result paths. The tables below use
-plain workload descriptions. Environment: `CPU` (default 2), `READ_FILE`, `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`.
+`--cells` takes the canonical case names (`stream-write-128k`, `stream-read-1m`, ...); the
+`W21-128k`-style values are still accepted as aliases for old invocations. New runs, manifests and
+raw result paths use the canonical names. Environment: `CPU` (default 2), `READ_FILE`, `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`.
 
 The driver refuses to start unless both datasets exist with the right permissions and size (at least 10 GiB and a multiple of 1 MiB), the write filesystem has at least 2 GiB free, `kernel.io_uring_disabled=0`, the governor is `performance`, the pinned CPU is online, 1-min loadavg is below 1.0 (unless `ALLOW_RESIDUAL_LOAD=1`), no foreign process is above 20% CPU, and the JUring runner, Seastar binary and analyzer exist. `--dry-run` reports the same checks without exiting on failure or creating files.
 
@@ -76,18 +84,18 @@ Single runs are usable standalone:
 env JURING_SKIP_MVN=1 bash bench/juring/run-juring-stream.sh \
     --workload stream_write --file nvme-data/write_files/single_file_bench_w.bin \
     --bs 128k --qd 8 --size 1g --seconds 3 --warmup-sec 1 --runs 1 \
-    --label w21_smoke --json /tmp/w21_smoke.json
+    --label stream-write-128k_smoke --json /tmp/stream-write-128k_smoke.json
 
 env JURING_SKIP_MVN=1 bash bench/juring/run-juring-stream.sh \
     --workload stream_read --file /mnt/TestData/read_files/single_file_bench.bin \
     --bs 128k --qd 8 --size 1g --seconds 3 --warmup-sec 1 --runs 1 --readonly \
-    --label w22_smoke --json /tmp/w22_smoke.json
+    --label stream-read-128k_smoke --json /tmp/stream-read-128k_smoke.json
 
 LD_LIBRARY_PATH="$PWD/.sysroot/root/usr/lib64" taskset -c 2 \
     bench/seastar/seastar_stream_bench \
     --workload stream_read --file /mnt/TestData/read_files/single_file_bench.bin \
     --bs 128k --qd 8 --size 1g --seconds 3 --warmup-sec 1 --runs 1 --readonly \
-    --label w22_seastar_smoke --json /tmp/w22_seastar_smoke.json \
+    --label stream-read-128k_seastar_smoke --json /tmp/stream-read-128k_seastar_smoke.json \
     --smp 1 --cpuset 2 --memory 1G --lock-memory 0 --reactor-backend io_uring
 ```
 
@@ -150,7 +158,7 @@ bench/stream/run-group-commit-bench.sh --dry-run
 # short validation with tiny windows and a scratch file
 ALLOW_RESIDUAL_LOAD=1 bench/stream/run-group-commit-bench.sh \
     --reps 1 --warmup 1 --seconds 2 --rest 0 --rep-pause 0 --batches "1 8 32 128" \
-    --file scratch/b6-bench/smoke/w25-driver.bin --file-size 16m --session b6-group-commit-smoke
+    --file scratch/b6-bench/smoke/groupcommit-driver.bin --file-size 16m --session b6-group-commit-smoke
 
 # full session on a quiet machine
 bench/stream/run-group-commit-bench.sh
@@ -161,7 +169,7 @@ python3 bench/stream/analyze_group_commit.py --session b6-group-commit-<date>
 bench/stream/run-group-commit-bench.sh --resume
 ```
 
-The session lives in `bench/results/b6-group-commit-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--rest-between`, `--rep-pause`, `--batches`, `--file`, `--file-size`, `--skip-compile`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU`, `W25_FILE`, `W25_FILE_SIZE`, `JURING_CLASSES` (default `target/classes`), `JURING_OUT` (default `bench/juring/out`), `ALLOW_RESIDUAL_LOAD=1`. The driver compiles the runner with `javac` against the existing classes; it never runs Maven. It preflights the API presence, file space, io_uring, governor, CPU, loadavg and foreign CPU.
+The session lives in `bench/results/b6-group-commit-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--rest-between`, `--rep-pause`, `--batches`, `--file`, `--file-size`, `--skip-compile`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU`, `GC_FILE`, `GC_FILE_SIZE` (legacy `W25_FILE`/`W25_FILE_SIZE` still accepted), `JURING_CLASSES` (default `target/classes`), `JURING_OUT` (default `bench/juring/out`), `ALLOW_RESIDUAL_LOAD=1`. The driver compiles the runner with `javac` against the existing classes; it never runs Maven. It preflights the API presence, file space, io_uring, governor, CPU, loadavg and foreign CPU.
 
 `analyze_group_commit.py` requires `b6-durability-1` and writes `aggregate/group-commit.{json,md}`: per batch size MiB/s (mean, sd, 95% CI, CV), writes/s, groups/s, group-latency p50 and p99, sync latency p50 and p99, syncs/s, `MiB/sync`, `sync_wait_share`, `fsyncs_per_group`, wrap-arounds, identity rows and the per-repetition table. It exits 3 and lists the offending files if any identity, restart check or schema check fails. `sync_latency_us` is the `commit()` duration and an upper bound on the sync-only cost, because it includes waiting for the batch writes.
 

@@ -13,10 +13,15 @@ Figures written to --out-dir (default docs/figures):
                             the local start time of each back-to-back pass)
   write-mode-probe.svg      fio batch-size sweep: the fast/slow flip is not batching
 
+Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
+(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
+g1 and pass1 forms. Figure labels use the human cell names from
+`bench/analysis/cells.py`; no W#/g# codes appear in the SVGs.
+
 Usage:
     python3 bench/write/plot_write_modes.py \
         --session bench/results/write-3way-20261123-212038 \
-        --gens g1,g2,g3,g4,g5 \
+        --passes pass1,pass2,pass3,pass4,pass5 \
         --probe-dir bench/results/write-mode-probe-20261124 \
         --out-dir docs/figures
 """
@@ -31,20 +36,21 @@ import zoneinfo
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bench"))
+from analysis import cells as cellmap  # noqa: E402
 from analysis import stats  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "frozen_write_state", os.path.join(REPO, "bench", "stepd", "analyze_write_state.py"))
+    "frozen_write_state", os.path.join(REPO, "bench", "host-setup", "analyze_write_state.py"))
 aw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aw)
 
 # The session timestamps are UTC; the campaign ran on this host, so the figures label
 # a run group by its local (CET) start time. That keeps the x axis readable without the
-# internal generation names (g1..g5) that only make sense next to the session directories.
+# internal pass names (pass1..pass5) that only make sense next to the session directories.
 CAMPAIGN_TZ = zoneinfo.ZoneInfo("Europe/Amsterdam")
-CELLS = ("W7", "W8")
-CELL_LABEL = {"W7": "QD 64 (W7)", "W8": "QD 128 (W8)"}
-CELL_QD = {"W7": "64", "W8": "128"}
+CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
+CELL_LABEL = {cell: cellmap.label(cell) for cell in CELLS}
+CELL_QD = {cell: str(cellmap.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 STEADY_MAX_IOPS = 250_000.0
 STEADY_BAND = (185_000, 205_000)
@@ -77,18 +83,20 @@ svg = _svg.document
 
 
 def load_meta(d):
+    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
-            rows[(r["case"], r["engine"], r["variant"], r["rep"])] = r
+            rows[(cellmap.slug(r["case"]), r["engine"], r["variant"], r["rep"])] = r
     return rows
 
 
-def collect(session, gens):
-    """(gen, cell, engine) -> list of measured runs; steady flag per run."""
+def collect(session, passes):
+    """(pass, cell, engine) -> list of measured runs; steady flag per run."""
     per = {}
-    for g in gens:
-        d = os.path.join(session, g)
+    for token in passes:
+        name = cellmap.pass_name(token)
+        d = cellmap.pass_dir(session, token)
         meta = load_meta(d)
         for cell in CELLS:
             for engine, variant, _label, _color, _style in ARMS:
@@ -98,24 +106,25 @@ def collect(session, gens):
                 iops = float(r["iops"]) if r["status"] == "ok" else None
                 steady = False
                 if iops is not None and iops > 0:
-                    stem = aw.stem(cell, engine, variant, "4k", CELL_QD[cell], 1)
-                    c = aw.classify(aw.read_series(os.path.join(d, "series", stem + ".tsv")))
+                    c = aw.classify(aw.read_series(
+                        aw.series_path(d, cell, engine, variant, "4k", CELL_QD[cell])))
                     steady = bool(c["steady"]) and iops < STEADY_MAX_IOPS
-                per.setdefault((g, cell, engine), []).append(
+                per.setdefault((name, cell, engine), []).append(
                     {"iops": iops, "steady": steady, "p99": float(r["p99_us"] or 0)})
     return per
 
 
-def cell_start_times(session, gens):
-    """(generation, cell) -> datetime of that cell's first measured run, campaign local time."""
+def cell_start_times(session, passes):
+    """(pass, cell) -> datetime of that cell's first measured run, campaign local time."""
     raw = {}
-    for g in gens:
-        meta = load_meta(os.path.join(session, g))
+    for token in passes:
+        name = cellmap.pass_name(token)
+        meta = load_meta(cellmap.pass_dir(session, token))
         for r in meta.values():
             ts = r["ts_utc"]
             if not ts:
                 continue
-            key = (g, r["case"])
+            key = (name, cellmap.slug(r["case"]))
             if key not in raw or ts < raw[key]:
                 raw[key] = ts
     out = {}
@@ -125,16 +134,16 @@ def cell_start_times(session, gens):
     return out
 
 
-def steady_summary(per, gens, cell, engine):
+def steady_summary(per, passes, cell, engine):
     vals = []
-    for g in gens:
-        for run in per.get((g, cell, engine), []):
+    for p in passes:
+        for run in per.get((p, cell, engine), []):
             if run["steady"]:
                 vals.append(run["iops"])
     return stats.describe(vals)
 
 
-def figure_parity(session, gens, per):
+def figure_parity(session, passes, per):
     W, H = 920, 500
     L, R, T, B = 90, 880, 100, 405
     ymax = 220_000
@@ -159,7 +168,7 @@ def figure_parity(session, gens, per):
     bar_w, gap = 58, 18
     for idx, cell in enumerate(CELLS):
         for j, (engine, _variant, _label, color) in enumerate(PARITY_ARMS):
-            d = steady_summary(per, gens, cell, engine)
+            d = steady_summary(per, passes, cell, engine)
             if d["mean"] is None:
                 continue
             x = centers[idx] - (3 * bar_w + 2 * gap) / 2 + j * (bar_w + gap)
@@ -194,7 +203,7 @@ def figure_parity(session, gens, per):
     return svg(W, H, body)
 
 
-def figure_operating_modes(gens, per, starts):
+def figure_operating_modes(passes, per, starts):
     W, H = 1060, 668
     body = [text(W / 2, 30, "4 KiB random write — the margins all three engines operate in",
                  size=19, anchor="middle", weight="bold"),
@@ -211,7 +220,8 @@ def figure_operating_modes(gens, per, starts):
         def y(v):
             return B - (v / ymax) * (B - T)
 
-        labels = [starts[(g, cell)].strftime("%H:%M") if (g, cell) in starts else g for g in gens]
+        labels = [starts[(p, cell)].strftime("%H:%M") if (p, cell) in starts
+                  else cellmap.pass_label(p) for p in passes]
         body.append(rect(pl, y(FAST_BAND[1]), pr - pl, y(FAST_BAND[0]) - y(FAST_BAND[1]),
                          "#e3742a", opacity="0.10"))
         body.append(rect(pl, y(STEADY_BAND[1]), pr - pl,
@@ -225,15 +235,15 @@ def figure_operating_modes(gens, per, starts):
         body.append(line(pl, B, pr, B, stroke=INK, width=1.2))
         body.append(text((pl + pr) / 2, T - 28, CELL_LABEL[cell], size=14,
                          anchor="middle", weight="bold"))
-        n = len(gens)
+        n = len(passes)
         pad = 42
         xs = [pl + pad + i * (pr - pl - 2 * pad) / max(1, n - 1) for i in range(n)]
         for i in range(n):
             body.append(text(xs[i], B + 18, labels[i], size=11, anchor="middle", fill=MUTED))
         for engine, _variant, _label, color, style in ARMS:
             points = []
-            for i, g in enumerate(gens):
-                runs = per.get((g, cell, engine))
+            for i, p in enumerate(passes):
+                runs = per.get((p, cell, engine))
                 if not runs or runs[0]["iops"] is None:
                     continue
                 points.append((xs[i], y(runs[0]["iops"])))
@@ -335,20 +345,23 @@ def figure_probe(rounds, batches):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--gens", required=True)
+    ap.add_argument("--passes", "--gens", dest="passes", required=True,
+                    help="comma-separated passes (accepts passN and legacy gN); "
+                         "legacy alias: --gens")
     ap.add_argument("--probe-dir", default="")
     ap.add_argument("--out-dir", default="docs/figures")
     ap.add_argument("--batches", default="1,8,16,32,64,128")
     args = ap.parse_args()
-    gens = [g for g in args.gens.split(",") if g]
+    tokens = args.passes.replace(",", " ").split()
+    passes = [cellmap.pass_name(p) for p in tokens]
     os.makedirs(args.out_dir, exist_ok=True)
-    per = collect(args.session, gens)
+    per = collect(args.session, tokens)
     batches = [int(b) for b in args.batches.split(",")]
 
     figs = {
-        "write-steady-parity.svg": figure_parity(args.session, gens, per),
+        "write-steady-parity.svg": figure_parity(args.session, passes, per),
         "write-operating-modes.svg": figure_operating_modes(
-            gens, per, cell_start_times(args.session, gens)),
+            passes, per, cell_start_times(args.session, tokens)),
     }
     if args.probe_dir and all(os.path.exists(os.path.join(
             args.probe_dir, f"{n}_batch{b}.json")) for n in ("r1", "r2") for b in batches):

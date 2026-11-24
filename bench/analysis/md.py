@@ -2,8 +2,8 @@
 
 The formatters are named for their output, not their caller: ``fixed`` is a
 plain fixed-point number, ``thousands`` adds separators, ``auto`` picks the
-decimal count from the magnitude (the M1 table style) and uses an em dash for
-an absent value.
+decimal count from the magnitude (the read/write table style) and uses an em
+dash for an absent value.
 """
 
 
@@ -31,7 +31,7 @@ def signed(value, digits=2, dash="n/a"):
 
 
 def thousands(value, digits=1, dash="n/a"):
-    """Thousands-separated fixed-point number (analyze_scale_out / stepd)."""
+    """Thousands-separated fixed-point number (analyze_scale_out / host-setup)."""
     if value is None:
         return dash
     try:
@@ -41,7 +41,7 @@ def thousands(value, digits=1, dash="n/a"):
 
 
 def num(value, nd=None):
-    """Human number, thousands separators, em dash when absent (M1 tables).
+    """Human number, thousands separators, em dash when absent (read/write tables).
 
     With ``nd=None`` the decimal count follows the magnitude: 0 decimals at
     >= 1000, 1 at >= 100, 2 below that.
@@ -59,7 +59,7 @@ def num(value, nd=None):
 
 
 def ci(mean, half, nd=None):
-    """``mean +- half`` in the M1 style; ``(n<2)`` when the CI is absent."""
+    """``mean +- half`` in the read/write style; ``(n<2)`` when the CI is absent."""
     if mean is None:
         return "\u2014"
     if half is None:
@@ -68,7 +68,7 @@ def ci(mean, half, nd=None):
 
 
 def ratio(value):
-    """Ratio with the percent difference from 1.0 (M1 tables)."""
+    """Ratio with the percent difference from 1.0 (read/write tables)."""
     if value is None:
         return "\u2014"
     return f"{value:.4f} ({100.0 * (value - 1.0):+.1f}%)"
@@ -88,7 +88,7 @@ def pct(value, digits=1, dash="n/a"):
 
 
 def stat_ci(stat, digits=0):
-    """``mean [lb, ub]`` for a ``{"mean", "lb", "ub"}`` block (M3 tables)."""
+    """``mean [lb, ub]`` for a ``{"mean", "lb", "ub"}`` block (scaling tables)."""
     if not stat or stat.get("mean") is None:
         return "n/a"
     return (f"{stat['mean']:,.{digits}f} "

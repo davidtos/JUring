@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 #
-# run-stream-matrix.sh -- B2 W21/W22 stream matrix driver (docs/b2-design.md §3.3).
+# run-stream-matrix.sh -- stream matrix driver (protocol frozen before the campaign).
 #
 # Cells (one process per rep, pinned to CPU 2, primary O_DIRECT rows on both
 # engines, engines interleaved inside every rep, plus one disclosed JUring
 # --buffered exploratory row per cell):
 #
-#   W21-128k  stream_write  128 KiB buffer  qd 8  nvme-data/write_files/single_file_bench_w.bin (10 GiB)
-#   W22-128k  stream_read   128 KiB buffer  qd 8  /mnt/TestData/read_files/single_file_bench.bin (10 GiB)
-#   W21-1M    stream_write  1 MiB buffer    qd 8  same writable dataset
-#   W22-1M    stream_read   1 MiB buffer    qd 8  same read dataset
+#   stream-write-128k  stream_write  128 KiB buffer  qd 8  nvme-data/write_files/single_file_bench_w.bin (10 GiB)
+#   stream-read-128k   stream_read   128 KiB buffer  qd 8  /mnt/TestData/read_files/single_file_bench.bin (10 GiB)
+#   stream-write-1m    stream_write  1 MiB buffer    qd 8  same writable dataset
+#   stream-read-1m     stream_read   1 MiB buffer    qd 8  same read dataset
+#
+# Cell IDs are the canonical names from bench/analysis/cells.py; the old
+# W21-128k/W22-128k/W21-1M/W22-1M aliases are still accepted by --cells.
 #
 # Primary engines:
 #   juring   bench/juring/run-juring-stream.sh --buffered off (O_DIRECT), registered file,
@@ -19,7 +22,7 @@
 #            --lock-memory 0 --reactor-backend io_uring
 #   exploratory: JUring --buffered (no O_DIRECT) per cell; never used for the >=85 % verdict.
 #
-# Default protocol (preliminary, per §3.3): warmup 10 s + measured 30 s per
+# Default protocol (preliminary): warmup 10 s + measured 30 s per
 # process, R=3 reps per cell, 60 s rest between successive reps of a cell.
 # Overrides: --reps N --seconds S --warmup S --rest S --cells LIST.
 #
@@ -39,7 +42,7 @@
 #
 # Usage:
 #   bench/stream/run-stream-matrix.sh [--dry-run] [--session NAME]
-#       [--reps N] [--seconds S] [--warmup S] [--rest S] [--cells "W21-128k,..."]
+#       [--reps N] [--seconds S] [--warmup S] [--rest S] [--cells "stream-write-128k,..."]
 #       [--force]
 #
 # Environment: CPU (default 2), READ_FILE, WRITE_FILE, SEASTAR_BIN, JURING_RUN,
@@ -48,6 +51,8 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
+# shellcheck source=bench/cells.sh
+source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
@@ -66,10 +71,10 @@ REPS=3
 WARMUP=10
 DURATION=30
 REST=60
-CELLS="W21-128k W22-128k W21-1M W22-1M"
+CELLS="stream-write-128k stream-read-128k stream-write-1m stream-read-1m"
 DRY_RUN=0
 FORCE=0
-ALL_CELLS="W21-128k W22-128k W21-1M W22-1M"
+ALL_CELLS="stream-write-128k stream-read-128k stream-write-1m stream-read-1m"
 
 usage() {
     awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}"
@@ -126,15 +131,21 @@ for v in "$WARMUP" "$DURATION" "$REST"; do
         exit 2
     fi
 done
+# Canonicalize requested cells: legacy W21-128k/W22-1M aliases accepted, every
+# output file and manifest uses the canonical slug.
+CELLS_CANON=""
 for c in $CELLS; do
+    canonical=$(cell_slug "$c")
     case " $ALL_CELLS " in
-        *" $c "*) ;;
+        *" $canonical "*) ;;
         *)
             echo "error: unknown cell '$c' (expected: $ALL_CELLS)" >&2
             exit 2
             ;;
     esac
+    CELLS_CANON="${CELLS_CANON:+$CELLS_CANON }$canonical"
 done
+CELLS=$CELLS_CANON
 
 if ! [[ $SESSION =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "error: --session may only contain [A-Za-z0-9._-], got '$SESSION'" >&2
@@ -157,16 +168,16 @@ loadavg() { awk '{print $1","$2","$3}' /proc/loadavg; }
 wall_sec() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.3f", b-a}'; }
 
 cell_workload() {
-    case $1 in
-        W21-*) echo stream_write ;;
-        W22-*) echo stream_read ;;
+    case $(cell_slug "$1") in
+        stream-write-*) echo stream_write ;;
+        stream-read-*) echo stream_read ;;
         *) return 1 ;;
     esac
 }
 cell_bs() {
-    case $1 in
+    case $(cell_slug "$1") in
         *-128k) echo 128k ;;
-        *-1M) echo 1M ;;
+        *-1m) echo 1m ;;
         *) return 1 ;;
     esac
 }
@@ -222,7 +233,7 @@ argv_str() {
     printf '%q ' "$@"
 }
 
-# engine_exec_order <rep>: primary engine order alternates per rep (D6-style drift
+# engine_exec_order <rep>: primary engine order alternates per rep (the alternating order
 # cancellation); the exploratory buffered JUring row always runs last.
 engine_order() {
     if (( $1 % 2 == 1 )); then
@@ -252,7 +263,7 @@ print("%s\t%s\t%.3f\t%.3f\t%s\t%s" % (
 }
 
 # ---------------------------------------------------------------------------
-# preflight: gate the machine (§3.3). Returns 1 on failure; with report_only
+# preflight: gate the machine (frozen preflight). Returns 1 on failure; with report_only
 # (-1) it always returns 0 and prints the verdicts.
 # ---------------------------------------------------------------------------
 preflight() {
@@ -348,7 +359,7 @@ write_manifest() {
     seastar_version=$(git -C "$REPO_ROOT/SeaStarRef" describe --tags --always --dirty 2>/dev/null ||
         echo 'seastar-25.05.0-1392-g04b1c04d')
     {
-        echo "# B2 W21/W22 stream session manifest -- JUring streams vs seastar fstream"
+        echo "# Stream session manifest -- JUring streams vs seastar fstream"
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
         echo
@@ -397,7 +408,7 @@ write_manifest() {
         sha256sum "$JURING_RUN" "$HERE/run-stream-matrix.sh" "$ANALYZER" \
             "$REPO_ROOT/bench/juring/JUringStreamBench.java" 2>/dev/null || true
         echo
-        echo "## Protocol (B2 design §3.3; preliminary)"
+        echo "## Protocol (frozen; preliminary)"
         echo "cells: $CELLS"
         echo "protocol: reps=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s seed=$SEED qd=$QD cpu=$CPU"
         echo "primary rows: juring O_DIRECT registered file | seastar fstream (open_file_dma, DMA/O_DIRECT)"
@@ -405,7 +416,7 @@ write_manifest() {
         echo "engine order: alternates juring-first / seastar-first per rep; buffered row last"
         echo "engines per rep: one fresh process per invocation, all under taskset -c $CPU"
         echo
-        echo "## Disclosed engine asymmetries (F0)"
+        echo "## Disclosed engine asymmetries (each engine's documented best configuration)"
         echo "juring  : io_uring; SINGLE_ISSUER|COOP_TASKRUN|DEFER_TASKRUN; entries=max(256,2*qd);"
         echo "          file registered (JuringFile.register()); streams allocate their own aligned buffers"
         echo "          (fixed_buffers=false); bufferSize=bs, readAhead=qd-1 / writeBehind=qd,"
@@ -417,7 +428,7 @@ write_manifest() {
         echo "both    : same file, same O_DIRECT, same bs/qd/dataset, one thread on CPU $CPU,"
         echo "          same per-chunk latency definition and JSON schema."
         echo
-        echo "## Session cell plan (order recorded for D6)"
+        echo "## Session cell plan (order recorded for the alternating engine order)"
         echo "cells-major, reps inner, engines interleaved per rep; baseline rests ${REST}s between reps."
         echo
         echo "started: $(now_utc)"
@@ -490,7 +501,7 @@ run_row() {
 print_plan() {
     local cell rep order eng variant rows=0
     echo
-    echo "================ B2 W21/W22 STREAM MATRIX PLAN (--dry-run; nothing executed) ================"
+    echo "================ STREAM MATRIX PLAN (--dry-run; nothing executed) ================"
     echo "session dir : $RESULTS"
     echo "cells dir   : $CELLS_DIR"
     echo "logs dir    : $LOGS_DIR"
@@ -540,7 +551,7 @@ print_plan() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-echo "[stream-matrix] B2 W21/W22 stream matrix (docs/b2-design.md §3.3)"
+echo "[stream-matrix] stream matrix (protocol frozen)"
 echo "[stream-matrix] session=$SESSION cells='$CELLS' R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s cpu=$CPU"
 
 if [[ $DRY_RUN == 1 ]]; then
@@ -570,7 +581,7 @@ init_meta
 
 echo "[stream-matrix] compiling JUring stream runner (JURING_SKIP_MVN=1, no Maven) ..."
 if ! JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null; then
-    echo "error: JUring stream runner compile/--help failed; is the B2 stream API in target/classes?" >&2
+    echo "error: JUring stream runner compile/--help failed; is the stream API in target/classes?" >&2
     exit 1
 fi
 echo "[stream-matrix] JUring stream runner ready"

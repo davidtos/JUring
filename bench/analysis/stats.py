@@ -1,9 +1,9 @@
 """Statistics shared by the bench analyzers.
 
-Two generations of the same maths live here on purpose (see the package
-docstring): the summed-moment helpers with frozen t tables, and the exact
-``statistics``-module + inverted-CDF helpers used by the M1 analyzer.  Both are
-covered by ``bench/analysis/selftest.py``.
+Two independent implementations of the same maths live here on purpose (see the
+package docstring): the summed-moment helpers with frozen t tables, and the
+exact ``statistics``-module + inverted-CDF helpers used by the read/write
+analyzer.  Both are covered by ``bench/analysis/selftest.py``.
 """
 
 import math
@@ -24,7 +24,7 @@ T95_ONE_SIDED_3DP = [
 ]
 
 # One-sided 95% t quantiles to 4 dp, df = 1..30; df >= 30 -> 1.645
-# (the frozen M3 table: bench/shard/analyze_scale_out.py).
+# (the frozen table in bench/shard/analyze_scale_out.py).
 T95_ONE_SIDED_4DP = {
     1: 6.3138, 2: 2.9200, 3: 2.3534, 4: 2.1318, 5: 2.0150, 6: 1.9432,
     7: 1.8946, 8: 1.8595, 9: 1.8331, 10: 1.8125, 11: 1.7959, 12: 1.7823,
@@ -35,7 +35,7 @@ T95_ONE_SIDED_4DP = {
 
 
 # ---------------------------------------------------------------------------
-# summed-moment helpers (frozen t tables; analyze_stream / shard / stepd)
+# summed-moment helpers (frozen t tables; analyze_stream / shard / host-setup)
 # ---------------------------------------------------------------------------
 
 def mean(values):
@@ -93,7 +93,7 @@ def mean_ci(values):
     """``(mean, low, high)`` with a two-sided 95% t interval.
 
     ``mean`` is None for an empty sample; ``low``/``high`` are None for n < 2
-    (no interval).  This is the tuple shape the stepd analyzers print.
+    (no interval).  This is the tuple shape the host-setup analyzers print.
     """
     n = len(values)
     if n == 0:
@@ -108,7 +108,7 @@ def mean_ci(values):
 def one_sided_ci(values):
     """``(mean, sd, low, high)`` one-sided 95% t interval (analyze_scale_out shape).
 
-    A single value has no spread: it returns ``(m, 0.0, m, m)`` so the M3 bars
+    A single value has no spread: it returns ``(m, 0.0, m, m)`` so the scaling bars
     can still label the cell rather than dropping it.
     """
     if not values:
@@ -236,8 +236,8 @@ def ratio_stats(left_reps, right_reps):
     """Paired-by-rep-index ratio left/right with 90%/95% CIs of the mean.
 
     ``left_reps``/``right_reps`` are dicts with ``rep_index`` and ``iops``, as
-    built by the M1 analyzer.  Reps are paired by index only when both sides
-    have a positive IOPS: nothing is invented for a missing rep.
+    built by the read/write analyzer.  Reps are paired by index only when
+    both sides have a positive IOPS: nothing is invented for a missing rep.
     """
     lmap = {r["rep_index"]: r for r in left_reps}
     rmap = {r["rep_index"]: r for r in right_reps}
@@ -282,7 +282,7 @@ def ratio_stats(left_reps, right_reps):
 
 
 # ---------------------------------------------------------------------------
-# gate verdicts (the M1 convention: PASS / FAIL / INCONCLUSIVE with a level)
+# gate verdicts (the read/write convention: PASS / FAIL / INCONCLUSIVE)
 # ---------------------------------------------------------------------------
 
 def combine_verdicts(verdicts):
@@ -329,7 +329,7 @@ def upper_bound_verdict(st, limit):
 def noninferior_verdict(st, limit):
     """Non-inferiority: PASS iff the 95% upper bound of the ratio <= limit.
 
-    The M1 CPU gate compares JUring's cycles/op with fio's; a JUring CPU cost
+    The read/write CPU gate compares JUring's cycles/op with fio's; a JUring CPU cost
     *below* fio's is an advantage, not a failure, so the gate is one-sided
     ("JUring not more than 15 % worse"). The literal two-sided +-15 % band is
     reported next to it for completeness.
@@ -346,7 +346,7 @@ def noninferior_verdict(st, limit):
 
 def band_verdict(st, band):
     """PASS iff two-sided 90% CI of the ratio is inside `band` (TOST-style,
-    same convention as the +-5% parity rule in methodology section 7)."""
+    same convention as the +-5% parity rule in docs/benchmark-methodology.md)."""
     lo, hi = band
     if st is None or st.get("n_pairs", 0) < 2 or st.get("ci90_low") is None:
         return "INCONCLUSIVE", "n<2 reps (no CI)"

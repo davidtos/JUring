@@ -1,9 +1,9 @@
-# B6 W24 durability A/B -- aggregate (supporting evidence, not a milestone bar)
+# 128 KiB durable-write A/B -- aggregate (supporting evidence, not a milestone bar)
 
 Session: `b6-durability-2026-11-15`  
 Source: `<SESSIONS>/b6-durability-2026-11-15`  
 Generated: <TIMESTAMP>  
-Contract: `docs/b6-design.md` §6.3. Raw protocol: `<SESSIONS>/b6-durability-2026-11-15/manifest.txt`.
+Contract: frozen before the campaign. Raw protocol: `<SESSIONS>/b6-durability-2026-11-15/manifest.txt`.
 
 Protocol observed in the cell JSONs: warmup 5s + measured 15s per process, sync-every 4194304 B, seed 20261113; the driver protocol (R, 300 s rests, alternating arm order, writeback bracket control) is recorded in the session manifest.
 
@@ -61,14 +61,14 @@ The two writeback controls differ by 148.9% > 10%: the session is state-confound
 
 ## Disclosures
 
-- Supporting evidence only: W24 is not a milestone bar and makes no new cross-engine write win/loss claim (docs/b6-design.md §6.3/§6.5; methodology D7).
-- The M2 W21/W22 write comparison issued 2 fdatasync/pass on seastar and 0 on JUring (undisclosed in M2); the W24 arms match durability on both engines and run a writeback-vs-writeback control first/last, so the paired ratio here is a within-engine cost of durability, not an engine ranking.
-- Durability points include a write-behind drain on both engines (B2 flush() and seastar fstream flush() both drain); the matched arms isolate the sync cost (writeback = drain only vs fdatasync = drain + one sync), but the absolute sync_wait_share is an upper bound on pure sync cost (§9.7).
+- Supporting evidence only: durability-write-128k is not a milestone bar and makes no new cross-engine write win/loss claim (the variance rule applies).
+- The stream write/read comparison issued 2 fdatasync/pass on seastar and 0 on JUring (undisclosed in the stream campaign); the 128 KiB durable-write arms match durability on both engines and run a writeback-vs-writeback control first/last, so the paired ratio here is a within-engine cost of durability, not an engine ranking.
+- Durability points include a write-behind drain on both engines (the stream flush() and seastar fstream flush() both drain); the matched arms isolate the sync cost (writeback = drain only vs fdatasync = drain + one sync), but the absolute sync_wait_share is an upper bound on pure sync cost.
 - seastar's pass-end path issues two fdatasync per pass (output_stream flush() + close()); the JUring pass-end path issues one. With --sync-every 4 MiB this is <1 % of the durability points and is reported through syncs/s and MiB/sync instead of being hidden.
 - seastar has no fsync(2) path (file::flush() is fdatasync only); the juring-fsync arm is JUring-only and is not compared across engines.
-- State classes are derived (not pre-registered) from M1 §4 + M2 §6 and fixed in this analyzer before the campaign: fast iff MiB/s >= 550 and write p50 <= 250 us; slow iff MiB/s < 300 or write p50 > 600 us; else mixed; plus the M1 0.92 rule.
-- The W24 dataset is 2 GiB per pass on the existing 10 GiB write file (the file is never resized): a disclosed deviation from the frozen 10 GiB dataset (§9.8).
-- No cache drop and no power-loss test: durability is the fdatasync/fsync/O_DSYNC guarantee, not something W24 measures (§9.1).
+- State classes are derived (not pre-registered) from the read/write and stream write-state classes and fixed in this analyzer before the campaign: fast iff MiB/s >= 550 and write p50 <= 250 us; slow iff MiB/s < 300 or write p50 > 600 us; else mixed; plus the 0.92 same-arm rule.
+- The durability-write-128k dataset is 2 GiB per pass on the existing 10 GiB write file (the file is never resized): a disclosed deviation from the frozen 10 GiB dataset.
+- No cache drop and no power-loss test: durability is the fdatasync/fsync/O_DSYNC guarantee, not something the 128 KiB durable-write cells measure.
 
-State classes are computed **within each arm** (`fast` iff MiB/s >= 550 and write p50 <= 250 us; `slow` iff MiB/s < 300 or write p50 > 600 us; else `mixed`; the M1 0.92 same-arm rule also marks a rep slow). Arms are ranked only if both sides have >= 2 reps in the same class and neither arm has CV > 10% (methodology D7); the writeback controls bracket the Tier-1 block and must agree within 10%.
+State classes are computed **within each arm** (`fast` iff MiB/s >= 550 and write p50 <= 250 us; `slow` iff MiB/s < 300 or write p50 > 600 us; else `mixed`; the 0.92 same-arm rule also marks a rep slow). Arms are ranked only if both sides have >= 2 reps in the same class and neither arm has CV > 10% (the variance rule); the writeback controls bracket the Tier-1 block and must agree within 10%.
 

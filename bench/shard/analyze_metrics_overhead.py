@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""B5 observability-overhead A/B analyzer -- frozen against docs/b5-design.md §7.1.
+"""Observability overhead (metrics on vs off) A/B analyzer.  Protocol frozen before the session.
 
 Reads a ``bench/shard/run-metrics-overhead.sh`` session (cell-meta.tsv plus the paired
 ``<cell>__b4|b5__r<rep>.json`` cell JSONs) and writes ``aggregate/overhead.{json,md}``.
-The frozen metric is the paired per-rep throughput ratio B5/B4: mean >= 0.99 in
+The frozen metric is the paired per-rep throughput ratio metrics-on/baseline: mean >= 0.99 in
 every cell and no undisclosed rep below 0.95.  State-gated reps are disclosed,
 never trimmed.
 
@@ -31,7 +31,7 @@ CELL_ORDER = ["shard1", "shard8", "threads1"]
 FAST_P99_US = 600.0          # 4K randread QD64 fast-state threshold (single ring)
 # Cell-adjusted fast-state threshold (Lead-approved, analysis-only): the methodology's
 # 600 us calibration is for ONE QD64 ring. A cell with W workers has W x 64 requests in
-# flight, so its normal p99 scales with W (B4 report measured p99(8)/p99(1) = 5.1-5.9 for
+# flight, so its normal p99 scales with W (the shard-runtime report measured p99(8)/p99(1) = 5.1-5.9 for
 # every engine incl. fio at constant QD64/worker). The approved gate is therefore
 # 600 us x W; the literal 600 us gate is still reported side by side.
 FAST_P99_US_PER_WORKER = 600.0
@@ -44,7 +44,7 @@ def t_crit_one_sided_95(df):
     """One-sided 95 % t multiplier (df = n-1), on the frozen 4 dp table.
 
     The shared :func:`stats.t95_one_sided` is 3 dp and would move the published
-    B5 CI digits; ``stats.T95_ONE_SIDED_4DP`` is the table this campaign used.
+    campaign CI digits; ``stats.T95_ONE_SIDED_4DP`` is the table this campaign used.
     """
     if df <= 0:
         return 0.0
@@ -130,7 +130,7 @@ def extract_invocation(arm, cell, rep, path, meta):
         len(w.get("ring_series") or []) for w in unique_workers) or rec["series_points"]
     dispatch = run.get("dispatch_latency_us") or {}
     rec["dispatch_samples"] = int(dispatch.get("samples") or 0)
-    # Arm identity: baseline = schema 1.0 / no metrics; B5 = schema 1.1 / metrics on.
+    # Arm identity: baseline = schema 1.0 / no metrics; metrics-on = schema 1.1 / metrics on.
     reason = None
     if rec["status"] != "ok":
         reason = "status=%s" % rec["status"]
@@ -141,7 +141,7 @@ def extract_invocation(arm, cell, rep, path, meta):
     elif arm == "b4" and schema != "1.0":
         reason = "baseline arm JSON schema %s != 1.0 (wrong build?)" % schema
     elif arm == "b5" and (schema != "1.1" or not rec["metrics_enabled"]):
-        reason = "B5 arm schema=%s metrics=%s (expected 1.1/on)" % (
+        reason = "metrics-on arm schema=%s metrics=%s (expected 1.1/on)" % (
             schema, rec["metrics_enabled"])
     if reason is None:
         rec["valid"] = True
@@ -203,17 +203,17 @@ def pair_gate(b4, b5, adjusted):
                     else p99_threshold_literal(b5))
     reasons = []
     if b4["iops_anomaly"]:
-        reasons.append("b4 IOPS anomaly (< 0.92 x max of its cell/arm)")
+        reasons.append("baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)")
     if b5["iops_anomaly"]:
-        reasons.append("b5 IOPS anomaly (< 0.92 x max of its cell/arm)")
+        reasons.append("metrics-on arm IOPS anomaly (< 0.92 x max of its cell/arm)")
     if (b4["p99_us"] or 0.0) >= threshold_b4:
-        reasons.append("b4 slow-state p99 >= %.0f us" % threshold_b4)
+        reasons.append("baseline arm slow-state p99 >= %.0f us" % threshold_b4)
     if (b5["p99_us"] or 0.0) >= threshold_b5:
-        reasons.append("b5 slow-state p99 >= %.0f us" % threshold_b5)
+        reasons.append("metrics-on arm slow-state p99 >= %.0f us" % threshold_b5)
     if _cells.gate_violation(b4["gate_start"]) or _cells.gate_violation(b4["gate_end"]):
-        reasons.append("b4 F14 gate")
+        reasons.append("baseline arm background-load gate")
     if _cells.gate_violation(b5["gate_start"]) or _cells.gate_violation(b5["gate_end"]):
-        reasons.append("b5 F14 gate")
+        reasons.append("metrics-on arm background-load gate")
     return bool(reasons), reasons
 
 
@@ -243,7 +243,7 @@ def analyze(records):
             if not b4["valid"] or not b5["valid"]:
                 skipped.append({
                     "rep": rep,
-                    "reason": "invalid invocation (b4: %s; b5: %s)"
+                    "reason": "invalid invocation (baseline: %s; metrics-on: %s)"
                               % (b4["error"] or "n/a", b5["error"] or "n/a"),
                 })
                 continue
@@ -389,9 +389,9 @@ def analyze(records):
 
 
 def per_ring_evidence(records):
-    """Per-ring queue-depth/p99 evidence for the B5 arm, aggregated over the valid reps.
+    """Per-ring queue-depth/p99 evidence for the metrics-on arm, aggregated over the valid reps.
 
-    This is the M3-report "per-ring queue depth and p99" data from schema 1.1
+    This is the multi-shard scaling report's "per-ring queue depth and p99" data from schema 1.1
     (`ring_series` + `ring_metrics` + `dispatch_latency_us` per worker).
     """
     out = {}
@@ -450,12 +450,12 @@ def r3_list(values):
 def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add = []
     cells = analysis["cells"]
-    add.append("# B5 observability overhead A/B — analysis (`%s`)" % session)
+    add.append("# Observability overhead A/B — analysis (`%s`)" % session)
     add.append("")
-    add.append("> **Protocol (docs/b5-design.md §7.1).** Paired per-rep ratio "
-               "`throughput(B5)/throughput(B4)` for the same cell/rep/position; arms "
+    add.append("> **Protocol (frozen before the session).** Paired per-rep ratio "
+               "`throughput(metrics-on)/throughput(baseline)` for the same cell/rep/position; arms "
                "interleaved with the arm order alternating per rep; baseline = commit "
-               "`%s` (no B5 metrics) built from a `git archive` scratch tree; B5 = frozen "
+               "`%s` (no metrics) built from a `git archive` scratch tree; metrics-on = frozen "
                "tree with metrics **on** (`ring_metrics`, 1 Hz `ring_series`, shard "
                "`withLatencySampleEvery(1)`). PASS = mean paired ratio >= %.2f in every "
                "cell and no individual rep below %.2f unless state-gated and disclosed. "
@@ -486,10 +486,10 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                   FAST_P99_US, analysis["verdict_literal"], MEAN_RATIO_BAR,
                   REP_RATIO_FLOOR))
     add.append("")
-    add.append("Metric: mean paired ratio per cell (lower is worse for B5); "
+    add.append("Metric: mean paired ratio per cell (lower is worse for metrics-on); "
                "`overhead` = `(1 - ratio) * 100 %`.")
     add.append("")
-    add.append("| cell | workers | pairs (R) | B4 mean IOPS | B5 mean IOPS | "
+    add.append("| cell | workers | pairs (R) | baseline mean IOPS | metrics-on mean IOPS | "
                "mean paired ratio | stdev | one-sided 95 % CI lower | min rep ratio | "
                "overhead % | state-gated reps (adjusted) | verdict (adjusted) |")
     add.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
@@ -514,7 +514,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("")
     add.append("## 1. All reps (paired, raw, never trimmed)")
     add.append("")
-    add.append("| cell | rep | B4 IOPS | B5 IOPS | ratio B5/B4 | B4 p99 us | B5 p99 us | "
+    add.append("| cell | rep | baseline IOPS | metrics-on IOPS | ratio metrics-on/baseline | baseline p99 us | metrics-on p99 us | "
                "state | gated? (adjusted) | gated? (literal) | reason (adjusted) |")
     add.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for cell in analysis["cell_order"]:
@@ -578,23 +578,23 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("")
     add.append("The cell-adjusted gate is `600 us x total workers`: the methodology's "
                "600 us calibration is for one QD64 ring, while a cell with W workers has "
-               "W x 64 requests in flight, so its normal p99 scales with W (the B4 report "
+               "W x 64 requests in flight, so its normal p99 scales with W (the shard-runtime report "
                "measured p99(8)/p99(1) = 5.1-5.9 for every engine, including fio, at "
                "constant QD64/worker). Both labellings keep the IOPS-anomaly rule "
-               "(rep < %.2f x the max IOPS of its own cell/arm) and the F14 gate."
+               "(rep < %.2f x the max IOPS of its own cell/arm) and the background-load gate."
                % IOPS_ANOMALY_FACTOR)
     add.append("")
-    add.append("## 2. B5 measured-arm metrics configuration")
+    add.append("## 2. Metrics-on arm configuration")
     add.append("")
-    add.append("The B5 arm must have metrics on in every invocation; this is what the "
+    add.append("The metrics-on arm must have metrics on in every invocation; this is what the "
                "measured overhead covers (per-ring counters + dispatch-latency sampling + "
                "one 1 Hz sampler thread). `dispatch_latency_us` is the **runtime "
                "completion latency (registration->dispatch)**: it includes kernel/device "
                "completion time and excludes SQE preparation + the handler body; it is "
-               "the M3 per-ring p99 and is NOT comparable to fio `clat` or the external "
-               "`latency_us`. Sampling is every successful registration (design A2.1).")
+               "the multi-shard scaling report's per-ring p99 and is NOT comparable to fio `clat` or the external "
+               "`latency_us`. Sampling counts every successful registration (the sampling-count rule).")
     add.append("")
-    add.append("| cell | metrics on (B5 reps) | total ring_series points per run | per-ring "
+    add.append("| cell | metrics on (metrics-on reps) | total ring_series points per run | per-ring "
                "ring_metrics | dispatch samples (mean) |")
     add.append("|---|---|---|---|---|")
     for cell in analysis["cell_order"]:
@@ -611,22 +611,22 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("")
     add.append("- **State gate (disclosed, never trimmed):** fast-state p99 thresholds as "
                "in §1.2; IOPS anomaly rule = a rep below %.2f x the maximum IOPS of its "
-               "own (cell, arm); F14 background gate from cell-meta.tsv (foreign process "
+               "own (cell, arm); background-load gate from cell-meta.tsv (foreign process "
                "> 20 %% CPU; own decaying loadavg residual is recorded as "
                "`own-residual` and is not foreign interference). A pair is state-gated "
                "when either arm is slow-state or gate-flagged; it stays in every mean."
                % IOPS_ANOMALY_FACTOR)
     add.append("- Baseline arm identity: commit `%s`, built by `git archive` into a "
                "scratch tree + `mvn -o -q -DskipTests compile` + its own `javac` build "
-               "(workspace never edited for the baseline). Schema 1.0, no B5 metrics."
+               "(workspace never edited for the baseline). Schema 1.0, no metrics."
                % b4_commit)
-    add.append("- B5 arm identity: frozen workspace tree (see manifest.txt for the "
+    add.append("- Metrics-on arm identity: frozen workspace tree (see manifest.txt for the "
                "expected/live hashes), schema 1.1, metrics on.")
     add.append("- Arms are interleaved with the order alternating each rep (rep odd: "
-               "b4->b5; rep even: b5->b4); every invocation is a fresh process/JVM under "
+               "baseline->metrics-on; rep even: metrics-on->baseline); every invocation is a fresh process/JVM under "
                "`taskset -c`; identical JVM flags for both arms; 30 s rest between "
                "invocations; every rep kept.")
-    add.append("- This session proves the B5 metrics-overhead bar only; **M3 is not "
+    add.append("- This session proves the metrics-overhead bar only; **the multi-shard scaling campaign is not "
                "signed off** by it.")
     skipped = [r for r in records if not r["valid"]]
     if skipped:
@@ -637,18 +637,18 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                        % (rec["cell"], rec["arm"], rec["rep"],
                           rec["error"] or rec["status"], rec["path"]))
     add.append("")
-    add.append("## 4. Per-ring queue depth / p99 evidence (B5 arm, schema 1.1; "
-               "M3-report data source)")
+    add.append("## 4. Per-ring queue depth / p99 evidence (metrics-on arm, schema 1.1; "
+               "multi-shard scaling report data source)")
     add.append("")
     per_ring = analysis.get("b5_per_ring") or {}
     if not per_ring:
-        add.append("No per-ring B5 data available in this session.")
+        add.append("No per-ring metrics data available in this session.")
     else:
         for cell in analysis["cell_order"]:
             rows = per_ring.get(cell)
             if not rows:
                 continue
-            add.append("### 4.%d `%s` per-ring values (mean over the 5 B5 reps; "
+            add.append("### 4.%d `%s` per-ring values (mean over the 5 metrics-on reps; "
                        "queue depth from the 1 Hz `ring_series`, dispatch p99 from "
                        "`dispatch_latency_us.p99`)" % (analysis["cell_order"].index(cell) + 1,
                                                        cell))
@@ -668,7 +668,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                               row["failed"], row["cancelled"],
                               row["series_points"] if row["series_points"] else "n/a"))
             add.append("")
-        add.append("This is the schema-1.1 evidence for the M3-report requirement "
+        add.append("This is the schema-1.1 evidence for the multi-shard scaling report requirement "
                    "\"per-ring queue depth and p99\": queue depth comes from the "
                    "measured-phase `ring_series`; the p99 is the runtime completion "
                    "latency (registration->dispatch, includes kernel/device completion; "
@@ -678,7 +678,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("")
     add.append("## 5. Method")
     add.append("")
-    add.append("For each cell and rep `i`, `ratio_i = IOPS_B5,i / IOPS_B4,i` (paired at "
+    add.append("For each cell and rep `i`, `ratio_i = IOPS_metrics-on,i / IOPS_baseline,i` (paired at "
                "the same position). Reported: mean, sample stdev, one-sided 95 %% lower "
                "confidence bound `mean - t_{0.95,n-1} * stdev/sqrt(n)`, min/max. "
                "PASS = mean ratio >= %.2f in every cell AND no non-state-gated ratio < "
@@ -726,12 +726,12 @@ def main(argv):
         "workload": "4K randread, QD 64 per worker, CPUs 1..N",
         "warmup_s": 10, "measured_s": 30, "reps": 5, "rest_s": 30,
         "arms_interleaved": True, "arm_order_alternates_per_rep": True,
-        "metric": "paired per-rep throughput ratio B5/B4",
+        "metric": "paired per-rep throughput ratio metrics-on/baseline",
         "primary_bar": "mean paired ratio >= %.2f in every cell" % MEAN_RATIO_BAR,
         "rep_floor": "no individual rep < %.2f unless state-gated and disclosed"
                      % REP_RATIO_FLOOR,
         "state_gate": "fast p99 < %.0f us + IOPS anomaly rep < %.2f x max (cell,arm) "
-                      "+ F14" % (FAST_P99_US, IOPS_ANOMALY_FACTOR),
+                      "+ background-load gate" % (FAST_P99_US, IOPS_ANOMALY_FACTOR),
         "baseline_commit": args.baseline_commit,
         "b5_metrics": "on: ring_metrics + 1 Hz ring_series + withLatencySampleEvery(1) (dispatch_latency_us = runtime completion latency registration->dispatch)",
         "m3_signed_off": False,
@@ -835,7 +835,7 @@ def main(argv):
     for cell in analysis["cell_order"]:
         rows = analysis.get("b5_per_ring", {}).get(cell) or []
         if rows:
-            print("  b5 per-ring %-9s rings=%d mean_in_flight=%.2f max_in_flight=%s "
+            print("  metrics-on per-ring %-9s rings=%d mean_in_flight=%.2f max_in_flight=%s "
                   "runtime_completion_p99_us=%s"
                   % (cell, len(rows),
                      stats.mean([r["mean_in_flight"] for r in rows if r["mean_in_flight"] is not None]),

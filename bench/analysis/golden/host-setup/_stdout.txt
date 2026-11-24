@@ -1,8 +1,8 @@
-# Step D — host representativeness: campaign analysis
+# Host representativeness: campaign analysis
 
 - results dir: `<SESSIONS>/unattended-2026-11-16/stepd`
 - rows: 75 (75 ok, 0 fail), hugepage warnings: 15
-- protocol: `docs/stepd-design.md` v1.0 (frozen); disclosure campaign, **no pass/fail**
+- protocol: frozen; host rules in `docs/benchmark-methodology.md`; disclosure campaign, **no pass/fail**
 
 ## Block A — seastar THP vs hugetlbfs (paired, R=3)
 
@@ -59,5 +59,5 @@
 | W9 qd1 | 1.0138 | [0.9825, 1.0451] | 5 | 0.9959 | [0.9212, 1.0706] | 5 |
 
 
-wrote <SESSIONS>/unattended-2026-11-16/stepd/analysis/stepd-summary.md
-wrote <SESSIONS>/unattended-2026-11-16/stepd/analysis/stepd.ratios.csv
+wrote <SESSIONS>/unattended-2026-11-16/stepd/analysis/host-setup-summary.md
+wrote <SESSIONS>/unattended-2026-11-16/stepd/analysis/host-setup.ratios.csv

@@ -52,7 +52,7 @@ def ring_counters(rm):
 
 
 def gate_violation(state):
-    """F14 gate states: ``ok`` and our own decaying loadavg residual are not violations."""
+    """Background-load gate states: ``ok`` and our own decaying loadavg residual are not violations."""
     if state in (None, "", "ok"):
         return False
     return not str(state).startswith("own-residual")

@@ -24,10 +24,10 @@
     "rest_s": 30,
     "arms_interleaved": true,
     "arm_order_alternates_per_rep": true,
-    "metric": "paired per-rep throughput ratio B5/B4",
+    "metric": "paired per-rep throughput ratio metrics-on/baseline",
     "primary_bar": "mean paired ratio >= 0.99 in every cell",
     "rep_floor": "no individual rep < 0.95 unless state-gated and disclosed",
-    "state_gate": "fast p99 < 600 us + IOPS anomaly rep < 0.92 x max (cell,arm) + F14",
+    "state_gate": "fast p99 < 600 us + IOPS anomaly rep < 0.92 x max (cell,arm) + background-load gate",
     "baseline_commit": "6cc1a75",
     "b5_metrics": "on: ring_metrics + 1 Hz ring_series + withLatencySampleEvery(1) (dispatch_latency_us = runtime completion latency registration->dispatch)",
     "m3_signed_off": false
@@ -95,13 +95,13 @@
           "b5_p99_us": 538.714,
           "state_gated": true,
           "state_reasons": [
-            "b4 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b4 slow-state p99 >= 600 us"
+            "baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "baseline arm slow-state p99 >= 600 us"
           ],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b4 slow-state p99 >= 600 us"
+            "baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "baseline arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false
@@ -205,8 +205,8 @@
           "state_reasons": [],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 slow-state p99 >= 600 us",
-            "b5 slow-state p99 >= 600 us"
+            "baseline arm slow-state p99 >= 600 us",
+            "metrics-on arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false
@@ -222,8 +222,8 @@
           "state_reasons": [],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 slow-state p99 >= 600 us",
-            "b5 slow-state p99 >= 600 us"
+            "baseline arm slow-state p99 >= 600 us",
+            "metrics-on arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false
@@ -239,8 +239,8 @@
           "state_reasons": [],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 slow-state p99 >= 600 us",
-            "b5 slow-state p99 >= 600 us"
+            "baseline arm slow-state p99 >= 600 us",
+            "metrics-on arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false
@@ -256,8 +256,8 @@
           "state_reasons": [],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 slow-state p99 >= 600 us",
-            "b5 slow-state p99 >= 600 us"
+            "baseline arm slow-state p99 >= 600 us",
+            "metrics-on arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false
@@ -271,17 +271,17 @@
           "b5_p99_us": 7016.249,
           "state_gated": true,
           "state_reasons": [
-            "b4 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b5 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b4 slow-state p99 >= 4800 us",
-            "b5 slow-state p99 >= 4800 us"
+            "baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "metrics-on arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "baseline arm slow-state p99 >= 4800 us",
+            "metrics-on arm slow-state p99 >= 4800 us"
           ],
           "state_gated_literal": true,
           "state_reasons_literal": [
-            "b4 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b5 IOPS anomaly (< 0.92 x max of its cell/arm)",
-            "b4 slow-state p99 >= 600 us",
-            "b5 slow-state p99 >= 600 us"
+            "baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "metrics-on arm IOPS anomaly (< 0.92 x max of its cell/arm)",
+            "baseline arm slow-state p99 >= 600 us",
+            "metrics-on arm slow-state p99 >= 600 us"
           ],
           "undisclosed_below_floor": false,
           "undisclosed_below_floor_literal": false

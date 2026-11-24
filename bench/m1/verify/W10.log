@@ -1,4 +1,0 @@
-[juring] note: RLIMIT_MEMLOCK=8388608 B, estimated registered-buffer need=8519680 B for 1 thread(s) x qd 8 x 1048576 B; using unregistered 4096-aligned arena buffers
-[juring] label=verify_W10 workload=randread file=/mnt/TestData/read_files/single_file_bench.bin fileSize=10,737,418,240 ioSize=10,737,418,240 (read-only) bs=1048576 qd=8 threads=1 runs=1 seconds=30.00 warmup=10.00
-[juring] ring flags=[IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN] entries=max(256,2*qd) buffers=arena-unregistered (8 x 1048576 B)
-[juring] run 1/1: 30.00 s, 136,820 ops, 4560.4 MiB/s, 4560.4 IOPS, p50=1734.6 us p99=2938.4 us p999=3921.1 us max=6897.9 us, errors=0, seqOverflows=0

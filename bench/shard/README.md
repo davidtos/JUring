@@ -4,6 +4,13 @@ One ring on one thread has a ceiling. I measured whether sharding work across ri
 
 The results I trust are in [`BENCHMARK.md`](../../BENCHMARK.md#multi-ring-scale-out). The protocol and statistics are in [`docs/benchmark-methodology.md`](../../docs/benchmark-methodology.md), and the decision not to build a shard runtime with work stealing or QoS is in [`docs/design-notes.md`](../../docs/design-notes.md).
 
+### Identifiers
+
+The four scaling cells are `shards-1`, `shards-2`, `shards-4` and `shards-8` (1/2/4/8 shards); the
+mapping lives in [`bench/analysis/cells.py`](../analysis/cells.py), loaded by
+[`bench/cells.sh`](../cells.sh). Historical sessions named the cell `N<n>`; new runs write the
+canonical slug, and the analyzer accepts both.
+
 ## What it measures
 
 The workload is 4 KiB random read, QD 64 per shard, on the aged 10 GiB read-only file `/mnt/TestData/read_files/single_file_bench.bin`, opened `O_DIRECT`, with 10 s warmup and 30 s measured. Shards run from one to eight. For one to four shards, workers are pinned to CPUs `1..N`. For eight shards the runners are confined to the eight data-NVMe `blk-mq` hardware-queue CPUs `1,2,4,6,8,10,12,14` (`mq/0..7`), and the shard runtime runs unpinned inside that CPU mask.
@@ -117,7 +124,7 @@ Shard mode adds `config.runtime`, `config.shards`, `config.first_cpu` and `runs[
 
 ```text
 bench/results/<session>/
-  cells/<N>__<engine>__r<rep>.json      raw per-process JSON
+  cells/shards-<N>__<engine>__r<rep>.json   raw per-process JSON (cell slug)
   logs/<id>.log, logs/<id>.env          process output; pre/post uptime, loadavg, top
   cell-meta.tsv                         one row per invocation, all repetitions kept
   manifest.txt                          host, kernel, JDK, CPU, NVMe, protocol, commands

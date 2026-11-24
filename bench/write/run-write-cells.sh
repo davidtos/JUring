@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 #
-# run-write-cells.sh - execute the M1 write matrix (methodology W5-W8, W12-W14).
+# run-write-cells.sh - execute the write matrix (4 KiB random
+# write at QD 1/16/64/128, then 1 MiB sequential write at QD 1/8/32).
 #
-# Cells (docs/benchmark-methodology.md section 2):
-#   W5  randwrite 4K  QD1    60 s warmup / 60 s measured
-#   W6  randwrite 4K  QD16  120/60
-#   W7  randwrite 4K  QD64  120/60  (+ fio batching sweep b=1,8,16,32)
-#   W8  randwrite 4K  QD128 120/60
-#   W12 seqwrite  1M  QD1    60/60
-#   W13 seqwrite  1M  QD8    60/60
-#   W14 seqwrite  1M  QD32   60/60
+# Cells (docs/benchmark-methodology.md):
+#   randwrite-4k-qd1    randwrite 4K  QD1    60 s warmup / 60 s measured
+#   randwrite-4k-qd16   randwrite 4K  QD16  120/60
+#   randwrite-4k-qd64   randwrite 4K  QD64  120/60  (+ fio batching sweep b=1,8,16,32)
+#   randwrite-4k-qd128  randwrite 4K  QD128 120/60
+#   seqwrite-1m-qd1     seqwrite  1M  QD1    60/60
+#   seqwrite-1m-qd8     seqwrite  1M  QD8    60/60
+#   seqwrite-1m-qd32    seqwrite  1M  QD32   60/60
+#
+# Cell IDs are the canonical workload names from bench/analysis/cells.py; the
+# old W5..W8/W12..W14 aliases are still accepted by --cells and --reps-by-cell.
 # Engines: juring (bench/juring/run-juring.sh, JURING_SKIP_COMPILE=1),
 #          fio (io_uring; variant default / matched registration / batching sweep),
 #          seastar (bench/seastar/seastar_file_bench; write path smoke-validated on
@@ -21,26 +25,27 @@
 #          create-write-file.sh).  The read dataset is never opened for writing.
 #
 # Device-state controls encoded here:
-#   D1  preconditioning before every measured block: calls precondition.sh
+#   preconditioning before every measured block: calls precondition.sh
 #       (default condition=target: stop as soon as 3x file size = 32,212,254,720 B
-#       of 4K randwrite QD64 is written, then fsync), records the write
-#       generation; --precondition=per-cell|session-once|none.
-#   D2  1 s /sys/block/nvme1n1/stat series per measured run via
+#       of 4K randwrite QD64 is written, then fsync), records the pass number;
+#       --precondition=per-cell|session-once|none.
+#   the 1 s device I/O series: /sys/block/nvme1n1/stat series per measured run via
 #       sample-device-iops.sh (background); --no-sampler to disable.
-#   D3  300 s idle rest between measured runs (--rest-sec), 600 s after a
-#       preconditioning burst (--precond-rest-sec); recorded in
+#   the between-run rests: 300 s idle rest between measured runs (--rest-sec), 600 s
+#       after a preconditioning burst (--precond-rest-sec); recorded in
 #       state/rests.tsv.  --rest-scope=reps rests only between rep groups.
-#   D4  refuses silent discard: records the mount options and warns if `discard`
+#   the no-discard rule: records the mount options and warns if `discard`
 #       is present; never issues blkdiscard/TRIM.
-#   D5  records thermal state before/after every run when readable (nvme
-#       smart-log needs root; hwmon is used when available) and marks it
+#   the thermal record: records thermal state before/after every run when readable
+#       (nvme smart-log needs root; hwmon is used when available) and marks it
 #       unavailable otherwise - the host-root step is in bench/write/README.md.
-#   D6  monotonic cell order W5->W8, W12->W14; engine order within a rep is
+#   the rotated engine order: monotonic cell order (4 KiB random write QD 1 -> 128, then 1 MiB
+#       sequential write QD 1 -> 32); engine order within a rep is
 #       rotated by rep (A,B / B,A / A,B) and the exact order is written to
 #       state/order.tsv.  Preconditioning stays monotonic.
-#   D7  emits per-run RESULT lines and per-cell CELL_SUMMARY lines with n,
-#       mean, sd, CV%; CV>10% is flagged unstable (no ranking).
-#   F14 gate: loadavg(1m) > --loadavg-max aborts (or warns) before a run.
+#   the variance rule: emits per-run RESULT lines and per-cell CELL_SUMMARY lines
+#       with n, mean, sd, CV%; CV>10% is flagged unstable (no ranking).
+#   the background-load gate: loadavg(1m) > --loadavg-max aborts (or warns) before a run.
 #
 # Multi-invocation support: --resume lets a later invocation re-use a session
 # dir (run-granular skip of cells/<stem>.json that parses with iops>0; a cell
@@ -52,21 +57,21 @@
 # microseconds for every engine in RESULT / runs.tsv / cell-meta.tsv (fio
 # clat_ns is divided by 1000; manifest line cell_meta_p99_units=us).
 #
-# Outputs (all below <session-dir>, default bench/results/m1-2026-11-13-write):
+# Outputs (all below <session-dir>, default bench/results/write-2026-11-13):
 #   cells/<case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>.json
 #   logs/<same stem>.log
-#   series/<same stem>.tsv                  (D2 device time series)
+#   series/<same stem>.tsv                  (1 s device I/O series)
 #   state/order.tsv, runs.tsv, rests.tsv, cell-summaries.txt,
 #   state/resumed.tsv, state/invocations.tsv,
-#   state/write-generations.tsv, state/precondition-results.txt
+#   state/write-passes.tsv, state/precondition-results.txt
 #   manifest.txt (first invocation) / manifest-run<N>.txt (later invocations)
 #
 # Usage:
 #   bench/write/run-write-cells.sh --dry-run            # print the whole plan
-#   bench/write/run-write-cells.sh --cells W5 --reps 1  # smoke subset
+#   bench/write/run-write-cells.sh --cells randwrite-4k-qd1 --reps 1  # smoke subset
 #   bench/write/run-write-cells.sh --resume             # continue a session
 #   bench/write/run-write-cells.sh                      # full protocol (R=3)
-#   bench/write/run-write-campaign.sh                   # the Step-A 3-block campaign
+#   bench/write/run-write-campaign.sh                   # the 3-block write-matrix campaign
 #
 # Exit status: 0 all executed runs ok, 1 at least one failure, 2 usage error.
 #
@@ -77,16 +82,18 @@ ORIG_ARGV=("$@")   # preserved verbatim for state/invocations.tsv
 PROG=$(basename -- "${BASH_SOURCE[0]}")
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
+# shellcheck source=bench/cells.sh
+source "$REPO_ROOT/bench/cells.sh"
 
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/m1-2026-11-13-write}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
 
-CELLS_RAW="W5 W6 W7 W8 W12 W13 W14"
+CELLS_RAW="randwrite-4k-qd1 randwrite-4k-qd16 randwrite-4k-qd64 randwrite-4k-qd128 seqwrite-1m-qd1 seqwrite-1m-qd8 seqwrite-1m-qd32"
 ENGINES_RAW="juring,fio"
 FIO_VARIANTS_RAW="default,matched"
-W7_SWEEP=1
+BATCHING_SWEEP=1
 CPU=2
 SEED=20261113
 MEASURED_SEC=60
@@ -110,28 +117,33 @@ DRY_RUN=0
 
 usage() {
     cat <<'EOF'
-run-write-cells.sh - execute the M1 write matrix (W5-W8, W12-W14)
+run-write-cells.sh - execute the write matrix (4 KiB random write QD 1-128,
+1 MiB sequential write QD 1-32)
 
 Usage:
   bench/write/run-write-cells.sh [options]
 
 Selection:
-  --cells LIST           comma/space list from W5,W6,W7,W8,W12,W13,W14
-                         (default all, monotonic order preserved)
+  --cells LIST           comma/space list of cell slugs, e.g.
+                         randwrite-4k-qd64,randwrite-4k-qd128 (default: all seven
+                         write cells). Legacy W5/W6/W7/W8/W12/W13/W14 accepted.
   --engines LIST         subset of juring,fio,seastar (default juring,fio)
   --fio-variants LIST    subset of default,matched,regfile,matchedbatch,batch1,
                          batch8,batch16,batch32,sqpoll,libaio (default default,matched;
                          the batching sweep batch1/batch8/batch16/batch32 is added
-                         for W7 unless --no-w7-sweep, and matchedbatch is added
-                         for W7/W8 as the M1 gate comparator)
-  --no-w7-sweep          do not add the W7 fio batching sweep / W7-W8
-                         matchedbatch comparator
+                         for randwrite-4k-qd64 unless --no-batching-sweep, and
+                         matchedbatch is added for randwrite-4k-qd64 and
+                         randwrite-4k-qd128 as the write-gate comparator)
+  --no-batching-sweep    do not add the fio batching sweep on randwrite-4k-qd64
+                         or the extra matchedbatch comparator (legacy alias:
+                         --no-w7-sweep, still accepted)
   --allow-seastar-write  enable the seastar write path (smoke-validated, opt-in)
 
 Protocol:
-  --reps N               default repetitions per cell (default 3, methodology D7)
-  --reps-by-cell LIST    per-cell repetition override, e.g. W7=5,W8=5; a cell
-                         not listed falls back to --reps
+  --reps N               default repetitions per cell (default 3, the variance rule)
+  --reps-by-cell LIST    per-cell repetition override, e.g.
+                         randwrite-4k-qd64=5,randwrite-4k-qd128=5 (legacy W7=5 also
+                         accepted); a cell not listed falls back to --reps
   --resume               run-granular resume into an existing --session-dir:
                          a planned run whose cells/<stem>.json exists and parses
                          with iops>0 is skipped (logged to state/resumed.tsv); a
@@ -139,14 +151,15 @@ Protocol:
                          a fully present cell skips cell+preconditioning
   --measured-sec S       measured window (default 60)
   --warmup-sec S         warmup override for every cell; default per cell
-                         from the methodology table (W5/W12/W13/W14=60,
-                         W6/W7/W8=120)
-  --rest-sec S           idle rest between measured runs (D3, default 300)
+                         from the methodology table (4 KiB random write QD 1 and
+                         all 1 MiB sequential-write cells = 60 s; 4 KiB random
+                         write QD 16/64/128 = 120 s)
+  --rest-sec S           idle rest between measured runs (between-run rest, default 300)
   --rest-scope runs|reps rest after every run (default) or only between rep
                          groups (identical engine order within a rep, no rest
                          between engines - cheaper, documented deviation)
-  --precond-rest-sec S   idle rest after a preconditioning burst (D3, default 600)
-  --precondition MODE    per-cell (D1 before every cell, default),
+  --precond-rest-sec S   idle rest after a preconditioning burst (between-run rest, default 600)
+  --precondition MODE    per-cell (precondition before every cell, default),
                          session-once (before the first cell only), or none
   --allow-capped-precondition
                          continue if precondition.sh stops capped (target not
@@ -160,17 +173,17 @@ Paths / safety:
                          read dataset is still refused. Pair with --device-stat
   --expect-size SIZE     expected file size (default 10g); refuse otherwise
   --session-dir DIR      result root
-                         (default <repo>/bench/results/m1-2026-11-13-write)
+                         (default <repo>/bench/results/write-2026-11-13)
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --cpu N                taskset CPU (default 2)
   --seed N               PRNG seed (default 20261113)
-  --loadavg-max F        F14 gate threshold for loadavg(1m) (default 0.5)
+  --loadavg-max F        background-load gate threshold for loadavg(1m) (default 0.5)
   --loadavg-action abort|warn   (default abort)
   --allow-concurrent     do not abort when another fio/seastar/JUring bench
                          process is already running
-  --sampler              enable the D2 device time series (default; accepted
+  --sampler              enable the 1 s device I/O series (default; accepted
                          explicitly so wrappers can state the whole protocol)
-  --no-sampler           disable the D2 device time series
+  --no-sampler           disable the 1 s device I/O series
   --dry-run              print the complete plan + every command; execute
                          NOTHING (no I/O, no mkdir, no sleeps)
   -h, --help             this text
@@ -212,7 +225,8 @@ while [[ $# -gt 0 ]]; do
         --cells)                    [[ $# -ge 2 ]] || die "--cells needs a value"; CELLS_RAW=$2; shift 2 ;;
         --engines)                  [[ $# -ge 2 ]] || die "--engines needs a value"; ENGINES_RAW=$2; shift 2 ;;
         --fio-variants)             [[ $# -ge 2 ]] || die "--fio-variants needs a value"; FIO_VARIANTS_RAW=$2; shift 2 ;;
-        --no-w7-sweep)              W7_SWEEP=0; shift ;;
+        --no-batching-sweep)        BATCHING_SWEEP=0; shift ;;
+        --no-w7-sweep)              BATCHING_SWEEP=0; shift ;;  # legacy alias
         --allow-seastar-write)      ALLOW_SEASTAR_WRITE=1; shift ;;
         --reps)                     [[ $# -ge 2 ]] || die "--reps needs a value"; REPS=$2; shift 2 ;;
         --reps-by-cell)             [[ $# -ge 2 ]] || die "--reps-by-cell needs a value"; REPS_BY_CELL_RAW=$2; shift 2 ;;
@@ -289,20 +303,27 @@ FIO_VARIANTS=$(printf '%s' "$FIO_VARIANTS_RAW" | tr ',' ' ')
 # cell_meta CASE -> "<workload> <bs_label> <bs_bytes> <qd> <default_warmup_sec>"
 cell_meta() {
     case "$1" in
-        W5)  echo "randwrite 4k 4096 1 60" ;;
-        W6)  echo "randwrite 4k 4096 16 120" ;;
-        W7)  echo "randwrite 4k 4096 64 120" ;;
-        W8)  echo "randwrite 4k 4096 128 120" ;;
-        W12) echo "seqwrite 1m 1048576 1 60" ;;
-        W13) echo "seqwrite 1m 1048576 8 60" ;;
-        W14) echo "seqwrite 1m 1048576 32 60" ;;
+        randwrite-4k-qd1)  echo "randwrite 4k 4096 1 60" ;;
+        randwrite-4k-qd16)  echo "randwrite 4k 4096 16 120" ;;
+        randwrite-4k-qd64)  echo "randwrite 4k 4096 64 120" ;;
+        randwrite-4k-qd128)  echo "randwrite 4k 4096 128 120" ;;
+        seqwrite-1m-qd1) echo "seqwrite 1m 1048576 1 60" ;;
+        seqwrite-1m-qd8) echo "seqwrite 1m 1048576 8 60" ;;
+        seqwrite-1m-qd32) echo "seqwrite 1m 1048576 32 60" ;;
         *) return 1 ;;
     esac
 }
 
+# Canonicalize every requested cell: a legacy W# alias is accepted, the plan and
+# every output file use the canonical slug from bench/analysis/cells.py.
+CELL_CHOICES="randwrite-4k-qd1 randwrite-4k-qd16 randwrite-4k-qd64 randwrite-4k-qd128 seqwrite-1m-qd1 seqwrite-1m-qd8 seqwrite-1m-qd32"
+CELLS_CANON=""
 for cell in $CELLS; do
-    cell_meta "$cell" >/dev/null || die "unknown --cells entry '$cell' (W5 W6 W7 W8 W12 W13 W14)"
+    canonical=$(cell_slug "$cell")
+    cell_meta "$canonical" >/dev/null || die "unknown --cells entry '$cell' (canonical slugs: $CELL_CHOICES)"
+    CELLS_CANON="${CELLS_CANON:+$CELLS_CANON }$canonical"
 done
+CELLS=$CELLS_CANON
 for eng in $ENGINES; do
     case "$eng" in juring|fio|seastar) : ;; *) die "unknown --engines entry '$eng' (juring|fio|seastar)" ;; esac
 done
@@ -313,16 +334,17 @@ for v in $FIO_VARIANTS; do
     case "$v" in default|matched|regfile|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
 done
 
-# --reps-by-cell W7=5,W8=5 (a cell not listed falls back to --reps)
+# --reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5 (legacy W7=5 accepted;
+# a cell not listed falls back to --reps)
 declare -A CELL_REPS=()
 if [[ -n "$REPS_BY_CELL_RAW" ]]; then
     for item in $(printf '%s' "$REPS_BY_CELL_RAW" | tr ',' ' '); do
         if [[ "$item" != *=* ]]; then
-            die "--reps-by-cell entries must look like W7=5 (got '$item')"
+            die "--reps-by-cell entries must look like randwrite-4k-qd64=5 (got '$item')"
         fi
-        rc_cell=${item%%=*}
+        rc_cell=$(cell_slug "${item%%=*}")
         rc_reps=${item#*=}
-        cell_meta "$rc_cell" >/dev/null || die "--reps-by-cell: unknown cell '$rc_cell' (W5 W6 W7 W8 W12 W13 W14)"
+        cell_meta "$rc_cell" >/dev/null || die "--reps-by-cell: unknown cell '${item%%=*}' (canonical slugs: $CELL_CHOICES)"
         [[ "$rc_reps" =~ ^[1-9][0-9]*$ ]] || die "--reps-by-cell: '$rc_cell' needs a positive integer reps value (got '$rc_reps')"
         [[ -z "${CELL_REPS[$rc_cell]:-}" ]] || die "--reps-by-cell: cell '$rc_cell' given more than once"
         CELL_REPS[$rc_cell]=$rc_reps
@@ -348,12 +370,12 @@ build_specs() { # $1 = cell
                 SPEC_TOKEN+=("seastar"); SPEC_VARIANT+=("std"); SPEC_KIND+=("seastar") ;;
             fio)
                 local variants=$FIO_VARIANTS
-                if (( W7_SWEEP )); then
-                    if [[ "$cell" == "W7" ]]; then
+                if (( BATCHING_SWEEP )); then
+                    if [[ "$cell" == "randwrite-4k-qd64" ]]; then
                         for extra in batch1 batch8 batch16 batch32 matchedbatch; do
                             case " $variants " in *" $extra "*) : ;; *) variants="$variants $extra" ;; esac
                         done
-                    elif [[ "$cell" == "W8" ]]; then
+                    elif [[ "$cell" == "randwrite-4k-qd128" ]]; then
                         case " $variants " in *" matchedbatch "*) : ;; *) variants="$variants matchedbatch" ;; esac
                     fi
                 fi
@@ -532,7 +554,7 @@ build_engine_cmd() { # kind variant workload bs_label qd warmup stem out_json
             case "$variant" in
                 default) : ;;
                 matched)      CMD+=(--registerfiles=1 --fixedbufs=1) ;;
-                regfile)      CMD+=(--registerfiles=1) ;;  # 1 MiB cells: fixedbufs > RLIMIT_MEMLOCK (Amendment A1)
+                regfile)      CMD+=(--registerfiles=1) ;;  # 1 MiB cells: fixedbufs > RLIMIT_MEMLOCK, so use a registered file only
                 matchedbatch) CMD+=(--registerfiles=1 --fixedbufs=1 --iodepth_batch_submit="$qd") ;;
                 batch1)  CMD+=(--iodepth_batch_submit=1) ;;
                 batch8)  CMD+=(--iodepth_batch_submit=8) ;;
@@ -630,7 +652,7 @@ do_rest() { # seconds phase after_ref
     local secs=$1 phase=$2 after=$3
     (( secs > 0 )) || return 0
     local t0 t1 actual
-    note "== [D3] rest ${secs}s ($phase) =="
+    note "== [between-run rest] rest ${secs}s ($phase) =="
     t0=$(now_s)
     sleep "$secs"
     t1=$(now_s)
@@ -645,7 +667,7 @@ do_rest() { # seconds phase after_ref
 run_precondition() { # cell
     local cell=$1
     local plog="$SESSION_DIR/logs/precondition-${cell}-$(date -u +%Y%m%dT%H%M%SZ).log"
-    note "== [D1] preconditioning before cell $cell (3x file size 4K randwrite QD64 + fsync) =="
+    note "== [preconditioning] before cell $cell (3x file size 4K randwrite QD64 + fsync) =="
     local -a pcmd=("$SCRIPT_DIR/precondition.sh"
         --file "$WF" --session-dir "$SESSION_DIR" --device-stat "$DEVICE_STAT"
         --cpu "$CPU" --bs 4k --qd 64)
@@ -752,7 +774,7 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
     local log="$LOGS_DIR/$stem.log"
     local series="$SERIES_DIR/$stem.tsv"
 
-    # ---- F14 loadavg gate
+    # ---- background-load gate
     local load1 top_proc gate=ok
     load1=$(awk '{print $1}' /proc/loadavg)
     top_proc=$(ps -eo pcpu=,comm= --sort=-pcpu 2>/dev/null | head -n1 | awk '{print $1"/"$2}' || true)
@@ -760,9 +782,9 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
     if awk -v a="$load1" -v b="$LOADAVG_MAX" 'BEGIN{exit !(a+0 > b+0)}'; then
         gate="over($load1>$LOADAVG_MAX)"
         if [[ "$LOADAVG_ACTION" == "abort" ]]; then
-            die "loadavg(1m)=$load1 > $LOADAVG_MAX before $stem (F14); aborting. Wait for an idle machine or pass --loadavg-action warn"
+            die "loadavg(1m)=$load1 > $LOADAVG_MAX before $stem (background-load gate); aborting. Wait for an idle machine or pass --loadavg-action warn"
         fi
-        warn "loadavg(1m)=$load1 > $LOADAVG_MAX before $stem (F14); continuing (--loadavg-action warn)"
+        warn "loadavg(1m)=$load1 > $LOADAVG_MAX before $stem (background-load gate); continuing (--loadavg-action warn)"
     fi
 
     local wl
@@ -840,7 +862,7 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
     if [[ "$status" == "ok" && "$bytes" =~ ^[0-9]+$ ]] && (( bytes > 0 )); then
         local dev_bytes=$(( w_sec_d * 512 ))
         if (( dev_bytes < bytes * 9 / 10 )); then
-            warn "device wrote ${dev_bytes} B but the engine reports ${bytes} B (10% gate, methodology section 6)"
+            warn "device wrote ${dev_bytes} B but the engine reports ${bytes} B (10% device-write gate)"
         fi
     fi
 
@@ -863,7 +885,7 @@ run_one() { # seq cell token variant kind bs_label bs_bytes qd warmup rep rest_a
         "$bmode" "$w_sec_d" "$dev_write_mib" "$load1" "$loadavg_end_full" "$GOVERNOR" \
         "$thermal_start" "$thermal_end" "$started_utc" >>"$SESSION_DIR/state/runs.tsv"
 
-    # bench/m1/lib.sh-compatible row (same 17 columns as the read session)
+    # bench/read-write/lib.sh-compatible row (same 17 columns as the read session)
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$cell" "$token" "$variant" "$bs_label" "$qd" "$rep" "$(now_utc)" \
         "$loadavg_start_full" "$loadavg_end_full" "$(( DR_SEC2 - DR_SEC ))" "$w_sec_d" \
@@ -883,8 +905,8 @@ if (( DRY_RUN )); then
     printf '#   write_file=%s\n' "$WF"
     printf '#   read_file=%s (never touched)\n' "$RF"
     printf '#   session_dir=%s\n' "$SESSION_DIR"
-    printf '#   cells=%s engines=%s fio_variants=%s w7_sweep=%s\n' \
-        "$CELLS" "$ENGINES" "$FIO_VARIANTS" "$W7_SWEEP"
+    printf '#   cells=%s engines=%s fio_variants=%s batching_sweep=%s\n' \
+        "$CELLS" "$ENGINES" "$FIO_VARIANTS" "$BATCHING_SWEEP"
     printf '#   protocol: reps_default=%s reps_by_cell=%s measured=%ss warmup=%s rest=%ss rest_scope=%s precond_rest=%ss precondition=%s resume=%s\n' \
         "$REPS" "${REPS_BY_CELL_RAW:-none}" "$MEASURED_SEC" "${WARMUP_OVERRIDE:-per-cell}" "$REST_SEC" "$REST_SCOPE" "$PRECOND_REST_SEC" "$PRECOND_MODE" "$RESUME"
     printf '#   cpu=%s seed=%s expect_size_bytes=%s sampler=%s\n' \
@@ -961,12 +983,12 @@ if (( DRY_RUN )); then
                 session-once) (( pd_seen == 0 )) && need_precond=1 ;;
             esac
             if (( RESUME )) && (( ${RESUME_CELL_MISSING[$cell]:-0} == 0 )); then
-                printf '# precondition (D1) before cell %s: SKIP (cell fully present under --resume)\n' "$cell"
+                printf '# precondition before cell %s: SKIP (cell fully present under --resume)\n' "$cell"
                 need_precond=0
             elif (( need_precond )); then
-                printf '# precondition (D1) before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64 (condition=target%s)\n' \
+                printf '# precondition before cell %s: %s/precondition.sh --file %s --session-dir %s --device-stat %s --cpu %s --bs 4k --qd 64 (condition=target%s)\n' \
                     "$cell" "$SCRIPT_DIR" "$WF" "$SESSION_DIR" "$DEVICE_STAT" "$CPU"
-                printf '# rest %ss after preconditioning (D3)\n' "$PRECOND_REST_SEC"
+                printf '# rest %ss after preconditioning (between-run rest)\n' "$PRECOND_REST_SEC"
                 pd_seen=1
             fi
             prev_cell=$cell
@@ -985,12 +1007,12 @@ if (( DRY_RUN )); then
                 "$SCRIPT_DIR" "$SESSION_DIR" "$stem" "$DEVICE_STAT" "$stem"
         fi
         if (( rest_after )); then
-            printf '#   rest: %ss after this run (D3)\n' "$REST_SEC"
+            printf '#   rest: %ss after this run (between-run rest)\n' "$REST_SEC"
         fi
     done
 
     # wall-time estimate: run = warmup+measured+~3 s startup; 90 s precondition +
-    # precond rest per burst (Step-A target-driven burst, not the old 120 s AND).
+    # precond rest per burst (the write-matrix target-driven burst, not the old 120 s AND).
     PRECOND_COST=$(( 90 + PRECOND_REST_SEC ))
     est=0
     est_exec=0
@@ -1086,7 +1108,7 @@ check_concurrency
 
 GOVERNOR=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)
 if [[ "$GOVERNOR" != "performance" ]]; then
-    warn "CPU governor is '$GOVERNOR', not 'performance' (F7); results will not be comparable"
+    warn "CPU governor is '$GOVERNOR', not 'performance' (the performance-governor rule); results will not be comparable"
 fi
 WRITE_DIR=$(dirname -- "$WF")
 while [[ ! -e "$WRITE_DIR" ]]; do WRITE_DIR=$(dirname -- "$WRITE_DIR"); done
@@ -1094,10 +1116,10 @@ FSTYPE=$(findmnt -no FSTYPE -T "$WRITE_DIR" 2>/dev/null | tail -n1 || true)
 SOURCE=$(findmnt -no SOURCE -T "$WRITE_DIR" 2>/dev/null | tail -n1 || true)
 MOUNT_OPTS=$(findmnt -no OPTIONS -T "$WRITE_DIR" 2>/dev/null | tail -n1 || true)
 if [[ "$MOUNT_OPTS" == *discard* ]]; then
-    warn "filesystem mount options contain 'discard' ($MOUNT_OPTS); methodology D4 says do not compare with discard active"
+    warn "filesystem mount options contain 'discard' ($MOUNT_OPTS); the no-discard rule says do not compare with discard active"
 fi
 if [[ "$FSTYPE" != "ext4" && "$FSTYPE" != "xfs" ]]; then
-    warn "write filesystem is '$FSTYPE', not ext4/xfs (record it; F12/F13)"
+    warn "write filesystem is '$FSTYPE', not ext4/xfs (record it; the host/filesystem checks)"
 fi
 case "$SOURCE" in
     *nvme1n1p1*) : ;;
@@ -1138,7 +1160,7 @@ fi
 [[ -s "$STATE_DIR/rests.tsv" ]] || printf '%s\n' $'phase\tafter_run_seq\trequested_s\tactual_s\tstart_utc\tend_utc' >"$STATE_DIR/rests.tsv"
 [[ -s "$STATE_DIR/resumed.tsv" ]] || printf '%s\n' $'utc\tsession_dir\tcell\tstem\trep\taction' >"$STATE_DIR/resumed.tsv"
 [[ -s "$STATE_DIR/invocations.tsv" ]] || printf '%s\n' $'utc\tmanifest\targv\truns_planned\truns_executed\truns_skipped\truns_ok\truns_failed\tsession_elapsed_s' >"$STATE_DIR/invocations.tsv"
-# bench/m1/lib.sh-compatible meta file so the M1 analyzer can consume this session too
+# bench/read-write/lib.sh-compatible meta file so the read/write analyzer can consume this session too
 CELL_META=$SESSION_DIR/cell-meta.tsv
 [[ -s "$CELL_META" ]] || printf '%s\n' $'case\tengine\tvariant\tbs\tqd\trep\tts_utc\tloadavg_start\tloadavg_end\tread_sectors_delta\twrite_sectors_delta\tops\tiops\tp99_us\twall_s\tstatus\tbytes' >"$CELL_META"
 
@@ -1156,7 +1178,7 @@ fi
 
 # manifest
 {
-    printf '# M1 write-session manifest (methodology D1-D8)\n'
+    printf '# write-session manifest (device-state controls)\n'
     printf '# generated=%s host=%s kernel=%s\n' "$(now_utc)" "$(cat /proc/sys/kernel/hostname 2>/dev/null || uname -n)" "$(uname -r)"
     printf 'invocation=%s manifest=%s\n' "$INVOCATION" "$(basename -- "$MANIFEST_FILE")"
     printf 'argv=%s\n' "$(printf '%q ' "${ORIG_ARGV[@]}")"
@@ -1189,7 +1211,7 @@ fi
     printf 'cells=%s\n' "$(printf '%s' "$CELLS")"
     printf 'engines=%s\n' "$(printf '%s' "$ENGINES")"
     printf 'fio_variants=%s\n' "$(printf '%s' "$FIO_VARIANTS")"
-    printf 'w7_sweep=%s\n' "$W7_SWEEP"
+    printf 'batching_sweep=%s\n' "$BATCHING_SWEEP"
     printf 'reps_default=%s reps_by_cell=%s\n' "$REPS" "${REPS_BY_CELL_RAW:-none}"
     printf 'cell_reps=%s\n' "$(for c in $CELLS; do printf '%s=%s ' "$c" "$(cell_reps "$c")"; done)"
     printf 'measured_s=%s warmup=%s rest_s=%s rest_scope=%s precond_rest_s=%s precondition=%s\n' \
@@ -1210,7 +1232,7 @@ for entry in "${PLAN[@]}"; do
 done
 
 SESSION_START_S=$(now_s)
-note "== M1 write session =="
+note "== write session =="
 note "   write file: $WF"
 note "   session dir: $SESSION_DIR"
 note "   manifest: $MANIFEST_FILE (invocation $INVOCATION)"

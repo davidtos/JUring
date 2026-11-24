@@ -4,7 +4,7 @@
 The bracket alternates JUring / fio-matched / Seastar in short 15 s warmup +
 30 s measured cycles, so every engine samples the same drifting device state.
 Paired ratios are computed per cycle. The frozen state-controlled gate
-(bench/stepd/analyze_write_state.py) does not apply here and is not used.
+(bench/host-setup/analyze_write_state.py) does not apply here and is not used.
 
 Usage:
     python3 bench/write/analyze_write_interleaved.py --session DIR --out DIR
@@ -18,10 +18,11 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bench"))
+from analysis import cells as cellmap  # noqa: E402
 from analysis import stats  # noqa: E402
 
-CELLS = ("W7", "W8")
-CELL_QD = {"W7": "64", "W8": "128"}
+CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
+CELL_QD = {cell: str(cellmap.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 MEASURED_SEC = 30
 ARMS = [
@@ -44,11 +45,25 @@ def fnum(x):
 
 
 def load_meta(d):
+    """cell-meta.tsv rows with the case column normalized to the canonical slug."""
     rows = []
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
+            r["case"] = cellmap.slug(r["case"])
             rows.append(r)
     return rows
+
+
+def series_path(session, cell, engine, variant, qd, rep):
+    for name in cellmap.aliases(cell):
+        path = os.path.join(
+            session, "series",
+            f"{name}__{engine}__{variant}__bs4k__qd{qd}__t1__r{rep}.tsv")
+        if os.path.exists(path):
+            return path
+    return os.path.join(
+        session, "series",
+        f"{cell}__{engine}__{variant}__bs4k__qd{qd}__t1__r{rep}.tsv")
 
 
 def read_series(path):
@@ -105,8 +120,8 @@ def collect(session):
             for r in rows:
                 rep = int(r["rep"])
                 reps.add(rep)
-                stem = f"{cell}__{engine}__{variant}__bs4k__qd{CELL_QD[cell]}__t1__r{rep}"
-                st = classify(read_series(os.path.join(session, "series", stem + ".tsv")))
+                st = classify(read_series(series_path(
+                    session, cell, engine, variant, CELL_QD[cell], rep)))
                 iops = fnum(r["iops"]) if r["status"] == "ok" else None
                 if iops is not None and iops <= 0:
                     iops = None
@@ -179,12 +194,12 @@ def write_report(outdir, session, reps, per):
     lines.append(f"- session: `{session}`")
     lines.append("- protocol: [docs/write-state-interleaved-protocol.md]"
                  "(../docs/write-state-interleaved-protocol.md) (fixed before the run)")
-    lines.append(f"- cells: W7 = 4 KiB random write QD 64; W8 = QD 128; "
+    lines.append("- cells: " + "; ".join(cellmap.label(c) for c in CELLS) + "; "
                  f"{len(reps)} cycles x 3 engines per cell")
     lines.append("- 15 s warmup + 30 s measured per run, fresh process, CPU 2, no preconditioning "
                  "(device already in a sustained post-burst state), no rests")
     lines.append("- why: the primary state-controlled campaign failed its pre-registered "
-                 "homogeneity gate in both completed generations; this bracket measures all engines "
+                 "homogeneity gate in both completed passes; this bracket measures all engines "
                  "over the same drifting state instead of claiming one state. It is descriptive, "
                  "not a frozen-gate PASS/FAIL, and it is not pooled with any other write session.")
     lines.append("- Seastar is a bracket: stock 200-entry ring, no taskrun flags, no registered "
@@ -202,7 +217,7 @@ def write_report(outdir, session, reps, per):
                 mibs = f"{x['iops'] * BS / 1048576.0:,.1f}" if x["iops"] else "-"
                 iops = f"{x['iops']:,.0f}" if x["iops"] is not None else "-"
                 p99 = f"{x['p99']:.1f}" if x["p99"] is not None else "-"
-                lines.append(f"| {cell} | {r} | {label} | {iops} | {mibs} | {p99} | "
+                lines.append(f"| {cellmap.label(cell)} | {r} | {label} | {iops} | {mibs} | {p99} | "
                              f"{not x['cliff']} ({x['reason']}) | {x['status']} |")
     lines.append("")
 
@@ -235,7 +250,7 @@ def write_report(outdir, session, reps, per):
     lines.append("")
     for cell in CELLS:
         if descriptive_only[cell]:
-            lines.append(f"**{cell} is descriptive only:** at least one arm has CV > 20% or a 95% "
+            lines.append(f"**{cellmap.label(cell)} is descriptive only:** at least one arm has CV > 20% or a 95% "
                          "CI half-width above 15%; the device moved too much to rank this cell.")
             lines.append("")
 
@@ -254,7 +269,8 @@ def write_report(outdir, session, reps, per):
             ci95 = (f"[{st['ci95_low']:.4f}, {st['ci95_high']:.4f}]"
                     if st.get("ci95_low") is not None else "-")
             mean = f"{st['mean']:.4f}" if st.get("mean") is not None else "-"
-            lines.append(f"| {cell} | {name} | {st.get('n_pairs', 0)} | {mean} | {ci90} | "
+            lines.append(f"| {cellmap.label(cell)} | {name} | {st.get('n_pairs', 0)} | "
+                         f"{mean} | {ci90} | "
                          f"{ci95} | {verdict_for(st)} |")
     lines.append("")
 
@@ -267,7 +283,7 @@ def write_report(outdir, session, reps, per):
     lines.append("|---|---|---|")
     for cell in CELLS:
         for r, sp in spreads[cell].items():
-            lines.append(f"| {cell} | {r} | {sp:.4f} |")
+            lines.append(f"| {cellmap.label(cell)} | {r} | {sp:.4f} |")
     lines.append("")
 
     lines.append("## Caveats")
@@ -278,7 +294,7 @@ def write_report(outdir, session, reps, per):
     lines.append("- Short 30 s measured windows and 5 cycles per cell; the intervals reflect the "
                  "moving device, not only engine differences.")
     lines.append("- Descriptive bracket, not the frozen state-controlled gate; it cannot be pooled "
-                 "with session-12/Step-A or with the primary 2026-11-23 campaign.")
+                 "with the write matrix or with the primary 2026-11-23 campaign.")
     lines.append("- Seastar asymmetry as above. No durability/fsync claim.")
     lines.append("")
 

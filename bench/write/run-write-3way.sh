@@ -2,31 +2,38 @@
 # bench/write/run-write-3way.sh -- pre-registered 3-way write rerun.
 #
 # Protocol: docs/write-state-3way-protocol.md (frozen before the first run).
-# Frozen lineage: bench/stepd/run-write-chain.sh W2 gate + W1-A "continuous" variant.
+# Frozen lineage: bench/host-setup/run-write-chain.sh gate campaign + the continuous
+# state-control variant.
 # Deviations, all pre-registered: 60/60 windows (bench/write/README.md allows the
 # uniform 60/60 override), Seastar added as a measured arm (write path smoke-verified
-# in scratch/audit/seastar-audit.md), engine order rotated per generation.
+# in scratch/audit/seastar-audit.md), engine order rotated per pass.
 #
-# Uses: run-write-cells.sh (generation), analyze_write_state.py (frozen gate),
+# Uses: run-write-cells.sh (pass), analyze_write_state.py (frozen gate),
 # analyze_write_3way.py (3-way table). All writes go below bench/results/.
 #
-# Usage: bash scratch/audit/run-write-rerun-3way.sh [--dry-run]
+# Usage: bash bench/write/run-write-3way.sh [--dry-run]
 set -euo pipefail
 cd -- "$(dirname -- "$0")/../.."
 
 DRY=0
-[[ ${1:-} == --dry-run ]] && DRY=1
+usage() { sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+case "${1:-}" in
+    --dry-run) DRY=1 ;;
+    -h | --help) usage; exit 0 ;;
+    "") ;;
+    *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+esac
 
-MAX_GENS=${RERUN_MAX_GENS:-5}
+MAX_PASSES=${RERUN_MAX_PASSES:-5}
 MIN_VALID=${RERUN_MIN_VALID:-4}      # frozen gate threshold; stop early when reached
-BUDGET=${RERUN_BUDGET:-5650}         # wall seconds available for generation starts
-GEN_TIMEOUT=${RERUN_GEN_TIMEOUT:-1500}
+BUDGET=${RERUN_BUDGET:-5650}         # wall seconds available for pass starts
+PASS_TIMEOUT=${RERUN_PASS_TIMEOUT:-1500}
 # A 5th attempt is only started when the first four left us below the frozen
-# minimum (i.e. exactly one invalid generation): that is the only case where it
+# minimum (i.e. exactly one invalid pass): that is the only case where it
 # can still change the verdict.
-GEN_MIN_REM=${RERUN_GEN_MIN_REM:-1100}
+PASS_MIN_REM=${RERUN_PASS_MIN_REM:-1100}
 WRC=bench/write/run-write-cells.sh
-ANALYZER=bench/stepd/analyze_write_state.py
+ANALYZER=bench/host-setup/analyze_write_state.py
 ANALYZER3=bench/write/analyze_write_3way.py
 WRITE_FILE=${WRITE_FILE:-nvme-data/write_files/single_file_bench_w.bin}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
@@ -34,7 +41,7 @@ ALLOW_ANY_PATH=${ALLOW_ANY_PATH:-0}
 WRITE_ARGS=(--write-file "$WRITE_FILE" --device-stat "$DEVICE_STAT")
 if (( ALLOW_ANY_PATH )); then WRITE_ARGS+=(--allow-any-path); fi
 READ_FILE=/mnt/TestData/read_files/single_file_bench.bin
-# 3-cycle rotation: first/last arm changes between generations.
+# 3-cycle rotation: first/last arm changes between passes.
 ORDERS=(
     "juring fio seastar"
     "seastar juring fio"
@@ -69,8 +76,8 @@ else
         echo "io_uring_disabled=$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || echo unknown)"
         echo "loadavg_start=$(cat /proc/loadavg)"
         echo "thermal_start_mc=$(cat /sys/class/nvme/nvme1/hwmon*/temp1_input 2>/dev/null | head -n1 || echo unavailable)"
-        echo "max_gens=$MAX_GENS min_valid=$MIN_VALID budget_s=$BUDGET gen_timeout_s=$GEN_TIMEOUT gen_min_remaining_s=$GEN_MIN_REM"
-        echo "cells=W7,W8 arms=juring,fio-io_uring[matched,matchedbatch],seastar reps=1/gen warmup_s=60 measured_s=60"
+        echo "max_passes=$MAX_PASSES min_valid=$MIN_VALID budget_s=$BUDGET pass_timeout_s=$PASS_TIMEOUT pass_min_remaining_s=$PASS_MIN_REM"
+        echo "cells=randwrite-4k-qd64,randwrite-4k-qd128 arms=juring,fio-io_uring[matched,matchedbatch],seastar reps=1/pass warmup_s=60 measured_s=60"
         echo "precondition=session-once precond_rest_s=0 rest_s=0 rest_scope=runs seed=20261113 cpu=2"
         echo "orders=${ORDERS[*]}"
     } >"$S/PROTOCOL.txt"
@@ -89,85 +96,85 @@ else
 fi
 
 T0=$(date +%s)
-GENS=""
+PASSES=""
 VALID=""
 NVALID=0
-for g in $(seq 1 "$MAX_GENS"); do
+for g in $(seq 1 "$MAX_PASSES"); do
     elapsed=$(( $(date +%s) - T0 ))
     rem=$(( BUDGET - elapsed ))
-    if (( rem < GEN_MIN_REM )); then
-        [[ -n ${VALID} ]] && echo "TIMEBOX: ${rem}s left < ${GEN_MIN_REM}s needed; stopping before g$g"
+    if (( rem < PASS_MIN_REM )); then
+        [[ -n ${VALID} ]] && echo "TIMEBOX: ${rem}s left < ${PASS_MIN_REM}s needed; stopping before pass$g"
         break
     fi
     order=${ORDERS[$(( (g - 1) % ${#ORDERS[@]} ))]}
-    echo "== generation g$g order='$order' elapsed=${elapsed}s remaining=${rem}s =="
+    echo "== pass $g order='$order' elapsed=${elapsed}s remaining=${rem}s =="
 
     if (( DRY )); then
         bash "$WRC" \
-            --cells W7,W8 --engines "$order" --allow-seastar-write \
-            --fio-variants matched,matchedbatch --no-w7-sweep \
-            --reps-by-cell W7=1,W8=1 \
+            --cells randwrite-4k-qd64,randwrite-4k-qd128 --engines "$order" --allow-seastar-write \
+            --fio-variants matched,matchedbatch --no-batching-sweep \
+            --reps-by-cell randwrite-4k-qd64=1,randwrite-4k-qd128=1 \
             --precondition session-once --precond-rest-sec 0 \
             --rest-sec 0 --rest-scope runs \
             --warmup-sec 60 --measured-sec 60 \
             --seed 20261113 --cpu 2 "${WRITE_ARGS[@]}" \
-            --session-dir "$S/g$g" \
+            --session-dir "$S/pass$g" \
             --loadavg-max 1.6 --loadavg-action abort \
             --dry-run
-        echo "# DRY-RUN: real run would then classify each generation with:"
-        echo "#   python3 $ANALYZER --gen-dir $S/g$g      # PILOT_PASS 0/1 (frozen gate)"
-        echo "#   python3 $ANALYZER3 --session $S --gens $GENS --out $S/analysis-3way"
-        echo "DRY_RUN_OK session=$S max_gens=$MAX_GENS plan_runs_per_gen=8 est_sec_per_gen=1114"
+        echo "# DRY-RUN: real run would then classify each pass with:"
+        echo "#   python3 $ANALYZER --pass-dir $S/pass$g      # PILOT_PASS 0/1 (frozen gate)"
+        echo "#   python3 $ANALYZER3 --session $S --passes $PASSES --out $S/analysis-3way"
+        echo "DRY_RUN_OK session=$S max_passes=$MAX_PASSES plan_runs_per_pass=8 est_sec_per_pass=1114"
         exit 0
     fi
 
     rc=0
-    timeout -k 30 "$GEN_TIMEOUT" bash "$WRC" \
-        --cells W7,W8 --engines "$order" --allow-seastar-write \
-        --fio-variants matched,matchedbatch --no-w7-sweep \
-        --reps-by-cell W7=1,W8=1 \
+    timeout -k 30 "$PASS_TIMEOUT" bash "$WRC" \
+        --cells randwrite-4k-qd64,randwrite-4k-qd128 --engines "$order" --allow-seastar-write \
+        --fio-variants matched,matchedbatch --no-batching-sweep \
+        --reps-by-cell randwrite-4k-qd64=1,randwrite-4k-qd128=1 \
         --precondition session-once --precond-rest-sec 0 \
         --rest-sec 0 --rest-scope runs \
         --warmup-sec 60 --measured-sec 60 \
         --seed 20261113 --cpu 2 "${WRITE_ARGS[@]}" \
-        --session-dir "$S/g$g" \
+        --session-dir "$S/pass$g" \
         --loadavg-max 1.6 --loadavg-action abort || rc=$?
     if (( rc == 124 )); then
-        echo "GENERATION g$g TIMEOUT (${GEN_TIMEOUT}s cap) -- infrastructure failure, stopping"
+        echo "pass $g TIMEOUT (${PASS_TIMEOUT}s cap) -- infrastructure failure, stopping"
         break
     fi
-    if [[ ! -f $S/g$g/cell-meta.tsv ]]; then
-        echo "GENERATION g$g produced no cell-meta.tsv (rc=$rc) -- infrastructure failure, stopping"
+    if [[ ! -f $S/pass$g/cell-meta.tsv ]]; then
+        echo "pass $g produced no cell-meta.tsv (rc=$rc) -- infrastructure failure, stopping"
         break
     fi
-    (( rc == 0 )) || echo "WARN: generation g$g harness rc=$rc (a run failed; classified invalid)"
-    GENS="${GENS:+$GENS,}g$g"
-    classify=$(python3 "$ANALYZER" --gen-dir "$S/g$g" | tee "$S/g$g.classify.txt")
+    (( rc == 0 )) || echo "WARN: pass $g harness rc=$rc (a run failed; classified invalid)"
+    PASSES="${PASSES:+$PASSES,}pass$g"
+    classify=$(python3 "$ANALYZER" --pass-dir "$S/pass$g" | tee "$S/pass$g.classify.txt")
     pass=$(awk '/^PILOT_PASS/{print $2}' <<<"$classify" | tail -n1)
     [[ -z $pass ]] && pass=0
-    echo "GENERATION g$g PILOT_PASS=$pass"
+    echo "pass $g PILOT_PASS=$pass"
     if (( pass == 1 )); then
-        VALID="${VALID:+$VALID,}g$g"
+        VALID="${VALID:+$VALID,}pass$g"
         NVALID=$((NVALID + 1))
     fi
     if (( NVALID >= MIN_VALID )); then
-        echo "STOP: reached $NVALID valid generation(s) (frozen minimum $MIN_VALID)"
+        echo "STOP: reached $NVALID valid pass(s) (frozen minimum $MIN_VALID)"
         break
     fi
 done
 
 if (( DRY )); then exit 0; fi
 
-if [[ -z $GENS ]]; then
-    echo "NO_GENERATION_COMPLETED: infrastructure failure; nothing to analyze" >&2
+if [[ -z $PASSES ]]; then
+    echo "NO_PASS_COMPLETED: infrastructure failure; nothing to analyze" >&2
     exit 2
 fi
 
 echo "== frozen gate analysis =="
-python3 "$ANALYZER" --session "$S" --gens "$GENS" --out "$S/analysis" | tee "$S/analysis.log"
+python3 "$ANALYZER" --session "$S" --passes "$PASSES" --out "$S/analysis" | tee "$S/analysis.log"
 cat -- "$S/analysis/write-state-summary.md"
 
 echo "== 3-way table =="
-python3 "$ANALYZER3" --session "$S" --gens "$GENS" --out "$S/analysis-3way" | tee "$S/analysis-3way.log"
+python3 "$ANALYZER3" --session "$S" --passes "$PASSES" --out "$S/analysis-3way" | tee "$S/analysis-3way.log"
 
-echo "SESSION_END session=$S gens=$GENS valid=$VALID elapsed_s=$(( $(date +%s) - T0 ))"
+echo "SESSION_END session=$S passes=$PASSES valid=$VALID elapsed_s=$(( $(date +%s) - T0 ))"

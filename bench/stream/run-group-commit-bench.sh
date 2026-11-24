@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# run-group-commit-bench.sh -- B6 W25 group-commit micro-benchmark driver
-# (docs/b6-design.md §6.4, frozen).
+# run-group-commit-bench.sh -- group-commit micro-benchmark driver
+# (protocol frozen before the campaign).
 #
-# JUring-only protocol: seastar has no group-commit primitive (the W24
+# JUring-only protocol: seastar has no group-commit primitive (the durability
 # seastar-fdatasync arm is the nearest equivalent: one fstream flush per batch,
 # which also drains write-behind -- disclosed).
 #
-# Cells: W25-4k-b1, W25-4k-b8, W25-4k-b32, W25-4k-b128
+# Cells: groupcommit-4k-batch1, groupcommit-4k-batch8, groupcommit-4k-batch32, groupcommit-4k-batch128
 #   bs = 4096 B, --batch B (GroupCommit maxBatchSize), durability fdatasync,
 #   --seconds 15 measured + --warmup-sec 5, one fresh process per invocation,
 #   taskset -c 2, R=3.
-# Rests (A2 adjudication): a 5 s pause between reps inside a cell and a 120 s idle
+# Rests (rest-time decision): a 5 s pause between reps inside a cell and a 120 s idle
 # rest between cells (3 rests; total ≈8–12 min).  --rest-between cells|reps|none
 # selects the 120 s placement (default cells; the official run uses the default).
 #
@@ -24,7 +24,7 @@
 #   cells/<cell>__juring__groupcommit__r<rep>.json   raw JSON (schema 1.0 +
 #                                                    schema_extensions ["b6-durability-1"])
 #   logs/<same>.log
-#   cell-meta.tsv                                    one row per invocation (M2's 20 columns)
+#   cell-meta.tsv                                    one row per invocation (20 columns)
 #   manifest.txt
 #   aggregate/group-commit.{json,md}                 written by analyze_group_commit.py
 #
@@ -34,7 +34,8 @@
 #       [--rep-pause S] [--batches "1 8 32 128"] [--file PATH] [--file-size SIZE]
 #       [--skip-compile] [--no-analyze] [--force]
 #
-# Environment: CPU (default 2), W25_FILE, W25_FILE_SIZE, JURING_CLASSES (default
+# Environment: CPU (default 2), GC_FILE, GC_FILE_SIZE, JURING_CLASSES (default
+#   legacy env aliases W25_FILE/W25_FILE_SIZE also accepted),
 # target/classes), JURING_OUT (default bench/juring/out), ALLOW_RESIDUAL_LOAD=1.
 # The driver compiles bench/juring/JUringDurabilityBench.java with javac against an
 # EXISTING target/classes (never runs Maven; the Lead owns repo-root builds).
@@ -42,12 +43,14 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
+# shellcheck source=bench/cells.sh
+source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
 SESSION=b6-group-commit-$(date +%F)
-W25_FILE=${W25_FILE:-$REPO_ROOT/nvme-data/write_files/w25_group_commit.bin}
-W25_FILE_SIZE=${W25_FILE_SIZE:-1g}
+GC_FILE=${GC_FILE:-${W25_FILE:-$REPO_ROOT/nvme-data/write_files/groupcommit_4k_batch.bin}}
+GC_FILE_SIZE=${GC_FILE_SIZE:-${W25_FILE_SIZE:-1g}}
 JURING_CLASSES=${JURING_CLASSES:-$REPO_ROOT/target/classes}
 JURING_OUT=${JURING_OUT:-$REPO_ROOT/bench/juring/out}
 ANALYZER=$HERE/analyze_group_commit.py
@@ -112,11 +115,11 @@ while (($#)); do
             shift
             ;;
         --file)
-            W25_FILE=${2:?--file needs a value}
+            GC_FILE=${2:?--file needs a value}
             shift
             ;;
         --file-size)
-            W25_FILE_SIZE=${2:?--file-size needs a value}
+            GC_FILE_SIZE=${2:?--file-size needs a value}
             shift
             ;;
         --no-analyze) NO_ANALYZE=1 ;;
@@ -178,7 +181,7 @@ wall_sec() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.3f", b-a}'; }
 size_bytes() { local v=${1^^}; numfmt --from=iec "$v" 2>/dev/null || echo "$1"; }
 size_human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1"; }
 
-cell_name() { echo "W25-4k-b$1"; }
+cell_name() { echo "groupcommit-4k-batch$1"; }
 row_id() { echo "$(cell_name "$1")__juring__groupcommit__r$2"; }
 row_json() { echo "$CELLS_DIR/$(row_id "$1" "$2").json"; }
 row_log() { echo "$LOGS_DIR/$(row_id "$1" "$2").log"; }
@@ -194,7 +197,7 @@ run_argv() {
         JURING_GIT_VERSION="${JURING_GIT_VERSION:-unknown}"
         "$JAVA_BIN" --enable-native-access=ALL-UNNAMED
         -cp "$JURING_CLASSES:$JURING_OUT" bench.juring.JUringDurabilityBench
-        --file "$W25_FILE" --file-size "$W25_FILE_SIZE" --bs "$BS" --batch "$batch"
+        --file "$GC_FILE" --file-size "$GC_FILE_SIZE" --bs "$BS" --batch "$batch"
         --seconds "$DURATION" --warmup-sec "$WARMUP" --runs 1 --seed "$SEED"
         --durability "$DURABILITY" --label "$id" --json "$json")
 }
@@ -289,13 +292,13 @@ preflight() {
             fail=1
         fi
     }
-    dir=$(dirname "$W25_FILE")
+    dir=$(dirname "$GC_FILE")
     check $([[ -d $dir && -w $dir ]] && echo 1 || echo 0) "group-commit file directory writable: $dir" \
         "group-commit file directory missing/not writable: $dir"
     avail=$(df -B1 --output=avail "$dir" 2>/dev/null | tail -n 1 | tr -d ' ' || echo 0)
     check $(( ${avail:-0} >= 2 * 1024 * 1024 * 1024 )) \
-        "free space for the W25 file: $(size_human "${avail:-0}")" \
-        "less than 2 GiB free on the W25 file filesystem (${avail:-0} B)"
+        "free space for the group-commit file: $(size_human "${avail:-0}")" \
+        "less than 2 GiB free on the group-commit file filesystem (${avail:-0} B)"
     io_disabled=$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || echo '?')
     check $([[ $io_disabled == 0 ]] && echo 1 || echo 0) \
         "io_uring enabled (kernel.io_uring_disabled=$io_disabled)" \
@@ -320,8 +323,8 @@ preflight() {
     check $([[ -z $foreign ]] && echo 1 || echo 0) "no foreign process >20% CPU" \
         "foreign process >20% CPU: $foreign"
     check $([[ -f $JURING_CLASSES/com/davidvlijmincx/lio/api/GroupCommit.class ]] && echo 1 || echo 0) \
-        "B6 API present in --classes: $JURING_CLASSES" \
-        "B6 API missing from $JURING_CLASSES (GroupCommit.class not found; wait for G3/Lead build)"
+        "group-commit API present in --classes: $JURING_CLASSES" \
+        "group-commit API missing from $JURING_CLASSES (GroupCommit.class not found; wait for the Lead build)"
     check $([[ -f $ANALYZER ]] && echo 1 || echo 0) "analyzer present: $ANALYZER" \
         "analyzer missing: $ANALYZER"
     if [[ $strict == 1 ]] && (( fail != 0 )); then
@@ -342,10 +345,10 @@ write_manifest() {
         echo 'seastar-25.05.0-1392-g04b1c04d')
     mkdir -p "$CELLS_DIR" "$LOGS_DIR" "$AGG_DIR"
     {
-        echo "# B6 W25 group-commit micro-benchmark session manifest (JUring-only)"
+        echo "# Group-commit micro-benchmark session manifest (JUring-only)"
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
-        echo "# design contract: docs/b6-design.md §6.4 (frozen) + A2 rest adjudication"
+        echo "# protocol: frozen before the campaign (rest times recorded below)"
         echo
         echo "## Host / kernel"
         uname -a
@@ -361,9 +364,9 @@ write_manifest() {
         grep -E 'MemTotal|MemAvailable|HugePages_Total|Hugepagesize' /proc/meminfo
         echo
         echo "## Target file / mount"
-        echo "W25 file: $W25_FILE (preallocated/required size $W25_FILE_SIZE; sparse setLength)"
-        findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS "$(dirname "$W25_FILE")" 2>/dev/null || true
-        df -h "$(dirname "$W25_FILE")" 2>/dev/null || true
+        echo "group-commit file: $GC_FILE (preallocated/required size $GC_FILE_SIZE; sparse setLength)"
+        findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS "$(dirname "$GC_FILE")" 2>/dev/null || true
+        df -h "$(dirname "$GC_FILE")" 2>/dev/null || true
         lsblk -o NAME,MODEL,SERIAL,SIZE,MOUNTPOINTS | grep -E 'nvme|NAME' || true
         echo
         echo "## Kernel I/O controls"
@@ -371,7 +374,7 @@ write_manifest() {
         echo
         echo "## Tool versions"
         echo "java: $(java -version 2>&1 | head -1)"
-        echo "seastar (reference only; W25 is JUring-only): $seastar_version"
+        echo "seastar (reference only; groupcommit is JUring-only): $seastar_version"
         echo
         echo "## Repo state"
         echo "git commit: $(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
@@ -383,20 +386,20 @@ write_manifest() {
         sha256sum "$REPO_ROOT/bench/juring/JUringDurabilityBench.java" \
             "$HERE/run-group-commit-bench.sh" "$ANALYZER" 2>/dev/null || true
         echo
-        echo "## Protocol (docs/b6-design.md §6.4 + A2 rests)"
+        echo "## Protocol (frozen; rest times below)"
         echo "cells: $(for b in $BATCHES; do printf '%s ' "$(cell_name "$b")"; done)"
-        echo "cell: W25-4k-bB = GroupCommit batch B (maxBatchSize), bs=$BS, durability=$DURABILITY"
+        echo "cell: groupcommit-4k-batchB = GroupCommit batch B (maxBatchSize), bs=$BS, durability=$DURABILITY"
         echo "protocol: R=$REPS; warmup=${WARMUP}s measured=${DURATION}s; one fresh process per arm;"
         echo "          fresh JVM --verify-only restart check after every measured run; taskset -c $CPU"
         echo "rests: ${REP_PAUSE}s pause between reps inside a cell; ${REST}s idle rest between cells"
-        echo "       (rest-between=$REST_BETWEEN; A2 adjudication: rests are between cells, not before"
+        echo "       (rest-between=$REST_BETWEEN; rest-time decision: rests are between cells, not before"
         echo "       every rep; total session ≈8–12 min incl. the fresh-process read-back)"
         echo "durability: fdatasync; acceptance identities: fsyncs_per_group == 1.0," 
         echo "            groups_total * batch_size == committed_writes, restart_verify.ok == true"
         echo
         echo "## Disclosures"
-        echo "- W25 is JUring-only: seastar has no group-commit primitive. The nearest seastar"
-        echo "  equivalent is the W24 seastar-fdatasync arm (one fstream flush per batch, which also"
+        echo "- groupcommit is JUring-only: seastar has no group-commit primitive. The nearest seastar"
+        echo "  equivalent is the durability seastar-fdatasync arm (one fstream flush per batch, which also"
         echo "  drains write-behind) and is an upper bound on the cost, not a matched comparison."
         echo "- 'one fsync per batch' is proven by GroupCommitStats counters + the JSON identity,"
         echo "  not by a syscall trace; 'visibility after restart' is a fresh-process re-read of the"
@@ -471,10 +474,10 @@ run_row() {
 print_plan() {
     local rows=0 batch rep est
     echo
-    echo "================ B6 W25 GROUP-COMMIT PLAN (--dry-run; nothing executed) ================="
+    echo "================ GROUP-COMMIT PLAN (--dry-run; nothing executed) ================="
     echo "session dir : $RESULTS"
     echo "cells       : $(for b in $BATCHES; do printf '%s ' "$(cell_name "$b")"; done)"
-    echo "file        : $W25_FILE (preallocate/require $W25_FILE_SIZE)"
+    echo "file        : $GC_FILE (preallocate/require $GC_FILE_SIZE)"
     echo "protocol    : R=$REPS warmup=${WARMUP}s measured=${DURATION}s cpu=$CPU seed=$SEED"
     echo "rests       : ${REP_PAUSE}s between reps; ${REST}s between cells (rest-between=$REST_BETWEEN)"
     echo "durability  : $DURABILITY; bs=$BS; fresh-process --verify-only after every run"
@@ -514,7 +517,7 @@ if [[ -z "${JURING_GIT_DIRTY:-}" ]]; then
 fi
 export JURING_GIT_VERSION=${JURING_GIT_VERSION:-$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)}
 
-echo "[group-commit] B6 W25 group-commit micro-benchmark (docs/b6-design.md §6.4 + A2 rests)"
+echo "[group-commit] group-commit micro-benchmark (protocol frozen; rest times in manifest)"
 echo "[group-commit] session=$SESSION batches='$BATCHES' R=$REPS warmup=${WARMUP}s measured=${DURATION}s cpu=$CPU"
 
 if [[ $DRY_RUN == 1 ]]; then
@@ -543,7 +546,7 @@ if (( SKIP_COMPILE == 0 )); then
     mkdir -p "$JURING_OUT"
     if ! javac -cp "$JURING_CLASSES" -d "$JURING_OUT" --release 25 \
         bench/juring/JUringDurabilityBench.java; then
-        echo "error: javac failed; is the B6 API compiled into $JURING_CLASSES?" >&2
+        echo "error: javac failed; is the group-commit API compiled into $JURING_CLASSES?" >&2
         exit 1
     fi
 fi

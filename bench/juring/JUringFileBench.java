@@ -43,22 +43,22 @@
  * Two worker runtimes (--runtime, default = threads = historical behaviour):
  *   threads : every worker is a plain platform thread that owns its own JUring
  *             ring and runs the self-driving fill/reap loop described above.
- *             This is exactly the pre-B4 harness; its 1.0 JSON fields are unchanged
- *             (schema 1.1 adds the B5 metrics fields additively; --metrics off omits them).
+ *             This is the plain-thread harness; its 1.0 JSON fields are unchanged
+ *             (schema 1.1 adds the metrics fields additively; --metrics off omits them).
  *   shard   : the workers are the IoShards of one RingGroup (one ring per
  *             shard, best-effort CPU pinning to CPUs first-cpu..first-cpu+N-1).
  *             Each shard's QD-64 pipeline is driven by ctx.onCompletion
  *             handlers that the shard's batched poll loop dispatches, i.e. the
- *             real B4 runtime path: tasks/handlers run on the shard thread,
+ *             real shard-runtime path: tasks/handlers run on the shard thread,
  *             the loop batches submits and reaps completions. Per-shard
  *             IOPS/latency plus the IoShard/ShardStats counters are added to
  *             the JSON (extra fields only; the historical 1.0 schema is kept and
- *             schema 1.1 adds the B5 metrics fields).
+ *             schema 1.1 adds the metrics fields).
  *             A shard never opens a second ring and never runs its own
  *             submit/reap loop (that would both bypass the runtime and race
  *             the shard's internal wakeup read).
  *
- * B5 observability (json schema 1.1, docs/b5-design.md §7): --metrics on|off
+ * Metrics observability (json schema 1.1): --metrics on|off
  * (default on) adds, for BOTH runtimes, a per-worker "ring_metrics" object (every
  * RingMetrics field, snake_case), a per-worker "ring_series" sampled by ONE
  * sampler thread at --metrics-interval (default 1.0 s; 0 disables) only during the
@@ -68,12 +68,12 @@
  * completion latency (registration->dispatch): it includes kernel/device
  * completion, excludes SQE prep + handler body, and is NOT comparable to fio
  * clat or the external latency_us. Shard mode runs with
- * ShardOptions.withLatencySampleEvery(1) (design A2.1: every successful
+ * ShardOptions.withLatencySampleEvery(1) (the sampling-count rule: every successful
  * registration; drained R => floor(R/N) samples for N).
  * runs[] gains a "metrics" object; the aggregate gains summed ring_metrics (mean
  * over runs) + ring_queue_depth {mean/max_in_flight, mean_sq_queued,
  * mean_cq_ready} + dispatch_latency_us (mean of per-run percentiles). --metrics
- * off emits no B5 field and disables the shard latency sampling. Every schema 1.0
+ * off emits no metrics field and disables the shard latency sampling. Every schema 1.0
  * field is unchanged; stdout stays exactly one JSON object.
  *
  * File I/O always uses O_DIRECT and a *registered* file + registered
@@ -134,7 +134,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SQPOLL;
 
 public final class JUringFileBench {
 
-    /** Bumped only on incompatible JSON changes (1.1 = additive B5 metrics fields). */
+    /** Bumped only on incompatible JSON changes (1.1 = additive metrics fields). */
     static final String SCHEMA_VERSION = "1.1";
     static final String ENGINE = "juring";
 
@@ -272,8 +272,8 @@ public final class JUringFileBench {
     }
 
     /**
-     * Worker runtime: plain platform threads (historical behaviour) or the B4
-     * shard runtime (one ring per IoShard of a RingGroup).
+     * Worker runtime: plain platform threads (historical behaviour) or the shard
+     * runtime (one ring per IoShard of a RingGroup).
      */
     enum WorkerRuntime {
         THREADS("threads"),
@@ -327,7 +327,7 @@ public final class JUringFileBench {
         int minComplete = 1;            // --min-complete N: completions per submit+wait
         boolean sqpoll = false;         // --sqpoll: IORING_SETUP_SQPOLL submission
 
-        // B5 schema 1.1 metrics (docs/b5-design.md §7): ring_metrics for both runtimes,
+        // Schema 1.1 metrics: ring_metrics for both runtimes,
         // a 1 Hz ring_series sampled during the measured phase, and (shard runtime only)
         // the library dispatch-latency snapshot with ShardOptions.withLatencySampleEvery(1).
         boolean metrics = true;         // --metrics on|off (default on)
@@ -666,7 +666,7 @@ public final class JUringFileBench {
                 "  --qd N                  per-thread/per-shard queue depth (default 64)",
                 "  --threads N             worker threads, each with its own ring (default 1)",
                 "  --runtime threads|shard worker runtime (default threads = historical behaviour);",
-                "                          shard = one B4 IoShard/ring per worker via RingGroup",
+                "                          shard = one IoShard/ring per worker via RingGroup",
                 "  --shards N              shard count for --runtime=shard, one ring per IoShard",
                 "                          (default: --threads; invalid with --runtime=threads)",
                 "  --first-cpu N           base CPU for shard affinity: shard i -> first-cpu+i",
@@ -680,7 +680,7 @@ public final class JUringFileBench {
                 "  --latency-samples N     per-thread latency reservoir size (default 1000000)",
                 "  --seed N                base PRNG seed (default: time based)",
                 "  --metrics on|off        per-ring metrics + dispatch latency in the JSON (default on);",
-                "                          off removes every B5 metrics field and disables shard latency sampling",
+                "                          off removes every metrics field and disables shard latency sampling",
                 "  --metrics-interval SEC  ring_series sampling interval during the measured phase",
                 "                          (default 1.0; 0 disables the series; shard mode)",
                 "  --min-complete N        completions to request per submit+wait (default 1;",
@@ -1005,7 +1005,7 @@ public final class JUringFileBench {
     }
 
     // ------------------------------------------------------------------
-    // B5 metrics (schema 1.1; docs/b5-design.md §7/§7.1)
+    // Metrics (schema 1.1)
     // ------------------------------------------------------------------
 
     /** One sample of a worker's ring snapshot during the measured phase. */
@@ -1028,7 +1028,7 @@ public final class JUringFileBench {
         }
     }
 
-    /** {@code runs[].metrics}: what the B5 metrics plumbing did in this run. */
+    /** {@code runs[].metrics}: what the metrics plumbing did in this run. */
     static final class MetricsInfo {
         final boolean enabled;
         final double intervalSec;
@@ -1063,7 +1063,7 @@ public final class JUringFileBench {
     }
 
     /**
-     * The single sampler thread required by design §7: it reads the cross-thread snapshot
+     * The single sampler thread required by the metrics schema: it reads the cross-thread snapshot
      * API of every worker once per interval, only between measured-phase start and end.
      * Sampling is 1 Hz by default and never touches the workers' threads.
      */
@@ -1313,7 +1313,8 @@ public final class JUringFileBench {
 
     /**
      * Run-level aggregation of the shard runtime's library dispatch/completion latency
-     * (design A2.2: runtime completion latency, registration -> handler dispatch; includes
+     * (the dispatch-latency definition: runtime completion latency, registration -> handler
+     * dispatch; includes
      * kernel/device completion; not fio clat / external latency_us). Per-worker snapshots
      * cannot be merged exactly (only the buckets are mergeable), so a run's percentiles are
      * the mean of its workers' percentile values and its mean is total/samples — the same
@@ -1634,7 +1635,7 @@ public final class JUringFileBench {
                 JUring r = ring;
                 if (r != null) {
                     r.close();
-                    // Design §2.1: after close the snapshot is frozen; capture the final
+                    // After close the snapshot is frozen; capture the final
                     // counters (shutdown cancels included) before dropping the ring reference.
                     if (cfg.metrics) {
                         try {
@@ -1926,8 +1927,8 @@ public final class JUringFileBench {
      * the shard's own ring (ctx.ring()), then the pipeline is driven purely by
      * {@link CompletionHandler}s dispatched by the shard's batched poll loop: each
      * completion records its latency and, before the phase deadline, prepares and
-     * registers exactly one replacement request. This is the frozen B4 completion
-     * path (design §4-§5): tasks/handlers run on the shard thread and the shard loop
+     * registers exactly one replacement request. This is the frozen shard-runtime completion
+     * path: tasks/handlers run on the shard thread and the shard loop
      * batches the submits and reaps the completions. The shard's internal wakeup
      * READ is a sentinel consumed by IoShard itself, so it never reaches this
      * handler; a completion that reaches us with no attribution is a harness bug
@@ -2365,8 +2366,8 @@ public final class JUringFileBench {
                 .withName("bench")
                 .withRingOptions(RING_FLAGS)
                 .withRingEntries(Math.max(256, cfg.qd * 2))
-                // Design §7: shard runtime enables library dispatch-latency sampling with
-                // metrics on (every registration). Metrics off keeps the B4 default (0).
+                // Metrics schema: shard runtime enables library dispatch-latency sampling with
+                // metrics on (every registration). Metrics off keeps the runtime default (0).
                 .withLatencySampleEvery(cfg.metrics ? 1 : 0);
         long seedBase = cfg.seed != 0L ? cfg.seed
                 : (System.nanoTime() ^ ((long) (runIndex + 1) * 0x9E3779B97F4A7C15L));
@@ -2443,7 +2444,7 @@ public final class JUringFileBench {
             }
         }
 
-        // Design §2.5/§2.6: after close the snapshots are frozen (shutdown cancels included).
+        // After close the snapshots are frozen (shutdown cancels included).
         // RingGroup.metrics() is total (never throws) and includes closed/unstarted shards.
         java.util.List<ShardMetrics> finalMetrics = null;
         if (group != null) {
@@ -2602,7 +2603,7 @@ public final class JUringFileBench {
         final long sumLatNs;
         final long recordedLat;
         final LatencyStats lat;
-        // B5 schema 1.1 (null when --metrics off / unavailable)
+        // Metrics schema 1.1 (null when --metrics off / unavailable)
         final RingMetrics ringMetrics;
         final DispatchLatencyAgg dispatchLat;   // shard runtime only
         final List<SeriesPoint> ringSeries;     // measured phase only
@@ -2639,7 +2640,7 @@ public final class JUringFileBench {
         final LatencyStats lat;
         final ThreadStat[] threads;
         final ShardInfo[] shards;   // non-null only for --runtime=shard
-        // B5 schema 1.1 (null/off when --metrics off or no series)
+        // Metrics schema 1.1 (null/off when --metrics off or no series)
         final RingMetricsAgg ringMetrics;   // summed per-worker counters for this run
         final RingQueueDepth ringQueueDepth; // from ring_series, all workers
         final DispatchLatencyAgg dispatchLat; // shard runtime only
@@ -3109,7 +3110,7 @@ public final class JUringFileBench {
             w.endObj();
         }
 
-        /** threads[] entry: 1.0 shape + B5 per-worker ring metrics/series/dispatch latency. */
+        /** threads[] entry: 1.0 shape + per-worker ring metrics/series/dispatch latency. */
         static void renderThread(Jw w, ThreadStat t) {
             w.obj();
             w.name("thread").num(t.thread);
@@ -3167,7 +3168,7 @@ public final class JUringFileBench {
             w.endObj();
         }
 
-        /** All frozen RingMetrics fields, snake_case (docs/b5-design.md §7). */
+        /** All frozen RingMetrics fields, snake_case (the frozen metrics schema). */
         static void renderRingMetrics(Jw w, RingMetrics m) {
             if (m == null) {
                 w.nul();
@@ -3352,7 +3353,7 @@ public final class JUringFileBench {
             w.name("max").num(maxOf(max));
             w.endObj();
 
-            // ---- B5 schema 1.1 aggregate metrics (docs/b5-design.md §7) ----
+            // ---- Metrics schema 1.1 aggregate metrics ----
             // "summed ring counters per run mean": each field is the mean over runs of the
             // per-run sum over workers.
             boolean anyRing = false;

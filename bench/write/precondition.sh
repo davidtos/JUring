@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# precondition.sh - methodology D1 (device preconditioning) for the write matrix.
+# precondition.sh - the preconditioning burst (device preconditioning) for the
+# write matrix.
 #
-# D1 (docs/benchmark-methodology.md section 5): "Before a write session: write
-# the 10 GiB write file to steady state - 3x file size of 4K randwrite at QD64
-# (~30 GiB) or 120 s minimum; then fsync.  Do not start a measured write cell on
-# a fresh file or after a long idle.  Record 'file write generation' and total
-# bytes written since last idle."
+# The write methodology (docs/benchmark-methodology.md): before a write session,
+# write the 10 GiB write file to steady state - 3x file size of 4K randwrite at
+# QD64 (~30 GiB) or 120 s minimum; then fsync.  Do not start a measured write
+# cell on a fresh file or after a long idle.  Record the write pass and total
+# bytes written since the last idle.
 #
 # This script does that with fio (io_uring, O_DIRECT, 4K randwrite, QD64, one
 # job pinned to --cpu), in chunks of --chunk-bytes (default 4 GiB).
@@ -14,7 +15,7 @@
 # Two stop conditions (--condition):
 #   target (default)  Stop as soon as bytes_written >= target (--target-mult x
 #                     file size, e.g. 32,212,254,720 B for the 10 GiB file).
-#                     This is the Step-A fix for the 2026-11-13 block, where the
+#                     This is the write-matrix fix for the 2026-11-13 block, where the
 #                     old AND condition wrote 128.8 GiB: 4 GiB chunks reach the
 #                     32 GiB target in 8 chunks, no 120 s minimum is imposed.
 #                     --min-sec is only a time cap here: if the target is NOT
@@ -33,10 +34,10 @@
 # pre/post device counters from /sys/block/nvme1n1/stat so a run block is
 # reproducible.
 #
-# A monotonically increasing "write generation" number is stored under
-#   <session-dir>/state/write-generation.counter
+# A monotonically increasing "write pass" number is stored under
+#   <session-dir>/state/write-pass.counter
 # and every burst appends one row to
-#   <session-dir>/state/write-generations.tsv
+#   <session-dir>/state/write-passes.tsv
 # so measured cells can be tied to the burst that preceded them.
 #
 # Usage:
@@ -55,15 +56,15 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/m1-2026-11-13-write}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
 
 TARGET_MULT=3
 MIN_SEC=120
 MAX_SEC=900
-CHUNK_SPEC=               # empty -> default 4 GiB chunks (Step A fix)
+CHUNK_SPEC=               # empty -> default 4 GiB chunks (write-matrix default)
 DEFAULT_CHUNK_BYTES=$(( 4 * 1073741824 ))
-CONDITION=target          # target (Step A default) | and (old 2026-11-13 behaviour)
+CONDITION=target          # target (write-matrix default) | and (old 2026-11-13 behaviour)
 BS=4k
 QD=64
 CPU=2
@@ -73,7 +74,7 @@ ALLOW_ANY_PATH=0
 
 usage() {
     cat <<'EOF'
-precondition.sh - D1 preconditioning burst (4K randwrite QD64) + fsync
+precondition.sh - preconditioning burst (4K randwrite QD64) + fsync
 
 Usage:
   bench/write/precondition.sh [options]
@@ -82,7 +83,7 @@ Options:
   --file PATH            write dataset file
                          (default <repo>/nvme-data/write_files/single_file_bench_w.bin)
   --session-dir DIR      session dir for state/logs
-                         (default <repo>/bench/results/m1-2026-11-13-write)
+                         (default <repo>/bench/results/write-2026-11-13)
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --target-mult N        bytes target = N x file size (default 3)
   --condition target|and stop rule (default target = stop as soon as the target
@@ -95,13 +96,13 @@ Options:
   --bs SIZE              block size (default 4k)
   --qd N                 per-job queue depth (default 64)
   --cpu N                CPU to pin fio to with taskset (default 2)
-  --no-fsync             skip the fsync after the burst (not methodology D1)
+  --no-fsync             skip the fsync after the burst (not the preconditioning rule)
   --dry-run              print the exact fio commands/loop, write nothing
   --allow-any-path       skip the "must be below <repo>/nvme-data" guard
   -h, --help             this text
 
 Machine-readable output: one PRECONDITION_RESULT line on stdout:
-  generation, condition, stop_reason, chunks, bytes_written, target_bytes,
+  pass, condition, stop_reason, chunks, bytes_written, target_bytes,
   min_sec, elapsed_s, fsync, capped, pre/post write sectors, device write
   delta, loadavg start/end.
 
@@ -235,7 +236,7 @@ FSTYPE=$(findmnt -no FSTYPE -T "$PROBE_DIR" 2>/dev/null | tail -n1 || true)
 SOURCE=$(findmnt -no SOURCE -T "$PROBE_DIR" 2>/dev/null | tail -n1 || true)
 
 if (( DRY_RUN )); then
-    printf '# dry-run: precondition.sh (methodology D1)\n'
+    printf '# dry-run: precondition.sh (preconditioning burst)\n'
     printf '#   file=%s exists=%s size_bytes=%s\n' "$WF" "$FILE_EXISTS" "$FILE_SIZE"
     printf '#   target_mult=%s condition=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s expected_chunks_if_exact=%s\n' \
         "$TARGET_MULT" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES" "$EXPECTED_CHUNKS"
@@ -251,36 +252,36 @@ if (( DRY_RUN )); then
             "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC"
     fi
     printf '#   chunk command (repeated, chunk index increments; each chunk writes %s bytes):\n' "$CHUNK_BYTES"
-    printf 'taskset -c %s fio --name=precondition_g<GEN>_c<CHUNK> --filename=%s --ioengine=io_uring --direct=1 --rw=randwrite --bs=%s --iodepth=%s --numjobs=1 --io_size=%s --randrepeat=0 --group_reporting --clocksource=clock_gettime --output-format=json --output=%s\n' \
+    printf 'taskset -c %s fio --name=precondition_pass<PASS>_c<CHUNK> --filename=%s --ioengine=io_uring --direct=1 --rw=randwrite --bs=%s --iodepth=%s --numjobs=1 --io_size=%s --randrepeat=0 --group_reporting --clocksource=clock_gettime --output-format=json --output=%s\n' \
         "$CPU" "$WF" "$BS" "$QD" "$CHUNK_BYTES" \
-        "$SESSION_DIR/logs/precondition_g<GEN>_chunk<CHUNK>.json"
+        "$SESSION_DIR/logs/precondition_pass<PASS>_chunk<CHUNK>.json"
     if (( ! NO_FSYNC )); then
-        printf 'sync -f %s   # D1: fsync after the burst\n' "$(printf '%q' "$WF")"
+        printf 'sync -f %s   # fsync after the burst\n' "$(printf '%q' "$WF")"
     fi
-    printf 'PRECONDITION_RESULT action=dry-run file=%s generation=would-increment condition=%s stop_reason=not-run target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s fsync=%s\n' \
+    printf 'PRECONDITION_RESULT action=dry-run file=%s pass=would-increment condition=%s stop_reason=not-run target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s fsync=%s\n' \
         "$WF" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES" "$( (( NO_FSYNC )) && echo skipped || echo after-burst )"
     exit 0
 fi
 
 # ------------------------------------------------------------------ real burst
 mkdir -p -- "$SESSION_DIR/state" "$SESSION_DIR/logs"
-COUNTER_FILE="$SESSION_DIR/state/write-generation.counter"
-GEN=0
+COUNTER_FILE="$SESSION_DIR/state/write-pass.counter"
+PASS=0
 if [[ -f "$COUNTER_FILE" ]]; then
-    GEN=$(tr -cd '0-9' <"$COUNTER_FILE")
-    [[ -n "$GEN" ]] || GEN=0
+    PASS=$(tr -cd '0-9' <"$COUNTER_FILE")
+    [[ -n "$PASS" ]] || PASS=0
 fi
-GEN=$(( GEN + 1 ))
-printf '%s\n' "$GEN" >"$COUNTER_FILE"
+PASS=$(( PASS + 1 ))
+printf '%s\n' "$PASS" >"$COUNTER_FILE"
 
-GEN_TSV="$SESSION_DIR/state/write-generations.tsv"
-if [[ ! -s "$GEN_TSV" ]]; then
-    printf '%s\n' $'generation\tstarted_utc\tfile\tfile_size_bytes\tbytes_written\ttarget_bytes\tmin_sec\telapsed_s\tchunks\tfsync\tpre_write_sectors\tpost_write_sectors\tdevice_write_sectors_d\tloadavg_start\tloadavg_end\tcapped\tcondition\tstop_reason' >"$GEN_TSV"
+PASS_TSV="$SESSION_DIR/state/write-passes.tsv"
+if [[ ! -s "$PASS_TSV" ]]; then
+    printf '%s\n' $'pass\tstarted_utc\tfile\tfile_size_bytes\tbytes_written\ttarget_bytes\tmin_sec\telapsed_s\tchunks\tfsync\tpre_write_sectors\tpost_write_sectors\tdevice_write_sectors_d\tloadavg_start\tloadavg_end\tcapped\tcondition\tstop_reason' >"$PASS_TSV"
 fi
 
-RUN_LOG="$SESSION_DIR/logs/precondition_g${GEN}-$(date -u +%Y%m%dT%H%M%SZ).log"
+RUN_LOG="$SESSION_DIR/logs/precondition_pass${PASS}-$(date -u +%Y%m%dT%H%M%SZ).log"
 {
-    printf '=== precondition.sh D1 burst generation=%s %s\n' "$GEN" "$(now_utc)"
+    printf '=== precondition.sh burst pass=%s %s\n' "$PASS" "$(now_utc)"
     printf 'file=%s size_bytes=%s target_mult=%s condition=%s target_bytes=%s min_sec=%s max_sec=%s chunk_bytes=%s\n' \
         "$WF" "$FILE_SIZE" "$TARGET_MULT" "$CONDITION" "$TARGET_BYTES" "$MIN_SEC" "$MAX_SEC" "$CHUNK_BYTES"
     printf 'bs=%s qd=%s cpu=%s fstype=%s source=%s governor=%s loadavg=%s\n' \
@@ -319,9 +320,9 @@ while :; do
         break
     fi
     CHUNKS=$(( CHUNKS + 1 ))
-    CHUNK_JSON="$SESSION_DIR/logs/precondition_g${GEN}_chunk${CHUNKS}.json"
+    CHUNK_JSON="$SESSION_DIR/logs/precondition_pass${PASS}_chunk${CHUNKS}.json"
     CMD=(taskset -c "$CPU" fio
-        --name="precondition_g${GEN}_c${CHUNKS}"
+        --name="precondition_pass${PASS}_c${CHUNKS}"
         --filename="$WF"
         --ioengine=io_uring --direct=1
         --rw=randwrite --bs="$BS" --iodepth="$QD" --numjobs=1
@@ -404,12 +405,12 @@ FSYNC_STATUS="ok"
 } >>"$RUN_LOG"
 
 printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$GEN" "$(now_utc)" "$WF" "$FILE_SIZE" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" \
+    "$PASS" "$(now_utc)" "$WF" "$FILE_SIZE" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" \
     "$ELAPSED" "$CHUNKS" "$FSYNC_STATUS" "$PREV_W_SEC" "$POST_W_SEC" "$WSEC_DELTA" \
-    "$LOADAVG_START" "$LOADAVG_END" "$CAPPED" "$CONDITION" "$STOP_REASON" >>"$GEN_TSV"
+    "$LOADAVG_START" "$LOADAVG_END" "$CAPPED" "$CONDITION" "$STOP_REASON" >>"$PASS_TSV"
 
-printf 'PRECONDITION_RESULT file=%s generation=%s condition=%s stop_reason=%s chunks=%s bytes_written=%s target_bytes=%s min_sec=%s elapsed_s=%s fsync=%s capped=%s pre_write_sectors=%s post_write_sectors=%s device_write_sectors_delta=%s device_write_mib=%s loadavg_start=%s loadavg_end=%s log=%s\n' \
-    "$WF" "$GEN" "$CONDITION" "$STOP_REASON" "$CHUNKS" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" "$ELAPSED" \
+printf 'PRECONDITION_RESULT file=%s pass=%s condition=%s stop_reason=%s chunks=%s bytes_written=%s target_bytes=%s min_sec=%s elapsed_s=%s fsync=%s capped=%s pre_write_sectors=%s post_write_sectors=%s device_write_sectors_delta=%s device_write_mib=%s loadavg_start=%s loadavg_end=%s log=%s\n' \
+    "$WF" "$PASS" "$CONDITION" "$STOP_REASON" "$CHUNKS" "$TOTAL_BYTES" "$TARGET_BYTES" "$MIN_SEC" "$ELAPSED" \
     "$FSYNC_STATUS" "$CAPPED" "$PREV_W_SEC" "$POST_W_SEC" "$WSEC_DELTA" \
     "$(( WSEC_DELTA / 2048 ))" "$LOADAVG_START" "$LOADAVG_END" "$RUN_LOG"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""M3 W17-W20 campaign analyzer -- frozen against docs/m3-design.md.
+"""Multi-shard scaling campaign analyzer -- protocol frozen before the campaign.
 
 Reads a ``bench/shard/run-scale-out.sh`` session (cell-meta.tsv, cells/*.json,
 manifest.txt) and writes ``aggregate/m3.{json,md}``: the frozen bars (a)-(e) with
@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _cells  # noqa: E402
+from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 BASELINE_ENGINES = ["juring-group", "juring-manual", "fio", "seastar"]
@@ -41,9 +42,9 @@ MANIFEST_FIELDS = {
 def one_sided_ci(values):
     """``(mean, sd, lb, ub)`` one-sided 95 % t CI (df = n-1).
 
-    The frozen M3 table is 4 dp (:data:`stats.T95_ONE_SIDED_4DP`); the shared
+    The frozen campaign table is 4 dp (:data:`stats.T95_ONE_SIDED_4DP`); the shared
     :func:`stats.one_sided_ci` uses the 3 dp table, which moves the published
-    CI digits, so M3 keeps this tuple form on the 4 dp table.
+    CI digits, so this campaign keeps this tuple form on the 4 dp table.
     """
     if not values:
         return None, None, None, None
@@ -71,7 +72,7 @@ def worker_entries(raw, engine):
 
 
 def series_depth(entry):
-    """Mean/max in-flight and mean sq/cq from a B5 ring_series (schema 1.1)."""
+    """Mean/max in-flight and mean sq/cq from a metrics-on ring_series (schema 1.1)."""
     series = entry.get("ring_series") or []
     inflight = [v for s in series if (v := jsonio.as_float(s.get("in_flight"))) is not None]
     sq = [v for s in series if (v := jsonio.as_float(s.get("sq_queued"))) is not None]
@@ -183,13 +184,29 @@ def load_session(results_dir):
     recs = []
     for m in meta:
         engine = m.get("engine", "?")
-        # cell-meta.tsv `cell` is "N<n>"; the raw file is
-        # cells/N<n>__<engine>__r<rep>.json (same convention as the driver).
-        raw_name = "%s__%s__r%s.json" % (m.get("cell", ""), engine, m.get("rep", ""))
-        path = os.path.join(results_dir, "cells", raw_name)
+        # cell-meta.tsv `cell` is the canonical "shards-<n>" slug in new sessions and
+        # the legacy "N<n>" in old ones; the raw file is
+        # cells/<cell>__<engine>__r<rep>.json (same convention as the driver).
+        raw_cell = m.get("cell", "")
+        n = cellmap.shard_count(raw_cell)
+        cell = cellmap.slug(raw_cell)
+        if n is not None:                 # legacy "N<n>" and canonical "shards-<n>"
+            cell = "shards-%d" % n
+        candidates = [cell]
+        if n is not None and ("N%d" % n) not in candidates:
+            candidates.append("N%d" % n)  # unmigrated legacy filename
+        path = None
+        for name in candidates:
+            candidate = os.path.join(results_dir, "cells", "%s__%s__r%s.json"
+                                     % (name, engine, m.get("rep", "")))
+            if path is None and os.path.exists(candidate):
+                path = candidate
+        if path is None:
+            path = os.path.join(results_dir, "cells", "%s__%s__r%s.json"
+                                % (cell, engine, m.get("rep", "")))
         raw = jsonio.load_json(path)
         rec = normalize(engine, raw, m)
-        rec["cell"] = raw_name[:-5] if raw is not None else m.get("cell", "")
+        rec["cell"] = cell
         rec["raw_path"] = path
         recs.append(rec)
     return recs
@@ -304,7 +321,7 @@ def analyze(results_dir):
         }
 
     # ---- bar (b): SE and p99 vs fio at the same N (no N*IOPS(1)) -----------
-    # A1: this is a reporting/comparison bar (the brief attaches no numeric
+    # Reporting/comparison bar: the protocol attaches no numeric
     # threshold); PASS iff both ratios are present with R reps at every N.
     expected_r = max([r["rep"] for r in recs] + [1])
     bar_b = {}
@@ -381,7 +398,7 @@ def analyze(results_dir):
                                 "reps": {str(k): v for k, v in rev}},
         "juring_iops": (cells.get(("juring-group", 8), {}).get("iops") or {}).get("mean"),
         "seastar_iops": (cells.get(("seastar", 8), {}).get("iops") or {}).get("mean"),
-        # A1 frozen decision: brief-literal direction seastar/JUring >= 0.90.
+        # Frozen decision: literal-bar direction seastar/JUring >= 0.90.
         "verdict": stats.classify_ge(rmm, rlb, 0.90),
     }
 
@@ -475,7 +492,7 @@ def analyze(results_dir):
 
 
 def read_manifest(path):
-    """The frozen-identity/protocol fields the M3 report cites."""
+    """The frozen-identity/protocol fields the scaling report cites."""
     out = {}
     for key, value in jsonio.read_manifest(path).items():
         name = MANIFEST_FIELDS.get(key)
@@ -494,31 +511,31 @@ def render_markdown(session, analysis):
     a = L.append
     verdict = analysis["verdict"]
     bars = analysis["bars"]
-    a(f"# M3 W17–W20 campaign analysis — `{session}`")
+    a(f"# Multi-shard scaling campaign analysis — `{session}`")
     a("")
-    a(f"**Verdict: {verdict}** (M3 is signed only if every frozen bar passes; this "
+    a(f"**Verdict: {verdict}** (the campaign is signed only if every frozen bar passes; this "
       "analyzer is generated from raw JSON and never trims a rep).")
     a("")
     if not analysis.get("signing"):
-        a(f"**This session is NOT M3-signing**: R={analysis.get('expected_reps')} / incomplete "
+        a(f"**This session cannot sign the campaign**: R={analysis.get('expected_reps')} / incomplete "
           "engine-N coverage (pilot or partial session). Only the official R=5, all-cells session "
-          "can sign M3.")
+          "can sign it.")
         a("")
     a("Generated by `bench/shard/analyze_scale_out.py` from `cell-meta.tsv` + `cells/*.json`. "
-      "Bar rules are the frozen ones in `docs/m3-design.md` §1.")
+      "Bar rules are the frozen ones listed below.")
     a("")
     a("## 0. Frozen bars")
     a("")
     a("| bar | rule | result |")
     a("|---|---|---|")
     a(f"| (a) throughput vs fio at same N | one-sided 95 % LB of JUring/fio ≥ 0.85 for N=1,2,4,8 | **{bars['(a)']}** |")
-    a(f"| (b) SE + p99 vs fio at same N | reporting bar (brief-literal, no numeric threshold): both ratios present per rep with one-sided 95 % CIs at every N | **{bars['(b)']}** |")
+    a(f"| (b) SE + p99 vs fio at same N | reporting bar (literal reading, no numeric threshold): both ratios present per rep with one-sided 95 % CIs at every N | **{bars['(b)']}** |")
     a(f"| (c) per-shard min/mean (juring-group N=8) | one-sided 95 % LB ≥ 0.85 | **{bars['(c)']}** |")
-    a(f"| (d) seastar io_uring N=8 | brief-literal: LB(seastar/JUring) ≥ 0.90 (plan-direction JUring/seastar also reported) | **{bars['(d)']}** |")
+    a(f"| (d) seastar io_uring N=8 | literal reading: LB(seastar/JUring) ≥ 0.90 (JUring/seastar direction also reported) | **{bars['(d)']}** |")
     a(f"| (e) per-ring queue depth + runtime p99 | present for all juring-group cells | **{bars['(e)']}** |")
     a("")
-    a("B5 metrics <1 % overhead is already PASS (`bench/results/b5-overhead-2026-11-14/`) "
-      "and is not re-run by M3.")
+    a("The metrics <1 % overhead A/B is already PASS (`bench/results/b5-overhead-2026-11-14/`) "
+      "and is not re-run by this campaign.")
     a("")
     a("## 1. Session / identity / protocol")
     a("")
@@ -574,7 +591,7 @@ def render_markdown(session, analysis):
           f"{md.thousands(sr['lb'], 3)} | {md.thousands(pr['mean'], 3)} | {md.thousands(pr['ub'], 3)} | **{disp}** |")
     a("")
     a("SE(N) = IOPS(N)/(N·IOPS(1)) computed per engine from this campaign's cells; the ratio is "
-      "paired by rep index. Bar (b) is the brief's reporting/comparison bar (Amendment A1): it has "
+      "paired by rep index. Bar (b) is the reporting/comparison bar: it has "
       "no numeric threshold; it PASSES when both ratios are present per rep with one-sided 95 % CIs "
       "at every N. N=1,2 are bracket rows, N=4,8 the reported comparison. The p99 ratio compares "
       "engine-native latency definitions (see §7) and is disclosed, never gate-tuned.")
@@ -587,16 +604,16 @@ def render_markdown(session, analysis):
       f"per-rep " + ", ".join(f"r{k}={v:.3f}" for k, v in c["spread"]["reps"].items()) + f" ⇒ **{c['verdict']}**")
     d = analysis["bar_d"]
     a(f"- **(d) seastar io_uring at N=8:** juring mean {md.thousands(d['juring_iops'], 0)}, seastar mean "
-      f"{md.thousands(d['seastar_iops'], 0)}. Brief-literal bar ratio seastar/JUring mean "
+      f"{md.thousands(d['seastar_iops'], 0)}. Literal-bar ratio seastar/JUring mean "
       f"{md.thousands(d['seastar_over_juring']['mean'], 3)} (one-sided 95 % LB "
-      f"{md.thousands(d['seastar_over_juring']['lb'], 3)} ⇒ **{d['verdict']}**); plan-direction "
+      f"{md.thousands(d['seastar_over_juring']['lb'], 3)} ⇒ **{d['verdict']}**); reverse-direction "
       f"JUring/seastar mean {md.thousands(d['juring_over_seastar']['mean'], 3)} (LB "
       f"{md.thousands(d['juring_over_seastar']['lb'], 3)}) is reported for transparency.")
     e = analysis["bar_e"]
     a("- **(e) per-ring coverage:** " + ", ".join(
         f"N={cc['N']} {cc['covered_reps']}/{cc['good_reps']} reps" for cc in e["cells"]) + f" ⇒ **{e['verdict']}**")
     a("")
-    a("## 5. Per-ring queue depth + runtime-completion p99 (juring-group, B5 schema 1.1)")
+    a("## 5. Per-ring queue depth + runtime-completion p99 (juring-group, schema 1.1)")
     a("")
     if analysis["per_ring"]:
         a("| N | rep | ring | mean/max in-flight | mean sq_queued | mean cq_ready | "
@@ -609,7 +626,7 @@ def render_markdown(session, analysis):
               f"{md.thousands(row['dispatch_p99_us'])} | {md.thousands(row['external_p99_us'])} | "
               f"{md.thousands(row['failed'], 0)}/{md.thousands(row['cancelled'], 0)}/{md.thousands(row['timed_out'], 0)} |")
         a("")
-        a("`runtime p99` is the B5 `dispatch_latency_us.p99` (registration→dispatch; includes "
+        a("`runtime p99` is the metrics-on `dispatch_latency_us.p99` (registration→dispatch; includes "
           "kernel/device completion; **not** `fio clat` and **not** the external `latency_us`). "
           "External p99 starts before SQE preparation and is the value used in bar (b).")
     else:
@@ -622,7 +639,8 @@ def render_markdown(session, analysis):
         a("| cell | engine | N | rep | status | IOPS | external p99 µs | flags |")
         a("|---|---|---|---|---|---|---|---|")
         for g in gated:
-            a(f"| {g['cell']} | {g['engine']} | {g['N']} | {g['rep']} | {g['status']} | "
+            a(f"| {cellmap.label(g['cell'])} | {g['engine']} | {g['N']} | {g['rep']} | "
+              f"{g['status']} | "
               f"{md.thousands(g['iops'], 0)} | {md.thousands(g['p99_us'])} | {', '.join(g['flags'])} |")
         a("")
         a("Gated reps stay in every mean/CI above; the flags are disclosure, not trimming.")
@@ -632,16 +650,16 @@ def render_markdown(session, analysis):
     a("## 7. Reading notes / residual risks")
     a("")
     a("- This is a single-device, constant-QD-per-shard protocol: N·IOPS(1) is capacity-bounded "
-      "by the SSD, which is exactly why the plan's original `SE(8)≥0.75` and `p99(8)≤1.15·p99(1)` "
-      "were restated vs `fio` at the same N (B4 §6/§8).")
+      "by the SSD, which is exactly why the original `SE(8)≥0.75` and `p99(8)≤1.15·p99(1)` "
+      "were restated vs `fio` at the same N.")
     a("- Latency definitions are engine-native and not identical: JUring external = before "
       "prepare/submit → completion; fio = `clat` (submission→completion); seastar = before "
       "submit → completion. Cross-engine p99 is only used as the frozen same-N ratio, never as "
-      "an absolute ranking; the B5 runtime-completion p99 is a separate per-ring metric.")
+      "an absolute ranking; the metrics-on runtime-completion p99 is a separate per-ring metric.")
     a("- `fio` was run with `--group_reporting=1` (frozen template), so fio per-job spread is "
       "`n/a`; bar (c) is evaluated on `juring-group` shards.")
     a("- N=8 placement: hctx CPU set for fio/seastar; `juring-group` unpinned inside the same "
-      "taskset mask (frozen design §3). `mq/*/cpu_list` is in `manifest.txt`.")
+      "taskset mask (frozen placement rule). `mq/*/cpu_list` is in `manifest.txt`.")
     a("- All engine asymmetries (seastar 200-entry ring, no registered files/fixed buffers; "
       "JUring registered file+buffers and DEFER_TASKRUN) are disclosed, not equalised.")
     a("")
@@ -652,7 +670,7 @@ def render_markdown(session, analysis):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="M3 campaign analyzer")
+    ap = argparse.ArgumentParser(description="multi-shard scaling campaign analyzer")
     ap.add_argument("--session", help="session name under bench/results/")
     ap.add_argument("--results-dir", help="explicit session directory")
     ap.add_argument("--out-dir", help="output directory (default <session>/aggregate)")

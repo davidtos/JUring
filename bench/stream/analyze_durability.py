@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""B6 W24 durability A/B aggregator (supporting evidence).
+"""128 KiB durable-write A/B aggregator (supporting evidence).
 
-Reads the B6-extended JUring/seastar stream JSONs from
+Reads the durability-extended JUring/seastar stream JSONs from
 ``<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
-``<session>/aggregate/durability.{json,md}``.  This is W24 supporting evidence,
+``<session>/aggregate/durability.{json,md}``.  This is durability-write-128k supporting evidence,
 not a milestone verdict: per-arm statistics, the within-rep paired durability
 cost (durable/writeback), the frozen write-state classes, the disclosure rules,
-and the writeback bracket control (docs/b6-design.md §6.3).
+and the writeback bracket control.
 
 Usage:
     python3 bench/stream/analyze_durability.py [--session NAME] [--results DIR] [--out DIR]
@@ -23,21 +23,22 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 REQUIRED_EXTENSION = "b6-durability-1"
 DEFAULT_SESSION = "b6-durability-2026-11-15"
-CELL_ORDER = ["W24-128k"]
+CELL_ORDER = ["durability-write-128k"]
 
-# Frozen state-class thresholds (docs/b6-design.md §6.3; derived from M1 §4 + M2 §6 and
+# Frozen state-class thresholds (derived from the read/write and stream write-state classes and
 # fixed in this analyzer before the campaign).  Write throughput in MiB/s, write p50 in us.
 FAST_MIBS = 550.0
 FAST_P50_US = 250.0
 SLOW_MIBS = 300.0
 SLOW_P50_US = 600.0
-M1_RATIO = 0.92           # M1 §4 rule: a rep < 0.92 x same-arm max is slow
-CV_UNSTABLE_PCT = 10.0    # methodology D7: CV > 10 % => unstable, no ranking
+MATRIX_RATIO = 0.92           # the 0.92 same-arm rule: a rep < 0.92 x same-arm max is slow
+CV_UNSTABLE_PCT = 10.0    # the variance rule: CV > 10 % => unstable, no ranking
 BRACKET_TOLERANCE_PCT = 10.0
 
 # Engine rows: Tier-1 decisive arms, Tier-2 exploratory arms.
@@ -54,7 +55,7 @@ def _r6(x):
 
 
 # ---------------------------------------------------------------------------
-# state classification (frozen rule, docs/b6-design.md §6.3)
+# state classification (frozen rule)
 # ---------------------------------------------------------------------------
 
 def classify_rep(mibs, p50_us, arm_max_mibs):
@@ -72,10 +73,10 @@ def classify_rep(mibs, p50_us, arm_max_mibs):
             reasons.append("p50 > %.0f us" % SLOW_P50_US)
     else:
         cls = "mixed"
-    # M1 0.92 same-arm rule also marks a rep slow.
-    if arm_max_mibs and mibs < M1_RATIO * arm_max_mibs:
+    # The 0.92 same-arm rule also marks a rep slow.
+    if arm_max_mibs and mibs < MATRIX_RATIO * arm_max_mibs:
         if cls != "slow":
-            reasons.append("MiB/s < %.2f x arm max (M1 rule)" % M1_RATIO)
+            reasons.append("MiB/s < %.2f x arm max (same-arm max rule)" % MATRIX_RATIO)
         cls = "slow"
     return cls, reasons
 
@@ -249,13 +250,13 @@ def paired_cost(engine, control_arm, durable_arm, expected_reps):
 def render_markdown(session, results_dir, aggregate):
     lines = []
     a = lines.append
-    a("# B6 W24 durability A/B -- aggregate (supporting evidence, not a milestone bar)")
+    a("# 128 KiB durable-write A/B -- aggregate (supporting evidence, not a milestone bar)")
     a("")
     a("Session: `%s`  " % session)
     a("Source: `%s`  " % results_dir)
     a("Generated: %s  "
       % datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    a("Contract: `docs/b6-design.md` §6.3. Raw protocol: `%s/manifest.txt`." % results_dir)
+    a("Contract: frozen before the campaign. Raw protocol: `%s/manifest.txt`." % results_dir)
     a("")
     protocol = aggregate.get("protocol") or {}
     a("Protocol observed in the cell JSONs: warmup %ss + measured %ss per process, "
@@ -359,9 +360,11 @@ def render_markdown(session, results_dir, aggregate):
     else:
         for e in bad["excluded"]:
             a("- EXCLUDED %s / %s / %s rep %s: %s (`%s`)"
-              % (e["cell"], e["engine"], e["variant"], e["rep"], e["reason"], e["file"]))
+              % (cellmap.label(e["cell"]), e["engine"], e["variant"], e["rep"],
+                 e["reason"], e["file"]))
         for e in bad["missing"]:
-            a("- MISSING %s / %s / %s rep %s" % (e["cell"], e["engine"], e["variant"], e["rep"]))
+            a("- MISSING %s / %s / %s rep %s" % (cellmap.label(e["cell"]), e["engine"],
+                                                e["variant"], e["rep"]))
         for e in bad["unparsed"]:
             a("- UNPARSED `%s`: %s" % (e["file"], e["reason"]))
     a("")
@@ -371,9 +374,9 @@ def render_markdown(session, results_dir, aggregate):
         a("- %s" % note)
     a("")
     a("State classes are computed **within each arm** (`fast` iff MiB/s >= 550 and write "
-      "p50 <= 250 us; `slow` iff MiB/s < 300 or write p50 > 600 us; else `mixed`; the M1 "
+      "p50 <= 250 us; `slow` iff MiB/s < 300 or write p50 > 600 us; else `mixed`; the 0.92 "
       "0.92 same-arm rule also marks a rep slow). Arms are ranked only if both sides have "
-      ">= 2 reps in the same class and neither arm has CV > 10% (methodology D7); the "
+      ">= 2 reps in the same class and neither arm has CV > 10% (the variance rule); the "
       "writeback controls bracket the Tier-1 block and must agree within 10%."
       )
     a("")
@@ -386,7 +389,7 @@ def render_markdown(session, results_dir, aggregate):
 
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Aggregate B6 W24 durability cells into aggregate/durability.{json,md}.")
+        description="Aggregate durability cells into aggregate/durability.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
                     help="session name under bench/results/ (default %(default)s)")
     ap.add_argument("--results", default=None,
@@ -402,10 +405,10 @@ def main(argv):
     records, unparsed, schema_errors = load_session(
         results_dir, expected_hint="<cell>__<engine>__<variant>__r<rep>.json",
         schema_version=SCHEMA_VERSION, required_extension=REQUIRED_EXTENSION,
-        extension_note=": this is not a B6 durability JSON",
-        version_note=" (the B6 extension must be additive on 1.0)")
+        extension_note=": this is not a durability JSON",
+        version_note=" (the durability extension must be additive on 1.0)")
     if schema_errors:
-        sys.stderr.write("error: B6 durability schema check FAILED for %d cell JSON(s); "
+        sys.stderr.write("error: durability schema check FAILED for %d cell JSON(s); "
                          "refusing to aggregate a mixed/old session\n" % len(schema_errors))
         for e in schema_errors:
             sys.stderr.write("  - %s: %s\n" % (e["file"], e["reason"]))
@@ -416,7 +419,7 @@ def main(argv):
 
     cells = sort_cells({r["cell"] for r in records}, CELL_ORDER)
     if len(cells) != 1:
-        sys.stderr.write("warning: expected exactly one W24 cell, found %r; aggregating all\n"
+        sys.stderr.write("warning: expected exactly one durability-write-128k cell, found %r; aggregating all\n"
                          % (cells,))
 
     # Arm inventory: one entry per (engine, variant) observed in the session.
@@ -512,29 +515,29 @@ def main(argv):
                 protocol[out_key] = d[key]
 
     disclosures = [
-        "Supporting evidence only: W24 is not a milestone bar and makes no new "
-        "cross-engine write win/loss claim (docs/b6-design.md §6.3/§6.5; methodology D7).",
-        "The M2 W21/W22 write comparison issued 2 fdatasync/pass on seastar and 0 on "
-        "JUring (undisclosed in M2); the W24 arms match durability on both engines and "
+        "Supporting evidence only: durability-write-128k is not a milestone bar and makes no new "
+        "cross-engine write win/loss claim (the variance rule applies).",
+        "The stream write/read comparison issued 2 fdatasync/pass on seastar and 0 on "
+        "JUring (undisclosed in the stream campaign); the 128 KiB durable-write arms match durability on both engines and "
         "run a writeback-vs-writeback control first/last, so the paired ratio here is a "
         "within-engine cost of durability, not an engine ranking.",
-        "Durability points include a write-behind drain on both engines (B2 flush() and "
+        "Durability points include a write-behind drain on both engines (the stream flush() and "
         "seastar fstream flush() both drain); the matched arms isolate the sync cost "
         "(writeback = drain only vs fdatasync = drain + one sync), but the absolute "
-        "sync_wait_share is an upper bound on pure sync cost (§9.7).",
+        "sync_wait_share is an upper bound on pure sync cost.",
         "seastar's pass-end path issues two fdatasync per pass (output_stream flush() + "
         "close()); the JUring pass-end path issues one. With --sync-every 4 MiB this is "
         "<1 % of the durability points and is reported through syncs/s and MiB/sync "
         "instead of being hidden.",
         "seastar has no fsync(2) path (file::flush() is fdatasync only); the juring-fsync "
         "arm is JUring-only and is not compared across engines.",
-        "State classes are derived (not pre-registered) from M1 §4 + M2 §6 and fixed in "
+        "State classes are derived (not pre-registered) from the read/write and stream write-state classes and fixed in "
         "this analyzer before the campaign: fast iff MiB/s >= 550 and write p50 <= 250 us; "
-        "slow iff MiB/s < 300 or write p50 > 600 us; else mixed; plus the M1 0.92 rule.",
-        "The W24 dataset is 2 GiB per pass on the existing 10 GiB write file (the file is "
-        "never resized): a disclosed deviation from the frozen 10 GiB dataset (§9.8).",
+        "slow iff MiB/s < 300 or write p50 > 600 us; else mixed; plus the 0.92 same-arm rule.",
+        "The durability-write-128k dataset is 2 GiB per pass on the existing 10 GiB write file (the file is "
+        "never resized): a disclosed deviation from the frozen 10 GiB dataset.",
         "No cache drop and no power-loss test: durability is the fdatasync/fsync/O_DSYNC "
-        "guarantee, not something W24 measures (§9.1).",
+        "guarantee, not something the 128 KiB durable-write cells measure.",
     ]
 
     aggregate = {
@@ -545,13 +548,13 @@ def main(argv):
         "source_dir": results_dir,
         "generated_utc": datetime.datetime.now(datetime.timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "contract": "docs/b6-design.md §6.3 (frozen protocol); analyzer fixed before campaign",
+        "contract": "protocol frozen before the campaign; analyzer fixed before campaign",
         "protocol": protocol,
         "state_class_rule": {
             "fast": "MiB/s >= %.0f and write p50 <= %.0f us" % (FAST_MIBS, FAST_P50_US),
             "slow": "MiB/s < %.0f or write p50 > %.0f us" % (SLOW_MIBS, SLOW_P50_US),
             "mixed": "otherwise",
-            "m1_rule": "also slow if MiB/s < %.2f x same-arm max" % M1_RATIO,
+            "m1_rule": "also slow if MiB/s < %.2f x same-arm max" % MATRIX_RATIO,
             "computed_within_arm": True,
         },
         "arms": arms,

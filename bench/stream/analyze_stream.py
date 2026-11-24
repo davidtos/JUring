@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""B2 W21/W22 stream-matrix aggregator.
+"""Stream-matrix aggregator.
 
 Reads the per-process JSON written by the JUring/seastar stream runners from
 ``<session>/cells/<cell>__<engine>__<variant>__r<rep>.json`` and writes
 ``<session>/aggregate/stream.{json,md}``: per-cell engine statistics, per-rep
-paired juring/seastar MiB/s ratios, and the plan-M2 bar
+paired juring/seastar MiB/s ratios, and the frozen bar
 ``juring MiB/s >= 0.85 * seastar MiB/s``.  Failed/missing/excluded reps are listed
 explicitly; the exploratory ``juring --buffered`` row is disclosed but never used
-for the verdict (docs/b2-design.md §3.3).
+for the verdict.
 
 Usage:
     python3 bench/stream/analyze_stream.py [--session NAME] [--results DIR]
@@ -23,13 +23,15 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_SESSION = "b2-2026-11-13"
 PRIMARY_ENGINES = ("juring", "seastar")
 EXPLORATORY = "juring-buffered"
-CELL_ORDER = ["W21-128k", "W22-128k", "W21-1M", "W22-1M"]
+CELL_ORDER = ["stream-write-128k", "stream-read-128k",
+              "stream-write-1m", "stream-read-1m"]
 
 
 
@@ -210,17 +212,17 @@ def paired_block(cell_result, bar):
 def render_markdown(session, results_dir, bar, cells, overall, unparsed, protocol):
     lines = []
     a = lines.append
-    a("# B2 W21/W22 stream matrix -- aggregate")
+    a("# Stream matrix -- aggregate")
     a("")
     a("Session: `%s`  " % session)
     a("Source: `%s`  " % results_dir)
     a("Generated: %s  " % datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    a("Verdict bar (plan M2): `juring MiB/s >= %.2f * seastar MiB/s`  " % bar)
-    a("Contract: `docs/b2-design.md` §3.3. Raw protocol: `%s/manifest.txt`." % results_dir)
+    a("Verdict bar: `juring MiB/s >= %.2f * seastar MiB/s`  " % bar)
+    a("Contract: frozen before the campaign. Raw protocol: `%s/manifest.txt`." % results_dir)
     a("")
     if protocol.get("seconds") is not None:
         a("Protocol observed in the cell JSONs: warmup %ss + measured %ss per process, "
-          "R=%s reps per cell (preliminary; the full M2 campaign uses longer cells/rests)."
+          "R=%s reps per cell (preliminary; the full stream campaign uses longer cells/rests)."
           % (md.fixed(protocol.get("warmup_sec"), 0), md.fixed(protocol.get("seconds"), 0),
              protocol.get("reps")))
         a("")
@@ -236,7 +238,7 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
         ci = p["ratio_ci95"]
         ci_s = "n/a" if ci[0] is None else "[%.3f, %.3f]" % (ci[0], ci[1])
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s |" % (
-            c["cell"], c["config"].get("workload", "?"), p["n"],
+            cellmap.label(c["cell"]), c["config"].get("workload", "?"), p["n"],
             md.fixed(j, 1), md.fixed(s, 1), md.fixed(p["ratio_mean"], 3), ci_s,
             md.fixed(p["ratio_one_sided_95_lower"], 3), p["verdict"]))
     a("")
@@ -304,7 +306,7 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
     a("")
     a("Notes: the exploratory `juring-buffered` row is disclosed only and is never used for the")
     a("verdict (seastar fstream is O_DIRECT/DMA here, so the matched-primary rows are O_DIRECT on")
-    a("both sides). 128K cells are the methodology's W21/W22 wording; 1M cells address the plan's")
+    a("both sides). The 128 KiB cells are the methodology's original stream wording; the 1 MiB cells address the")
     a("\"seq 1M\" wording. The overall verdict requires all primary cells listed above to clear the")
     a("bar; the strict reading additionally requires the one-sided 95% lower bound of the paired")
     a("ratio to clear the bar. This is a preliminary measurement (durations/rests in manifest.txt).")
@@ -318,7 +320,7 @@ def render_markdown(session, results_dir, bar, cells, overall, unparsed, protoco
 
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Aggregate B2 W21/W22 stream cells into aggregate/stream.{json,md}.")
+        description="Aggregate stream cells into aggregate/stream.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
                     help="session name under bench/results/ (default %(default)s)")
     ap.add_argument("--results", default=None,
@@ -326,7 +328,7 @@ def main(argv):
     ap.add_argument("--out", default=None,
                     help="output directory (default <session>/aggregate)")
     ap.add_argument("--bar", type=float, default=0.85,
-                    help="plan-M2 bar juring/seastar (default %(default)s)")
+                    help="bar juring/seastar (default %(default)s)")
     args = ap.parse_args(argv)
 
     results_dir = os.path.abspath(args.results) if args.results else os.path.join(
@@ -334,6 +336,8 @@ def main(argv):
     out_dir = os.path.abspath(args.out) if args.out else os.path.join(results_dir, "aggregate")
 
     records, unparsed, _ = load_session(results_dir)
+    for rec in records:
+        rec["cell"] = cellmap.slug(rec["cell"])
     if not records:
         sys.stderr.write("error: no cell JSON files found under %s/cells\n" % results_dir)
         return 1
@@ -410,7 +414,7 @@ def main(argv):
             "seconds_default": 30,
             "rest_sec_default": 60,
             "cpu": 2,
-            "note": "durations/rests are preliminary (docs/b2-design.md §3.3); see manifest.txt for the "
+            "note": "durations/rests are preliminary; see manifest.txt for the "
                     "exact run protocol",
         },
         "unparsed_files": unparsed,

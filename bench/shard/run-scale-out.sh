@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 #
-# run-scale-out.sh -- M3 W17-W20 multi-shard scaling campaign driver
-# (docs/m3-design.md FROZEN 2026-11-15; SEASTAR-PLAN.md §5 M3).
+# run-scale-out.sh -- multi-shard scaling campaign driver
+# (protocol frozen 2026-11-15).
 #
 # Cells (12 cells / 60 invocations, R=5):
-#   juring-group + fio + seastar --smp N for N in {1,2,4,8}
+#   juring-group + fio + seastar --smp N; cells shards-1/2/4/8
 #   4K randread, QD 64 per worker/shard, one aged shared 10 GiB read-only file
 #   (DS-S), 10 s warmup + 30 s measured, fresh process/JVM per invocation,
 #   300 s rest between invocations, engines interleaved and the order alternating
 #   per rep block, every rep kept and reported.
 #
-# Placement (frozen design §3):
+# Placement (frozen rule):
 #   N=1..4: CPUs 1..N for every engine (juring-group --first-cpu 1).
 #   N=8   : data NVMe hctx CPU set 1,2,4,6,8,10,12,14. fio and seastar are
 #           confined/pinned to that exact set; juring-group runs UNPINNED
-#           (--first-cpu -1) inside a taskset mask of the same set (the B4 naive
+#           (--first-cpu -1) inside a taskset mask of the same set (the earlier naive
 #           1..8 pinning is deliberately not reused; mq/*/cpu_list is recorded).
 #
 # Resumability: every invocation is checkpointed in cell-meta.tsv + a raw JSON.
@@ -45,6 +45,8 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
+# shellcheck source=bench/cells.sh
+source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 SESSION=${SESSION:-m3-$(date +%Y-%m-%d)}
@@ -56,7 +58,7 @@ ANALYZER=$HERE/analyze_scale_out.py
 JVM_OPTS=${JVM_OPTS:--Xms8g -Xmx8g -XX:+AlwaysPreTouch}
 FIO_GROUP_REPORTING=${FIO_GROUP_REPORTING:-1}
 
-# Frozen identity of the code under test (B5 tree, M3 design §"Frozen identity").
+# Frozen identity of the code under test and of the frozen protocol document.
 FROZEN_SRC_SHA1=04f12dbc85d723a10dd952b7ac3c51bb6253ed46
 FROZEN_TEST_SHA1=666e0644dc063c0b15c5bb52571002a79b5ec657
 FROZEN_DESIGN_PATH=docs/m3-design.md
@@ -203,7 +205,7 @@ loadavg() { awk '{print $1","$2","$3}' /proc/loadavg; }
 load1() { awk '{print $1}' /proc/loadavg; }
 wall_sec() { awk -v a="$1" -v b="$2" 'BEGIN{printf "%.3f", b-a}'; }
 
-# cpu_set_for_n <N>: frozen placement (design §3).
+# cpu_set_for_n <N>: frozen placement.
 cpu_set_for_n() { # cpu_set_for_n <N> -> taskset/--cpuset list
     if [[ $1 -ge 8 ]]; then
         echo "$HCTX_CPUS"
@@ -233,7 +235,7 @@ env_snapshot() { # env_snapshot <path> <tag>
 }
 
 # Last invocation end (epoch seconds) so we can tell our own decaying loadavg
-# residual from genuine foreign interference (F14).
+# residual from genuine foreign interference (the background-load gate).
 LAST_END_TS=0
 # Epoch seconds of the previous invocation's process exit; used to enforce the
 # frozen 300 s inter-invocation rest even across chunk boundaries / --resume.
@@ -372,10 +374,10 @@ rest_before_next() {
     elapsed=$(( now - LAST_END_EPOCH ))
     deficit=$(awk -v r="$REST" -v e="$elapsed" 'BEGIN{printf "%d", (r-e>0)?(r-e):0}')
     if (( deficit > 0 )); then
-        echo "[m3] rest ${deficit}s (inter-invocation rest ${REST}s; elapsed since last exit ${elapsed}s)"
+        echo "[scale-out] rest ${deficit}s (inter-invocation rest ${REST}s; elapsed since last exit ${elapsed}s)"
         sleep "$deficit"
     else
-        echo "[m3] rest satisfied (elapsed since last exit ${elapsed}s >= ${REST}s)"
+        echo "[scale-out] rest satisfied (elapsed since last exit ${elapsed}s >= ${REST}s)"
     fi
 }
 
@@ -385,7 +387,7 @@ run_argv() {
     local cpus jvm
     cpus=$(cpu_set_for_n "$n")
     CPU_SET=$cpus
-    ID="N${n}__${engine}__r${rep}"
+    ID="$(cell_for_shards "$n")__${engine}__r${rep}"
     JSON="$CELLS_DIR/$ID.json"
     LOG="$LOGS_DIR/$ID.log"
     ARGV=()
@@ -447,7 +449,7 @@ run_row() {
     env_snapshot "$ENVF" "before"
     gate0=$(gate_state)
     if [[ $gate0 != ok ]]; then
-        echo "warn: F14 gate violation before $id: $gate0 (recorded, still run; not trimmed)" >&2
+        echo "warn: background-load gate violation before $id: $gate0 (recorded, still run; not trimmed)" >&2
     fi
 
     cmd_str="taskset -c $cpus $(argv_str "${ARGV[@]}")"
@@ -500,7 +502,7 @@ run_row() {
     printf 'cell %-32s status=%-4s wall=%-7ss iops=%-11s p50_us=%-8s p99_us=%-8s ops=%s gate=%s\n' \
         "$id" "$status" "$wall" "$iops" "$p50" "$p99" "$ops" "$gate0"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-        "N$n" "$engine" "std" "$n" "$cpus" "$rep" "$start" "$end" "$wall" \
+        "$(cell_for_shards "$n")" "$engine" "std" "$n" "$cpus" "$rep" "$start" "$end" "$wall" \
         "$la0" "$la1" "$gate0" "$gate1" "$status" "$rc" "$ops" "$iops" "$p50" "$p99" \
         "$bytes" "$cmd_str" >>"$META"
     [[ $status == ok || $status == gate ]]
@@ -520,7 +522,7 @@ write_manifest() {
         echo "    $(basename "$(dirname "$m")") -> $(cat "$m")"
     done 2>/dev/null || true)
     {
-        echo "# M3 W17-W20 multi-shard scaling campaign manifest (docs/m3-design.md, frozen)"
+        echo "# Multi-shard scaling campaign manifest (protocol frozen)"
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
         echo
@@ -529,7 +531,7 @@ write_manifest() {
         echo "design sha1 (expected): $FROZEN_DESIGN_SHA1"
         echo "design sha1 (live):     $(design_sha1)"
         echo "design freeze commit:   $(git -C "$REPO_ROOT" log -1 --format='%H %s' -- "$FROZEN_DESIGN_PATH" 2>/dev/null || echo '?')"
-        echo "code under test: B5 frozen tree (B4+B5 delivered), src/main/java content sha1 (expected): $FROZEN_SRC_SHA1"
+        echo "code under test: frozen tree (shard runtime + metrics delivered), src/main/java content sha1 (expected): $FROZEN_SRC_SHA1"
         echo "src/test/java content sha1 (expected): $FROZEN_TEST_SHA1"
         echo "live src/main/java content sha1: $(src_main_sha1)"
         echo "live src/test/java content sha1: $(src_test_sha1)"
@@ -580,14 +582,14 @@ write_manifest() {
             "$SEASTAR_BIN" "$REPO_ROOT/bench/seastar/seastar_file_bench.cc" 2>/dev/null || true
         sha256sum "$(command -v "$FIO_BIN")" 2>/dev/null || true
         echo
-        echo "## Frozen protocol (docs/m3-design.md §2)"
-        echo "cells: N in {$(echo "$N_LIST" | tr ' ' ',')} x engines {$ENGINES} (R=$REPS)"
+        echo "## Frozen protocol"
+        echo "cells: shards-{$(echo "$N_LIST" | tr ' ' ',')} (N = shard count) x engines {$ENGINES} (R=$REPS)"
         echo "invocations expected: $(($(wc -w <<<"$N_LIST") * REPS * $(wc -w <<<"$ENGINES")))"
         echo "per invocation: 4K randread, QD $QD per worker/shard, warmup ${WARMUP}s, measured ${DURATION}s,"
         echo "                fresh process/JVM, seed $SEED, 300 s rest between invocations (frozen REST=$REST)"
         echo "engine order: alternating per rep block; odd (rep+N) = $ENGINES; even = reversed"
         echo "dataset: ONE shared aged 10 GiB read-only file for every engine/shard (DS-S);"
-        echo "         the W18-W20 DS-M one-file-per-shard layout is NOT used (recorded limitation)"
+        echo "         the 2/4/8-shard DS-M one-file-per-shard layout is NOT used (recorded limitation)"
         echo "juring : io_uring, SINGLE_ISSUER|COOP_TASKRUN|DEFER_TASKRUN, registered file + fixed buffers,"
         echo "         runtime=shard, one IoShard/ring per worker through RingGroup, metrics on (schema 1.1);"
         echo "         JVM: $JVM_OPTS (fresh JVM per invocation)"
@@ -709,17 +711,17 @@ archive_incomplete() {
             moved=1
         fi
     done
-    drop_meta_rows "N$n" "$engine" "$rep"
+    drop_meta_rows "$(cell_for_shards "$n")" "$engine" "$rep"
     if (( moved )); then
-        echo "[m3] resume: archived incomplete artifacts of $id -> $dest (ts=$ts)"
+        echo "[scale-out] resume: archived incomplete artifacts of $id -> $dest (ts=$ts)"
         echo "$(now_utc) archived incomplete $id -> $dest ts=$ts" >>"$RESULTS/resume.log"
     else
-        echo "[m3] resume: $id has no artifacts yet (never started)" | tee -a "$RESULTS/resume.log"
+        echo "[scale-out] resume: $id has no artifacts yet (never started)" | tee -a "$RESULTS/resume.log"
     fi
 }
 
 # ---------------------------------------------------------------------------
-# preflight (frozen tree + F14 + machine)
+# preflight (frozen tree + background-load gate + machine)
 # ---------------------------------------------------------------------------
 preflight() {
     local strict=$1 fail=0 rd_size govs foreign mvn_procs other_procs
@@ -746,10 +748,10 @@ preflight() {
         "design sha1 $(design_sha1) != frozen $FROZEN_DESIGN_SHA1 (design moved after freeze)"
 
     check $([[ $(src_main_sha1) == "$FROZEN_SRC_SHA1" ]] && echo 1 || echo 0) \
-        "src/main/java content sha1 == B5/M3 frozen $FROZEN_SRC_SHA1" \
+        "src/main/java content sha1 == frozen $FROZEN_SRC_SHA1" \
         "src/main/java content sha1 $(src_main_sha1) != frozen $FROZEN_SRC_SHA1 (code changed)"
     check $([[ $(src_test_sha1) == "$FROZEN_TEST_SHA1" ]] && echo 1 || echo 0) \
-        "src/test/java content sha1 == B5/M3 frozen $FROZEN_TEST_SHA1" \
+        "src/test/java content sha1 == frozen $FROZEN_TEST_SHA1" \
         "src/test/java content sha1 $(src_test_sha1) != frozen $FROZEN_TEST_SHA1 (tests changed)"
     check $([[ -z $(git -C "$REPO_ROOT" status --porcelain -- src/main/java src/test/java) ]] && echo 1 || echo 0) \
         "no uncommitted change under src/main/java or src/test/java" \
@@ -774,8 +776,8 @@ preflight() {
     check $([[ -f target/classes/com/davidvlijmincx/lio/api/IoShard.class &&
         -f target/classes/com/davidvlijmincx/lio/api/RingGroup.class &&
         -f target/classes/com/davidvlijmincx/lio/api/RingMetrics.class ]] && echo 1 || echo 0) \
-        "B4+B5 API classes present in target/classes (IoShard/RingGroup/RingMetrics)" \
-        "target/classes lacks B4+B5 API classes -- the Lead must build the frozen tree first"
+        "shard-runtime + metrics API classes present in target/classes (IoShard/RingGroup/RingMetrics)" \
+        "target/classes lacks the shard-runtime/metrics API classes -- the Lead must build the frozen tree first"
 
     check $([[ -x $SEASTAR_BIN ]] && echo 1 || echo 0) \
         "seastar runner executable: $SEASTAR_BIN" "seastar runner missing/not executable: $SEASTAR_BIN"
@@ -799,7 +801,7 @@ preflight() {
     elif [[ ${ALLOW_RESIDUAL_LOAD:-0} == 1 ]]; then
         printf 'preflight: NOTE  1-min loadavg %s > 0.5 (ALLOW_RESIDUAL_LOAD=1: own residual)\n' "$(load1)"
     else
-        printf 'preflight: FAIL  1-min loadavg %s > 0.5 (F14 gate)\n' "$(load1)"
+        printf 'preflight: FAIL  1-min loadavg %s > 0.5 (background-load gate)\n' "$(load1)"
         fail=1
     fi
 
@@ -824,11 +826,11 @@ preflight() {
 print_plan() {
     local n rep order eng rows=0 blocks=0 est
     echo
-    echo "================ M3 W17-W20 MULTI-SHARD SCALING CAMPAIGN PLAN (--dry-run) ================"
+    echo "================ MULTI-SHARD SCALING CAMPAIGN PLAN (--dry-run) ================"
     echo "session dir : $RESULTS"
     echo "cells dir   : $CELLS_DIR"
     echo "aggregate   : $AGG_DIR/m3.json, $AGG_DIR/m3.md"
-    echo "cells       : N in {$N_LIST} x engines {$ENGINES} (R=$REPS)"
+    echo "cells       : $(for n in $N_LIST; do printf 'shards-%s ' "$n"; done)(N = shard count) x engines {$ENGINES} (R=$REPS)"
     echo "protocol    : warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s/invocation seed=$SEED"
     echo "read file   : $READ_FILE ($(dataset_size) B, read-only DS-S; only read cells)"
     echo "placement   : N=1..4 CPUs 1..N; N=8 fio/seastar set $HCTX_CPUS; N=8 juring-group UNPINNED in that set"
@@ -841,7 +843,7 @@ print_plan() {
         for n in $N_LIST; do
             for rep in $(seq 1 "$REPS"); do
                 for eng in $(engine_order "$n" "$rep"); do
-                    st=$(meta_status "N$n" "$eng" "$rep")
+                    st=$(meta_status "$(cell_for_shards "$n")" "$eng" "$rep")
                     if [[ $st == ok || $st == gate ]] && cell_json_complete "$eng" "$n" "$rep"; then
                         skip=$((skip + 1))
                     else
@@ -883,8 +885,8 @@ print_plan() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-echo "[m3] M3 W17-W20 multi-shard scaling campaign (docs/m3-design.md FROZEN $FROZEN_DESIGN_SHA1)"
-echo "[m3] session=$SESSION N='$N_LIST' R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s engines='$ENGINES'"
+echo "[scale-out] multi-shard scaling campaign (frozen protocol $FROZEN_DESIGN_SHA1)"
+echo "[scale-out] session=$SESSION N='$N_LIST' R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s engines='$ENGINES'"
 
 if [[ $DRY_RUN == 1 ]]; then
     preflight -1 || true
@@ -901,7 +903,7 @@ if (( RESUME == 1 )); then
         echo "error: --resume needs an existing session with cell-meta.tsv: $META" >&2
         exit 1
     fi
-    echo "[m3] resume mode: continuing session $SESSION (keeps complete invocations)"
+    echo "[scale-out] resume mode: continuing session $SESSION (keeps complete invocations)"
 elif [[ -d $CELLS_DIR ]] && compgen -G "$CELLS_DIR/*.json" >/dev/null; then
     if (( FORCE != 1 )); then
         echo "error: session '$SESSION' already contains cell JSONs under $CELLS_DIR" >&2
@@ -909,7 +911,7 @@ elif [[ -d $CELLS_DIR ]] && compgen -G "$CELLS_DIR/*.json" >/dev/null; then
         echo "       (an interrupted session should be continued with --resume)" >&2
         exit 1
     fi
-    echo "[m3] warning: --force given; appending to existing session $SESSION" >&2
+    echo "[scale-out] warning: --force given; appending to existing session $SESSION" >&2
 fi
 
 preflight 1 || {
@@ -925,16 +927,16 @@ init_meta
 # first invocation of this chunk.
 if (( RESUME == 1 )); then
     LAST_END_EPOCH=$(meta_end_epoch_of_last)
-    echo "[m3] last invocation end (epoch): $LAST_END_EPOCH"
+    echo "[scale-out] last invocation end (epoch): $LAST_END_EPOCH"
 fi
 
-echo "[m3] compiling the JUring harness javac-only (JURING_SKIP_MVN=1; no Maven) ..."
+echo "[scale-out] compiling the JUring harness javac-only (JURING_SKIP_MVN=1; no Maven) ..."
 if ! JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null 2>"$LOGS_DIR/compile.log"; then
     echo "error: JUring harness javac compile failed; see $LOGS_DIR/compile.log" >&2
     exit 1
 fi
-echo "[m3] harness ready; manifest: $MANIFEST"
-echo "[m3] started: $(now_utc)"
+echo "[scale-out] harness ready; manifest: $MANIFEST"
+echo "[scale-out] started: $(now_utc)"
 
 FAILS=0
 RUNS_DONE=0
@@ -944,22 +946,22 @@ CHUNKED=0
 N_TOTAL=$(wc -w <<<"$N_LIST")
 E_TOTAL=$(wc -w <<<"$ENGINES")
 if (( RESUME == 1 )); then
-    echo "[m3] resume: scanning existing meta/artifacts under $RESULTS ..."
+    echo "[scale-out] resume: scanning existing meta/artifacts under $RESULTS ..."
     mkdir -p "$RESULTS/incomplete-archive"
     : >"$RESULTS/resume.log"
     for n in $N_LIST; do
         for rep in $(seq 1 "$REPS"); do
             for eng in $(engine_order "$n" "$rep"); do
-                st=$(meta_status "N$n" "$eng" "$rep")
+                st=$(meta_status "$(cell_for_shards "$n")" "$eng" "$rep")
                 if [[ $st == ok || $st == gate ]] && cell_json_complete "$eng" "$n" "$rep"; then
                     SKIPPED=$((SKIPPED + 1))
                 else
-                    archive_incomplete "$n" "$eng" "$rep" "N${n}__${eng}__r${rep}"
+                    archive_incomplete "$n" "$eng" "$rep" "$(cell_for_shards "$n")__${eng}__r${rep}"
                 fi
             done
         done
     done
-    echo "[m3] resume: $SKIPPED complete invocation(s) kept; the rest will run now"
+    echo "[scale-out] resume: $SKIPPED complete invocation(s) kept; the rest will run now"
 fi
 
 for n in $N_LIST; do
@@ -968,7 +970,7 @@ for n in $N_LIST; do
         missing=()
         for eng in $order; do
             if (( RESUME == 1 )); then
-                st=$(meta_status "N$n" "$eng" "$rep")
+                st=$(meta_status "$(cell_for_shards "$n")" "$eng" "$rep")
                 if [[ $st == ok || $st == gate ]] && cell_json_complete "$eng" "$n" "$rep"; then
                     continue
                 fi
@@ -976,14 +978,14 @@ for n in $N_LIST; do
             missing+=("$eng")
         done
         ((${#missing[@]} == 0)) && continue
-        echo "[m3] === block N=$n rep=$rep/$REPS engines missing: ${missing[*]} ==="
+        echo "[scale-out] === block N=$n rep=$rep/$REPS engines missing: ${missing[*]} ==="
         for eng in "${missing[@]}"; do
             rest_before_next
             run_row "$n" "$eng" "$rep" || FAILS=$((FAILS + 1))
             RUNS_DONE=$((RUNS_DONE + 1))
         done
         if (( SETTLE > 0 )); then
-            echo "[m3] settle ${SETTLE}s (not part of the frozen protocol; diagnostic only)"
+            echo "[scale-out] settle ${SETTLE}s (not part of the frozen protocol; diagnostic only)"
             sleep "$SETTLE"
         fi
         BLOCKS_RUN=$((BLOCKS_RUN + 1))
@@ -1001,23 +1003,23 @@ for n in $N_LIST; do
     done
 done
 ACTUAL_ROWS=$(( $(wc -l <"$META") - 1 ))
-echo "[m3] invocation_runs=$RUNS_DONE skipped_resume=$SKIPPED failed/flagged=$FAILS blocks_run=$BLOCKS_RUN"
-echo "[m3] cell-meta rows: $ACTUAL_ROWS / $EXPECTED_ROWS expected (all reps kept, none trimmed)"
+echo "[scale-out] invocation_runs=$RUNS_DONE skipped_resume=$SKIPPED failed/flagged=$FAILS blocks_run=$BLOCKS_RUN"
+echo "[scale-out] cell-meta rows: $ACTUAL_ROWS / $EXPECTED_ROWS expected (all reps kept, none trimmed)"
 if (( CHUNKED == 1 && ACTUAL_ROWS < EXPECTED_ROWS )); then
-    echo "[m3] CHUNK COMPLETE (--max-blocks $MAX_BLOCKS): $(now_utc)"
-    echo "[m3] resume with: bench/shard/run-scale-out.sh --session $SESSION --resume"
+    echo "[scale-out] CHUNK COMPLETE (--max-blocks $MAX_BLOCKS): $(now_utc)"
+    echo "[scale-out] resume with: bench/shard/run-scale-out.sh --session $SESSION --resume"
     exit 0
 fi
 if (( ACTUAL_ROWS != EXPECTED_ROWS )); then
     echo "warn: cell-meta row count mismatch (expected one row per invocation)" >&2
     FAILS=$((FAILS + 1))
 fi
-echo "[m3] cell-meta: $META"
+echo "[scale-out] cell-meta: $META"
 
 if [[ -f $ANALYZER ]]; then
-    echo "[m3] analyzing: $ANALYZER --session $SESSION"
+    echo "[scale-out] analyzing: $ANALYZER --session $SESSION"
     if python3 "$ANALYZER" --session "$SESSION" >"$AGG_DIR/analyze.log" 2>&1; then
-        echo "[m3] aggregate: $AGG_DIR/m3.json, $AGG_DIR/m3.md"
+        echo "[scale-out] aggregate: $AGG_DIR/m3.json, $AGG_DIR/m3.md"
     else
         echo "warn: analyzer failed; see $AGG_DIR/analyze.log" >&2
         FAILS=$((FAILS + 1))
@@ -1029,4 +1031,4 @@ if (( FAILS > 0 )); then
     echo "       (re-run with --resume after fixing; good cells are kept, failed cells are retried)" >&2
     exit 1
 fi
-echo "[m3] ok"
+echo "[scale-out] ok"

@@ -31,7 +31,7 @@
 <line x1="369.0" y1="180.8" x2="383.0" y2="180.8" stroke="#1f2328" stroke-width="1.2"/>
 <line x1="369.0" y1="191.3" x2="383.0" y2="191.3" stroke="#1f2328" stroke-width="1.2"/>
 <text x="376.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
-<text x="300.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 64</text>
+<text x="300.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read, 64 in flight</text>
 <text x="300.0" y="458.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#e3742a" text-anchor="middle">JUring/fio 1.054  [90% 1.019–1.088]</text>
 <text x="300.0" y="476.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#2ea043" text-anchor="middle">JUring/Seastar 1.006  [90% 0.980–1.031]</text>
 <rect x="565.0" y="124.5" width="58.0" height="265.5" rx="0" fill="#1f6feb" opacity="0.88"/>
@@ -52,7 +52,7 @@
 <line x1="739.0" y1="130.9" x2="753.0" y2="130.9" stroke="#1f2328" stroke-width="1.2"/>
 <line x1="739.0" y1="145.3" x2="753.0" y2="145.3" stroke="#1f2328" stroke-width="1.2"/>
 <text x="746.0" y="408.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="middle">n=5</text>
-<text x="670.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 128</text>
+<text x="670.0" y="434.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="13" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random read, 128 in flight</text>
 <text x="670.0" y="458.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#e3742a" text-anchor="middle">JUring/fio 1.206  [90% 1.159–1.252]</text>
 <text x="670.0" y="476.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#2ea043" text-anchor="middle">JUring/Seastar 1.054  [90% 1.035–1.073]</text>
 <rect x="90.0" y="72.0" width="12.0" height="12.0" rx="0" fill="#1f6feb"/>

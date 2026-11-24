@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# run-write-campaign.sh - Step-A M1 write campaign: three sequential blocks in
+# run-write-campaign.sh - the write-matrix campaign: three sequential blocks in
 # ONE session dir (thin wrapper around run-write-cells.sh).
 #
 # Why a wrapper exists: the write matrix must be run as three monotonic,
-# separately-preconditioned blocks (methodology section 2 phasing; D1/D3/D6),
-# with a recorded 300 s idle rest between blocks, and each block's run count
-# verified before any I/O starts. Doing that by hand invites a wrong --cells /
-# --reps / rest flag on block 2 of an overnight run.
+# separately-preconditioned blocks (per the phasing, rests and rotated order in
+# docs/benchmark-methodology.md), with a recorded 300 s idle rest between blocks,
+# and each block's run count verified before any I/O starts. Doing that by hand
+# invites a wrong --cells / --reps / rest flag on block 2 of an overnight run.
 #
-#   block 1  cells W5,W6         reps 3
-#   block 2  cells W7,W8         reps-by-cell W7=5,W8=5 (M1 power fix)
-#   block 3  cells W12,W13,W14   reps 3
+#   block 1  cells randwrite-4k-qd1,randwrite-4k-qd16         reps 3
+#   block 2  cells randwrite-4k-qd64,randwrite-4k-qd128         reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5 (extra reps for statistical power)
+#   block 3  cells seqwrite-1m-qd1,seqwrite-1m-qd8,seqwrite-1m-qd32   reps 3
 #
-# Common flags for every block (exact Step-A protocol):
+# Common flags for every block (exact frozen campaign protocol):
 #   --engines juring,fio,seastar --allow-seastar-write
 #   --rest-scope reps --rest-sec 300 --precond-rest-sec 600
 #   --precondition per-cell --loadavg-max 1.6 --loadavg-action abort --sampler
@@ -25,8 +25,8 @@
 #   requested_s=300, actual_s, start_utc, end_utc.
 #
 # Expected plans (verified by running each block once with --dry-run and parsing
-# its SESSION_PLAN line BEFORE the real block): B1=24, B2=70, B3=36 runs,
-# 130 total. A mismatch, a failed run, or a non-zero block exit aborts the
+# its SESSION_PLAN line BEFORE the real block): block 1 = 24, block 2 = 70,
+# block 3 = 36 runs, 130 total. A mismatch, a failed run, or a non-zero block exit aborts the
 # campaign (no silent continuation).
 #
 # Preflight (real runs only): scripts present/executable, write file present,
@@ -43,8 +43,8 @@
 #
 # Usage:
 #   bench/write/run-write-campaign.sh --dry-run \
-#       --session-dir scratch/stepa-harness/dryrun-session
-#   bench/write/run-write-campaign.sh --session-dir bench/results/stepa-write-<date>
+#       --session-dir scratch/write-campaign-dryrun
+#   bench/write/run-write-campaign.sh --session-dir bench/results/write-campaign-<date>
 #   bench/write/run-write-campaign.sh --resume --session-dir <same dir>
 #
 # Exit status: 0 all blocks ok, 1 a block failed / mismatch / aborted,
@@ -58,7 +58,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/stepa-write-$(date -u +%Y%m%d)}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-campaign-$(date -u +%Y%m%d)}
 CPU=2
 SEED=20261113
 LOADAVG_MAX=1.6
@@ -68,22 +68,22 @@ DRY_RUN=0
 ALLOW_CONCURRENT=0
 
 BLOCK_COUNT=3
-BLOCK_CELLS=("W5,W6" "W7,W8" "W12,W13,W14")
-BLOCK_DESC=("W5,W6 reps=3" "W7,W8 reps-by-cell W7=5,W8=5" "W12,W13,W14 reps=3")
+BLOCK_CELLS=("randwrite-4k-qd1,randwrite-4k-qd16" "randwrite-4k-qd64,randwrite-4k-qd128" "seqwrite-1m-qd1,seqwrite-1m-qd8,seqwrite-1m-qd32")
+BLOCK_DESC=("randwrite-4k-qd1,randwrite-4k-qd16 reps=3" "randwrite-4k-qd64,randwrite-4k-qd128 reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5" "seqwrite-1m-qd1,seqwrite-1m-qd8,seqwrite-1m-qd32 reps=3")
 EXPECTED_BLOCK_RUNS=(24 70 36)
 EXPECTED_TOTAL_RUNS=130
 
 usage() {
     cat <<'EOF'
-run-write-campaign.sh - Step-A M1 write campaign (3 sequential blocks, one session)
+run-write-campaign.sh - write-matrix campaign (3 sequential blocks, one session)
 
 Usage:
   bench/write/run-write-campaign.sh [options]
 
-Blocks (fixed by the frozen Step-A protocol):
-  1. --cells W5,W6        --reps 3
-  2. --cells W7,W8        --reps-by-cell W7=5,W8=5
-  3. --cells W12,W13,W14  --reps 3
+Blocks (fixed by the frozen campaign protocol):
+  1. --cells randwrite-4k-qd1,randwrite-4k-qd16        --reps 3
+  2. --cells randwrite-4k-qd64,randwrite-4k-qd128        --reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5
+  3. --cells seqwrite-1m-qd1,seqwrite-1m-qd8,seqwrite-1m-qd32  --reps 3
 Common: --engines juring,fio,seastar --allow-seastar-write --rest-scope reps
         --rest-sec 300 --precond-rest-sec 600 --precondition per-cell
         --loadavg-max <F> --loadavg-action abort --sampler
@@ -92,12 +92,12 @@ The wrapper also enforces + records a 300 s idle rest between blocks
 
 Options:
   --session-dir DIR      result root shared by all three blocks
-                         (default <repo>/bench/results/stepa-write-<utc-date>)
+                         (default <repo>/bench/results/write-campaign-<utc-date>)
   --write-file PATH      dedicated write dataset
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --cpu N                taskset CPU for every engine (default 2)
   --seed N               PRNG seed (default 20261113)
-  --loadavg-max F        F14 gate passed to every block (default 1.6)
+  --loadavg-max F        background-load gate passed to every block (default 1.6)
   --resume               pass --resume to each block (run-granular resume)
   --allow-concurrent     do not abort when a benchmark process is running
   --dry-run              print the 3-block plan (all block --dry-runs, expected
@@ -158,9 +158,9 @@ build_block_cmd() { # $1 = block number (1..3)
     local block=$1
     BLOCK_CMD=("$SCRIPT_DIR/run-write-cells.sh")
     case "$block" in
-        1) BLOCK_CMD+=(--cells W5,W6 --reps 3) ;;
-        2) BLOCK_CMD+=(--cells W7,W8 --reps-by-cell W7=5,W8=5) ;;
-        3) BLOCK_CMD+=(--cells W12,W13,W14 --reps 3) ;;
+        1) BLOCK_CMD+=(--cells randwrite-4k-qd1,randwrite-4k-qd16 --reps 3) ;;
+        2) BLOCK_CMD+=(--cells randwrite-4k-qd64,randwrite-4k-qd128 --reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5) ;;
+        3) BLOCK_CMD+=(--cells seqwrite-1m-qd1,seqwrite-1m-qd8,seqwrite-1m-qd32 --reps 3) ;;
         *) die "internal error: bad block number '$block'" ;;
     esac
     BLOCK_CMD+=(--engines juring,fio,seastar --allow-seastar-write
@@ -316,7 +316,7 @@ preflight() {
     fi
     la1=$(awk '{print $1}' /proc/loadavg)
     if awk -v a="$la1" -v b="$LOADAVG_MAX" 'BEGIN{exit !(a+0 > b+0)}'; then
-        abort_campaign "loadavg(1m)=$la1 > --loadavg-max=$LOADAVG_MAX (F14)"
+        abort_campaign "loadavg(1m)=$la1 > --loadavg-max=$LOADAVG_MAX (background-load gate)"
     fi
     foreign=""
     foreign+=$(pgrep -x fio 2>/dev/null || true)
@@ -365,7 +365,7 @@ record_between_rest() { # $1 = after_run_seq $2 = requested_s $3 = actual_s $4 =
         "between-blocks" "$1" "$2" "$3" "$4" "$5" >>"$rests"
 }
 
-note "== Step-A M1 write campaign: 3 blocks, one session dir =="
+note "== write-matrix campaign: 3 blocks, one session dir =="
 note "   session dir: $SESSION_DIR"
 note "   write file:  $WF"
 note "   resume=$RESUME; between-block rest=${BETWEEN_REST_SEC}s; expected total runs=$EXPECTED_TOTAL_RUNS"
@@ -431,7 +431,7 @@ for block in $(seq 1 "$BLOCK_COUNT"); do
 
     if (( block < BLOCK_COUNT )); then
         after_seq=$(last_state_seq)
-        note "== between-block rest ${BETWEEN_REST_SEC}s after_run_seq=$after_seq (D3) =="
+        note "== between-block rest ${BETWEEN_REST_SEC}s after_run_seq=$after_seq (between-run rest) =="
         rest_start_utc=$(now_utc)
         t0=$(now_s)
         sleep "$BETWEEN_REST_SEC"

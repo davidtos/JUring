@@ -1,13 +1,13 @@
 /*
- * JUringStreamBench - standalone stream-I/O benchmark for the B2 stream layer.
+ * JUringStreamBench - standalone stream-I/O benchmark for the stream layer.
  *
  * Purpose
  * -------
  * Companion of bench/juring/JUringFileBench.java for the buffered stream layer
  * (`com.davidvlijmincx.lio.api.JuringInputStream` / `JuringOutputStream`), and
- * the JUring side of the B2 W21/W22 comparison against seastar `fstream`
- * (bench/seastar/seastar_stream_bench). Contract: docs/b2-design.md §3.1
- * (frozen CLI + JSON schema). This class does NOT touch JUringFileBench.java.
+ * the JUring side of the buffered-stream comparison against seastar `fstream`
+ * (bench/seastar/seastar_stream_bench). Contract: the frozen stream CLI + JSON schema.
+ * This class does NOT touch JUringFileBench.java.
  *
  * Workloads (one thread; pin externally with `taskset -c 2`):
  *   stream_read  : repeat passes until the phase deadline. Each pass opens a
@@ -22,7 +22,7 @@
  *                  mid-pass at the deadline (chunk boundary; stream is drained
  *                  by close()).
  *
- * Ring / files / buffers (mirrors B1 + design §3):
+ * Ring / files / buffers (mirrors the file benchmark's ring setup):
  *   - one JUring per run: entries = max(256, 2*qd),
  *     flags SINGLE_ISSUER|COOP_TASKRUN|DEFER_TASKRUN, one owner thread;
  *   - JuringFile.withInFlightCapacity(max(64, 2*qd + 8));
@@ -39,7 +39,7 @@
  * JUringFileBench: bounded uniform reservoir (Algorithm R), percentiles from
  * the sorted reservoir, exact mean from a running sum. The default cap is
  * 1,000,000 samples per run (JSON `config.latency_samples_cap`; not a CLI flag
- * because §3.1's CLI is frozen).
+ * because the stream CLI is frozen).
  *
  * Output: exactly ONE JSON object on stdout (schema_version "1.0", engine
  * "juring", engine_detail "JUringStreamBench"); diagnostics on stderr;
@@ -48,7 +48,7 @@
  *
  * Build/run: bench/juring/run-juring-stream.sh (compiles against target/classes).
  *
- * B6 durability extension (docs/b6-design.md §6.1; additive, schema stays "1.0")
+ * Durability extension (additive, schema stays "1.0")
  * ------------------------------------------------------------------------------
  *   --durability writeback|fdatasync|fsync|dsync  (default writeback = historical arm)
  *       writeback -> OutputStreamOptions.durability()==WRITEBACK, syncOnClose=false
@@ -111,7 +111,7 @@ public final class JUringStreamBench {
     static final String ENGINE = "juring";
     static final String ENGINE_DETAIL = "JUringStreamBench";
 
-    /** io_uring setup flags used for the ring (§3.1). */
+    /** io_uring setup flags used for the ring (the frozen stream contract). */
     static final IoUringOptions[] RING_FLAGS = {
             IORING_SETUP_SINGLE_ISSUER,
             IORING_SETUP_COOP_TASKRUN,
@@ -123,16 +123,16 @@ public final class JUringStreamBench {
             "IORING_SETUP_DEFER_TASKRUN"
     };
 
-    /** Stream buffer/write alignment (design §1.5 / §4.4). */
+    /** Stream buffer/write alignment. */
     static final int ALIGNMENT = 4096;
 
-    /** Uniform reservoir cap per run; not a CLI flag (frozen §3.1 CLI). */
+    /** Uniform reservoir cap per run; not a CLI flag (frozen stream CLI). */
     static final int LATENCY_SAMPLES = 1_000_000;
 
     /**
-     * B6: separate uniform reservoir for durability-point (flush/close) call
-     * durations, so sync latency is not mixed with the per-chunk reservoir
-     * (docs/b6-design.md §6.1). A 15 s W24 window holds at most a few thousand
+     * Durability: separate uniform reservoir for durability-point (flush/close) call
+     * durations, so sync latency is not mixed with the per-chunk reservoir. A 15 s
+     * measured window holds at most a few thousand
      * durability points; 100k samples is a bounded, allocation-cheap cap.
      */
     static final int SYNC_LATENCY_SAMPLES = 100_000;
@@ -200,7 +200,7 @@ public final class JUringStreamBench {
     }
 
     // ------------------------------------------------------------------
-    // CLI (frozen §3.1)
+    // CLI (frozen stream contract)
     // ------------------------------------------------------------------
 
     enum Workload {
@@ -257,7 +257,7 @@ public final class JUringStreamBench {
         String label = null;
         long seed = 20261113L;             // deterministic dataset fill by default
 
-        // B6 durability (docs/b6-design.md §6.1); defaults = historical behaviour.
+        // Durability defaults = historical behaviour.
         DurabilityMode durability = DurabilityMode.WRITEBACK;
         long syncEvery = 0;                // bytes; 0 = pass end only
         FadviseAdvice fadvise = FadviseAdvice.NORMAL;
@@ -508,7 +508,7 @@ public final class JUringStreamBench {
             if (size > 0 && size < bs) {
                 throw new UsageException("--size must be >= --bs");
             }
-            // B6 durability (docs/b6-design.md §6.1).
+            // Durability.
             if (workload.isRead()) {
                 if (durability != DurabilityMode.WRITEBACK) {
                     throw new UsageException("--durability only applies to stream_write");
@@ -561,7 +561,7 @@ public final class JUringStreamBench {
 
     static String usage() {
         return String.join("\n",
-                "JUringStreamBench - JUring B2 stream benchmark (JuringInputStream/JuringOutputStream)",
+                "JUringStreamBench - JUring stream benchmark (JuringInputStream/JuringOutputStream)",
                 "",
                 "Usage:",
                 "  java --enable-native-access=ALL-UNNAMED -cp target/classes:bench/juring/out \\",
@@ -767,8 +767,8 @@ public final class JUringStreamBench {
 
     static JuringFile openFile(JUring ring, Config cfg, Dataset ds) throws JuringException {
         if (cfg.workload.isWrite()) {
-            // B6 dsync arm: the stream's DSYNC mode is a contract assertion, so the
-            // file must be opened with O_DSYNC (docs/b6-design.md §6.1/§2.2).
+            // dsync arm: the stream's DSYNC mode is a contract assertion, so the
+            // file must be opened with O_DSYNC.
             boolean dsync = cfg.durability == DurabilityMode.DSYNC;
             if (cfg.buffered) {
                 return dsync
@@ -808,7 +808,7 @@ public final class JUringStreamBench {
         long unmeasuredOps;          // warmup: chunks executed (diagnostics only)
         double elapsedSec;
         LatencyStats lat = LatencyStats.empty();
-        // B6 durability counters (measured phase only; docs/b6-design.md §6.1).
+        // Durability counters (measured phase only).
         long durabilityPoints;
         long syncsIssued;
         long syncsCompleted;
@@ -893,10 +893,9 @@ public final class JUringStreamBench {
                         if (t1 >= deadline) {
                             break phaseLoop;           // stop mid-pass; close() flushes+drains
                         }
-                        // B6 durability point every S bytes (write only; S is a multiple
+                        // Durability point every S bytes (write only; S is a multiple
                         // of --bs and 4096, so the position stays alignment-aligned):
-                        // flush() drains, and for fdatasync/fsync issues exactly one sync
-                        // (docs/b6-design.md §3.1/§6.1).
+                        // flush() drains, and for fdatasync/fsync issues exactly one sync.
                         if (cfg.syncEvery > 0 && bytesSincePoint >= cfg.syncEvery) {
                             long s0 = System.nanoTime();
                             long before = out.syncs();
@@ -919,7 +918,7 @@ public final class JUringStreamBench {
                 } finally {
                     // Pass-end durability point: close() performs the single flush, i.e.
                     // one sync for fdatasync/fsync and a drain only for writeback/dsync
-                    // (docs/b6-design.md §3.1; frozen B2 close semantics unchanged).
+                    // (frozen stream close semantics unchanged).
                     long s0 = System.nanoTime();
                     long before = out.syncs();
                     out.close();
@@ -1074,7 +1073,7 @@ public final class JUringStreamBench {
         final double iops;
         final double mibs;
         final LatencyStats lat;
-        // B6 durability (docs/b6-design.md §6.1).
+        // Durability.
         final long durabilityPoints;
         final long syncsIssued;
         final long syncsCompleted;
@@ -1103,7 +1102,7 @@ public final class JUringStreamBench {
             this.syncLat = phase.syncLat;
         }
 
-        /** Σ durability-point call time / measured elapsed (docs/b6-design.md §6.1). */
+        /** Σ durability-point call time / measured elapsed. */
         double syncWaitShare() {
             double elapsedNs = seconds * 1_000_000_000.0;
             return elapsedNs > 0 ? syncWaitNs / elapsedNs : 0.0;
@@ -1364,7 +1363,7 @@ public final class JUringStreamBench {
     }
 
     // ------------------------------------------------------------------
-    // JSON report (frozen §3.1 shape)
+    // JSON report (frozen stream schema)
     // ------------------------------------------------------------------
 
     static final class Report {
@@ -1375,8 +1374,8 @@ public final class JUringStreamBench {
             w.name("schema_version").str(SCHEMA_VERSION);
             w.name("engine").str(ENGINE);
             w.name("engine_detail").str(ENGINE_DETAIL);
-            // B6 additive marker: schema_version stays "1.0" (frozen B2 §3.1);
-            // consumers must ignore unknown keys (docs/b6-design.md §6.1/§6.5).
+            // Additive durability marker: schema_version stays "1.0";
+            // consumers must ignore unknown keys.
             w.name("schema_extensions").arr();
             w.str("b6-durability-1");
             w.endArr();
@@ -1468,7 +1467,7 @@ public final class JUringStreamBench {
             w.name("file_register_error").str(c.resolvedRegisterError);
             w.name("latency_samples_cap").num(LATENCY_SAMPLES);
             w.name("in_flight_capacity").num(Math.max(64, 2 * c.qd + 8));
-            // B6 durability config (additive; docs/b6-design.md §6.1).
+            // Durability config (additive).
             w.name("durability").str(c.durabilityCliName());
             w.name("sync_every_bytes").num(c.syncEvery);
             w.name("fadvise").str(c.fadviseCliName());
@@ -1489,7 +1488,7 @@ public final class JUringStreamBench {
             w.endObj();
         }
 
-        /** B6 sync-latency block: exactly samples/avg/p50/p90/p99/max (§6.1). */
+        /** Sync-latency block: exactly samples/avg/p50/p90/p99/max. */
         static void renderSyncLatency(Jw w, LatencyStats s) {
             w.obj();
             w.name("samples").num(s.samples);
@@ -1513,7 +1512,7 @@ public final class JUringStreamBench {
             w.name("mibs").num(r.mibs);
             w.name("latency_us");
             renderLatency(w, r.lat);
-            // B6 additive durability fields (docs/b6-design.md §6.1).
+            // Additive durability fields.
             w.name("durability_mode").str(cfg != null ? cfg.durabilityCliName() : null);
             w.name("sync_every_bytes").num(cfg != null ? cfg.syncEvery : 0);
             w.name("durability_points").num(r.durabilityPoints);
@@ -1604,7 +1603,7 @@ public final class JUringStreamBench {
             w.name("p999").num(mean(p999));
             w.name("max").num(maxOf(max));
             w.endObj();
-            // B6 additive durability totals (docs/b6-design.md §6.1/§6.5).
+            // Additive durability totals.
             w.name("durability_points_total").num(durabilityPointsTotal);
             w.name("syncs_issued_total").num(syncsIssuedTotal);
             w.name("syncs_completed_total").num(syncsCompletedTotal);

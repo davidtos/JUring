@@ -13,7 +13,7 @@ in BENCHMARK.md:
 
 * :func:`mean`, :func:`sd`, :func:`ci95`, :func:`one_sided_lower`,
   :func:`cv_pct` use summed moments and frozen t-critical tables (the
-  ``analyze_stream`` family and the shard/stepd analyzers);
+  ``analyze_stream`` family and the shard/host-setup analyzers);
 * :func:`describe`, :func:`ratio_stats` use :mod:`statistics` and an exact
   inverse Student-t CDF (:mod:`analyze_read_write`).
 

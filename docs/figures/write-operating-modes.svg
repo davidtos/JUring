@@ -19,7 +19,7 @@
 <line x1="80.0" y1="140.0" x2="520.0" y2="140.0" stroke="#d0d7de" stroke-width="1"/>
 <text x="70.0" y="144.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">500k</text>
 <line x1="80.0" y1="570.0" x2="520.0" y2="570.0" stroke="#1f2328" stroke-width="1.2"/>
-<text x="300.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 64 (W7)</text>
+<text x="300.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write, 64 in flight</text>
 <text x="122.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:23</text>
 <text x="211.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:39</text>
 <text x="300.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:56</text>
@@ -66,7 +66,7 @@
 <line x1="570.0" y1="140.0" x2="1010.0" y2="140.0" stroke="#d0d7de" stroke-width="1"/>
 <text x="560.0" y="144.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="10" fill="#57606a" text-anchor="end">500k</text>
 <line x1="570.0" y1="570.0" x2="1010.0" y2="570.0" stroke="#1f2328" stroke-width="1.2"/>
-<text x="790.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">QD 128 (W8)</text>
+<text x="790.0" y="112.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="14" fill="#1f2328" text-anchor="middle" font-weight="bold">4 KiB random write, 128 in flight</text>
 <text x="612.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:31</text>
 <text x="701.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">22:47</text>
 <text x="790.0" y="588.0" font-family="DejaVu Sans, Helvetica, Arial, sans-serif" font-size="11" fill="#57606a" text-anchor="middle">23:04</text>

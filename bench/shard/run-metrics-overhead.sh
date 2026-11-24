@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 #
-# run-metrics-overhead.sh -- B5 observability overhead A/B session driver
-# (docs/b5-design.md §7.1; SEASTAR-PLAN.md §4 B5 "< 1 % throughput cost").
+# run-metrics-overhead.sh -- observability (metrics) overhead A/B session driver
+# (protocol frozen before the session; primary bar: "< 1 % throughput cost").
 #
-# Arms (same host/JDK/flags/dataset/protocol, fresh JVM+process per invocation):
-#   b4 = commit 6cc1a75, built in a scratch worktree via `git archive` + offline
-#        maven (`mvn -o -q -DskipTests compile`) and its own javac bench build.
+# Arms (same host/JDK/flags/dataset/protocol, fresh JVM+process per invocation;
+# the b4/b5 arm tokens name the cell files and the `arm` column):
+#   b4 = baseline: commit 6cc1a75, built in a scratch worktree via `git archive` +
+#        offline maven (`mvn -o -q -DskipTests compile`) and its own javac bench build.
 #        The workspace is NEVER edited for the baseline arm.
-#   b5 = the current (frozen) workspace tree with B5 metrics ON: per-ring
+#   b5 = metrics-on: the current (frozen) workspace tree with per-ring metrics ON:
 #        ring_metrics, 1 Hz ring_series during the measured phase, and the shard
 #        runtime's library dispatch-latency sampling (withLatencySampleEvery(1)).
 #
@@ -17,7 +18,7 @@
 # warmup 10 s + measured 30 s, R=5 reps, 30 s rest between invocations, arms
 # interleaved with the arm order alternating per rep, every rep kept.
 #
-# Metric (frozen): paired per-rep ratio throughput(B5)/throughput(B4) for the same
+# Metric (frozen): paired per-rep ratio throughput(metrics-on)/throughput(baseline) for the same
 # cell/rep/position. Primary bar: mean paired ratio >= 0.99 (i.e. < 1 % cost) in
 # EVERY cell. PASS also requires no individual rep below 0.95 unless it is
 # state-gated and disclosed. The analyzer reports per-rep ratios, stdev, the
@@ -26,17 +27,17 @@
 # State gate (docs/benchmark-methodology.md; disclosed, not trimmed):
 #   - fast-state p99 < 600 us for this 4K randread QD64 protocol;
 #   - IOPS anomaly rule: a rep < 0.92 x the maximum IOPS of its own (cell, arm);
-#   - F14 background gate: no Maven, no other benchmark harness, no foreign
+#   - background-load gate: no Maven, no other benchmark harness, no foreign
 #     process > 20 % CPU, loadavg(1m) <= 0.5 (own decaying residual is recorded
 #     as own-residual(la1=...) and is not foreign interference).
-#   A pair whose B4 or B5 invocation is slow-state is disclosed as state-gated:
+#   A pair whose baseline or metrics-on invocation is slow-state is disclosed as state-gated:
 #   it is still reported and still enters the mean, but a sub-0.95 ratio there
 #   is not counted as an undisclosed regression (the report says so explicitly).
 #
 # IMPORTANT: this session must run ALONE on the machine. The driver refuses to
 # start while Maven or another benchmark harness is running. The baseline arm is
 # built by `--prep-only` BEFORE the session (that is the only Maven invocation);
-# the session itself only javac-compiles the B5 harness once against the Lead's
+# the session itself only javac-compiles the metrics-on harness once against the Lead's
 # frozen target/classes (no `mvn`) and then runs every cell with
 # JURING_SKIP_COMPILE=1 / a direct java launcher.
 #
@@ -48,7 +49,7 @@
 #   aggregate/overhead.{json,md}          written by bench/shard/analyze_metrics_overhead.py
 #
 # Usage:
-#   # 0) build the baseline scratch tree (Maven, offline) + the B5 harness; before the session
+#   # 0) build the baseline scratch tree (Maven, offline) + the metrics-on harness; before the session
 #   bench/shard/run-metrics-overhead.sh --prep-only
 #   # 1) plan only (no files, no I/O): preflight + exact commands + estimated wall
 #   bench/shard/run-metrics-overhead.sh --dry-run
@@ -214,12 +215,12 @@ cell_runtime() {
 
 arm_label() {
     case $1 in
-        b4) echo "B4 baseline (commit $BASELINE_COMMIT, no B5 metrics)" ;;
-        b5) echo "B5 frozen tree, metrics on" ;;
+        b4) echo "baseline arm b4 (commit $BASELINE_COMMIT, no metrics)" ;;
+        b5) echo "metrics-on arm b5 (frozen tree, metrics on)" ;;
     esac
 }
 
-# arm order alternates per rep so slow drift is common-mode (methodology D6).
+# arm order alternates per rep so slow drift is common-mode (the rotated order).
 arm_order() {
     local rep=$1
     if (( rep % 2 == 1 )); then
@@ -371,7 +372,7 @@ run_row() {
     env_snapshot "$ENVF" "before"
     gate0=$(gate_state)
     if [[ $gate0 != ok && $gate0 != own-residual* ]]; then
-        echo "warn: F14 gate violation before $id: $gate0 (recorded, still run; not trimmed)" >&2
+        echo "warn: background-load gate violation before $id: $gate0 (recorded, still run; not trimmed)" >&2
     fi
 
     cmd_str="taskset -c $cpus $(argv_str "${ARGV[@]}")"
@@ -410,7 +411,7 @@ run_row() {
                 status=fail
             fi
         fi
-        # Arm identity: baseline must be schema 1.0 with metrics off; B5 must be 1.1 metrics on.
+        # Arm identity: baseline must be schema 1.0 with metrics off; metrics-on must be 1.1 metrics on.
         if [[ $arm == b4 ]]; then
             if [[ $schema != "1.0" ]]; then
                 echo "warn: cell $id expected baseline schema 1.0, JSON says $schema" >&2
@@ -418,12 +419,12 @@ run_row() {
             fi
         else
             if [[ $schema != "1.1" || $metrics_on != "on" ]]; then
-                echo "warn: cell $id expected B5 schema 1.1 metrics on, JSON says schema=$schema metrics=$metrics_on" >&2
+                echo "warn: cell $id expected metrics-on schema 1.1 metrics on, JSON says schema=$schema metrics=$metrics_on" >&2
                 status=fail
             fi
         fi
     fi
-    # 4K randread QD64 fast-state threshold (methodology §5 / M1 calibration).
+    # 4K randread QD64 fast-state threshold (the read-matrix calibration).
     p99_state=unknown
     if [[ $p99 != "-1" ]]; then
         if awk -v x="$p99" 'BEGIN{exit !(x < 600.0)}'; then
@@ -466,34 +467,34 @@ build_baseline() {
         return 1
     fi
     archive_sha=$(git -C "$REPO_ROOT" archive "$BASELINE_COMMIT" | sha1sum | cut -d' ' -f1)
-    echo "[b5-overhead] building BASELINE arm: commit $BASELINE_COMMIT (archive sha1=$archive_sha)"
-    echo "[b5-overhead]   scratch tree: $BASELINE_DIR (workspace is never edited for the baseline)"
+    echo "[metrics-overhead] building BASELINE arm: commit $BASELINE_COMMIT (archive sha1=$archive_sha)"
+    echo "[metrics-overhead]   scratch tree: $BASELINE_DIR (workspace is never edited for the baseline)"
     rm -rf "$BASELINE_DIR"
     mkdir -p "$BASELINE_DIR"
     git -C "$REPO_ROOT" archive "$BASELINE_COMMIT" | tar -x -C "$BASELINE_DIR"
     echo "$archive_sha" >"$BASELINE_DIR/ARCHIVE_SHA1"
-    echo "[b5-overhead]   mvn -o -q -DskipTests compile (offline; before the session)"
+    echo "[metrics-overhead]   mvn -o -q -DskipTests compile (offline; before the session)"
     ( cd "$BASELINE_DIR" && mvn -o -q -DskipTests compile ) || {
         echo "error: baseline maven compile failed" >&2
         return 1
     }
     mkdir -p "$BASELINE_DIR/bench/juring/out"
-    echo "[b5-overhead]   javac baseline bench (its own build)"
+    echo "[metrics-overhead]   javac baseline bench (its own build)"
     "$JAVAC_BIN" -cp "$BASELINE_DIR/target/classes" -d "$BASELINE_DIR/bench/juring/out" \
         --release "$JAVAC_RELEASE" "$BASELINE_DIR/bench/juring/JUringFileBench.java" || {
         echo "error: baseline javac build failed" >&2
         return 1
     }
-    echo "[b5-overhead] baseline arm identity: $(baseline_identity)"
+    echo "[metrics-overhead] baseline arm identity: $(baseline_identity)"
 }
 
 build_b5_harness() {
-    echo "[b5-overhead] javac-only B5 harness build against the Lead's target/classes (no Maven)"
-    JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null 2>"$LOGS_DIR/compile-b5.log" || {
-        echo "error: B5 harness javac compile failed; see $LOGS_DIR/compile-b5.log" >&2
+    echo "[metrics-overhead] javac-only metrics-on harness build against the Lead's target/classes (no Maven)"
+    JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null 2>"$LOGS_DIR/compile-metrics.log" || {
+        echo "error: metrics-on harness javac compile failed; see $LOGS_DIR/compile-metrics.log" >&2
         return 1
     }
-    echo "[b5-overhead] B5 harness: $(sha256sum bench/juring/JUringFileBench.java | cut -d' ' -f1) $(stat -c '%y' bench/juring/out 2>/dev/null || true)"
+    echo "[metrics-overhead] metrics-on harness: $(sha256sum bench/juring/JUringFileBench.java | cut -d' ' -f1) $(stat -c '%y' bench/juring/out 2>/dev/null || true)"
 }
 
 # ---------------------------------------------------------------------------
@@ -531,8 +532,8 @@ preflight() {
     classes=(RingMetrics LatencySnapshot ShardMetrics IoShard RingGroup JUring ShardOptions)
     for c in "${classes[@]}"; do
         check $([[ -f target/classes/com/davidvlijmincx/lio/api/$c.class ]] && echo 1 || echo 0) \
-            "B5 API class present in target/classes: $c" \
-            "target/classes missing $c -- the Lead must build the frozen B5 tree before the session"
+            "metrics API class present in target/classes: $c" \
+            "target/classes missing $c -- the Lead must build the frozen metrics tree before the session"
     done
 
     check $([[ $(baseline_identity) != missing ]] && echo 1 || echo 0) \
@@ -555,11 +556,11 @@ preflight() {
     elif [[ ${ALLOW_RESIDUAL_LOAD:-0} == 1 ]]; then
         printf 'preflight: NOTE  1-min loadavg %s > 0.5 (ALLOW_RESIDUAL_LOAD=1: our own residual)\n' "$(load1)"
     else
-        printf 'preflight: FAIL  1-min loadavg %s > 0.5 (F14 gate)\n' "$(load1)"
+        printf 'preflight: FAIL  1-min loadavg %s > 0.5 (background-load gate)\n' "$(load1)"
         fail=1
     fi
 
-    # frozen-tree identity (G3/G4 gate): the official session must run on the tree the
+    # frozen-tree identity: the official session must run on the tree the
     # Lead froze. A dry-run / prep may proceed with a note; a real session requires it
     # unless --allow-unfrozen.
     if [[ -z $FROZEN_SRC_SHA1 ]]; then
@@ -609,10 +610,10 @@ write_manifest() {
     build_state=$(stat -c '%y %n' target/classes 2>/dev/null || echo 'target/classes MISSING')
     baseline_ident=$(baseline_identity)
     {
-        echo "# B5 observability overhead A/B session manifest (docs/b5-design.md §7.1)"
+        echo "# Observability overhead A/B session manifest (protocol frozen)"
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
-        echo "# M3 is NOT signed off by this session: it only proves the B5 metrics overhead bar."
+        echo "# The multi-shard scaling campaign is NOT signed off by this session: it only proves the metrics-overhead bar."
         echo
         echo "## Host / kernel"
         uname -a
@@ -645,18 +646,18 @@ write_manifest() {
         echo "runs under taskset (util-linux): $(taskset --version 2>&1)"
         echo
         echo "## Arms"
-        echo "B4 arm : commit $BASELINE_COMMIT (git archive scratch tree; no B5 metrics; schema 1.0)"
+        echo "baseline arm (b4) : commit $BASELINE_COMMIT (git archive scratch tree; no metrics; schema 1.0)"
         echo "         scratch tree: $BASELINE_DIR"
         echo "         identity: $baseline_ident"
         echo "         build: mvn -o -q -DskipTests compile + javac (done by --prep-only BEFORE this session)"
         echo "         source sha256 of archived bench: $(sha256sum "$BASELINE_DIR/bench/juring/JUringFileBench.java" 2>/dev/null | cut -d' ' -f1 || echo '?')"
-        echo "B5 arm : frozen workspace tree with metrics ON (schema 1.1)"
+        echo "metrics-on arm (b5): frozen workspace tree with metrics ON (schema 1.1)"
         echo "         live HEAD: $(head_commit)"
         echo "         src/main/java content sha1: $(src_main_sha1)"
         echo "         src/test/java content sha1: $(src_test_sha1)"
         echo "         frozen expected: HEAD=${FROZEN_HEAD:-<unset>} src=${FROZEN_SRC_SHA1:-<unset>} test=${FROZEN_TEST_SHA1:-<unset>}"
         echo "         target/classes state: $build_state"
-        echo "         B5 harness sha256: $(sha256sum bench/juring/JUringFileBench.java | cut -d' ' -f1)"
+        echo "         metrics-on harness sha256: $(sha256sum bench/juring/JUringFileBench.java | cut -d' ' -f1)"
         echo "git status (porcelain):"
         git -C "$REPO_ROOT" status --porcelain 2>/dev/null | head -40 || true
         echo
@@ -664,15 +665,15 @@ write_manifest() {
         sha256sum "$JURING_RUN" "$REPO_ROOT/bench/juring/JUringFileBench.java" \
             "$HERE/run-metrics-overhead.sh" "$ANALYZER" 2>/dev/null || true
         echo
-        echo "## F14 machine gate at start"
+        echo "## Background-load machine gate at start"
         echo "ALLOW_RESIDUAL_LOAD=${ALLOW_RESIDUAL_LOAD:-0} (1 = start allowed with a decaying"
         echo "own/verifier loadavg residual and no foreign process; residual recorded per cell)"
         echo "loadavg at manifest time: $(loadavg)"
-        echo "The driver NEVER invokes Maven: baseline was built by --prep-only, the B5 harness is"
+        echo "The driver NEVER invokes Maven: baseline was built by --prep-only, the metrics-on harness is"
         echo "javac-only against the Lead's frozen target/classes, then every cell runs with"
-        echo "JURING_SKIP_COMPILE=1 (B5) or a direct java launcher (baseline)."
+        echo "JURING_SKIP_COMPILE=1 (metrics-on) or a direct java launcher (baseline)."
         echo
-        echo "## Protocol (docs/b5-design.md §7.1)"
+        echo "## Protocol (frozen before the session)"
         echo "cells: shard N=1, shard N=8, threads N=1 (juring-group / juring-manual runtimes)"
         echo "protocol: workload=randread bs=$BS qd=$QD/worker warmup=${WARMUP}s measured=${DURATION}s"
         echo "          reps=$REPS rest=${REST}s between invocations, seed=$SEED"
@@ -681,29 +682,29 @@ write_manifest() {
         echo "          fresh process/JVM per invocation; every rep kept, no trimming"
         echo "arms: b4=baseline commit $BASELINE_COMMIT (metrics off / schema 1.0);"
         echo "      b5=frozen tree, metrics on, ring_series 1.0 s, ShardOptions.withLatencySampleEvery(1)"
-        echo "metric: paired per-rep ratio throughput(B5)/throughput(B4) per cell/rep/position;"
+        echo "metric: paired per-rep ratio throughput(metrics-on)/throughput(baseline) per cell/rep/position;"
         echo "        primary bar mean ratio >= 0.99 in EVERY cell; no individual rep < 0.95"
         echo "        unless state-gated and disclosed. Report: per-rep ratios, stdev, one-sided"
         echo "        95 % t CI (df=n-1); PASS/FAIL from bench/shard/analyze_metrics_overhead.py."
         echo "state gate: fast-state p99 < 600 us (4K randread QD64 protocol) + IOPS anomaly rule"
-        echo "            (rep < 0.92 x max IOPS of its cell/arm) + F14 background gate; disclosed,"
+        echo "            (rep < 0.92 x max IOPS of its cell/arm) + background-load gate; disclosed,"
         echo "            reps never trimmed."
         echo "jvm: identical flags for both arms: $JVM_OPTS (fresh JVM per invocation)"
         echo
         echo "## Exact per-cell command templates"
-        echo "b4 shard  : taskset -c <1..N> env JURING_GIT_COMMIT=$BASELINE_COMMIT JURING_GIT_DIRTY=false \\"
+        echo "baseline (b4) shard  : taskset -c <1..N> env JURING_GIT_COMMIT=$BASELINE_COMMIT JURING_GIT_DIRTY=false \\"
         echo "             $JAVA_BIN --enable-native-access=ALL-UNNAMED $JVM_OPTS \\"
         echo "             -cp $BASELINE_DIR/target/classes:$BASELINE_DIR/bench/juring/out \\"
         echo "             bench.juring.JUringFileBench --workload randread --file $READ_FILE --size <bytes> \\"
         echo "             --bs $BS --qd $QD --runtime shard --shards N --first-cpu $CPU_FIRST --seconds $DURATION \\"
         echo "             --warmup-sec $WARMUP --runs 1 --seed $SEED --label <id> --readonly --json <cells/id.json>"
-        echo "b4 threads: same with --runtime threads --threads 1"
-        echo "b5 shard  : taskset -c <1..N> env JURING_SKIP_COMPILE=1 JURING_JAVA_OPTS='$JVM_OPTS -Xlog:gc:file=<log>' \\"
+        echo "baseline (b4) threads: same with --runtime threads --threads 1"
+        echo "metrics-on (b5) shard  : taskset -c <1..N> env JURING_SKIP_COMPILE=1 JURING_JAVA_OPTS='$JVM_OPTS -Xlog:gc:file=<log>' \\"
         echo "             bash bench/juring/run-juring.sh --workload randread --file $READ_FILE --size <bytes> \\"
         echo "             --bs $BS --qd $QD --runtime=shard --shards N --first-cpu $CPU_FIRST --seconds $DURATION \\"
         echo "             --warmup-sec $WARMUP --runs 1 --seed $SEED --label <id> --readonly --json <cells/id.json> \\"
         echo "             --metrics on --metrics-interval 1.0"
-        echo "b5 threads: same with --runtime=threads --threads 1"
+        echo "metrics-on (b5) threads: same with --runtime=threads --threads 1"
         echo
         echo "started: $(now_utc)"
     } >"$MANIFEST"
@@ -772,7 +773,7 @@ archive_incomplete() {
     done
     drop_meta_rows "$id"
     if (( moved )); then
-        echo "[b5-overhead] resume: archived incomplete artifacts of $id -> $dest (ts=$ts)" |
+        echo "[metrics-overhead] resume: archived incomplete artifacts of $id -> $dest (ts=$ts)" |
             tee -a "$RESULTS/resume.log"
     fi
 }
@@ -784,7 +785,7 @@ print_plan() {
     local cell rep arm rows=0 total invocations
     total=$(( $(wc -w <<<"$CELLS") * REPS * 2 ))
     echo
-    echo "=============== B5 OBSERVABILITY OVERHEAD A/B PLAN (--dry-run; nothing executed) ==============="
+    echo "=============== OBSERVABILITY OVERHEAD A/B PLAN (--dry-run; nothing executed) ==============="
     echo "session dir : $RESULTS"
     echo "cells dir   : $CELLS_DIR"
     echo "aggregate   : $AGG_DIR/overhead.json, $AGG_DIR/overhead.md"
@@ -793,7 +794,7 @@ print_plan() {
     echo "protocol    : R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s seed=$SEED"
     echo "read file   : $READ_FILE ($(dataset_size) B, read-only)"
     echo "JVM flags   : $JVM_OPTS (identical for both arms; fresh JVM/process per invocation)"
-    echo "state gate  : fast p99 < 600 us + IOPS anomaly rep < 0.92 x max (cell,arm) + F14; disclosed"
+    echo "state gate  : fast p99 < 600 us + IOPS anomaly rep < 0.92 x max (cell,arm) + background-load gate; disclosed"
     echo "frozen tree : HEAD=${FROZEN_HEAD:-<unset>} src=${FROZEN_SRC_SHA1:-<unset>} test=${FROZEN_TEST_SHA1:-<unset>}"
     echo "baseline    : $(baseline_identity)  ($BASELINE_DIR)"
     echo
@@ -823,17 +824,17 @@ print_plan() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-echo "[b5-overhead] B5 observability overhead A/B (docs/b5-design.md §7.1; M3 NOT signed off)"
-echo "[b5-overhead] session=$SESSION reps=$REPS cells='$CELLS' baseline=$BASELINE_COMMIT"
+echo "[metrics-overhead] observability overhead A/B (protocol frozen; multi-shard scaling campaign NOT signed off)"
+echo "[metrics-overhead] session=$SESSION reps=$REPS cells='$CELLS' baseline=$BASELINE_COMMIT"
 
 if (( PREP_ONLY == 1 || PREP_BASELINE == 1 )); then
     mkdir -p "$LOGS_DIR" "$AGG_DIR"
     build_baseline || exit 1
     if (( PREP_ONLY == 1 )); then
         build_b5_harness || exit 1
-        echo "[b5-overhead] prep done; baseline and B5 harness are built (run '--dry-run' next)"
+        echo "[metrics-overhead] prep done; baseline and metrics-on harness are built (run '--dry-run' next)"
     else
-        echo "[b5-overhead] baseline prep done; the B5 harness is built at session start"
+        echo "[metrics-overhead] baseline prep done; the metrics-on harness is built at session start"
     fi
     exit 0
 fi
@@ -849,14 +850,14 @@ if (( RESUME == 1 )); then
         echo "error: --resume needs an existing session with cell-meta.tsv: $META" >&2
         exit 1
     fi
-    echo "[b5-overhead] resume mode: continuing session $SESSION (keeps complete invocations)"
+    echo "[metrics-overhead] resume mode: continuing session $SESSION (keeps complete invocations)"
 elif [[ -d $CELLS_DIR ]] && compgen -G "$CELLS_DIR/*.json" >/dev/null; then
     if (( FORCE != 1 )); then
         echo "error: session '$SESSION' already contains cell JSONs under $CELLS_DIR" >&2
         echo "       start a new session with --session NAME, or pass --force to append." >&2
         exit 1
     fi
-    echo "[b5-overhead] warning: --force given; appending to existing session $SESSION" >&2
+    echo "[metrics-overhead] warning: --force given; appending to existing session $SESSION" >&2
 fi
 
 preflight 1 || {
@@ -869,8 +870,8 @@ write_manifest
 init_meta
 
 build_b5_harness || exit 1
-echo "[b5-overhead] manifest: $MANIFEST"
-echo "[b5-overhead] started: $(now_utc) loadavg=$(loadavg)"
+echo "[metrics-overhead] manifest: $MANIFEST"
+echo "[metrics-overhead] started: $(now_utc) loadavg=$(loadavg)"
 
 FAILS=0
 ROWS_DONE=0
@@ -885,14 +886,14 @@ if (( RESUME == 1 )); then
                 st=$(meta_status "$id")
                 if [[ $st == ok || $st == gate ]] && cell_json_complete "$arm" "$cell" "$rep"; then
                     SKIPPED=$((SKIPPED + 1))
-                    echo "[b5-overhead] resume: keep $id (status=$st)"
+                    echo "[metrics-overhead] resume: keep $id (status=$st)"
                 else
                     archive_incomplete "$cell" "$arm" "$rep"
                 fi
             done
         done
     done
-    echo "[b5-overhead] resume: $SKIPPED complete invocation(s) kept"
+    echo "[metrics-overhead] resume: $SKIPPED complete invocation(s) kept"
 fi
 
 N_TOTAL=$(wc -w <<<"$CELLS")
@@ -909,7 +910,7 @@ for cell in $CELLS; do
                 fi
             fi
             if (( ROWS_DONE > 0 )); then
-                echo "[b5-overhead] rest ${REST}s before $id (loadavg=$(loadavg))"
+                echo "[metrics-overhead] rest ${REST}s before $id (loadavg=$(loadavg))"
                 sleep "$REST"
             fi
             run_row "$cell" "$arm" "$rep" || FAILS=$((FAILS + 1))
@@ -920,16 +921,16 @@ done
 
 EXPECTED=$(( N_TOTAL * REPS * 2 ))
 ACTUAL=$(( $(wc -l <"$META") - 1 ))
-echo "[b5-overhead] session done: $(now_utc) ran=$ROWS_DONE skipped_resume=$SKIPPED failed/flagged=$FAILS"
-echo "[b5-overhead] cell-meta rows: $ACTUAL / $EXPECTED expected (all reps kept, none trimmed)"
+echo "[metrics-overhead] session done: $(now_utc) ran=$ROWS_DONE skipped_resume=$SKIPPED failed/flagged=$FAILS"
+echo "[metrics-overhead] cell-meta rows: $ACTUAL / $EXPECTED expected (all reps kept, none trimmed)"
 if (( ACTUAL != EXPECTED )); then
     echo "warn: cell-meta row count mismatch -- expected one row per invocation" >&2
     FAILS=$((FAILS + 1))
 fi
-echo "[b5-overhead] cell-meta: $META"
+echo "[metrics-overhead] cell-meta: $META"
 
 if [[ -f $ANALYZER ]]; then
-    echo "[b5-overhead] analyzing: $ANALYZER --session $SESSION"
+    echo "[metrics-overhead] analyzing: $ANALYZER --session $SESSION"
     rc_a=0
     if ! python3 "$ANALYZER" --session "$SESSION" \
         --baseline-commit "$BASELINE_COMMIT" \
@@ -941,7 +942,7 @@ if [[ -f $ANALYZER ]]; then
     fi
     cat "$AGG_DIR/analyze.log"
     if (( rc_a == 0 )); then
-        echo "[b5-overhead] aggregate: $AGG_DIR/overhead.json, $AGG_DIR/overhead.md"
+        echo "[metrics-overhead] aggregate: $AGG_DIR/overhead.json, $AGG_DIR/overhead.md"
     else
         echo "warn: analyzer verdict is not PASS (exit $rc_a); see $AGG_DIR/analyze.log" >&2
         FAILS=$((FAILS + 1))
@@ -953,4 +954,4 @@ if (( FAILS > 0 )); then
     echo "       inspect cell-meta.tsv, logs/ and aggregate/overhead.md" >&2
     exit 1
 fi
-echo "[b5-overhead] ok"
+echo "[metrics-overhead] ok"

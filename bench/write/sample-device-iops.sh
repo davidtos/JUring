@@ -2,7 +2,7 @@
 #
 # sample-device-iops.sh - 1 s-resolution device I/O sampler for the write matrix.
 #
-# Why: methodology D2 (docs/benchmark-methodology.md section 5) requires an
+# Why: the write methodology (docs/benchmark-methodology.md) requires an
 # IOPS-vs-time series at 1 s resolution for every write cell so the SLC-cache
 # cliff can be detected (>30% step drop) and burst vs steady-state reported
 # separately.  Neither JUringFileBench nor seastar_file_bench emits a time
@@ -66,7 +66,7 @@ DRY_RUN=0
 
 usage() {
     cat <<'EOF'
-sample-device-iops.sh - 1 s-resolution NVMe device I/O sampler (methodology D2)
+sample-device-iops.sh - 1 s-resolution NVMe device I/O sampler (the 1 s device I/O series)
 
 Usage:
   bench/write/sample-device-iops.sh --out FILE [options]
@@ -163,7 +163,7 @@ fi
 T0_NS=$(now_ns)
 T0_EPOCH=$(( T0_NS / 1000000000 ))
 {
-    printf '# sample-device-iops.sh v1 (methodology D2: 1 s device time series)\n'
+    printf '# sample-device-iops.sh v1 (the 1 s device I/O series)\n'
     printf '# label=%s\n' "${LABEL:-<none>}"
     printf '# device_stat=%s\n' "$DEVICE_STAT"
     printf '# interval_s=%s duration_s=%s\n' "$INTERVAL_SEC" "$DURATION_SEC"

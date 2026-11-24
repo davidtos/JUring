@@ -45,7 +45,7 @@ GOLDEN = Path(__file__).resolve().parent / "golden"
 WORK = REPO / "scratch" / "selftest" / "work"
 
 sys.path.insert(0, str(BENCH))
-from analysis import cli, jsonio, md, stats  # noqa: E402
+from analysis import cells, cli, jsonio, md, stats  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # unit tests
@@ -413,14 +413,49 @@ def manifests():
 
 @test("jsonio")
 def stems_and_paths():
-    eq(jsonio.split_stem("W1__juring__std__bs4k__qd1__t1__r2"),
-       ["W1", "juring", "std", "bs4k", "qd1", "t1", "r2"])
-    eq(jsonio.rep_index("W1__juring__std__bs4k__qd1__t1__r2"), 2)
+    eq(jsonio.split_stem("randread-4k-qd1__juring__std__bs4k__qd1__t1__r2"),
+       ["randread-4k-qd1", "juring", "std", "bs4k", "qd1", "t1", "r2"])
+    eq(jsonio.rep_index("randread-4k-qd1__juring__std__bs4k__qd1__t1__r2"), 2)
     eq(jsonio.rep_index("W1__juring__std__r12"), 12)
     eq(jsonio.rep_index("noseparator"), None)
     eq(jsonio.rel(jsonio.REPO_ROOT / "bench" / "README.md"), "bench/README.md")
     eq(jsonio.rel("/definitely/not/in/repo"), "/definitely/not/in/repo")
     eq(jsonio.rel(REPO / "bench", root=REPO), "bench")
+
+
+# --- canonical cell / pass identifiers --------------------------------------
+
+@test("cells")
+def canonical_cell_map():
+    eq(cells.slug("W7"), "randwrite-4k-qd64")
+    eq(cells.slug("randwrite-4k-qd64"), "randwrite-4k-qd64")
+    eq(cells.label("W7"), "4 KiB random write, 64 in flight")
+    eq(cells.legacy("randwrite-4k-qd64"), "W7")
+    eq(cells.slug("not-a-cell"), "not-a-cell")
+    legacies = [c.legacy for c in cells.CELLS]
+    eq(len(legacies), len(set(legacies)), "legacy aliases")
+    eq(len({c.slug for c in cells.CELLS}), len(cells.CELLS), "canonical slugs")
+    eq(cells.aliases("W7"), ["randwrite-4k-qd64", "W7"])
+
+
+@test("cells")
+def cell_for_and_passes():
+    eq(cells.cell_for("throughput", "randread", "4k", 64), "randread-4k-qd64")
+    eq(cells.cell_for("latency", "randread", "4k", 64), "randread-4k-qd64-latency")
+    eq(cells.cell_for("throughput", "randwrite", "4k", 128),
+       "randwrite-4k-qd128")
+    eq(cells.cell_for("durability", "stream_write", "128k", 8),
+       "durability-write-128k")
+    eq(cells.cell_for("groupcommit", "randwrite", "4k", None, 32),
+       "groupcommit-4k-batch32")
+    eq(cells.cell_for("throughput", "randread", "4k", 3), None)
+    for value in ("g1", "pass1", "w2-g1", "G1"):
+        eq(cells.pass_name(value), "pass1", value)
+        eq(cells.pass_label(value), "pass 1", value)
+    eq(cells.pass_name("other"), "other")
+    eq(cells.shard_count("N8"), 8)
+    eq(cells.shard_count("shards-8"), 8)
+    eq(cells.shard_slug(4), "shards-4")
 
 
 # --- CLI plumbing -----------------------------------------------------------
@@ -472,17 +507,18 @@ def run_unit() -> bool:
 # One case per campaign analyzer.  "{sessions}" is the
 # throwaway copy of the session root and "{out}" the per-case output directory.
 CASES = {
-    # m1 only writes next to the session for the canonical directory; the copy
-    # here is raw evidence, so the golden always passes an explicit --out-prefix
-    # and pins every generated table (CSV, aggregate JSON, summary markdown).
+    # The read/write analyzer only writes next to the session for the canonical
+    # directory; the copy here is raw evidence, so the golden always passes an
+    # explicit --out-prefix and pins every generated table (CSV, aggregate JSON,
+    # summary markdown).
     "read-matrix": {
-        "argv": ["bench/m1/analyze_read_write.py", "--dir", "{sessions}/m1-2026-11-13",
+        "argv": ["bench/read-write/analyze_read_write.py", "--dir", "{sessions}/m1-2026-11-13",
                  "--out-prefix", "{out}/m1"],
         "outs": ["{out}"],
         "needs": ["m1-2026-11-13"],
     },
     "write-matrix": {
-        "argv": ["bench/m1/analyze_read_write.py", "--dir", "{sessions}/m1-write-2026-11-15",
+        "argv": ["bench/read-write/analyze_read_write.py", "--dir", "{sessions}/m1-write-2026-11-15",
                  "--out-prefix", "{out}/m1-write"],
         "outs": ["{out}"],
         "needs": ["m1-write-2026-11-15"],
@@ -499,14 +535,18 @@ CASES = {
         "outs": ["{out}"],
         "needs": ["m3-2026-11-15"],
     },
+    # The host-setup and write-state fixtures below keep the recorded historical
+    # session names under the unattended-2026-11-16 archive (the directory whose
+    # old name was "stepd" is the historical host-setup session; .../write-state
+    # is the state-control pass).
     "host-setup": {
-        "argv": ["bench/stepd/analyze_host_setup.py", "--dir",
+        "argv": ["bench/host-setup/analyze_host_setup.py", "--dir",
                  "{sessions}/unattended-2026-11-16/stepd"],
         "outs": ["{sessions}/unattended-2026-11-16/stepd/analysis"],
         "needs": ["unattended-2026-11-16/stepd"],
     },
     "write-state": {
-        "argv": ["bench/stepd/analyze_write_state.py",
+        "argv": ["bench/host-setup/analyze_write_state.py",
                  "--session", "{sessions}/unattended-2026-11-16/write-state",
                  "--gens", "w2-g1,w2-g2,w2-g3,w2-g4,w2-g5", "--out", "{out}"],
         "outs": ["{out}"],

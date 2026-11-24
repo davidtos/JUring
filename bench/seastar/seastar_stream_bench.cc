@@ -1,6 +1,6 @@
 /*
  * seastar_stream_bench - seastar fstream (stream) counterpart of
- * bench/juring/JUringStreamBench.java (B2 / W21-W22).
+ * bench/juring/JUringStreamBench.java.
  *
  * Purpose
  * -------
@@ -50,9 +50,8 @@
  *
  * EOF / padding semantics (documented deviations)
  * -----------------------------------------------
- *   - Reads stop at EOF (an empty buffer from input_stream::read(); the design
- *     doc's `s.get()` is the data_source method below it - input_stream only
- *     exposes read(), which forwards to data_source::get()).
+ *   - Reads stop at EOF (an empty buffer from input_stream::read();
+ *     `data_source::get()` below is the method input_stream::read() forwards to).
  *   - Writes: fstream's sink pads an unaligned tail with zeros and then
  *     truncate()s the file to the logical position (seastar
  *     file_data_sink_impl::do_put), i.e. the same rule as the JUring output
@@ -61,7 +60,7 @@
  *     the deadline only ever ends on a chunk boundary, so a partial pass never
  *     truncates anything.
  *
- * B6 durability extension (docs/b6-design.md §6.2; additive, schema stays 1.0)
+ * Durability extension (additive, schema stays 1.0)
  * ---------------------------------------------------------------------------
  *   --durability writeback|fdatasync|dsync   (default fdatasync = historical behaviour)
  *       writeback -> file_open_options.durable=false (flush() drains only, no fdatasync)
@@ -92,7 +91,7 @@
  *     bench/seastar/seastar_stream_bench \
  *       --file /mnt/TestData/read_files/single_file_bench.bin \
  *       --workload stream_read --bs 128k --qd 8 --seconds 10 --warmup-sec 2 \
- *       --readonly --label W22-128k --json /tmp/w22-128k.json \
+ *       --readonly --label stream-read-128k --json /tmp/stream-read-128k.json \
  *       --smp 1 --cpuset 2 --memory 1G --lock-memory 0 --reactor-backend io_uring
  */
 
@@ -154,7 +153,7 @@ struct config {
     uint64_t dataset = 0;       // 0 => file size
     bool readonly = false;
     bool no_register_file = false;  // accepted no-op disclosure flag
-    // B6 durability (docs/b6-design.md §6.2); defaults = historical behaviour.
+    // Durability defaults = historical behaviour.
     std::string durability = "fdatasync";   // writeback|fdatasync|dsync (fsync rejected)
     uint64_t sync_every = 0;                // drain+fdatasync every S bytes (0 = pass end)
     // Shared adaptive read-ahead history: reused across every pass of this
@@ -258,11 +257,11 @@ struct pass_result {
     uint64_t errors = 0;
 };
 
-// B6 durability counters for one phase. `points` counts every durability-point
+// Durability counters for one phase. `points` counts every durability-point
 // call the bench makes (interval flushes + pass-end flush/close, including
 // writeback/dsync drains); `issued/completed` count the fdatasync operations
 // those calls issue (derived: one per flush()/close() when durable=true — seastar
-// exports no fsync counter, docs/b6-design.md §6.2). `lat_ns` is a uniform
+// exports no fsync counter). `lat_ns` is a uniform
 // reservoir of the durability-point call durations; `bytes` is the payload those
 // sync points made durable (excludes the redundant close-time re-flush).
 struct sync_result {
@@ -282,7 +281,7 @@ struct phase_result {
     uint64_t passes = 0;
     double elapsed_s = 0.0;
     std::vector<uint64_t> lat_ns;   // uniform reservoir of per-chunk latencies (ns)
-    sync_result sync;               // B6 durability counters (measured phase only)
+    sync_result sync;               // durability counters (measured phase only)
 };
 
 // Fill a reused aligned buffer with a deterministic (xorshift64) pattern.
@@ -360,9 +359,9 @@ read_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
 }
 
 // ---------------------------------------------------------------------------
-// one write pass: open file (rw|create, B6 durability flags) + output stream,
+// one write pass: open file (rw|create, durability flags) + output stream,
 // write `dataset` bytes as bs-sized chunks, flush/close the stream (plus one
-// flush per --sync-every bytes for the B6 durability arms), then the caller
+// flush per --sync-every bytes for the durability arms), then the caller
 // reopens for the next pass. The chunk loop stops cleanly at the deadline.
 // ---------------------------------------------------------------------------
 
@@ -372,7 +371,7 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
            sync_result* sync, uint64_t sync_cap) {
     pass_result pr;
 
-    // B6 durability: writeback drops O_DSYNC and makes file::flush() a no-op;
+    // Durability: writeback drops O_DSYNC and makes file::flush() a no-op;
     // fdatasync keeps seastar's default durable=true (one fdatasync per flush);
     // dsync opens with O_DSYNC (writes durable on completion, flush a no-op).
     seastar::open_flags flags = seastar::open_flags::rw | seastar::open_flags::create;
@@ -397,7 +396,7 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
     fill_pattern(p, cfg.bs,
                  cfg.seed ^ (0x9E3779B97F4A7C15ULL * (pass_index + 1)));
 
-    // Record one durability-point call into the B6 sync counters (if collecting).
+    // Record one durability-point call into the sync counters (if collecting).
     auto note_point = [sync, sync_cap](uint64_t dt_ns, bool ok, bool sync_issued,
                                        uint64_t bytes) {
         if (!sync) {
@@ -436,7 +435,7 @@ write_pass(const config& cfg, uint64_t dataset, uint64_t deadline,
                       << current_exception_what() << "\n";
             break;
         }
-        // B6 durability point every S bytes (write only; S multiple of bs and 4096).
+        // Durability point every S bytes (write only; S multiple of bs and 4096).
         if (cfg.sync_every > 0 && bytes_since_point >= cfg.sync_every) {
             const uint64_t f0 = now_ns();
             try {
@@ -532,7 +531,7 @@ run_phase(const config& cfg, uint64_t dataset, unsigned seconds, bool collect) {
         // percentile_json() indexes a sorted array (same contract as
         // seastar_file_bench.cc, which sorts the merged per-fiber reservoirs).
         std::sort(ph.lat_ns.begin(), ph.lat_ns.end());
-        // B6: the sync-latency reservoir is sorted the same way.
+        // The sync-latency reservoir is sorted the same way.
         std::sort(ph.sync.lat.samples.begin(), ph.sync.lat.samples.end());
     }
     co_return std::move(ph);
@@ -549,7 +548,7 @@ struct manifest {
     std::string backend;
     unsigned smp = 1;
     std::string command_line;
-    // B6: effective seastar reactor --aio-fsync setting (true/false/unknown).
+    // Effective seastar reactor --aio-fsync setting (true/false/unknown).
     std::string aio_fsync = "unknown";
 };
 
@@ -609,7 +608,7 @@ static std::string kernel_str() {
 }
 
 // Percentile block for an already-sorted latency reservoir (ns -> us), identical
-// arithmetic to the pre-B6 percentile_json() so existing fields keep their meaning.
+// arithmetic to the percentile block of the original runner so existing fields keep their meaning.
 static std::string latency_json(const std::vector<uint64_t>& sorted, uint64_t population) {
     std::ostringstream o;
     auto pct = [&](double p) -> double {
@@ -644,7 +643,7 @@ static std::string percentile_json(const phase_result& r) {
     return latency_json(r.lat_ns, r.ops);
 }
 
-// B6 sync-latency block (docs/b6-design.md §6.1/§6.2 fields only:
+// Sync-latency block (fields only:
 // samples,avg,p50,p90,p99,max — microseconds; reservoir over durability points).
 static std::string sync_wait_json(const sync_result& s) {
     std::ostringstream o;
@@ -685,8 +684,8 @@ static std::string render_json(const config& cfg, const manifest& m,
     o << "\"schema_version\":\"" << SCHEMA_VERSION << "\"";
     o << ",\"engine\":\"" << ENGINE << "\"";
     o << ",\"engine_detail\":\"" << ENGINE_DETAIL << "\"";
-    // B6 additive marker: schema_version stays "1.0" (docs/b2-design.md §3.1);
-    // consumers must ignore unknown keys (docs/b6-design.md §6.1/§6.5).
+    // Additive durability marker: schema_version stays "1.0";
+    // consumers must ignore unknown keys.
     o << ",\"schema_extensions\":[\"b6-durability-1\"]";
     o << ",\"status\":\"" << json_escape(status) << "\"";
     o << ",\"error\":" << (error.empty() ? "null" : ("\"" + json_escape(error) + "\""));
@@ -737,7 +736,7 @@ static std::string render_json(const config& cfg, const manifest& m,
     } else {
         o << ",\"read_ahead\":" << (cfg.qd - 1);
     }
-    // B6 durability config (additive).
+    // Durability config (additive).
     o << ",\"durability\":\"" << json_escape(cfg.durability) << "\"";
     o << ",\"sync_every_bytes\":" << cfg.sync_every;
     o << ",\"durable\":" << (cfg.is_writeback() ? "false" : "true");
@@ -759,7 +758,7 @@ static std::string render_json(const config& cfg, const manifest& m,
         o << ",\"iops\":" << std::setprecision(3) << r.iops;
         o << ",\"mibs\":" << std::setprecision(3) << r.mibs;
         o << ",\"latency_us\":{" << percentile_json(r.measured) << "}";
-        // B6 additive durability fields (docs/b6-design.md §6.2).
+        // Additive durability fields.
         o << ",\"passes\":" << r.measured.passes;
         o << ",\"durability_mode\":\"" << json_escape(cfg.durability) << "\"";
         o << ",\"sync_every_bytes\":" << cfg.sync_every;
@@ -846,7 +845,7 @@ static std::string render_json(const config& cfg, const manifest& m,
     o << ",\"mibs\":{\"mean\":" << mibs << ",\"sd\":" << mibs_sd
       << ",\"ci95\":" << mibs_ci95 << "}";
     o << ",\"latency_us\":{" << percentile_json(agg) << "}";
-    // B6 additive sync totals.
+    // Additive sync totals.
     {
         sync_result agg_sync;
         agg_sync.points = sync_points_total;
@@ -902,16 +901,16 @@ int main(int argc, char** argv) {
             "rejected: seastar file I/O on this path is always O_DIRECT/DMA")
         ("json", bpo::value<std::string>(), "also write the JSON report to this path")
         ("label", bpo::value<std::string>(), "case label for reports")
-        // B6 durability (docs/b6-design.md §6.2; additive, defaults = historical behaviour).
+        // Durability (additive, defaults = historical behaviour).
         ("durability", bpo::value<std::string>()->default_value("fdatasync"),
-            "B6 durability: writeback|fdatasync|dsync (default fdatasync = historical behaviour; "
+            "Durability: writeback|fdatasync|dsync (default fdatasync = historical behaviour; "
             "fsync is rejected: seastar has no fsync(2) path)")
         ("durable", bpo::value<int>(),
-            "B6 compatibility spelling of --durability: 0 = writeback, 1 = fdatasync")
+            "Compatibility spelling of --durability: 0 = writeback, 1 = fdatasync")
         ("dsync", bpo::value<int>(),
-            "B6: 1 = open with open_flags::dsync (same as --durability dsync)")
+            "1 = open with open_flags::dsync (same as --durability dsync)")
         ("sync-every", bpo::value<std::string>(),
-            "B6: one durability point (drain + fdatasync for the fdatasync arm) every S bytes "
+            "One durability point (drain + fdatasync for the fdatasync arm) every S bytes "
             "inside a write pass; default 0 = pass end only; S multiple of --bs and 4096, write only");
 
     return app.run(argc, argv, [&app, argc, argv]() -> seastar::future<> {
@@ -931,7 +930,7 @@ int main(int argc, char** argv) {
         if (vm.count("label")) cfg.label = vm["label"].as<std::string>();
         if (vm.count("size")) cfg.dataset = parse_size(vm["size"].as<std::string>());
 
-        // B6 durability CLI (docs/b6-design.md §6.2).
+        // Durability CLI.
         cfg.durability = vm["durability"].as<std::string>();
         for (auto& c : cfg.durability) {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -962,8 +961,7 @@ int main(int argc, char** argv) {
             throw std::runtime_error(
                 "--durability fsync is not supported by seastar_stream_bench: seastar "
                 "fstream has no fsync(2) path (file::flush() issues fdatasync only; "
-                "SeaStarRef/src/core/file.cc:217-227). The fsync arm is JUring-only "
-                "(docs/b6-design.md §6.2/§9.7).");
+                "SeaStarRef/src/core/file.cc:217-227). The fsync arm is JUring-only.");
         }
         if (cfg.durability != "writeback" && cfg.durability != "fdatasync"
             && cfg.durability != "dsync") {
@@ -1014,7 +1012,7 @@ int main(int argc, char** argv) {
                 "to have more than one request in flight; the runner uses read_ahead = qd-1 "
                 "with adaptive adjustment)");
         }
-        // B6 durability validation (write path only).
+        // Durability validation (write path only).
         if (cfg.is_read()) {
             if (durability_explicit) {
                 throw std::runtime_error(
@@ -1047,9 +1045,9 @@ int main(int argc, char** argv) {
         m.backend = std::string(seastar::engine().get_backend_name());
         m.smp = seastar::this_smp_shard_count();
         m.command_line = cmd.str();
-        // B6: record the effective reactor --aio-fsync setting (the W24 driver pins
+        // Record the effective reactor --aio-fsync setting (the durability driver pins
         // --aio-fsync 1 so flush() is IORING_OP_FSYNC|IORING_FSYNC_DATASYNC, not a
-        // blocking thread-pool fdatasync; docs/b6-design.md §6.2).
+        // blocking thread-pool fdatasync).
         try {
             if (vm.count("aio-fsync")) {
                 m.aio_fsync = vm["aio-fsync"].as<bool>() ? "true" : "false";

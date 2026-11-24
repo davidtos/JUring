@@ -18,8 +18,8 @@
  *   - same JSON schema as JUringFileBench (schema_version 1.1), so
  *     bench/parse_results.py can consume both.
  *
- * Multi-shard (M3) mode
- * ---------------------
+ * Multi-shard mode
+ * -----------------
  * With seastar's own `--smp N` argv flag this app runs N seastar reactors, one
  * per shard. Each shard opens its *own* file handle on the same file and runs
  * its own `--qd`-in-flight fiber pipeline, so the total in-flight count is
@@ -38,11 +38,11 @@
  * authoritative transport; the JSON file is the inspection artifact.
  *
  * JSON is additive to the historical 1.0 shape (all old fields keep their
- * names) and adds the JUring schema 1.1 fields M3 needs: config.runtime="smp",
+ * names) and adds the JUring schema 1.1 fields the shard mode needs: config.runtime="smp",
  * config.shards=N, runs[].elapsed_sec/ops/bytes/errors, runs[].threads[] and
  * runs[].shards[] (per-shard iops/mibs/latency_us), run-level merged latency_us,
  * plus `recorded`/`min` in every latency block. Ring metrics are JUring-only
- * (B5) and are not emitted here.
+ * and are not emitted here.
  *
  * Why not io_tester? io_tester creates and prefills its own files under
  * --storage, which is impossible on a read-only dataset mount and perturbs the
@@ -60,7 +60,7 @@
  *     --readonly --seed 20261113 --label rr4k_qd64 --json out.json \
  *     --smp 1 --cpuset 2 --memory 1G --lock-memory 0 --reactor-backend io_uring
  *
- * Run (M3 shard mode, N=8):
+ * Run (multi-shard mode, N=8):
  *   LD_LIBRARY_PATH=$PWD/.sysroot/root/usr/lib64 bench/seastar/seastar_file_bench \
  *     --file /mnt/TestData/read_files/single_file_bench.bin \
  *     --workload randread --bs 4k --qd 64 --seconds 30 --warmup-sec 10 \
@@ -722,7 +722,7 @@ static std::string render_json(const config& cfg, const manifest& m, unsigned sm
     o << ",\"cpu_model\":\"" << json_escape(m.cpu_model) << "\"";
     o << ",\"hostname\":\"" << json_escape(m.hostname) << "\"";
     o << ",\"reactor_backend\":\"" << json_escape(m.backend) << "\"";
-    o << ",\"smp\":" << m.smp;   // numeric N (M3 driver validates manifest.smp == N)
+    o << ",\"smp\":" << m.smp;   // numeric N (the shard driver validates manifest.smp == N)
     o << ",\"shards\":" << smp;
     o << ",\"command_line\":\"" << json_escape(m.command_line) << "\"";
     o << ",\"seastar_version\":\"seastar-25.05.0-1392-g04b1c04d\"";

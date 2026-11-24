@@ -1,3 +1,0 @@
-[juring] label=verify_W3 workload=randread file=/mnt/TestData/read_files/single_file_bench.bin fileSize=10,737,418,240 ioSize=10,737,418,240 (read-only) bs=4096 qd=64 threads=1 runs=1 seconds=30.00 warmup=10.00
-[juring] ring flags=[IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_DEFER_TASKRUN] entries=max(256,2*qd) buffers=registered-fixed (64 x 4096 B)
-[juring] run 1/1: 30.00 s, 9,805,849 ops, 1276.8 MiB/s, 326857.6 IOPS, p50=169.5 us p99=485.4 us p999=929.0 us max=4477.2 us, errors=0, seqOverflows=0

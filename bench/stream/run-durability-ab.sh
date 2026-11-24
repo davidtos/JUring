@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# run-durability-ab.sh -- B6 W24 durability A/B driver (docs/b6-design.md §6.3, frozen).
+# run-durability-ab.sh -- 128 KiB durable-write A/B driver (protocol frozen).
 #
 # SUPPORTING EVIDENCE ONLY -- not a milestone bar, no new cross-engine write win/loss
 # claim.  One write cell, matched durability arms on both engines, writeback-vs-writeback
 # control bracketing the block.
 #
-# Cell W24-128k: stream_write, bs 128 KiB, qd 8, --size 2g on the existing 10 GiB write
+# Cell durability-write-128k: stream_write, bs 128 KiB, qd 8, --size 2g on the existing 10 GiB write
 # file (the file is never resized; the 2 GiB dataset is a disclosed deviation from the
 # frozen 10 GiB).
 #
@@ -24,18 +24,18 @@
 #   optional juring-fsync (--durability fsync, --sync-every 4M) reported JUring-only
 #   because seastar has no fsync(2) path.  --skip-fsync disables it.
 #
-# Engine rows use the existing W21/W22 conventions: JUring O_DIRECT + registered file via
+# Engine rows use the existing stream write/read conventions: JUring O_DIRECT + registered file via
 # bench/juring/run-juring-stream.sh; seastar fstream via bench/seastar/seastar_stream_bench
 # with --smp 1 --cpuset 2 --memory 1G --lock-memory 0 --reactor-backend io_uring and the
 # pinned --aio-fsync 1 (so flush() is IORING_OP_FSYNC|IORING_FSYNC_DATASYNC, not a blocking
-# thread-pool fdatasync; docs/b6-design.md §6.2).
+# thread-pool fdatasync).
 #
 # Session layout (gitignored): bench/results/<session>/ with
 #   cells/<cell>__<engine>__<variant>__r<rep>.json   raw per-process JSON (schema 1.0 +
 #                                                    schema_extensions ["b6-durability-1"])
 #   logs/<same>.log                                  stdout+stderr of the process
-#   cell-meta.tsv                                    one row per invocation (M2's 20 columns;
-#                                                    sync data lives in the JSON, §6.5)
+#   cell-meta.tsv                                    one row per invocation (20 columns;
+#                                                    sync data lives in the JSON)
 #   manifest.txt                                     host/device/tool/protocol manifest
 #   aggregate/durability.{json,md}                   written by analyze_durability.py
 #
@@ -58,6 +58,8 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
+# shellcheck source=bench/cells.sh
+source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
@@ -69,7 +71,7 @@ ANALYZER=$HERE/analyze_durability.py
 SYSROOT_LIB=$REPO_ROOT/.sysroot/root/usr/lib64
 SEED=${SEED:-20261113}
 
-CELL=W24-128k
+CELL=durability-write-128k
 BS=128k
 QD=8
 SYNC_EVERY=4M
@@ -199,7 +201,7 @@ durability_of() {
     esac
 }
 
-# tier1_order <rep>: 4 arms back-to-back, order alternating every rep (design §6.3).
+# tier1_order <rep>: 4 arms back-to-back, order alternating every rep (frozen protocol).
 tier1_order() {
     if (( $1 % 2 == 1 )); then
         echo "juring:writeback juring:fdatasync seastar:writeback seastar:fdatasync"
@@ -416,10 +418,10 @@ write_manifest() {
         echo 'seastar-25.05.0-1392-g04b1c04d')
     mkdir -p "$CELLS_DIR" "$LOGS_DIR" "$AGG_DIR"
     {
-        echo "# B6 W24 durability A/B session manifest -- matched durability arms, JUring vs seastar"
+        echo "# 128 KiB durable-write A/B session manifest -- matched durability arms, JUring vs seastar"
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
-        echo "# design contract: docs/b6-design.md §6.3 (frozen); SUPPORTING EVIDENCE ONLY"
+        echo "# protocol: frozen before the campaign; SUPPORTING EVIDENCE ONLY"
         echo
         echo "## Host / kernel"
         uname -a
@@ -464,7 +466,7 @@ write_manifest() {
             "$REPO_ROOT/bench/juring/JUringStreamBench.java" \
             "$REPO_ROOT/bench/seastar/seastar_stream_bench.cc" 2>/dev/null || true
         echo
-        echo "## Protocol (docs/b6-design.md §6.3, frozen)"
+        echo "## Protocol (frozen before the campaign)"
         echo "cell: $CELL (stream_write, bs=$BS, qd=$QD, --size $SIZE, --sync-every $SYNC_EVERY)"
         echo "tier1: R=$REPS reps; ${REST}s idle rest before each rep window; 4 arms back-to-back"
         echo "       per window in an order alternating every rep (rep1 Jw,Jd,Sw,Sd; rep2 Sd,Sw,Jd,Jw;"
@@ -477,8 +479,8 @@ write_manifest() {
         echo "         --aio-fsync 1 (pinned: flush() = IORING_OP_FSYNC|IORING_FSYNC_DATASYNC)"
         echo "juring : O_DIRECT + registered file; stream bufferSize=$BS writeBehind=$QD"
         echo
-        echo "## Disclosed asymmetries (docs/b6-design.md §6 preamble/§9.6-§9.8)"
-        echo "- M2's W21 write arms issued 2 fdatasync/pass on seastar and 0 on JUring; W24 matches"
+        echo "## Disclosed asymmetries"
+        echo "- The stream write arms issued 2 fdatasync/pass on seastar and 0 on JUring; the durability cell matches"
         echo "  durability on both sides and brackets the block with writeback-vs-writeback controls."
         echo "- durability points include a write-behind drain on both engines; writeback = drain only,"
         echo "  fdatasync = drain + one sync, so the paired ratio isolates the sync cost."
@@ -486,7 +488,7 @@ write_manifest() {
         echo "  next to the --sync-every $SYNC_EVERY points and reported via syncs/s and MiB/sync."
         echo "- seastar has no fsync(2) path; juring-fsync is JUring-only, not compared across engines."
         echo "- dataset is $SIZE per pass on the existing file (deviation from the frozen 10 GiB)."
-        echo "- no cache drop, no power-loss test; state classes derived from M1 §4 + M2 §6."
+        echo "- no cache drop, no power-loss test; state classes derived from the earlier write-state classes."
         echo
         echo "started: $(now_utc)"
     } >"$MANIFEST"
@@ -558,7 +560,7 @@ run_row() {
 print_plan() {
     local rows=0 rep spec engine variant
     echo
-    echo "================ B6 W24 DURABILITY A/B PLAN (--dry-run; nothing executed) =============="
+    echo "================ DURABILITY A/B PLAN (--dry-run; nothing executed) =============="
     echo "session dir : $RESULTS"
     echo "cell        : $CELL (stream_write bs=$BS qd=$QD size=$SIZE sync-every=$SYNC_EVERY)"
     echo "write file  : $WRITE_FILE ($(size_human "$(stat -c%s "$WRITE_FILE" 2>/dev/null || echo 0)") )"
@@ -628,7 +630,7 @@ print_plan() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-echo "[durability-ab] B6 W24 durability A/B (docs/b6-design.md §6.3; supporting evidence only)"
+echo "[durability-ab] 128 KiB durable-write A/B (supporting evidence only)"
 echo "[durability-ab] session=$SESSION cell=$CELL size=$SIZE sync-every=$SYNC_EVERY R=$REPS rest=${REST}s warmup=${WARMUP}s measured=${DURATION}s cpu=$CPU"
 
 if [[ $DRY_RUN == 1 ]]; then
@@ -654,7 +656,7 @@ init_meta
 
 echo "[durability-ab] compiling JUring stream runner once (JURING_SKIP_MVN=1, no Maven) ..."
 if ! JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null 2>&1; then
-    echo "error: JUring stream runner compile/--help failed; is the B6 stream API in target/classes?" >&2
+    echo "error: JUring stream runner compile/--help failed; is the stream API in target/classes?" >&2
     exit 1
 fi
 echo "[durability-ab] JUring stream runner ready; manifest: $MANIFEST"

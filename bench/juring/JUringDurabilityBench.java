@@ -1,5 +1,5 @@
 /*
- * JUringDurabilityBench - W25 group-commit micro-benchmark (B6, docs/b6-design.md §6.4).
+ * JUringDurabilityBench - group-commit durability micro-benchmark.
  *
  * Purpose
  * -------
@@ -35,12 +35,12 @@
  *   with --verify-only --file F --bs BS --seed S --verify-bytes N; the child re-reads
  *   [0, min(N, file_size)) and compares every block against the deterministic pattern.
  *   JSON restart_verify{ok,verified_bytes,method,power_cut_tested:false,...} records the
- *   outcome. This is a process-restart test, NOT a power-loss test (docs/b6-design.md §9.1).
+ *   outcome. This is a process-restart test, NOT a power-loss test.
  *
  * Counters / JSON
  * ---------------
- *   schema_version "1.0" + "schema_extensions": ["b6-durability-1"] (additive B6 marker,
- *   the stream schema is not touched). Per-run: batch_size, groups_total, committed_writes,
+ *   schema_version "1.0" + "schema_extensions": ["b6-durability-1"] (an additive durability
+ *   marker, the stream schema is not touched). Per-run: batch_size, groups_total, committed_writes,
  *   committed_bytes, max_observed_batch, writes_per_group{min,mean,max}, syncs_issued,
  *   syncs_completed, syncs_failed, fsyncs_per_group (= syncs_completed / groups_total,
  *   exactly 1.0 for a successful FDATASYNC/FSYNC run), bytes_synced, syncs_per_sec,
@@ -53,7 +53,7 @@
  * CLI
  * ---
  *   --file PATH          target file (created/preallocated if absent)      [required]
- *   --batch B            writes per group (1..4096; design cells 1/8/32/128)
+ *   --batch B            writes per group (1..4096; benchmark cells 1/8/32/128)
  *   --records N          measured phase = exactly N writes (deterministic identity run)
  *   --seconds S          measured phase duration (default 15; ignored if --records > 0)
  *   --bs SIZE            record size (default 4096; multiple of 512, <= 1 MiB)
@@ -115,7 +115,7 @@ import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_SINGLE_ISSU
 
 public final class JUringDurabilityBench {
 
-    /** Stream/file schema is frozen at 1.0; B6 marks itself additively. */
+    /** Stream/file schema is frozen at 1.0; the durability bench marks itself additively. */
     static final String SCHEMA_VERSION = "1.0";
     static final String SCHEMA_EXTENSION = "b6-durability-1";
     static final String ENGINE = "juring";
@@ -135,7 +135,7 @@ public final class JUringDurabilityBench {
     };
 
     static final int ALIGNMENT = 4096;
-    static final long DEFAULT_FILE_SIZE = 1L << 30;      // 1 GiB (design §6.4 example)
+    static final long DEFAULT_FILE_SIZE = 1L << 30;      // 1 GiB (the default file size)
     static final int GROUP_LATENCY_SAMPLES = 100_000;
     static final int SYNC_LATENCY_SAMPLES = 100_000;
     static final long VERIFY_CHILD_TIMEOUT_SEC = 300;
@@ -406,9 +406,9 @@ public final class JUringDurabilityBench {
                 case "writeback":
                     return DurabilityMode.WRITEBACK;
                 case "dsync":
-                    throw new UsageException("--durability dsync is not part of W25: GroupCommit "
-                            + "DSYNC is the W24 stream arm's contract-assertion mode (docs/b6-design.md "
-                            + "§6.4); use fdatasync|fsync|writeback here");
+                    throw new UsageException("--durability dsync is not part of this bench: "
+                            + "DSYNC is the stream arm's contract-assertion mode; "
+                            + "use fdatasync|fsync|writeback here");
                 default:
                     throw new UsageException("unknown --durability '" + s
                             + "' (expected fdatasync|fsync|writeback)");
@@ -426,7 +426,7 @@ public final class JUringDurabilityBench {
                 throw new UsageException("--bs too large (max 1 MiB)");
             }
             if (batch < 1 || batch > 4096) {
-                throw new UsageException("--batch must be in [1, 4096] (design cells 1/8/32/128)");
+                throw new UsageException("--batch must be in [1, 4096] (benchmark cells 1/8/32/128)");
             }
             if (records > 0 && records < batch) {
                 throw new UsageException("--records must be >= --batch (one full group minimum)");
@@ -494,7 +494,7 @@ public final class JUringDurabilityBench {
 
     static String usage() {
         return String.join("\n",
-                "JUringDurabilityBench - W25 group-commit micro-benchmark (B6, docs/b6-design.md §6.4)",
+                "JUringDurabilityBench - group-commit durability micro-benchmark",
                 "",
                 "Usage:",
                 "  java --enable-native-access=ALL-UNNAMED -cp target/classes:bench/juring/out \\",
@@ -502,7 +502,7 @@ public final class JUringDurabilityBench {
                 "",
                 "Flags:",
                 "  --file PATH          target file (created/preallocated if absent)   [required]",
-                "  --batch B            writes per group (1..4096; design cells 1/8/32/128; default 32)",
+                "  --batch B            writes per group (1..4096; benchmark cells 1/8/32/128; default 32)",
                 "  --records N          measured phase = exactly N writes (deterministic identity run)",
                 "  --seconds S          measured duration when --records is absent (default 15)",
                 "  --bs SIZE            record size (default 4096; multiple of 512, <= 1 MiB)",
@@ -1500,7 +1500,7 @@ public final class JUringDurabilityBench {
             w.name("schema_version").str(SCHEMA_VERSION);
             w.name("engine").str(ENGINE);
             w.name("engine_detail").str(engineDetail);
-            // B6 additive marker; schema_version stays "1.0" (docs/b6-design.md §6.1/§6.4).
+            // Additive durability marker; schema_version stays "1.0".
             w.name("schema_extensions").arr();
             w.str(SCHEMA_EXTENSION);
             w.endArr();

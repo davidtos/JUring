@@ -1,9 +1,9 @@
-# B6 W25 group-commit micro-benchmark -- aggregate (JUring-only)
+# Group-commit micro-benchmark -- aggregate (JUring-only)
 
 Session: `b6-group-commit-2026-11-15`  
 Source: `<SESSIONS>/b6-group-commit-2026-11-15`  
 Generated: <TIMESTAMP>  
-Contract: `docs/b6-design.md` §6.4 + A2 rest adjudication. Raw protocol: `<SESSIONS>/b6-group-commit-2026-11-15/manifest.txt`.
+Contract: frozen before the campaign (rest times recorded in the manifest). Raw protocol: `<SESSIONS>/b6-group-commit-2026-11-15/manifest.txt`.
 
 Protocol observed in the cell JSONs: warmup 5s + measured 15s, bs 4096 B, durability fdatasync, seed 20261113; R=3.
 
@@ -46,14 +46,14 @@ Per-rep detail (exactly one fdatasync per committed batch; the fresh-process re-
 
 ## Data quality / contract violations (no rep silently dropped)
 
-Every cell JSON parsed, carried the `b6-durability-1` extension, satisfied the W25 identities and passed the fresh-process restart check.
+Every cell JSON parsed, carried the `b6-durability-1` extension, satisfied the groupcommit identities and passed the fresh-process restart check.
 
 ## Disclosures
 
-- W25 is JUring-only: seastar has no group-commit primitive. The nearest seastar equivalent is the W24 seastar-fdatasync arm (one fstream flush per batch, which also drains write-behind); that is an upper bound on the cost, not a matched comparison (docs/b6-design.md §6.4/§9.7).
-- 'One fdatasync per batch' is proven by GroupCommitStats counters + the JSON identity (fsyncs_per_group == 1.0), not by a syscall trace; 'visibility after restart' is a fresh-process re-read of the deterministic pattern (process-restart visibility, NOT a power-loss test; §9.1).
+- groupcommit is JUring-only: seastar has no group-commit primitive. The nearest seastar equivalent is the durability-write-128k seastar-fdatasync arm (one fstream flush per batch, which also drains write-behind); that is an upper bound on the cost, not a matched comparison.
+- 'One fdatasync per batch' is proven by GroupCommitStats counters + the JSON identity (fsyncs_per_group == 1.0), not by a syscall trace; 'visibility after restart' is a fresh-process re-read of the deterministic pattern (process-restart visibility, NOT a power-loss test).
 - sync_latency_us is the commit() call duration and is therefore an UPPER BOUND on the sync-only cost (it includes waiting for the batch writes; the public API exposes no sync-only hook).
-- The W25 file is preallocated with setLength (sparse) and offsets wrap modulo the file capacity; the pattern is position-indexed, so the verified prefix is deterministic across wraps (wrap_arounds reported).
-- Rests (A2 adjudication): 5 s pause between reps inside a cell, 120 s idle rest between cells - this is a count/latency micro-benchmark, not a throughput campaign.
-- Configuration/durability: durability fdatasync (never fsync), bs 4096 B, cells b1/b8/b32/b128; the W25 measured window is 15 s after a 5 s warmup.
+- The groupcommit file is preallocated with setLength (sparse) and offsets wrap modulo the file capacity; the pattern is position-indexed, so the verified prefix is deterministic across wraps (wrap_arounds reported).
+- Rests (rest-time decision): 5 s pause between reps inside a cell, 120 s idle rest between cells - this is a count/latency micro-benchmark, not a throughput campaign.
+- Configuration/durability: durability fdatasync (never fsync), bs 4096 B, cells b1/b8/b32/b128; the groupcommit measured window is 15 s after a 5 s warmup.
 

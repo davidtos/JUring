@@ -84,6 +84,6 @@ DATA_DIR=$PWD/nvme-data/iotester-storage \
 ./bench/run-comparison.sh
 ```
 
-This is the `io_tester` bracket: fresh generated files, no warmup, same device and size. The same-file Seastar numbers in BENCHMARK.md come from `bench/seastar/seastar_file_bench`, which opens the aged dataset and emits the JUring JSON; the `bench/m1/` read matrix and `bench/write/` campaign drive it. The seastar write path through that runner is opt-in in the write harness (`--allow-seastar-write`).
+This is the `io_tester` bracket: fresh generated files, no warmup, same device and size. The same-file Seastar numbers in BENCHMARK.md come from `bench/seastar/seastar_file_bench`, which opens the aged dataset and emits the JUring JSON; the `bench/read-write/` read matrix and `bench/write/` campaign drive it. The seastar write path through that runner is opt-in in the write harness (`--allow-seastar-write`).
 
 `python3 bench/parse_results.py --dir bench-results --csv bench-results/results.csv` then normalizes the io_tester YAML and the runners' JSON together with the JUring and fio output.

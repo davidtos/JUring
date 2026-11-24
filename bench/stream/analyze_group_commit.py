@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""B6 W25 group-commit micro-benchmark aggregator (JUring-only).
+"""Group-commit micro-benchmark aggregator (JUring-only).
 
 Reads the JSON written by the JUring group-commit runner from
 ``<session>/cells/<cell>__juring__groupcommit__r<rep>.json`` and writes
 ``<session>/aggregate/group-commit.{json,md}``: per-cell cost/latency statistics
-and the machine-checkable W25 acceptance identities (one fdatasync per batch,
+and the machine-checkable groupcommit acceptance identities (one fdatasync per batch,
 ``groups_total * batch_size == committed_writes``, sync/group counters, and the
 fresh-process restart re-read).  Every rep is kept; failed/missing reps and
-contract violations are listed explicitly (docs/b6-design.md §6.4).
+contract violations are listed explicitly.
 
 Usage:
     python3 bench/stream/analyze_group_commit.py [--session NAME] [--results DIR] [--out DIR]
 
 Exit codes: 0 = aggregate written and all identities hold; 1 = no cell JSONs found;
             2 = usage error; 3 = schema/contract violation (aggregate still written with
-                the violations listed, but the session is NOT valid W25 evidence).
+                the violations listed, but the session is NOT valid groupcommit evidence).
 """
 
 import argparse
@@ -24,12 +24,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _cells import load_session, sort_cells  # noqa: E402
+from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
 REQUIRED_EXTENSION = "b6-durability-1"
 DEFAULT_SESSION = "b6-group-commit-2026-11-15"
-CELL_ORDER = ["W25-4k-b1", "W25-4k-b8", "W25-4k-b32", "W25-4k-b128"]
+CELL_ORDER = ["groupcommit-4k-batch1", "groupcommit-4k-batch8",
+              "groupcommit-4k-batch32", "groupcommit-4k-batch128"]
 FPG_TOLERANCE = 1e-9
 
 
@@ -38,7 +40,7 @@ def _r6(x):
 
 
 def check_identities(rec):
-    """Return a list of human-readable violations for one W25 rep (empty = pass)."""
+    """Return a list of human-readable violations for one groupcommit rep (empty = pass)."""
     d = rec["extracted"]
     if rec["data"] is None:
         return [rec["error"] or "missing data"]
@@ -54,7 +56,7 @@ def check_identities(rec):
     if groups <= 0:
         v.append("groups_total=0")
     if d["durability_mode"] != "fdatasync" and d["durability"] != "fdatasync":
-        v.append("durability_mode=%r (W25 cells are fdatasync)" % (d["durability_mode"],))
+        v.append("durability_mode=%r (groupcommit cells are fdatasync)" % (d["durability_mode"],))
     if fpg is None or abs(float(fpg) - 1.0) > FPG_TOLERANCE:
         v.append("fsyncs_per_group=%r != 1.0" % (fpg,))
     if d["syncs_issued"] != groups:
@@ -165,13 +167,13 @@ def analyze_cell(cell, recs):
 def render_markdown(session, results_dir, aggregate):
     lines = []
     a = lines.append
-    a("# B6 W25 group-commit micro-benchmark -- aggregate (JUring-only)")
+    a("# Group-commit micro-benchmark -- aggregate (JUring-only)")
     a("")
     a("Session: `%s`  " % session)
     a("Source: `%s`  " % results_dir)
     a("Generated: %s  "
       % datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-    a("Contract: `docs/b6-design.md` §6.4 + A2 rest adjudication. "
+    a("Contract: frozen before the campaign (rest times recorded in the manifest). "
       "Raw protocol: `%s/manifest.txt`." % results_dir)
     a("")
     p = aggregate["protocol"]
@@ -189,7 +191,7 @@ def render_markdown(session, results_dir, aggregate):
     for c in aggregate["cells"]:
         f = c["fsyncs_per_group"]
         a("| %s | %s | %d | %s | %s | %s | 0 | %s | %d |"
-          % (c["cell"], c["batch_size"], c["n"], md.fixed(f["mean"], 6),
+          % (cellmap.label(c["cell"]), c["batch_size"], c["n"], md.fixed(f["mean"], 6),
              "PASS" if c["fsyncs_per_group_ok"] else "FAIL",
              "PASS" if c["identity_groups_batch_writes"] else "FAIL",
              "PASS" if c["restart_verify_ok"] else "FAIL",
@@ -207,7 +209,7 @@ def render_markdown(session, results_dir, aggregate):
         m = c["mibs"]
         f = c["fsyncs_per_group"]
         a("| %s | %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
-          % (c["cell"], c["batch_size"], c["n"],
+          % (cellmap.label(c["cell"]), c["batch_size"], c["n"],
              md.fixed(c["groups_per_sec"]["mean"], 2), md.fixed(c["writes_per_sec"]["mean"], 0),
              md.fixed(m["mean"], 1), md.fixed(m["sd"], 2), md.fixed(m["ci95"], 2),
              md.fixed(m["cv_pct"], 2), md.fixed(c["group_latency_ms"]["p50"]["mean"], 3),
@@ -226,7 +228,7 @@ def render_markdown(session, results_dir, aggregate):
     for c in aggregate["cells"]:
         for r in c["reps"]:
             a("| %s | %d | %d | %d | %s | %s | %s | %s | %s | %s | %s |"
-              % (c["cell"], r["rep"], r["groups_total"], r["committed_writes"],
+              % (cellmap.label(c["cell"]), r["rep"], r["groups_total"], r["committed_writes"],
                  md.fixed(r["mibs"], 1), md.fixed(r["group_p50_ms"], 3),
                  md.fixed(r["group_p99_ms"], 3),
                  md.fixed(r["sync_p50_us"], 1), md.fixed(r["fsyncs_per_group"], 6),
@@ -238,13 +240,13 @@ def render_markdown(session, results_dir, aggregate):
     if not bad["excluded"] and not bad["missing"] and not bad["unparsed"] \
             and not aggregate["violations"]:
         a("Every cell JSON parsed, carried the `b6-durability-1` extension, satisfied the "
-          "W25 identities and passed the fresh-process restart check.")
+          "groupcommit identities and passed the fresh-process restart check.")
     else:
         for e in bad["excluded"]:
             a("- EXCLUDED %s rep %s: %s (`%s`)"
-              % (e["cell"], e["rep"], e["reason"], e["file"]))
+              % (cellmap.label(e["cell"]), e["rep"], e["reason"], e["file"]))
         for m in bad["missing"]:
-            a("- MISSING %s rep %s (no JSON)" % (m["cell"], m["rep"]))
+            a("- MISSING %s rep %s (no JSON)" % (cellmap.label(m["cell"]), m["rep"]))
         for u in bad["unparsed"]:
             a("- UNPARSED `%s`: %s" % (u["file"], u["reason"]))
         for v in aggregate["violations"]:
@@ -261,7 +263,7 @@ def render_markdown(session, results_dir, aggregate):
 
 def main(argv):
     ap = argparse.ArgumentParser(
-        description="Aggregate B6 W25 group-commit cells into aggregate/group-commit.{json,md}.")
+        description="Aggregate group-commit cells into aggregate/group-commit.{json,md}.")
     ap.add_argument("--session", default=DEFAULT_SESSION,
                     help="session name under bench/results/ (default %(default)s)")
     ap.add_argument("--results", default=None,
@@ -279,7 +281,7 @@ def main(argv):
         expected_hint="<cell>__juring__groupcommit__r<rep>.json",
         schema_version=SCHEMA_VERSION, required_extension=REQUIRED_EXTENSION)
     if schema_errors:
-        sys.stderr.write("error: B6 durability schema check FAILED for %d cell JSON(s); "
+        sys.stderr.write("error: durability schema check FAILED for %d cell JSON(s); "
                          "refusing to aggregate a mixed/old session\n" % len(schema_errors))
         for e in schema_errors:
             sys.stderr.write("  - %s: %s\n" % (e["file"], e["reason"]))
@@ -322,29 +324,29 @@ def main(argv):
         "and every fresh-process re-read verified the deterministic pattern.")
     if not identities_ok:
         identity_verdict = (
-            "IDENTITY/SCHEMA VIOLATIONS PRESENT - this session is NOT valid W25 evidence; "
+            "IDENTITY/SCHEMA VIOLATIONS PRESENT - this session is NOT valid groupcommit evidence; "
             "see the violations below and aggregate/group-commit.json.")
 
     disclosures = [
-        "W25 is JUring-only: seastar has no group-commit primitive. The nearest seastar "
-        "equivalent is the W24 seastar-fdatasync arm (one fstream flush per batch, which "
+        "groupcommit is JUring-only: seastar has no group-commit primitive. The nearest seastar "
+        "equivalent is the durability-write-128k seastar-fdatasync arm (one fstream flush per batch, which "
         "also drains write-behind); that is an upper bound on the cost, not a matched "
-        "comparison (docs/b6-design.md §6.4/§9.7).",
+        "comparison.",
         "'One fdatasync per batch' is proven by GroupCommitStats counters + the JSON "
         "identity (fsyncs_per_group == 1.0), not by a syscall trace; 'visibility after "
         "restart' is a fresh-process re-read of the deterministic pattern "
-        "(process-restart visibility, NOT a power-loss test; §9.1).",
+        "(process-restart visibility, NOT a power-loss test).",
         "sync_latency_us is the commit() call duration and is therefore an UPPER BOUND on "
         "the sync-only cost (it includes waiting for the batch writes; the public API "
         "exposes no sync-only hook).",
-        "The W25 file is preallocated with setLength (sparse) and offsets wrap modulo the "
+        "The groupcommit file is preallocated with setLength (sparse) and offsets wrap modulo the "
         "file capacity; the pattern is position-indexed, so the verified prefix is "
         "deterministic across wraps (wrap_arounds reported).",
-        "Rests (A2 adjudication): 5 s pause between reps inside a cell, 120 s idle rest "
+        "Rests (rest-time decision): 5 s pause between reps inside a cell, 120 s idle rest "
         "between cells - this is a count/latency micro-benchmark, not a throughput "
         "campaign.",
         "Configuration/durability: durability fdatasync (never fsync), bs 4096 B, "
-        "cells b1/b8/b32/b128; the W25 measured window is 15 s after a 5 s warmup.",
+        "cells b1/b8/b32/b128; the groupcommit measured window is 15 s after a 5 s warmup.",
     ]
 
     aggregate = {
@@ -355,7 +357,7 @@ def main(argv):
         "source_dir": results_dir,
         "generated_utc": datetime.datetime.now(datetime.timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "contract": "docs/b6-design.md §6.4 (frozen) + A2 rest adjudication",
+        "contract": "protocol frozen before the campaign (rest times recorded in the manifest)",
         "protocol": protocol,
         "identity_verdict": identity_verdict,
         "identities_ok": bool(identities_ok),
@@ -374,7 +376,7 @@ def main(argv):
     print("wrote %s" % md_path)
     for c in cells_out:
         print("  %-12s batch=%-4s n=%d MiB/s=%s group_p99=%s ms syncs/group=%s verify=%s"
-              % (c["cell"], c["batch_size"], c["n"], md.fixed(c["mibs"]["mean"], 1),
+              % (cellmap.label(c["cell"]), c["batch_size"], c["n"], md.fixed(c["mibs"]["mean"], 1),
                  md.fixed(c["group_latency_ms"]["p99"]["mean"], 2),
                  md.fixed(c["fsyncs_per_group"]["mean"], 6),
                  "ok" if c["restart_verify_ok"] else "FAIL"))

@@ -3,7 +3,7 @@
 #
 # Protocol: docs/write-state-interleaved-protocol.md (fixed before the run).
 # Why: the primary state-controlled 3-way campaign failed its homogeneity gate
-# in both completed generations on this drive, so this bracket alternates the
+# in both completed passes on this drive, so this bracket alternates the
 # engines in short cycles instead of claiming a single homogeneous state.
 # Expected wall time: ~24 min for 2 cells x 5 cycles x 3 engines.
 #
@@ -22,19 +22,28 @@ ALLOW_ANY_PATH=${ALLOW_ANY_PATH:-0}
 WRITE_ARGS=(--write-file "$WRITE_FILE" --device-stat "$DEVICE_STAT")
 if (( ALLOW_ANY_PATH )); then WRITE_ARGS+=(--allow-any-path); fi
 SESSION_PREFIX=bench/results/write-interleaved
+DRY_RUN=0
+
+usage() { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+case "${1:-}" in
+    --dry-run) DRY_RUN=1 ;;
+    -h | --help) usage; exit 0 ;;
+    "") ;;
+    *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+esac
 
 run_harness() {
     # "$@" is either --dry-run or nothing
     timeout -k 30 2400 bash "$WRC" \
-        --cells W7,W8 --engines "juring fio seastar" --allow-seastar-write \
-        --fio-variants matched --no-w7-sweep --reps "$REPS" \
+        --cells randwrite-4k-qd64,randwrite-4k-qd128 --engines "juring fio seastar" --allow-seastar-write \
+        --fio-variants matched --no-batching-sweep --reps "$REPS" \
         --warmup-sec "$WARMUP" --measured-sec "$MEASURED" \
         --precondition none --rest-sec 0 --rest-scope runs \
         --seed 20261113 --cpu 2 "${WRITE_ARGS[@]}" \
         --session-dir "$S" --loadavg-max 1.6 --loadavg-action abort "$@"
 }
 
-if [[ ${1:-} == --dry-run ]]; then
+if (( DRY_RUN )); then
     S=${INTERLEAVED_SESSION:-$SESSION_PREFIX-dryrun}
     echo "# DRY-RUN: plan only, no directories, no I/O, no sleeps"
     run_harness --dry-run
@@ -63,7 +72,7 @@ dirty=false
     echo "io_uring_disabled=$(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null || echo unknown)"
     echo "loadavg_start=$(cat /proc/loadavg)"
     echo "thermal_start_mc=$(cat /sys/class/nvme/nvme1/hwmon*/temp1_input 2>/dev/null | head -n1 || echo unavailable)"
-    echo "cells=W7,W8 engines=juring,fio-io_uring[matched],seastar cycles=$REPS warmup_s=$WARMUP measured_s=$MEASURED"
+    echo "cells=randwrite-4k-qd64,randwrite-4k-qd128 engines=juring,fio-io_uring[matched],seastar cycles=$REPS warmup_s=$WARMUP measured_s=$MEASURED"
     echo "precondition=none rest_s=0 rest_scope=runs seed=20261113 cpu=2"
 } >"$S/PROTOCOL.txt"
 cat -- "$S/PROTOCOL.txt"

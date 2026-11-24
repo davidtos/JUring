@@ -1492,7 +1492,7 @@
     "seconds_default": 30,
     "rest_sec_default": 60,
     "cpu": 2,
-    "note": "durations/rests are preliminary (docs/b2-design.md \u00a73.3); see manifest.txt for the exact run protocol"
+    "note": "durations/rests are preliminary; see manifest.txt for the exact run protocol"
   },
   "unparsed_files": [],
   "exploratory_note": "juring-buffered rows are disclosed exploratory only; never used for the verdict"

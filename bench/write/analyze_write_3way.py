@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """Pre-registered 3-way write table for the 2026-11-23 state-controlled rerun.
 
-Protocol: scratch/audit/write-protocol-3way.md (frozen before the first run).
-Reads <session>/g*/cell-meta.tsv, <session>/g*/series/*.tsv and
-<session>/g*/cells/*.json. The frozen gate (bench/stepd/analyze_write_state.py)
-decides which generations are single-state; this script only adds the third and
+Protocol: docs/write-state-3way-protocol.md (frozen before the first run).
+Reads <session>/pass*/cell-meta.tsv, <session>/pass*/series/*.tsv and
+<session>/pass*/cells/*.json. The frozen gate (bench/host-setup/analyze_write_state.py)
+decides which passes are single-state; this script only adds the third and
 fourth arms and the table formatting. It never edits the frozen analyzer.
 
+Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
+(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
+g1 and pass1 forms.
+
 Usage:
-    python3 scratch/audit/analyze_write_3way.py --session DIR --gens g1,g2 --out DIR
+    python3 bench/write/analyze_write_3way.py --session DIR --passes pass1,pass2 --out DIR
 """
 import argparse
 import csv
@@ -19,15 +23,15 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bench"))
-from analysis import stats  # noqa: E402
+from analysis import cells, stats  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "frozen_write_state", os.path.join(REPO, "bench", "stepd", "analyze_write_state.py"))
+    "frozen_write_state", os.path.join(REPO, "bench", "host-setup", "analyze_write_state.py"))
 aw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aw)
 
-CELLS = ("W7", "W8")
-CELL_QD = {"W7": "64", "W8": "128"}
+CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
+CELL_QD = {cell: str(cells.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 ARMS = [
     ("juring", "std", "JUring"),
@@ -41,7 +45,7 @@ COMPARATORS = [
     (("juring", "std"), ("seastar", "std"), "JUring/Seastar"),
     (("fio-io_uring", "matched"), ("seastar", "std"), "fio-matched/Seastar"),
 ]
-MIN_3WAY_GENS = 3
+MIN_3WAY_PASSES = 3
 
 
 def fnum(x):
@@ -52,11 +56,32 @@ def fnum(x):
 
 
 def load_meta(d):
+    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
-            rows[(r["case"], r["engine"], r["variant"], r["bs"], r["qd"], r["rep"])] = r
+            rows[(cells.slug(r["case"]), r["engine"], r["variant"], r["bs"],
+                  r["qd"], r["rep"])] = r
     return rows
+
+
+def first_existing(paths):
+    for path in paths:
+        if os.path.exists(path):
+            return path
+    return paths[0]
+
+
+def series_path(d, cell, engine, variant, bs, qd, rep=1):
+    return first_existing([
+        os.path.join(d, "series", aw.stem(name, engine, variant, bs, qd, rep) + ".tsv")
+        for name in cells.aliases(cell)])
+
+
+def cell_json_path(d, cell, engine, variant, bs, qd, rep=1):
+    return first_existing([
+        os.path.join(d, "cells", aw.stem(name, engine, variant, bs, qd, rep) + ".json")
+        for name in cells.aliases(cell)])
 
 
 def run_errors(path, engine):
@@ -74,41 +99,45 @@ def run_errors(path, engine):
     return agg.get("errors_total")
 
 
-def collect(session, gens):
+def collect(session, passes):
     per = {}
     info = {}
-    for g in gens:
-        d = os.path.join(session, g)
+    for token in passes:
+        name = cells.pass_name(token)
+        d = cells.pass_dir(session, token)
         meta = load_meta(d)
         frozen = aw.gen_verdict(d)
-        info[g] = {"frozen_pass": bool(frozen["pass"]), "spread": {}, "all_arms_ok": True}
+        info[name] = {"frozen_pass": bool(frozen["pass"]), "spread": {},
+                      "all_arms_ok": True}
         for cell in CELLS:
             qd = CELL_QD[cell]
             for engine, variant, _label in ARMS:
                 key = (cell, engine, variant, "4k", qd, "1")
                 m = meta.get(key)
-                stem = aw.stem(cell, engine, variant, "4k", qd, 1)
-                series = aw.read_series(os.path.join(d, "series", stem + ".tsv"))
+                series = aw.read_series(series_path(d, cell, engine, variant, "4k", qd))
                 c = aw.classify(series)
                 iops = fnum(m["iops"]) if m and m["status"] == "ok" else None
                 if iops is not None and iops <= 0:
                     iops = None
-                err = run_errors(os.path.join(d, "cells", stem + ".json"), engine) if m else None
+                err = (run_errors(cell_json_path(d, cell, engine, variant, "4k", qd), engine)
+                       if m else None)
                 ok = (m is not None and m["status"] == "ok" and iops is not None
                       and c["steady"] and (err in (0, None)))
-                per[(g, cell, engine, variant)] = {
+                per[(name, cell, engine, variant)] = {
                     "status": m["status"] if m else "missing", "iops": iops,
                     "p99": fnum(m["p99_us"]) if m else None, "steady": c["steady"],
                     "reason": c["reason"], "cv": c.get("cv"), "errors": err, "ok": ok,
                 }
                 if not ok:
-                    info[g]["all_arms_ok"] = False
-            levels = [per[(g, cell, e, v)]["iops"] for e, v, _ in ARMS]
+                    info[name]["all_arms_ok"] = False
+            levels = [per[(name, cell, e, v)]["iops"] for e, v, _ in ARMS]
             levels = [x for x in levels if x]
-            info[g]["spread"][cell] = (max(levels) / min(levels)) if len(levels) == len(ARMS) else None
-        spreads = [info[g]["spread"][c] for c in CELLS]
+            info[name]["spread"][cell] = ((max(levels) / min(levels))
+                                          if len(levels) == len(ARMS) else None)
+        spreads = [info[name]["spread"][c] for c in CELLS]
         homogeneous = all(s is not None and s <= 1.25 for s in spreads)
-        info[g]["valid_3way"] = info[g]["frozen_pass"] and info[g]["all_arms_ok"] and homogeneous
+        info[name]["valid_3way"] = (info[name]["frozen_pass"]
+                                     and info[name]["all_arms_ok"] and homogeneous)
     return per, info
 
 
@@ -144,61 +173,66 @@ def fmt_ci(desc):
     return f"{desc['mean']:,.0f} ± {desc['ci95_half']:,.0f}"
 
 
-def write_report(outdir, session, gens, per, info):
+def write_report(outdir, session, passes, per, info):
     os.makedirs(outdir, exist_ok=True)
-    valid = [g for g in gens if info[g]["valid_3way"]]
-    frozen_valid = [g for g in gens if info[g]["frozen_pass"]]
+    valid = [p for p in passes if info[p]["valid_3way"]]
+    frozen_valid = [p for p in passes if info[p]["frozen_pass"]]
     lines = ["# State-controlled 3-way write rerun — pre-registered analysis", ""]
     lines.append(f"- session: `{session}`")
-    lines.append(f"- generations attempted: {', '.join(gens)}")
-    lines.append(f"- frozen-gate valid: {len(frozen_valid)} ({', '.join(frozen_valid) or 'none'})")
-    lines.append(f"- 3-way table valid: {len(valid)} ({', '.join(valid) or 'none'})")
-    lines.append("- cells: W7 = 4 KiB random write QD 64; W8 = 4 KiB random write QD 128")
+    lines.append("- passes attempted: "
+                 + ", ".join(cells.pass_label(p) for p in passes))
+    lines.append(f"- frozen-gate valid: {len(frozen_valid)} "
+                 f"({', '.join(cells.pass_label(p) for p in frozen_valid) or 'none'})")
+    lines.append(f"- 3-way table valid: {len(valid)} "
+                 f"({', '.join(cells.pass_label(p) for p in valid) or 'none'})")
+    lines.append("- cells: " + "; ".join(cells.label(c) for c in CELLS))
     lines.append("- windows: 60 s warmup + 60 s measured, one fresh process per run, "
-                 "continuous state-controlled generation (no rests), seed 20261113, CPU 2")
+                 "continuous state-controlled pass (no rests), seed 20261113, CPU 2")
     lines.append("- Seastar is a bracket: stock 200-entry ring, no taskrun flags, no "
                  "registered file, no fixed buffers. No fsync anywhere.")
     lines.append("")
 
-    lines.append("## Generation validity")
+    lines.append("## Pass validity")
     lines.append("")
-    lines.append("| generation | frozen PILOT_PASS | 4-arm max/min W7 | 4-arm max/min W8 | all arms steady/ok | 3-way valid |")
+    lines.append("| pass | frozen PILOT_PASS | 4-arm max/min, 64 in flight | "
+                 "4-arm max/min, 128 in flight | all arms steady/ok | 3-way valid |")
     lines.append("|---|---|---|---|---|---|")
-    for g in gens:
-        sp7 = info[g]["spread"]["W7"]
-        sp8 = info[g]["spread"]["W8"]
+    for p in passes:
+        sp7 = info[p]["spread"][CELLS[0]]
+        sp8 = info[p]["spread"][CELLS[1]]
         lines.append(
-            f"| {g} | {info[g]['frozen_pass']} | "
+            f"| {cells.pass_label(p)} | {info[p]['frozen_pass']} | "
             f"{'-' if sp7 is None else f'{sp7:.4f}'} | {'-' if sp8 is None else f'{sp8:.4f}'} | "
-            f"{info[g]['all_arms_ok']} | {info[g]['valid_3way']} |")
+            f"{info[p]['all_arms_ok']} | {info[p]['valid_3way']} |")
     lines.append("")
-    lines.append("Frozen gate (unchanged): `bench/stepd/analyze_write_state.py` over the six "
+    lines.append("Frozen gate (unchanged): `bench/host-setup/analyze_write_state.py` over the six "
                  "PLANNED JUring/fio runs; `max/min <= 1.25` per cell, single-state 60 s windows.")
     lines.append("")
 
     lines.append("## Per-run data")
     lines.append("")
-    lines.append("| generation | cell | engine | variant | IOPS | MiB/s | p99 µs | steady | errors | status |")
+    lines.append("| pass | cell | engine | variant | IOPS | MiB/s | p99 µs | steady | errors | status |")
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
-    for g in gens:
+    for p in passes:
         for cell in CELLS:
             for engine, variant, _label in ARMS:
-                r = per[(g, cell, engine, variant)]
+                r = per[(p, cell, engine, variant)]
                 mibs = (r["iops"] * BS / 1048576.0) if r["iops"] else None
                 iops_s = f"{r['iops']:,.0f}" if r["iops"] is not None else "-"
                 mibs_s = f"{mibs:,.1f}" if mibs is not None else "-"
                 p99_s = f"{r['p99']:.1f}" if r["p99"] is not None else "-"
                 err_s = "-" if r["errors"] is None else str(r["errors"])
                 lines.append(
-                    f"| {g} | {cell} | {engine} | {variant} | {iops_s} | {mibs_s} | "
+                    f"| {cells.pass_label(p)} | {cells.label(cell)} | {engine} | "
+                    f"{variant} | {iops_s} | {mibs_s} | "
                     f"{p99_s} | {r['steady']} | {err_s} | {r['status']} |")
     lines.append("")
 
-    lines.append("## Summary over 3-way-valid generations")
+    lines.append("## Summary over 3-way-valid passes")
     lines.append("")
-    if len(valid) < MIN_3WAY_GENS:
-        lines.append(f"**Only {len(valid)} valid generation(s); the pre-registered minimum for a "
-                     f"3-way summary is {MIN_3WAY_GENS}. Per-run data above is the evidence; no "
+    if len(valid) < MIN_3WAY_PASSES:
+        lines.append(f"**Only {len(valid)} valid pass(es); the pre-registered minimum for a "
+                     f"3-way summary is {MIN_3WAY_PASSES}. Per-run data above is the evidence; no "
                      "ranking is claimed.**")
         lines.append("")
     lines.append("| cell | engine | n | IOPS mean ± 95% CI | MiB/s | p99 µs (mean) | CV% | min | max |")
@@ -206,11 +240,11 @@ def write_report(outdir, session, gens, per, info):
     summary = {}
     for cell in CELLS:
         for engine, variant, label in ARMS:
-            vals = [per[(g, cell, engine, variant)]["iops"] for g in valid
-                    if per[(g, cell, engine, variant)]["iops"]]
+            vals = [per[(p, cell, engine, variant)]["iops"] for p in valid
+                    if per[(p, cell, engine, variant)]["iops"]]
             desc = stats.describe(vals)
-            p99s = [per[(g, cell, engine, variant)]["p99"] for g in valid
-                    if per[(g, cell, engine, variant)]["p99"] is not None]
+            p99s = [per[(p, cell, engine, variant)]["p99"] for p in valid
+                    if per[(p, cell, engine, variant)]["p99"] is not None]
             summary[(cell, engine, variant)] = desc
             p99 = sum(p99s) / len(p99s) if p99s else None
             mibs_mean = f"{desc['mean'] * BS / 1048576.0:,.1f}" if desc["mean"] is not None else "-"
@@ -219,11 +253,11 @@ def write_report(outdir, session, gens, per, info):
             min_s = f"{desc['min']:,.0f}" if desc["min"] is not None else "-"
             max_s = f"{desc['max']:,.0f}" if desc["max"] is not None else "-"
             lines.append(
-                f"| {cell} | {label} | {desc['n']} | {fmt_ci(desc)} | {mibs_mean} | "
+                f"| {cells.label(cell)} | {label} | {desc['n']} | {fmt_ci(desc)} | {mibs_mean} | "
                 f"{p99_mean} | {cv_s} | {min_s} | {max_s} |")
     lines.append("")
 
-    lines.append("## Paired ratios (same generation = same device state)")
+    lines.append("## Paired ratios (same pass = same device state)")
     lines.append("")
     lines.append("Parity at ±5%: two-sided 90% CI inside [0.95, 1.05]. Faster by >=5%: "
                  "one-sided 95% lower bound > 1.05. Slower by >=5%: 90% CI upper < 0.95.")
@@ -240,7 +274,8 @@ def write_report(outdir, session, gens, per, info):
             ci95 = (f"[{st['ci95_low']:.4f}, {st['ci95_high']:.4f}]"
                     if st.get("ci95_low") is not None else "-")
             ratio_mean_s = f"{st['mean']:.4f}" if st.get("mean") is not None else "-"
-            lines.append(f"| {cell} | {name} | {st.get('n_pairs', 0)} | {ratio_mean_s} | "
+            lines.append(f"| {cells.label(cell)} | {name} | {st.get('n_pairs', 0)} | "
+                         f"{ratio_mean_s} | "
                          f"{ci90} | {ci95} | {verdict_for(st)} |")
     lines.append("")
     lines.append("## Caveats carried with these numbers")
@@ -248,7 +283,8 @@ def write_report(outdir, session, gens, per, info):
     lines.append("- One host, one consumer NVMe, one kernel; absolute IOPS are device-state "
                  "evidence, not a specification.")
     lines.append("- Continuous post-SLC-burst steady state by construction: no rests after "
-                 "preconditioning or between runs (the frozen W1-A deviation). Not a fresh-drive "
+                 "preconditioning or between runs (the frozen continuous-variant deviation). Not a "
+                 "fresh-drive "
                  "or burst-mode number.")
     lines.append("- 60 s warmup / 60 s measured instead of the frozen 120/60; documented in the "
                  "protocol and allowed by bench/write/README.md.")
@@ -262,10 +298,10 @@ def write_report(outdir, session, gens, per, info):
         fh.write("\n".join(lines) + "\n")
 
     payload = {
-        "session": session, "generations": gens, "frozen_valid": frozen_valid,
-        "valid_3way": valid, "min_3way_gens": MIN_3WAY_GENS,
-        "runs": {f"{g}|{c}|{e}|{v}": per[(g, c, e, v)]
-                 for g in gens for c in CELLS for e, v, _ in ARMS},
+        "session": session, "generations": passes, "frozen_valid": frozen_valid,
+        "valid_3way": valid, "min_3way_gens": MIN_3WAY_PASSES,
+        "runs": {f"{p}|{c}|{e}|{v}": per[(p, c, e, v)]
+                 for p in passes for c in CELLS for e, v, _ in ARMS},
         "summary": {f"{c}|{e}|{v}": d for (c, e, v), d in summary.items()},
         "ratios": {f"{c}|{n}": st for (c, n), st in ratios.items()},
     }
@@ -276,29 +312,33 @@ def write_report(outdir, session, gens, per, info):
         w = csv.writer(fh)
         w.writerow(["generation", "cell", "engine", "variant", "iops", "mibs", "p99_us",
                     "steady", "errors", "status", "valid_3way_generation"])
-        for g in gens:
+        for p in passes:
             for cell in CELLS:
                 for engine, variant, _l in ARMS:
-                    r = per[(g, cell, engine, variant)]
+                    r = per[(p, cell, engine, variant)]
                     mibs = (r["iops"] * BS / 1048576.0) if r["iops"] else ""
-                    w.writerow([g, cell, engine, variant, r["iops"] or "", mibs,
+                    w.writerow([p, cell, engine, variant, r["iops"] or "", mibs,
                                 r["p99"] if r["p99"] is not None else "", r["steady"],
-                                r["errors"], r["status"], info[g]["valid_3way"]])
+                                r["errors"], r["status"], info[p]["valid_3way"]])
     return md_path, valid, frozen_valid
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--gens", required=True)
+    ap.add_argument("--passes", "--gens", dest="passes", required=True,
+                    help="comma-separated passes (accepts passN and legacy gN); "
+                         "legacy alias: --gens")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    gens = [g for g in args.gens.split(",") if g]
-    per, info = collect(args.session, gens)
-    md_path, valid, frozen_valid = write_report(args.out, args.session, gens, per, info)
+    passes = [cells.pass_name(p) for p in args.passes.replace(",", " ").split() if p]
+    per, info = collect(args.session, args.passes.replace(",", " ").split())
+    md_path, valid, frozen_valid = write_report(args.out, args.session, passes, per, info)
     print(f"wrote {md_path}")
-    print(f"frozen-gate valid: {len(frozen_valid)}/{len(gens)} ({', '.join(frozen_valid) or 'none'})")
-    print(f"3-way valid: {len(valid)}/{len(gens)} ({', '.join(valid) or 'none'})")
+    print(f"frozen-gate valid: {len(frozen_valid)}/{len(passes)} "
+          f"({', '.join(cells.pass_label(p) for p in frozen_valid) or 'none'})")
+    print(f"3-way valid: {len(valid)}/{len(passes)} "
+          f"({', '.join(cells.pass_label(p) for p in valid) or 'none'})")
     for cell in CELLS:
         print(f"== {cell} ==")
         for engine, variant, label in ARMS:

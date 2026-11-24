@@ -16,8 +16,12 @@ fixed in the script and reports the steady-state comparison as **descriptive onl
 Ratios are paired per generation+cell where both sides are steady, with 90%/95%
 CIs. The output states explicitly that this is not a frozen-gate verdict.
 
+Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
+(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
+g1 and pass1 forms.
+
 Usage:
-    python3 bench/write/analyze_write_steady.py --session DIR --gens g1,g2,g3,g4,g5 --out DIR
+    python3 bench/write/analyze_write_steady.py --session DIR --passes pass1,pass2 --out DIR
 """
 import argparse
 import csv
@@ -28,17 +32,18 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(REPO, "bench"))
-from analysis import stats  # noqa: E402
+from analysis import cells, stats  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
-    "frozen_write_state", os.path.join(REPO, "bench", "stepd", "analyze_write_state.py"))
+    "frozen_write_state", os.path.join(REPO, "bench", "host-setup", "analyze_write_state.py"))
 aw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(aw)
 
-CELLS = ("W7", "W8")
-CELL_QD = {"W7": "64", "W8": "128"}
+CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
+CELL_QD = {cell: str(cells.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 STEADY_MAX_IOPS = 250_000.0
+ANCHOR_PASS = "pass4"   # the one fully homogeneous pass in the 2026-11-23 session
 ARMS = [
     ("juring", "std", "JUring"),
     ("fio-io_uring", "matched", "fio matched"),
@@ -61,25 +66,37 @@ def fnum(x):
 
 
 def load_meta(d):
+    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
-            rows[(r["case"], r["engine"], r["variant"], r["rep"])] = r
+            rows[(cells.slug(r["case"]), r["engine"], r["variant"], r["rep"])] = r
     return rows
 
 
-def collect(session, gens):
-    per = {}       # (gen, cell, engine, variant) -> dict(mode, iops, p99, reason)
-    for g in gens:
-        d = os.path.join(session, g)
+def series_path(d, cell, engine, variant, qd, rep=1):
+    for name in cells.aliases(cell):
+        path = os.path.join(d, "series",
+                            aw.stem(name, engine, variant, "4k", qd, rep) + ".tsv")
+        if os.path.exists(path):
+            return path
+    return os.path.join(d, "series",
+                        aw.stem(cell, engine, variant, "4k", qd, rep) + ".tsv")
+
+
+def collect(session, passes):
+    per = {}       # (pass, cell, engine, variant) -> dict(mode, iops, p99, reason)
+    for token in passes:
+        name = cells.pass_name(token)
+        d = cells.pass_dir(session, token)
         meta = load_meta(d)
         for cell in CELLS:
             for engine, variant, _label in ARMS:
                 r = meta.get((cell, engine, variant, "1"))
                 if r is None:
                     continue
-                stem = aw.stem(cell, engine, variant, "4k", CELL_QD[cell], 1)
-                series = aw.read_series(os.path.join(d, "series", stem + ".tsv"))
+                series = aw.read_series(series_path(d, cell, engine, variant,
+                                                    CELL_QD[cell]))
                 c = aw.classify(series)
                 iops = fnum(r["iops"]) if r["status"] == "ok" else None
                 if iops is None or iops <= 0:
@@ -88,18 +105,18 @@ def collect(session, gens):
                     mode = "steady"
                 else:
                     mode = "cache"
-                per[(g, cell, engine, variant)] = {
+                per[(name, cell, engine, variant)] = {
                     "mode": mode, "iops": iops, "p99": fnum(r["p99_us"]),
                     "steady": c["steady"], "reason": c["reason"],
                 }
     return per
 
 
-def ratio_for(per, gens, cell, left, right):
+def ratio_for(per, passes, cell, left, right):
     lreps, rreps = [], []
-    for i, g in enumerate(gens):
-        a = per.get((g, cell, *left))
-        b = per.get((g, cell, *right))
+    for i, p in enumerate(passes):
+        a = per.get((p, cell, *left))
+        b = per.get((p, cell, *right))
         if a and b and a["mode"] == "steady" and b["mode"] == "steady":
             lreps.append({"rep_index": i, "iops": a["iops"]})
             rreps.append({"rep_index": i, "iops": b["iops"]})
@@ -119,17 +136,17 @@ def verdict_for(st):
     return "INCONCLUSIVE (interval spans the 5% bar)"
 
 
-def write_report(outdir, session, gens, per):
+def write_report(outdir, session, passes, per):
     os.makedirs(outdir, exist_ok=True)
     lines = ["# Second-drive write comparison — steady-state windows (descriptive)", ""]
     lines.append(f"- session: `{session}`")
     lines.append("- device: `nvme2n1p1` (same model/firmware as the read drive), ext4, "
-                 "6% used; 400 GiB SLC burn-in before generation 1, then five continuous "
-                 "state-controlled generations (60 s warmup + 60 s measured per arm, CPU 2)")
+                 "6% used; 400 GiB SLC burn-in before pass 1, then five continuous "
+                 "state-controlled passes (60 s warmup + 60 s measured per arm, CPU 2)")
     lines.append("- **This is not a frozen-gate verdict.** The frozen gate needs four "
-                 "homogeneous generations and got zero of five: `fio` intermittently reports "
+                 "homogeneous passes and got zero of five: `fio` intermittently reports "
                  "a cache-assisted window (~320k IOPS) while the device sustains ~195-200k, "
-                 "which breaks the within-generation `max/min` bound. The numbers below are the "
+                 "which breaks the within-pass `max/min` bound. The numbers below are the "
                  "steady-state windows; every cache-assisted run is listed separately.")
     lines.append(f"- steady run rule (fixed in this script): frozen single-state classifier "
                  f"PASS **and** measured mean below {STEADY_MAX_IOPS:,.0f} IOPS; the two observed "
@@ -145,13 +162,13 @@ def write_report(outdir, session, gens, per):
     summary = {}
     for cell in CELLS:
         for engine, variant, label in ARMS:
-            vals = [per[(g, cell, engine, variant)]["iops"] for g in gens
-                    if per.get((g, cell, engine, variant), {}).get("mode") == "steady"]
+            vals = [per[(p, cell, engine, variant)]["iops"] for p in passes
+                    if per.get((p, cell, engine, variant), {}).get("mode") == "steady"]
             desc = stats.describe(vals)
             summary[(cell, engine, variant)] = desc
-            p99s = [per[(g, cell, engine, variant)]["p99"] for g in gens
-                    if per.get((g, cell, engine, variant), {}).get("mode") == "steady"
-                    and per[(g, cell, engine, variant)]["p99"] is not None]
+            p99s = [per[(p, cell, engine, variant)]["p99"] for p in passes
+                    if per.get((p, cell, engine, variant), {}).get("mode") == "steady"
+                    and per[(p, cell, engine, variant)]["p99"] is not None]
             p99 = sum(p99s) / len(p99s) if p99s else None
             mean_s = f"{desc['mean']:,.0f}" if desc["mean"] is not None else "-"
             ci_s = f" ± {desc['ci95_half']:,.0f}" if desc["ci95_half"] is not None else ""
@@ -160,56 +177,59 @@ def write_report(outdir, session, gens, per):
             cv_s = f"{desc['cv_pct']:.2f}" if desc["cv_pct"] is not None else "-"
             min_s = f"{desc['min']:,.0f}" if desc["min"] is not None else "-"
             max_s = f"{desc['max']:,.0f}" if desc["max"] is not None else "-"
-            lines.append(f"| {cell} | {label} | {desc['n']} | {mean_s}{ci_s} | {mibs} | "
+            lines.append(f"| {cells.label(cell)} | {label} | {desc['n']} | {mean_s}{ci_s} | {mibs} | "
                          f"{p99_s} | {cv_s} | {min_s} | {max_s} |")
     lines.append("")
 
-    lines.append("## Paired steady-state ratios (per generation+cell)")
+    lines.append("## Paired steady-state ratios (per pass+cell)")
     lines.append("")
     lines.append("| cell | ratio | n pairs | mean | 90% CI | 95% CI | verdict |")
     lines.append("|---|---|---|---|---|---|---|")
     ratios = {}
     for cell in CELLS:
         for left, right, name in COMPARATORS:
-            st = ratio_for(per, gens, cell, left, right)
+            st = ratio_for(per, passes, cell, left, right)
             ratios[(cell, name)] = st
             ci90 = (f"[{st['ci90_low']:.4f}, {st['ci90_high']:.4f}]"
                     if st.get("ci90_low") is not None else "-")
             ci95 = (f"[{st['ci95_low']:.4f}, {st['ci95_high']:.4f}]"
                     if st.get("ci95_low") is not None else "-")
             mean = f"{st['mean']:.4f}" if st.get("mean") is not None else "-"
-            lines.append(f"| {cell} | {name} | {st.get('n_pairs', 0)} | {mean} | {ci90} | "
+            lines.append(f"| {cells.label(cell)} | {name} | {st.get('n_pairs', 0)} | "
+                         f"{mean} | {ci90} | "
                          f"{ci95} | {verdict_for(st)} |")
     lines.append("")
 
-    lines.append("## The one fully homogeneous generation (anchor)")
+    lines.append("## The one fully homogeneous pass (anchor)")
     lines.append("")
-    lines.append("`g4`, W7, all four arms in the same steady state:")
+    lines.append("Pass 4, " + cells.label(CELLS[0])
+                 + ", all four arms in the same steady state:")
     lines.append("")
     lines.append("| engine | IOPS | MiB/s |")
     lines.append("|---|---|---|")
     for engine, variant, label in ARMS:
-        r = per.get(("g4", "W7", engine, variant))
+        r = per.get((ANCHOR_PASS, CELLS[0], engine, variant))
         if r and r["iops"]:
             lines.append(f"| {label} | {r['iops']:,.0f} | {r['iops'] * BS / 1048576.0:,.1f} |")
     lines.append("")
-    lines.append("Within that generation JUring/fio-matched = `0.984`, JUring/Seastar = "
+    lines.append("Within that pass JUring/fio-matched = `0.984`, JUring/Seastar = "
                  "`1.001`: the three engines are indistinguishable at this device's sustained "
                  "write ceiling.")
     lines.append("")
 
     lines.append("## Cache-assisted runs (disclosed, excluded from the steady table)")
     lines.append("")
-    lines.append("| generation | cell | engine | variant | IOPS | single-state | reason |")
+    lines.append("| pass | cell | engine | variant | IOPS | single-state | reason |")
     lines.append("|---|---|---|---|---|---|---|")
     cache_count = 0
-    for g in gens:
+    for p in passes:
         for cell in CELLS:
             for engine, variant, label in ARMS:
-                r = per.get((g, cell, engine, variant))
+                r = per.get((p, cell, engine, variant))
                 if r and r["mode"] == "cache":
                     cache_count += 1
-                    lines.append(f"| {g} | {cell} | {label} | {variant} | {r['iops']:,.0f} | "
+                    lines.append(f"| {cells.pass_label(p)} | {cells.label(cell)} | {label} | "
+                                 f"{variant} | {r['iops']:,.0f} | "
                                  f"{r['steady']} | {r['reason']} |")
     lines.append("")
     lines.append(f"{cache_count} run(s) were fast-mode or non-steady. A controlled probe "
@@ -233,9 +253,9 @@ def write_report(outdir, session, gens, per):
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     payload = {
-        "session": session, "gens": gens, "steady_max_iops": STEADY_MAX_IOPS,
-        "steady": {f"{g}|{c}|{e}|{v}": r for g in gens for c in CELLS
-                   for e, v, _l in ARMS for r in [per.get((g, c, e, v))] if r},
+        "session": session, "gens": passes, "steady_max_iops": STEADY_MAX_IOPS,
+        "steady": {f"{p}|{c}|{e}|{v}": r for p in passes for c in CELLS
+                   for e, v, _l in ARMS for r in [per.get((p, c, e, v))] if r},
         "summary": {f"{c}|{e}|{v}": d for (c, e, v), d in summary.items()},
         "ratios": {f"{c}|{n}": st for (c, n), st in ratios.items()},
     }
@@ -247,12 +267,15 @@ def write_report(outdir, session, gens, per):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--gens", required=True)
+    ap.add_argument("--passes", "--gens", dest="passes", required=True,
+                    help="comma-separated passes (accepts passN and legacy gN); "
+                         "legacy alias: --gens")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    gens = [g for g in args.gens.split(",") if g]
-    per = collect(args.session, gens)
-    md_path, summary, ratios = write_report(args.out, args.session, gens, per)
+    tokens = args.passes.replace(",", " ").split()
+    passes = [cells.pass_name(p) for p in tokens]
+    per = collect(args.session, tokens)
+    md_path, summary, ratios = write_report(args.out, args.session, passes, per)
     print(f"wrote {md_path}")
     for cell in CELLS:
         for engine, variant, label in ARMS:
@@ -260,11 +283,12 @@ def main():
             if d["mean"] is not None:
                 ci = f" ±{d['ci95_half']:,.0f}" if d["ci95_half"] is not None else ""
                 cv = f"{d['cv_pct']:.2f}%" if d["cv_pct"] is not None else "n/a"
-                print(f"  {cell} {label:12s} n={d['n']} mean={d['mean']:,.0f}{ci} CV={cv}")
+                print(f"  {cells.label(cell)} {label:12s} n={d['n']} "
+                      f"mean={d['mean']:,.0f}{ci} CV={cv}")
         for _l, _r, name in COMPARATORS:
             st = ratios[(cell, name)]
             if st.get("mean") is not None:
-                print(f"  {cell} {name:24s} n={st['n_pairs']} ratio={st['mean']:.4f} "
+                print(f"  {cells.label(cell)} {name:24s} n={st['n_pairs']} ratio={st['mean']:.4f} "
                       f"-> {verdict_for(st)}")
 
 

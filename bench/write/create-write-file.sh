@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # create-write-file.sh - create the dedicated, non-sparse 10 GiB O_DIRECT write
-# dataset for the M1 write matrix (docs/HANDOVER.md section 7 Step 2).
+# dataset for the write matrix (see bench/write/README.md).
 #
 # The write file must live on the SAME NVMe as the read dataset (/dev/nvme1n1p1,
 # ext4).  In this sandbox it is reached through the writable bind mount:
@@ -50,7 +50,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_DIR=${WRITE_DIR:-$REPO_ROOT/nvme-data}
 WRITE_FILE=${WRITE_FILE:-$WRITE_DIR/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/m1-2026-11-13-write}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
 SIZE_SPEC=10g
 FORCE=0
 DRY_RUN=0
@@ -71,7 +71,7 @@ Options:
                          (default <repo>/nvme-data)
   --size SIZE            file size, integer with k/M/G/T suffix (default 10g = 10 GiB)
   --session-dir DIR      where to append state/write-file.tsv
-                         (default <repo>/bench/results/m1-2026-11-13-write)
+                         (default <repo>/bench/results/write-2026-11-13)
   --force                remove and recreate an existing (even correct) file
   --dry-run              print the exact commands and checks; write nothing
   --allow-any-path       allow a target outside <repo>/nvme-data (safety off)

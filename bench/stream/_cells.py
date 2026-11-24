@@ -1,6 +1,6 @@
 """Cell-JSON loading shared by the stream-campaign analyzers.
 
-The B2 stream matrix, B6 durability and W25 group-commit analyzers all read
+The stream-matrix, durability and group-commit analyzers all read
 ``<session>/cells/<cell>__<engine>__<variant>__r<rep>.json``.  The instruments and
 the campaign policy differ, but the file naming, the per-file error tolerance and
 the shape they read from each JSON do not.  Keeping that here means a corrupt or
@@ -52,7 +52,7 @@ def extract(data):
     runs = data.get("runs") or []
     run = runs[0] if runs else {}
     run_lat = run.get("latency_us") or {}
-    # The durability cells call the sync-wait latency sync_wait_us, the W25
+    # The durability cells call the sync-wait latency sync_wait_us, the group-commit
     # cells call it sync_latency_us; each instrument emits exactly one of them.
     sync_lat = run.get("sync_wait_us") or run.get("sync_latency_us") or {}
     group_lat = run.get("group_latency_us") or {}
@@ -128,7 +128,7 @@ def load_session(results_dir, expected_hint=None, schema_version=None,
 
     Returns ``(records, unparsed, schema_errors)``.  ``schema_version=None`` is
     analyze_stream's tolerant mode: an unreadable file is still a record with
-    ``error`` set, so its rep is listed as excluded under Data quality.  The B6
+    ``error`` set, so its rep is listed as excluded under Data quality.  The durability/group-commit
     analyzers pass their schema version instead: unreadable/schema-mismatched
     files become ``schema_errors`` and the caller refuses the session (exit 3).
     """
