@@ -58,12 +58,10 @@ ANALYZER=$HERE/analyze_scale_out.py
 JVM_OPTS=${JVM_OPTS:--Xms8g -Xmx8g -XX:+AlwaysPreTouch}
 FIO_GROUP_REPORTING=${FIO_GROUP_REPORTING:-1}
 
-# Frozen identity of the code under test and of the frozen protocol document.
+# Frozen identity of the code under test.
 FROZEN_SRC_SHA1=04f12dbc85d723a10dd952b7ac3c51bb6253ed46
 FROZEN_TEST_SHA1=666e0644dc063c0b15c5bb52571002a79b5ec657
-FROZEN_DESIGN_PATH=docs/m3-design.md
 SEASTAR_LD=${SEASTAR_LD:-$REPO_ROOT/.sysroot/root/usr/lib64}
-FROZEN_DESIGN_SHA1=d391cad3d9a4df50d3c8e0d365e8ba177393b9eb
 
 QD=64
 BS=4k
@@ -219,7 +217,6 @@ cpu_set_for_n() { # cpu_set_for_n <N> -> taskset/--cpuset list
 dataset_size() { stat -c%s "$READ_FILE" 2>/dev/null || echo 0; }
 src_main_sha1() { find src/main/java -type f | sort | xargs cat | sha1sum | cut -d' ' -f1; }
 src_test_sha1() { find src/test/java -type f | sort | xargs cat | sha1sum | cut -d' ' -f1; }
-design_sha1() { sha1sum "$FROZEN_DESIGN_PATH" 2>/dev/null | cut -d' ' -f1; }
 head_commit() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown; }
 argv_str() { printf '%q ' "$@"; }
 
@@ -526,11 +523,7 @@ write_manifest() {
         echo "# generated: $(date -Iseconds)  host: $(hostname)"
         echo "# workspace: $REPO_ROOT"
         echo
-        echo "## Frozen design + code identity"
-        echo "design file: $FROZEN_DESIGN_PATH"
-        echo "design sha1 (expected): $FROZEN_DESIGN_SHA1"
-        echo "design sha1 (live):     $(design_sha1)"
-        echo "design freeze commit:   $(git -C "$REPO_ROOT" log -1 --format='%H %s' -- "$FROZEN_DESIGN_PATH" 2>/dev/null || echo '?')"
+        echo "## Frozen code identity"
         echo "code under test: frozen tree (shard runtime + metrics delivered), src/main/java content sha1 (expected): $FROZEN_SRC_SHA1"
         echo "src/test/java content sha1 (expected): $FROZEN_TEST_SHA1"
         echo "live src/main/java content sha1: $(src_main_sha1)"
@@ -741,11 +734,6 @@ preflight() {
         "dataset size $rd_size B >= 10 GiB, 4K aligned" \
         "dataset size $rd_size B invalid (need >= 10 GiB, 4K aligned)"
 
-    check $([[ -f $FROZEN_DESIGN_PATH ]] && echo 1 || echo 0) \
-        "frozen design present: $FROZEN_DESIGN_PATH" "frozen design missing: $FROZEN_DESIGN_PATH"
-    check $([[ $(design_sha1) == "$FROZEN_DESIGN_SHA1" ]] && echo 1 || echo 0) \
-        "design sha1 == frozen $FROZEN_DESIGN_SHA1" \
-        "design sha1 $(design_sha1) != frozen $FROZEN_DESIGN_SHA1 (design moved after freeze)"
 
     check $([[ $(src_main_sha1) == "$FROZEN_SRC_SHA1" ]] && echo 1 || echo 0) \
         "src/main/java content sha1 == frozen $FROZEN_SRC_SHA1" \
@@ -837,7 +825,7 @@ print_plan() {
     echo "JVM flags   : $JVM_OPTS (fresh JVM per invocation)"
     echo "seastar     : --smp N --cpuset <set> --memory 1G --lock-memory 0 --reactor-backend io_uring"
     echo "fio json    : group_reporting=$FIO_GROUP_REPORTING (frozen template; 1 => fio per-job spread n/a)"
-    echo "identity    : design $FROZEN_DESIGN_SHA1; src/main $FROZEN_SRC_SHA1; src/test $FROZEN_TEST_SHA1"
+    echo "identity    : src/main $FROZEN_SRC_SHA1; src/test $FROZEN_TEST_SHA1"
     if (( RESUME == 1 )); then
         local skip=0 remain=0 st last
         for n in $N_LIST; do
@@ -885,7 +873,7 @@ print_plan() {
 # ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
-echo "[scale-out] multi-shard scaling campaign (frozen protocol $FROZEN_DESIGN_SHA1)"
+echo "[scale-out] multi-shard scaling campaign (frozen protocol)"
 echo "[scale-out] session=$SESSION N='$N_LIST' R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s engines='$ENGINES'"
 
 if [[ $DRY_RUN == 1 ]]; then

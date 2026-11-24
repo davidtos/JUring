@@ -27,11 +27,17 @@ The same day, the human-readable analyzer output stopped using the retired inter
 in favour of descriptive labels, e.g. "Read/write aggregate", "1 s device I/O series", "the
 variance rule (CV > 10 % = unstable, no ranking)" and "the background-load gate". The committed
 read-matrix and write-matrix text goldens were edited to the identical new wording (numbers,
-layout and line structure unchanged). The `_large-files.sha256` pins for those two cases could not
+layout and line structure unchanged). The `_large-files.sha256` pins for those cases could not
 be recomputed here because the session data is absent: they are already stale from the identifier
-rename (the pinned `_stdout.txt`, `summary.md` and `aggregate.json` carry cell/pass identifiers and
-the old wording), so a `--golden` run can only be green on a host that still has the historical
-sessions, after `python3 bench/analysis/selftest.py --update`.
+rename and the design-ID sweep (the pinned `_stdout.txt`, `summary.md` and `aggregate.json` carry
+cell/pass identifiers, the old wording, and the removed design-identity manifest fields), so a
+`--golden` run can only be green on a host that still has the historical sessions, after
+`python3 bench/analysis/selftest.py --update`.
+
+The multi-shard scaling campaign no longer records a design-document identity: the frozen protocol
+doc it used to hash was removed from the public tree, so that check could never pass. The campaign
+identity is now the frozen source/test content SHA-1 pair only; the scale-out golden's `m3.json`
+SHA-256 pin is stale for the same reason and is refreshed by `--update`.
 
 The preliminary shard-scaling pair (`bench/shard/run-shard-scaling.sh` + `analyze_shard.py`) and its
 historical `b4-shard` case were removed after the multi-shard scaling campaign superseded them; that

@@ -30,8 +30,6 @@ R_ENV = 5
 # manifest.txt fields this campaign cites; jsonio.read_manifest keeps the raw
 # "key: value" spelling, so map it to the names the report/payload use.
 MANIFEST_FIELDS = {
-    "design sha1 (expected)": "design_sha1",
-    "design freeze commit": "design_commit",
     "live src/main/java content sha1": "src_main_sha1",
     "live src/test/java content sha1": "src_test_sha1",
     "git HEAD": "head",
@@ -545,7 +543,6 @@ def render_markdown(session, analysis):
     if analysis.get("missing_raw"):
         a(f"- **WARNING: {len(analysis['missing_raw'])} raw JSON file(s) missing/unparseable**; "
           "bars needing raw fields (c/e) are INCONCLUSIVE. " + ", ".join(analysis["missing_raw"][:5]))
-    a(f"- design sha1: `{man.get('design_sha1', 'n/a')}`; frozen commit: `{man.get('design_commit', 'n/a')}`")
     a(f"- src/main sha1: `{man.get('src_main_sha1', 'n/a')}`; src/test sha1: `{man.get('src_test_sha1', 'n/a')}`")
     a(f"- git HEAD at session: `{man.get('head', 'n/a')}`")
     a("- Protocol: 4K randread, QD 64 per worker/shard, 10 s warmup + 30 s measured, R=5, "
