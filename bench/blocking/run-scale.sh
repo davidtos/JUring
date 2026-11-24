@@ -2,9 +2,9 @@
 #
 # run-scale.sh -- opt-in 1,000,000-virtual-thread scale run for JUringBlocking.
 #
-# The committed suite runs JUringBlockingScaleTest with 10,000 virtual threads
-# (see docs/vt-scale.md). This script runs the same test with 1,000,000 virtual
-# threads and a 6 GiB heap for the forked test JVM. It is opt-in: it is not part
+# The committed suite runs JUringBlockingScaleTest with 10,000 virtual threads.
+# This script runs the same test with 1,000,000 virtual threads and a 6 GiB heap
+# for the forked test JVM. It is opt-in: it is not part
 # of the default build, it can take minutes, and it needs enough heap for the
 # virtual threads and their buffers on top of the library's call records.
 #
@@ -41,7 +41,7 @@ next_pow2() {
 # Capacity model for a budget that admits every virtual thread at once
 # (maxConcurrentCalls = VT): split over workers, round each share up to a power
 # of two with the 256-record per-worker minimum, then add the per-worker
-# overhead. See docs/vt-scale.md.
+# overhead. See BlockingOptions.estimatedBytes() for the same arithmetic.
 per_worker=$(( (VT + WORKERS - 1) / WORKERS ))
 (( per_worker < 256 )) && per_worker=256
 per_worker=$(next_pow2 "$per_worker")
@@ -61,7 +61,7 @@ printf '  (the test sizes its own budget and prints the exact estimate it uses a
 printf '\n'
 
 FORK_ARGS="-Xmx${XMX} -Djuring.scale.vt=${VT}"
-printf 'mvn -o -Dmaven.repo.local=.m2repo -Dtest=JUringBlockingScaleTest -Djuring.surefire.argLine="%s" test\n\n' "$FORK_ARGS"
+printf 'mvn -Dtest=JUringBlockingScaleTest -Djuring.surefire.argLine="%s" test\n\n' "$FORK_ARGS"
 
-exec mvn -o -Dmaven.repo.local=.m2repo -Dtest=JUringBlockingScaleTest \
+exec mvn -Dtest=JUringBlockingScaleTest \
     -Djuring.surefire.argLine="$FORK_ARGS" test

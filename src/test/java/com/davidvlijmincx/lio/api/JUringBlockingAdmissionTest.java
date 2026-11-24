@@ -18,6 +18,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 
 import static com.davidvlijmincx.lio.api.IoUringOptions.IORING_SETUP_COOP_TASKRUN;
@@ -388,9 +389,16 @@ class JUringBlockingAdmissionTest {
             }
             awaitParked(io, 7);
 
+            AtomicReference<Throwable> queuedFailure = new AtomicReference<>();
             Thread queued = Thread.ofVirtual().unstarted(() -> {
                 try (Arena arena = Arena.ofConfined()) {
                     io.read(fd, arena.allocate(8), 8, 0);
+                } catch (IllegalStateException e) {
+                    // close() aborts a call that was admitted but never submitted; read()
+                    // documents IllegalStateException for a closed instance. The outcome is
+                    // timing-dependent, so record it and check it after the join instead of
+                    // letting the default uncaught-exception handler print a stack trace.
+                    queuedFailure.set(e);
                 }
             });
             queued.start();
@@ -411,8 +419,15 @@ class JUringBlockingAdmissionTest {
 
             io.close();
             queued.join(10_000);
+            assertFalse(queued.isAlive(), "the queued caller stayed blocked across close");
+            Throwable queuedError = queuedFailure.get();
+            if (queuedError != null) {
+                assertTrue(queuedError.getMessage().contains("closed"),
+                        "unexpected failure from the queued caller: " + queuedError);
+            }
             for (Thread vt : inFlight) {
                 vt.join(10_000);
+                assertFalse(vt.isAlive(), "an in-flight caller stayed blocked across close");
             }
         }
     }
