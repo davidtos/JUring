@@ -28,8 +28,8 @@ from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
-REQUIRED_EXTENSION = "b6-durability-1"
-DEFAULT_SESSION = "b6-group-commit-2026-11-15"
+REQUIRED_EXTENSION = "durability-1"
+DEFAULT_SESSION = "group-commit"
 CELL_ORDER = ["groupcommit-4k-batch1", "groupcommit-4k-batch8",
               "groupcommit-4k-batch32", "groupcommit-4k-batch128"]
 FPG_TOLERANCE = 1e-9
@@ -239,7 +239,7 @@ def render_markdown(session, results_dir, aggregate):
     bad = aggregate["data_quality"]
     if not bad["excluded"] and not bad["missing"] and not bad["unparsed"] \
             and not aggregate["violations"]:
-        a("Every cell JSON parsed, carried the `b6-durability-1` extension, satisfied the "
+        a("Every cell JSON parsed, carried the `durability-1` extension, satisfied the "
           "groupcommit identities and passed the fresh-process restart check.")
     else:
         for e in bad["excluded"]:
@@ -346,13 +346,13 @@ def main(argv):
         "between cells - this is a count/latency micro-benchmark, not a throughput "
         "campaign.",
         "Configuration/durability: durability fdatasync (never fsync), bs 4096 B, "
-        "cells b1/b8/b32/b128; the groupcommit measured window is 15 s after a 5 s warmup.",
+        "batch sizes 1/8/32/128; the groupcommit measured window is 15 s after a 5 s warmup.",
     ]
 
     aggregate = {
         "schema_version": SCHEMA_VERSION,
         "schema_extensions": [REQUIRED_EXTENSION],
-        "kind": "b6-w25-group-commit",
+        "kind": "group-commit-4k",
         "session": args.session,
         "source_dir": results_dir,
         "generated_utc": datetime.datetime.now(datetime.timezone.utc)

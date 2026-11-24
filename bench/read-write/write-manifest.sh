@@ -16,7 +16,7 @@ cd "$MATRIX_REPO_ROOT"
 
 OUT=$MATRIX_RESULTS/manifest.txt
 {
-    echo "# Read/write read-path session manifest -- JUring vs seastar"
+    echo "# Read/write session manifest -- JUring vs seastar"
     echo "# generated: $(date -Iseconds)  host: $(hostname)"
     echo "# workspace: $MATRIX_REPO_ROOT"
     echo
@@ -55,7 +55,7 @@ OUT=$MATRIX_RESULTS/manifest.txt
     echo "fio: $(fio --version 2>/dev/null || echo '?')"
     echo "perf: $(perf --version 2>/dev/null | head -1 || echo '?')"
     java -version 2>&1 | head -3 || true
-    echo "seastar: $(grep -m1 -o 'VERSION = .*' SeaStarRef/build/release/build.ninja 2>/dev/null || echo 'seastar-25.05.0-1392-g04b1c04d')"
+    echo "seastar: $(grep --max-count=1 -o 'VERSION = .*' SeaStarRef/build/release/build.ninja 2>/dev/null || echo 'seastar-25.05.0-1392-g04b1c04d')"
     echo
     echo "## Repo state"
     echo "git commit: $(git -C "$MATRIX_REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"

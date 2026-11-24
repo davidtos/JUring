@@ -2,8 +2,9 @@
 # run-write-chain.sh -- pre-registered state-controlled write protocol.
 #
 # FROZEN PROTOCOL: fixed before the campaign (see docs/write-state-3way-protocol.md). Unattended.
-#   control pass  one preconditioned pass, Step-A-like timing (precondition + 600 s
-#                 rest, no inter-run rest because the pass is one rep): is the pass
+#   control pass  one preconditioned pass with the same timing as the write-matrix
+#                 pass (precondition + 600 s rest, no inter-run rest because the pass
+#                 is one rep): is the pass
 #                 single-state and homogeneous across the three arms of both gate cells?
 #   variants      only if the control pass fails: two pre-registered state-control
 #                 variants, one pass each: A = no rest after preconditioning / no
@@ -15,9 +16,7 @@
 #                 4 KiB random-write cells (QD 64 and QD 128), using only valid
 #                 passes (n>=4). Otherwise INCONCLUSIVE / FAIL as defined.
 #
-# Identifier note (2026-11-24): a *pass* is what the protocol documents call a
-# "pass"; pass directories are pass1..pass8 and the analyzer flag is
-# --passes (legacy --passes/--pass-dir still accepted).
+# Passes are named pass1..pass8; the analyzer flags are --passes and --pass-dir.
 #
 # Usage (as user david, from repo root):
 #   bench/host-setup/run-write-chain.sh --session-dir bench/results/write-state
@@ -38,7 +37,7 @@ while (( $# )); do
         --session-dir) SESSION=$2; shift 2 ;;
         --dry-run) DRY=1; shift ;;
         --deadline-epoch) DEADLINE=$2; shift 2 ;;
-        -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

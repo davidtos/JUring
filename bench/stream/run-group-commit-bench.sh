@@ -22,7 +22,7 @@
 #
 # Session layout (gitignored): bench/results/<session>/ with
 #   cells/<cell>__juring__groupcommit__r<rep>.json   raw JSON (schema 1.0 +
-#                                                    schema_extensions ["b6-durability-1"])
+#                                                    schema_extensions ["durability-1"])
 #   logs/<same>.log
 #   cell-meta.tsv                                    one row per invocation (20 columns)
 #   manifest.txt
@@ -35,7 +35,6 @@
 #       [--skip-compile] [--no-analyze] [--force]
 #
 # Environment: CPU (default 2), GC_FILE, GC_FILE_SIZE, JURING_CLASSES (default
-#   legacy env aliases W25_FILE/W25_FILE_SIZE also accepted),
 # target/classes), JURING_OUT (default bench/juring/out), ALLOW_RESIDUAL_LOAD=1.
 # The driver compiles bench/juring/JUringDurabilityBench.java with javac against an
 # EXISTING target/classes (never runs Maven; the Lead owns repo-root builds).
@@ -48,9 +47,9 @@ source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
-SESSION=b6-group-commit-$(date +%F)
-GC_FILE=${GC_FILE:-${W25_FILE:-$REPO_ROOT/nvme-data/write_files/groupcommit_4k_batch.bin}}
-GC_FILE_SIZE=${GC_FILE_SIZE:-${W25_FILE_SIZE:-1g}}
+SESSION=group-commit
+GC_FILE=${GC_FILE:-$REPO_ROOT/nvme-data/write_files/groupcommit_4k_batch.bin}
+GC_FILE_SIZE=${GC_FILE_SIZE:-1g}
 JURING_CLASSES=${JURING_CLASSES:-$REPO_ROOT/target/classes}
 JURING_OUT=${JURING_OUT:-$REPO_ROOT/bench/juring/out}
 ANALYZER=$HERE/analyze_group_commit.py
@@ -218,8 +217,8 @@ except Exception:
 problems = []
 if d.get("status") != "ok":
     problems.append("status=%s error=%s" % (d.get("status"), d.get("error")))
-if "b6-durability-1" not in (d.get("schema_extensions") or []):
-    problems.append("missing schema_extensions b6-durability-1")
+if "durability-1" not in (d.get("schema_extensions") or []):
+    problems.append("missing schema_extensions durability-1")
 if d.get("schema_version") != "1.0":
     problems.append("schema_version=%r" % (d.get("schema_version"),))
 runs = d.get("runs") or []
@@ -271,7 +270,7 @@ except Exception:
     print("fail"); raise SystemExit(0)
 run = (d.get("runs") or [{}])[0]
 ok = (d.get("status") == "ok"
-      and "b6-durability-1" in (d.get("schema_extensions") or [])
+      and "durability-1" in (d.get("schema_extensions") or [])
       and abs(float(run.get("fsyncs_per_group") or 0.0) - 1.0) <= 1e-9
       and (run.get("restart_verify") or {}).get("ok") is True)
 print("ok" if ok else "fail")

@@ -123,7 +123,7 @@ for g in $(seq 1 "$MAX_PASSES"); do
             --dry-run
         echo "# DRY-RUN: real run would then classify each pass with:"
         echo "#   python3 $ANALYZER --pass-dir $S/pass$g      # PILOT_PASS 0/1 (frozen gate)"
-        echo "#   python3 $ANALYZER3 --session $S --passes $PASSES --out $S/analysis-3way"
+        echo "#   python3 $ANALYZER3 --session $S --passes pass1,pass2 --out $S/analysis-3way"
         echo "DRY_RUN_OK session=$S max_passes=$MAX_PASSES plan_runs_per_pass=8 est_sec_per_pass=1114"
         exit 0
     fi

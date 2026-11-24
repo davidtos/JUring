@@ -1,8 +1,0 @@
-case,variant,qd,shards,iops,mibs,p99_us,p999_us,source
-W1,std,1,1,15537.8496,60.694725,97.0,99.0,<SESSIONS>/m1-2026-11-13/iotester/W1__seastar-io_tester__std__bs4k__qd1__t1__r1.yaml
-W1,std,1,1,15778.543,61.63493349609375,96.0,98.0,<SESSIONS>/m1-2026-11-13/iotester/W1__seastar-io_tester__std__bs4k__qd1__t1__r2.yaml
-W1,std,1,1,15757.3652,61.55220791015625,96.0,98.0,<SESSIONS>/m1-2026-11-13/iotester/W1__seastar-io_tester__std__bs4k__qd1__t1__r3.yaml
-W24,devnull,64,1,1561102.38,6098.05615234375,54.0,67.0,<SESSIONS>/m1-2026-11-13/iotester/W24__seastar-io_tester__devnull__bs4k__qd64__t1__r1.yaml
-W3,std,64,1,374457.781,1462.725703125,275.0,348.0,<SESSIONS>/m1-2026-11-13/iotester/W3__seastar-io_tester__std__bs4k__qd64__t1__r1.yaml
-W3,std,64,1,374786.906,1464.01134765625,275.0,334.0,<SESSIONS>/m1-2026-11-13/iotester/W3__seastar-io_tester__std__bs4k__qd64__t1__r2.yaml
-W3,std,64,1,374582.25,1463.2119140625,275.0,343.0,<SESSIONS>/m1-2026-11-13/iotester/W3__seastar-io_tester__std__bs4k__qd64__t1__r3.yaml

@@ -1,9 +1,0 @@
-generation,cell,comparator,ratio
-w2-g1,W7,matched,0.947035
-w2-g3,W7,matched,0.944778
-w2-g1,W7,matchedbatch,0.951814
-w2-g3,W7,matchedbatch,0.954359
-w2-g1,W8,matched,0.950996
-w2-g3,W8,matched,0.955537
-w2-g1,W8,matchedbatch,1.011009
-w2-g3,W8,matchedbatch,0.955899

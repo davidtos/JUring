@@ -55,12 +55,6 @@ def load_meta(d):
 
 
 def series_path(session, cell, engine, variant, qd, rep):
-    for name in cellmap.aliases(cell):
-        path = os.path.join(
-            session, "series",
-            f"{name}__{engine}__{variant}__bs4k__qd{qd}__t1__r{rep}.tsv")
-        if os.path.exists(path):
-            return path
     return os.path.join(
         session, "series",
         f"{cell}__{engine}__{variant}__bs4k__qd{qd}__t1__r{rep}.tsv")
@@ -294,7 +288,7 @@ def write_report(outdir, session, reps, per):
     lines.append("- Short 30 s measured windows and 5 cycles per cell; the intervals reflect the "
                  "moving device, not only engine differences.")
     lines.append("- Descriptive bracket, not the frozen state-controlled gate; it cannot be pooled "
-                 "with the write matrix or with the primary 2026-11-23 campaign.")
+                 "with the write matrix or with the primary state-controlled campaign.")
     lines.append("- Seastar asymmetry as above. No durability/fsync claim.")
     lines.append("")
 

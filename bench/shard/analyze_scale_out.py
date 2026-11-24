@@ -2,13 +2,13 @@
 """Multi-shard scaling campaign analyzer -- protocol frozen before the campaign.
 
 Reads a ``bench/shard/run-scale-out.sh`` session (cell-meta.tsv, cells/*.json,
-manifest.txt) and writes ``aggregate/m3.{json,md}``: the frozen bars (a)-(e) with
+manifest.txt) and writes ``aggregate/scale-out.{json,md}``: the frozen bars (a)-(e) with
 one-sided 95 % t CIs (df = R-1), per-ring queue depth + runtime-completion p99,
 state-gate disclosure and a PASS / FAIL / INCONCLUSIVE verdict.  Every meta row
 is reported; gated reps stay in every mean/CI and are only labelled.
 
 Usage:
-    python3 bench/shard/analyze_scale_out.py --session m3-2026-11-15
+    python3 bench/shard/analyze_scale_out.py --session scale-out
     python3 bench/shard/analyze_scale_out.py --results-dir bench/results/<dir>
 """
 
@@ -114,7 +114,7 @@ def normalize(engine, raw, meta):
         "raw_ok": raw is not None,
         "per_shard": [],
         "per_ring": [],
-        "b5_available": False,
+        "metrics_available": False,
         "workers": 0,
         "aggregate_ring": None,
         "aggregate_dispatch_p99": None,
@@ -161,9 +161,9 @@ def normalize(engine, raw, meta):
         })
         depth = series_depth(w)
         rm = ring_metrics(w)
-        has_b5 = bool(w.get("ring_metrics")) or bool(w.get("ring_series")) or bool(w.get("dispatch_latency_us"))
-        if has_b5:
-            rec["b5_available"] = True
+        has_metrics = bool(w.get("ring_metrics")) or bool(w.get("ring_series")) or bool(w.get("dispatch_latency_us"))
+        if has_metrics:
+            rec["metrics_available"] = True
         rec["per_ring"].append({
             "worker": wid,
             "depth": depth,
@@ -182,26 +182,11 @@ def load_session(results_dir):
     recs = []
     for m in meta:
         engine = m.get("engine", "?")
-        # cell-meta.tsv `cell` is the canonical "shards-<n>" slug in new sessions and
-        # the legacy "N<n>" in old ones; the raw file is
+        # cell-meta.tsv `cell` is the canonical "shards-<n>" slug; the raw file is
         # cells/<cell>__<engine>__r<rep>.json (same convention as the driver).
-        raw_cell = m.get("cell", "")
-        n = cellmap.shard_count(raw_cell)
-        cell = cellmap.slug(raw_cell)
-        if n is not None:                 # legacy "N<n>" and canonical "shards-<n>"
-            cell = "shards-%d" % n
-        candidates = [cell]
-        if n is not None and ("N%d" % n) not in candidates:
-            candidates.append("N%d" % n)  # unmigrated legacy filename
-        path = None
-        for name in candidates:
-            candidate = os.path.join(results_dir, "cells", "%s__%s__r%s.json"
-                                     % (name, engine, m.get("rep", "")))
-            if path is None and os.path.exists(candidate):
-                path = candidate
-        if path is None:
-            path = os.path.join(results_dir, "cells", "%s__%s__r%s.json"
-                                % (cell, engine, m.get("rep", "")))
+        cell = cellmap.slug(m.get("cell", ""))
+        path = os.path.join(results_dir, "cells", "%s__%s__r%s.json"
+                            % (cell, engine, m.get("rep", "")))
         raw = jsonio.load_json(path)
         rec = normalize(engine, raw, m)
         rec["cell"] = cell
@@ -324,23 +309,25 @@ def analyze(results_dir):
     expected_r = max([r["rep"] for r in recs] + [1])
     bar_b = {}
     for n in N_ALL:
-        jn, j1 = getter("juring-group", n), getter("juring-group", 1)
-        fn, f1 = getter("fio", n), getter("fio", 1)
+        juring_n = getter("juring-group", n)
+        juring_1 = getter("juring-group", 1)
+        fio_n = getter("fio", n)
+        fio_1 = getter("fio", 1)
         se_ratio = []
         se_j = []
         se_f = []
         p99_ratio = []
         for rep in rep_range:
-            if all(rep in d for d in (jn, j1, fn, f1)):
+            if all(rep in d for d in (juring_n, juring_1, fio_n, fio_1)):
                 try:
-                    sej = jn[rep]["iops"] / (n * j1[rep]["iops"])
-                    sef = fn[rep]["iops"] / (n * f1[rep]["iops"])
+                    sej = juring_n[rep]["iops"] / (n * juring_1[rep]["iops"])
+                    sef = fio_n[rep]["iops"] / (n * fio_1[rep]["iops"])
                     se_j.append(sej)
                     se_f.append(sef)
                     if sef:
                         se_ratio.append((rep, sej / sef))
-                    if fn[rep]["p99_us"] and jn[rep]["p99_us"]:
-                        p99_ratio.append((rep, jn[rep]["p99_us"] / fn[rep]["p99_us"]))
+                    if fio_n[rep]["p99_us"] and juring_n[rep]["p99_us"]:
+                        p99_ratio.append((rep, juring_n[rep]["p99_us"] / fio_n[rep]["p99_us"]))
                 except (ZeroDivisionError, TypeError):
                     continue
         se_vals = [v for _, v in se_ratio]
@@ -407,7 +394,7 @@ def analyze(results_dir):
         rs = good(by.get(("juring-group", n), []))
         covered = 0
         for r in rs:
-            if r["b5_available"] and r["per_ring"]:
+            if r["metrics_available"] and r["per_ring"]:
                 covered += 1
                 for w in r["per_ring"]:
                     per_ring.append({
@@ -532,7 +519,7 @@ def render_markdown(session, analysis):
     a(f"| (d) seastar io_uring N=8 | literal reading: LB(seastar/JUring) ≥ 0.90 (JUring/seastar direction also reported) | **{bars['(d)']}** |")
     a(f"| (e) per-ring queue depth + runtime p99 | present for all juring-group cells | **{bars['(e)']}** |")
     a("")
-    a("The metrics <1 % overhead A/B is already PASS (`bench/results/b5-overhead-2026-11-14/`) "
+    a("The metrics <1 % overhead A/B is already PASS (`bench/results/metrics-overhead/`) "
       "and is not re-run by this campaign.")
     a("")
     a("## 1. Session / identity / protocol")
@@ -660,7 +647,7 @@ def render_markdown(session, analysis):
     a("- All engine asymmetries (seastar 200-entry ring, no registered files/fixed buffers; "
       "JUring registered file+buffers and DEFER_TASKRUN) are disclosed, not equalised.")
     a("")
-    a(f"Raw session: `{analysis['results_dir']}` (gitignored); `aggregate/m3.json` carries the "
+    a(f"Raw session: `{analysis['results_dir']}` (gitignored); `aggregate/scale-out.json` carries the "
       "same data machine-readably.")
     a("")
     return "\n".join(L)
@@ -686,10 +673,10 @@ def main(argv=None):
     cli.ensure_dir(out_dir)
 
     analysis = analyze(results_dir)
-    md_path = os.path.join(out_dir, "m3.md")
+    md_path = os.path.join(out_dir, "scale-out.md")
     cli.write_text(md_path, render_markdown(session, analysis))
-    # m3.json historically ends at the closing brace (no trailing newline)
-    cli.write_json(os.path.join(out_dir, "m3.json"), analysis, indent=2,
+    # the JSON file ends at the closing brace (no trailing newline)
+    cli.write_json(os.path.join(out_dir, "scale-out.json"), analysis, indent=2,
                    newline=False, default=str)
     print(f"[analyze_scale_out] {md_path}")
     print(f"[analyze_scale_out] verdict: {analysis['verdict']}  bars: "

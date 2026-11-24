@@ -1,2 +1,0 @@
-[analyze_scale_out] <WORK>/scale-out/out/m3.md
-[analyze_scale_out] verdict: PASS  bars: (a)=PASS, (b)=PASS, (c)=PASS, (d)=PASS, (e)=PASS

@@ -15,14 +15,14 @@
 # Two stop conditions (--condition):
 #   target (default)  Stop as soon as bytes_written >= target (--target-mult x
 #                     file size, e.g. 32,212,254,720 B for the 10 GiB file).
-#                     This is the write-matrix fix for the 2026-11-13 block, where the
+#                     This is the write-matrix fix for the older run, where the
 #                     old AND condition wrote 128.8 GiB: 4 GiB chunks reach the
 #                     32 GiB target in 8 chunks, no 120 s minimum is imposed.
 #                     --min-sec is only a time cap here: if the target is NOT
 #                     reached by --min-sec, the burst stops with
 #                     stop_reason=min-sec-cap and rc=1 (capped), exactly like
 #                     the --max-sec hard cap.
-#   and               Old behaviour (reproduce the 2026-11-13 block): stop only
+#   and               Old behaviour (reproduce the older target-and-120 s block): stop only
 #                     when BOTH bytes_written >= target AND elapsed >=
 #                     --min-sec.  To reproduce that block's full 12 x 10 GiB
 #                     burst, also pass --chunk-bytes 10g (the old default chunk
@@ -56,7 +56,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-matrix}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
 
 TARGET_MULT=3
@@ -64,7 +64,7 @@ MIN_SEC=120
 MAX_SEC=900
 CHUNK_SPEC=               # empty -> default 4 GiB chunks (write-matrix default)
 DEFAULT_CHUNK_BYTES=$(( 4 * 1073741824 ))
-CONDITION=target          # target (write-matrix default) | and (old 2026-11-13 behaviour)
+CONDITION=target          # target (write-matrix default) | and (old target-and-120 s behaviour)
 BS=4k
 QD=64
 CPU=2
@@ -83,7 +83,7 @@ Options:
   --file PATH            write dataset file
                          (default <repo>/nvme-data/write_files/single_file_bench_w.bin)
   --session-dir DIR      session dir for state/logs
-                         (default <repo>/bench/results/write-2026-11-13)
+                         (default <repo>/bench/results/write-matrix)
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --target-mult N        bytes target = N x file size (default 3)
   --condition target|and stop rule (default target = stop as soon as the target

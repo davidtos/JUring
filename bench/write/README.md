@@ -10,10 +10,8 @@ A real matrix takes the NVMe for hours. Start with `--dry-run`, confirm it print
 
 Cells are named by what they do: `randwrite-4k-qd64`, `seqwrite-1m-qd8`, and so on. The single
 source of truth is [`bench/analysis/cells.py`](../analysis/cells.py); the bash harness loads it
-through [`bench/cells.sh`](../cells.sh). The old `W5`-style codes are kept only as CLI aliases and
-in historical result files, so `--cells W7` still means `--cells randwrite-4k-qd64`. The write
-protocol's "generation" is a **pass**: directories and CLI values are `pass1`..`pass8`, the analyzer
-flag is `--passes` (legacy `--gens`/`--gen-dir` still accepted), and the state rows live in
+through [`bench/cells.sh`](../cells.sh). A write campaign repetition is a **pass**: directories and
+CLI values are `pass1`..`pass8`, the analyzer flag is `--passes`, and the state rows live in
 `state/write-passes.tsv`.
 
 ## Safety rules
@@ -76,10 +74,10 @@ bench/write/run-write-cells.sh --cells randwrite-4k-qd1 --reps 1 --rest-sec 60 -
 bench/write/run-write-cells.sh --cells randwrite-4k-qd1 --reps 1 --dry-run
 
 # ---- Step 4: the full session (one command, about 9 h, 130 runs) ----
-bench/write/run-write-campaign.sh --session-dir bench/results/write-campaign-<date>
+bench/write/run-write-campaign.sh --session-dir bench/results/write-matrix
 
 # continue an interrupted session (run-granular; skips present JSONs)
-bench/write/run-write-campaign.sh --resume --session-dir bench/results/write-campaign-<date>
+bench/write/run-write-campaign.sh --resume --session-dir bench/results/write-matrix
 
 # the underlying driver is still there for custom selections
 bench/write/run-write-cells.sh --engines juring,fio,seastar --allow-seastar-write
@@ -90,9 +88,8 @@ bench/write/sample-device-iops.sh --out series/manual.tsv --label manual &
 kill -TERM $!      # the sampler writes its final # end line and exits 0
 ```
 
-`--cells` takes the canonical slugs (`randwrite-4k-qd64`, `seqwrite-1m-qd8`, ...); the legacy
-`W5`-style codes are still accepted so old invocations keep working. The workload tables below use
-plain descriptions.
+`--cells` takes the canonical slugs (`randwrite-4k-qd64`, `seqwrite-1m-qd8`, ...); an unknown
+slug is rejected. The workload tables below use plain descriptions.
 
 `create-write-file.sh` prints `CREATE_WRITE_FILE_RESULT action=created ... size_bytes=10737418240 allocated_bytes=10737418240 non_sparse=1 ext4`; a second run prints `action=skipped`. `precondition.sh` prints `PRECONDITION_RESULT ... condition=target stop_reason=target-reached chunks=8 bytes_written>=32212254720 fsync=ok`. The burst stops as soon as the target is reached; `--min-sec=120` only caps a burst that cannot reach it (`rc=1`, `stop_reason=min-sec-cap`). After the burst the device must idle 600 s before the first configuration; `run-write-cells.sh` handles that when it owns the session.
 
@@ -119,11 +116,11 @@ The per-configuration protocol:
 3. After every measured run there is a 300 s idle rest, recorded in `state/rests.tsv`. `--rest-scope reps` rests only between repetition groups, a documented deviation.
 4. Every configuration gets a fresh preconditioning burst, so the order stays monotonic. `--cells` may select a subset; the order is preserved.
 
-Preconditioning defaults to per configuration. `--precondition session-once` costs less but a long session drifts away from the pre-write state, and `none` is for smoke runs only. `--condition and --chunk-bytes 10g` reproduces the 2026-11-13 block, where the old target-and-120 s rule wrote 128.8 GiB; the current target-driven rule stops at about 8 chunks and 32-34 GiB.
+Preconditioning defaults to per configuration. `--precondition session-once` costs less but a long session drifts away from the pre-write state, and `none` is for smoke runs only. `--condition and --chunk-bytes 10g` reproduces the older target-and-120 s rule, which wrote 128.8 GiB; the current target-driven rule stops at about 8 chunks and 32-34 GiB.
 
 ## State-controlled 3-way rerun (JUring / fio / Seastar)
 
-`bench/write/run-write-3way.sh` is the pre-registered continuous-state protocol behind the 2026-11-23 write table in BENCHMARK.md: the two 4 KiB random-write cells (`randwrite-4k-qd64` and `randwrite-4k-qd128`), one preconditioned pass per attempt, no rests inside a pass, 60 s warmup + 60 s measured, JUring + `fio` matched/matchedbatch + Seastar, engine order rotated per pass, and stop as soon as four passes pass the frozen `analyze_write_state.py` gate. The protocol, the deviations and the validity/ranking rules are frozen in [docs/write-state-3way-protocol.md](../../docs/write-state-3way-protocol.md). The Seastar arm is opt-in in the generic harness, so the wrapper passes `--allow-seastar-write`; the write path is validated in [bench/seastar/build-and-run.md](../seastar/build-and-run.md).
+`bench/write/run-write-3way.sh` is the pre-registered continuous-state protocol behind the state-controlled write table in BENCHMARK.md: the two 4 KiB random-write cells (`randwrite-4k-qd64` and `randwrite-4k-qd128`), one preconditioned pass per attempt, no rests inside a pass, 60 s warmup + 60 s measured, JUring + `fio` matched/matchedbatch + Seastar, engine order rotated per pass, and stop as soon as four passes pass the frozen `analyze_write_state.py` gate. The protocol, the deviations and the validity/ranking rules are frozen in [docs/write-state-3way-protocol.md](../../docs/write-state-3way-protocol.md). The Seastar arm is opt-in in the generic harness, so the wrapper passes `--allow-seastar-write`; the write path is validated in [bench/seastar/build-and-run.md](../seastar/build-and-run.md).
 
 ```bash
 # zero-I/O structural check first
@@ -164,7 +161,7 @@ python3 bench/write/plot_write_modes.py --session "$S" --passes "$PASSES" \
 
 ### Interleaved fallback bracket
 
-When the drive cannot hold a pass homogeneous — the 2026-11-23 primary campaign failed the gate in both completed passes — `bench/write/run-write-interleaved.sh` alternates the three engines in short cycles (15 s warmup + 30 s measured, 5 cycles per cell, order rotated) so all of them sample the same drifting state. It is a descriptive bracket, not a frozen-gate PASS/FAIL, and it is documented in [docs/write-state-interleaved-protocol.md](../../docs/write-state-interleaved-protocol.md). It runs 30 measured runs in about 24 minutes.
+When the drive cannot hold a pass homogeneous — the primary state-controlled campaign failed the gate in both completed passes — `bench/write/run-write-interleaved.sh` alternates the three engines in short cycles (15 s warmup + 30 s measured, 5 cycles per cell, order rotated) so all of them sample the same drifting state. It is a descriptive bracket, not a frozen-gate PASS/FAIL, and it is documented in [docs/write-state-interleaved-protocol.md](../../docs/write-state-interleaved-protocol.md). It runs 30 measured runs in about 24 minutes.
 
 ```bash
 bash bench/write/run-write-interleaved.sh --dry-run   # zero-I/O plan check
@@ -184,7 +181,7 @@ JURING_SKIP_COMPILE=1 taskset -c 2 bench/juring/run-juring.sh \
   --bs 4k --qd 64 --threads 1 --seconds 60 --warmup-sec 120 \
   --runs 1 --seed 20261113 \
   --label randwrite-4k-qd64__juring__std__bs4k__qd64__t1__r1 \
-  --json bench/results/write-2026-11-13/cells/randwrite-4k-qd64__juring__std__bs4k__qd64__t1__r1.json
+  --json bench/results/<write-session>/cells/randwrite-4k-qd64__juring__std__bs4k__qd64__t1__r1.json
 # 1M: --workload seqwrite --bs 1m
 ```
 
@@ -197,7 +194,7 @@ taskset -c 2 fio --name=<stem> --filename=nvme-data/write_files/single_file_benc
   --clocksource=clock_gettime --percentile_list=50:95:99:99.9 \
   --clat_percentiles=1 --lat_percentiles=0 \
   --output-format=json \
-  --output=bench/results/write-2026-11-13/cells/<stem>.json
+  --output=bench/results/<write-session>/cells/<stem>.json
 # 1M sequential: --rw=write --bs=1m --iodepth=1|8|32
 ```
 
@@ -222,11 +219,11 @@ LD_LIBRARY_PATH=$PWD/.sysroot/root/usr/lib64 taskset -c 2 bench/seastar/seastar_
   --seed 20261113 --label <stem> \
   --smp 1 --cpuset 2 --memory 1G --lock-memory 0 \
   --reactor-backend io_uring \
-  --json bench/results/write-2026-11-13/cells/<stem>.json
+  --json bench/results/<write-session>/cells/<stem>.json
 # 1M: --workload seqwrite --bs 1m
 ```
 
-The runner opens the existing file `rw|create`, uses `file::dma_write` (no fixed buffers or files, the documented Seastar asymmetry), one fiber per outstanding I/O, and emits the same schema as JUring. The write path was smoke-validated on this host on 2026-11-23 (`status=ok`, `errors=0`, in-place write on the 10 GiB file, size unchanged, no truncate/fsync), but it stays opt-in via `--allow-seastar-write` because the binary is host-built. Smoke-test it with `--seconds 3 --warmup-sec 1` before enabling it on another host.
+The runner opens the existing file `rw|create`, uses `file::dma_write` (no fixed buffers or files, the documented Seastar asymmetry), one fiber per outstanding I/O, and emits the same schema as JUring. The write path was smoke-validated on this host (`status=ok`, `errors=0`, in-place write on the 10 GiB file, size unchanged, no truncate/fsync), but it stays opt-in via `--allow-seastar-write` because the binary is host-built. Smoke-test it with `--seconds 3 --warmup-sec 1` before enabling it on another host.
 
 ## Device-state controls
 
@@ -242,7 +239,7 @@ The runner opens the existing file `rw|create`, uses `file::dma_write` (no fixed
 
 ## Outputs and naming
 
-The session root is `bench/results/write-2026-11-13/` unless you pass `--session-dir`. The executed matrix is in the 2026-11-15 write session (gitignored).
+The session root defaults to `bench/results/write-matrix/` unless you pass `--session-dir`.
 
 ```text
 cells/<case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>.json
@@ -256,7 +253,7 @@ manifest-run<N>.txt                # later invocations; manifest.txt is never tr
 logs/campaign-block<N>.log
 ```
 
-`<case>` is the canonical cell slug the driver selects with `--cells` (legacy `W#` accepted); `<engine>` is `juring`, `fio-io_uring`, `fio-libaio` or `seastar`; `<variant>` is `std` for JUring and Seastar, and `default`, `matched`, `matchedbatch`, `batch1/8/16/32` or `sqpoll` for fio. Sequence numbers stay monotonic across blocks and later `--resume` invocations.
+`<case>` is the canonical cell slug the driver selects with `--cells`; `<engine>` is `juring`, `fio-io_uring`, `fio-libaio` or `seastar`; `<variant>` is `std` for JUring and Seastar, and `default`, `matched`, `matchedbatch`, `batch1/8/16/32` or `sqpoll` for fio. Sequence numbers stay monotonic across blocks and later `--resume` invocations.
 
 fio `clat_ns` percentiles are divided by 1000 before they go into `RESULT`, `state/runs.tsv` and `cell-meta.tsv`, so `p99_us` is microseconds for every engine and the manifest records `cell_meta_p99_units=us`. Sessions written before that fix keep their nanosecond values and are not citable for fio p99.
 

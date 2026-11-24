@@ -39,7 +39,7 @@
  *
  * Counters / JSON
  * ---------------
- *   schema_version "1.0" + "schema_extensions": ["b6-durability-1"] (an additive durability
+ *   schema_version "1.0" + "schema_extensions": ["durability-1"] (an additive durability
  *   marker, the stream schema is not touched). Per-run: batch_size, groups_total, committed_writes,
  *   committed_bytes, max_observed_batch, writes_per_group{min,mean,max}, syncs_issued,
  *   syncs_completed, syncs_failed, fsyncs_per_group (= syncs_completed / groups_total,
@@ -117,7 +117,7 @@ public final class JUringDurabilityBench {
 
     /** Stream/file schema is frozen at 1.0; the durability bench marks itself additively. */
     static final String SCHEMA_VERSION = "1.0";
-    static final String SCHEMA_EXTENSION = "b6-durability-1";
+    static final String SCHEMA_EXTENSION = "durability-1";
     static final String ENGINE = "juring";
     static final String ENGINE_DETAIL = "JUringDurabilityBench";
     static final String ENGINE_DETAIL_VERIFY = "JUringDurabilityBench-verify";
@@ -461,7 +461,7 @@ public final class JUringDurabilityBench {
             if (verifyOnly) {
                 return "verify_" + humanSize(verifyBytes);
             }
-            return "w25_4k_b" + batch + "_" + durabilityModeName();
+            return "groupcommit-4k-batch" + batch + "_" + durabilityModeName();
         }
 
         String durabilityModeName() {

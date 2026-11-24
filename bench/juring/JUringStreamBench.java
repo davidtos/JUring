@@ -66,7 +66,7 @@
  *       stream hint, applied at open; informational, no verdict uses it)
  *
  * JSON keeps `schema_version "1.0"` and adds
- * `"schema_extensions": ["b6-durability-1"]`, config.{durability,sync_every_bytes,
+ * `"schema_extensions": ["durability-1"]`, config.{durability,sync_every_bytes,
  * fadvise} and per-run {durability_mode,sync_every_bytes,durability_points,
  * syncs_issued,syncs_completed,syncs_failed,bytes_synced,sync_wait_us{...},
  * sync_wait_share}; existing fields and their meanings are unchanged.
@@ -598,7 +598,7 @@ public final class JUringStreamBench {
                 "Example:",
                 "  bench/juring/run-juring-stream.sh --workload stream_write \\",
                 "      --file nvme-data/write_files/single_file_bench_w.bin --bs 128k --qd 8 \\",
-                "      --size 1g --seconds 3 --warmup-sec 1 --runs 1 --label w21_smoke",
+                "      --size 1g --seconds 3 --warmup-sec 1 --runs 1 --label stream-write-128k-smoke",
                 "");
     }
 
@@ -1377,7 +1377,7 @@ public final class JUringStreamBench {
             // Additive durability marker: schema_version stays "1.0";
             // consumers must ignore unknown keys.
             w.name("schema_extensions").arr();
-            w.str("b6-durability-1");
+            w.str("durability-1");
             w.endArr();
             w.name("status").str(status);
             w.name("error").str(error);

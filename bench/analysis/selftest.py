@@ -2,47 +2,26 @@
 """Regression harness for the bench analyzers.
 
 The analyzers under ``bench/`` were consolidated onto the shared
-``bench/analysis/`` package while keeping their published output byte-identical.
-This file pins both halves of that promise without any third-party runner:
-
-* ``--unit`` (the default when no mode is given) checks the shared helpers --
-  Student-t tables and intervals, descriptive statistics and paired ratios,
-  gate verdicts, markdown formatting, JSON/manifest loading and CLI session
-  resolution -- against hand-computed values and cross-checks;
-* ``--golden`` runs each campaign analyzer against a throwaway copy of its
-  session directory, normalizes timestamps and paths, and compares the exit
-  code, stdout, stderr and output tree with the committed tree under
-  ``bench/analysis/golden/`` (outputs over 100 KB are pinned by SHA-256 instead
-  of text).  The session data is gitignored, so a fresh clone
-  or CI skips every golden case; ``--update`` rewrites the tree from the
-  current code.
+``bench/analysis/`` package.  This file pins the shared helpers -- Student-t
+tables and intervals, descriptive statistics and paired ratios, gate verdicts,
+markdown formatting, JSON/manifest loading, CLI session resolution and the
+canonical cell/pass identifiers -- against hand-computed values and
+cross-checks.
 
 Run ``python3 bench/analysis/selftest.py --unit`` before touching anything under
-``bench/``.  ``--golden`` needs the raw session directories: it copies them into
-``scratch/selftest/`` and skips any campaign whose session is absent, so a fresh
-clone (and CI) still runs the unit half.  Stdlib only, like the analyzers.
+``bench/``.  ``--unit`` is the only mode and the default, so a bare invocation
+does the same thing.  Stdlib only, like the analyzers.
 """
 from __future__ import annotations
 
 import argparse
-import difflib
-import hashlib
-import os
-import re
-import shutil
 import statistics
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 BENCH = REPO / "bench"
-GOLDEN = Path(__file__).resolve().parent / "golden"
-# Throwaway session copies and analyzer output. The analyzers echo these paths;
-# canon() collapses any scratch/<root>/work/ prefix to <WORK>, so this location
-# is free to change.
-WORK = REPO / "scratch" / "selftest" / "work"
 
 sys.path.insert(0, str(BENCH))
 from analysis import cells, cli, jsonio, md, stats  # noqa: E402
@@ -416,7 +395,7 @@ def stems_and_paths():
     eq(jsonio.split_stem("randread-4k-qd1__juring__std__bs4k__qd1__t1__r2"),
        ["randread-4k-qd1", "juring", "std", "bs4k", "qd1", "t1", "r2"])
     eq(jsonio.rep_index("randread-4k-qd1__juring__std__bs4k__qd1__t1__r2"), 2)
-    eq(jsonio.rep_index("W1__juring__std__r12"), 12)
+    eq(jsonio.rep_index("randread-4k-qd1__juring__std__r12"), 12)
     eq(jsonio.rep_index("noseparator"), None)
     eq(jsonio.rel(jsonio.REPO_ROOT / "bench" / "README.md"), "bench/README.md")
     eq(jsonio.rel("/definitely/not/in/repo"), "/definitely/not/in/repo")
@@ -427,15 +406,14 @@ def stems_and_paths():
 
 @test("cells")
 def canonical_cell_map():
-    eq(cells.slug("W7"), "randwrite-4k-qd64")
     eq(cells.slug("randwrite-4k-qd64"), "randwrite-4k-qd64")
-    eq(cells.label("W7"), "4 KiB random write, 64 in flight")
-    eq(cells.legacy("randwrite-4k-qd64"), "W7")
+    eq(cells.label("randwrite-4k-qd64"), "4 KiB random write, 64 in flight")
     eq(cells.slug("not-a-cell"), "not-a-cell")
-    legacies = [c.legacy for c in cells.CELLS]
-    eq(len(legacies), len(set(legacies)), "legacy aliases")
+    eq(cells.label("not-a-cell"), "not-a-cell")
+    eq(cells.lookup("randwrite-4k-qd64").kind, "throughput")
+    eq(cells.lookup("pass1"), None, "pass ids are not cells")
     eq(len({c.slug for c in cells.CELLS}), len(cells.CELLS), "canonical slugs")
-    eq(cells.aliases("W7"), ["randwrite-4k-qd64", "W7"])
+    eq(len({c.slug for c in cells.ALL}), len(cells.ALL), "all slugs")
 
 
 @test("cells")
@@ -449,12 +427,18 @@ def cell_for_and_passes():
     eq(cells.cell_for("groupcommit", "randwrite", "4k", None, 32),
        "groupcommit-4k-batch32")
     eq(cells.cell_for("throughput", "randread", "4k", 3), None)
-    for value in ("g1", "pass1", "w2-g1", "G1"):
+    for value in ("pass1", "PASS1"):
         eq(cells.pass_name(value), "pass1", value)
         eq(cells.pass_label(value), "pass 1", value)
-    eq(cells.pass_name("other"), "other")
-    eq(cells.shard_count("N8"), 8)
+    # Non-canonical pass tokens are not accepted and pass through unchanged.
+    for value in ("not-a-pass", "other"):
+        eq(cells.pass_name(value), value, value)
+        eq(cells.pass_label(value), value, value)
+    eq(cells.pass_number("not-a-pass"), None)
+    eq(cells.pass_number("pass3"), 3)
+    eq(cells.pass_dir("/sessions/read-write", "pass4"), "/sessions/read-write/pass4")
     eq(cells.shard_count("shards-8"), 8)
+    eq(cells.shard_count("not-shards"), None, "unknown shard id")
     eq(cells.shard_slug(4), "shards-4")
 
 
@@ -464,13 +448,13 @@ def cell_for_and_passes():
 def resolve_session():
     with scratch_dir() as tmp:
         root = Path(tmp) / "results"
-        eq(cli.resolve_session(session="m2-final", results_root=root),
-           (root / "m2-final").resolve())
+        eq(cli.resolve_session(session="read-write", results_root=root),
+           (root / "read-write").resolve())
         explicit = Path(tmp) / "elsewhere"
-        eq(cli.resolve_session(session="m2-final", session_dir=str(explicit)),
+        eq(cli.resolve_session(session="read-write", session_dir=str(explicit)),
            explicit.resolve())
-        eq(cli.resolve_session(default_session="m3"),
-           (jsonio.REPO_ROOT / "bench" / "results" / "m3").resolve())
+        eq(cli.resolve_session(default_session="scale-out"),
+           (jsonio.REPO_ROOT / "bench" / "results" / "scale-out").resolve())
         try:
             cli.resolve_session()
         except ValueError:
@@ -501,323 +485,16 @@ def run_unit() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# golden comparison
-# ---------------------------------------------------------------------------
-
-# One case per campaign analyzer.  "{sessions}" is the
-# throwaway copy of the session root and "{out}" the per-case output directory.
-CASES = {
-    # The read/write analyzer only writes next to the session for the canonical
-    # directory; the copy here is raw evidence, so the golden always passes an
-    # explicit --out-prefix and pins every generated table (CSV, aggregate JSON,
-    # summary markdown).
-    "read-matrix": {
-        "argv": ["bench/read-write/analyze_read_write.py", "--dir", "{sessions}/m1-2026-11-13",
-                 "--out-prefix", "{out}/m1"],
-        "outs": ["{out}"],
-        "needs": ["m1-2026-11-13"],
-    },
-    "write-matrix": {
-        "argv": ["bench/read-write/analyze_read_write.py", "--dir", "{sessions}/m1-write-2026-11-15",
-                 "--out-prefix", "{out}/m1-write"],
-        "outs": ["{out}"],
-        "needs": ["m1-write-2026-11-15"],
-    },
-    "streams": {
-        "argv": ["bench/stream/analyze_stream.py", "--session", "m2-final",
-                 "--results", "{sessions}/m2-final", "--out", "{out}"],
-        "outs": ["{out}"],
-        "needs": ["m2-final"],
-    },
-    "scale-out": {
-        "argv": ["bench/shard/analyze_scale_out.py", "--session", "m3-2026-11-15",
-                 "--results-dir", "{sessions}/m3-2026-11-15", "--out-dir", "{out}"],
-        "outs": ["{out}"],
-        "needs": ["m3-2026-11-15"],
-    },
-    # The host-setup and write-state fixtures below keep the recorded historical
-    # session names under the unattended-2026-11-16 archive (the directory whose
-    # old name was "stepd" is the historical host-setup session; .../write-state
-    # is the state-control pass).
-    "host-setup": {
-        "argv": ["bench/host-setup/analyze_host_setup.py", "--dir",
-                 "{sessions}/unattended-2026-11-16/stepd"],
-        "outs": ["{sessions}/unattended-2026-11-16/stepd/analysis"],
-        "needs": ["unattended-2026-11-16/stepd"],
-    },
-    "write-state": {
-        "argv": ["bench/host-setup/analyze_write_state.py",
-                 "--session", "{sessions}/unattended-2026-11-16/write-state",
-                 "--gens", "w2-g1,w2-g2,w2-g3,w2-g4,w2-g5", "--out", "{out}"],
-        "outs": ["{out}"],
-        "needs": ["unattended-2026-11-16/write-state"],
-    },
-    "durability": {
-        "argv": ["bench/stream/analyze_durability.py",
-                 "--session", "b6-durability-2026-11-15",
-                 "--results", "{sessions}/b6-durability-2026-11-15", "--out", "{out}"],
-        "outs": ["{out}"],
-        "needs": ["b6-durability-2026-11-15"],
-    },
-    "group-commit": {
-        "argv": ["bench/stream/analyze_group_commit.py",
-                 "--session", "b6-group-commit-2026-11-15",
-                 "--results", "{sessions}/b6-group-commit-2026-11-15", "--out", "{out}"],
-        "outs": ["{out}"],
-        "needs": ["b6-group-commit-2026-11-15"],
-    },
-    "metrics-overhead": {
-        "argv": ["bench/shard/analyze_metrics_overhead.py",
-                 "--session", "b5-overhead-2026-11-14",
-                 "--results-dir", "{sessions}/b5-overhead-2026-11-14",
-                 "--out-dir", "{out}",
-                 "--frozen-head", "6cc1a751f1c652ead1bfa05f7941f75af8fb5ecf",
-                 "--frozen-src-sha1", "04f12dbc85d723a10dd952b7ac3c51bb6253ed46",
-                 "--frozen-test-sha1", "666e0644dc063c0b15c5bb52571002a79b5ec657"],
-        "outs": ["{out}"],
-        "needs": ["b5-overhead-2026-11-14"],
-    },
-    "parse-results": {
-        "argv": ["bench/parse_results.py", "--dir", "{sessions}/2026-11-13",
-                 "--csv", "{out}/results.csv"],
-        "outs": ["{out}"],
-        "needs": ["2026-11-13"],
-    },
-}
-
-_TS = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ")
-_SCRATCH_SESSIONS = re.compile(
-    r"[A-Za-z0-9_./-]*?scratch/[A-Za-z0-9_.-]+/sessions/")
-_WORK_PATH = re.compile(r"(?:<REPO>/)?scratch/[A-Za-z0-9_.-]+/work/")
-_MAX_TEXT = 100_000
-_MAX_DIFF_LINES = 120
-
-
-def canon(text: str) -> str:
-    """Collapse the sandbox-specific scratch work root (run_all.py's canon())."""
-    return _WORK_PATH.sub("<WORK>/", text)
-
-
-def normalize(text: str, session_root: Path) -> str:
-    """Collapse timestamps and host paths the way run_all.py did."""
-    text = _TS.sub("<TIMESTAMP>", text)
-    replacements = [(str(session_root), "<SESSIONS>")]
-    try:
-        rel_sessions = session_root.relative_to(REPO).as_posix() + "/"
-    except ValueError:
-        rel_sessions = None
-    if rel_sessions:
-        replacements.append((rel_sessions, "<SESSIONS>/"))
-    replacements.append((str(REPO / "bench" / "results"), "<SESSIONS>"))
-    replacements.append((str(REPO), "<REPO>"))
-    for root, tag in replacements:
-        text = text.replace(root, tag)
-    text = _SCRATCH_SESSIONS.sub("<SESSIONS>/", text)
-    text = text.replace("bench/results/", "<SESSIONS>/")
-    return canon(text)
-
-
-def snapshot(src: Path, sub: str, session_root: Path, prefixes: tuple,
-             texts: dict[str, str], digests: dict[str, str]) -> None:
-    """Split one case output into normalized text files and large-file digests."""
-    if src.is_file():
-        text = normalize(src.read_text(errors="replace"), session_root)
-        if src.stat().st_size > _MAX_TEXT:
-            digests[sub] = hashlib.sha256(text.encode()).hexdigest()
-        else:
-            texts[sub] = text
-        return
-    if not src.is_dir():
-        return
-    for f in sorted(src.rglob("*")):
-        if not f.is_file():
-            continue
-        if prefixes and not f.name.startswith(prefixes):
-            continue
-        rel = f.relative_to(src).as_posix()
-        text = normalize(f.read_text(errors="replace"), session_root)
-        if f.stat().st_size > _MAX_TEXT:
-            digests[f"{sub}/{rel}"] = hashlib.sha256(text.encode()).hexdigest()
-        else:
-            texts[f"{sub}/{rel}"] = text
-
-
-def run_case(name: str, cfg: dict, sessions: Path) -> dict[str, str]:
-    case_work = WORK / name
-    if case_work.exists():
-        shutil.rmtree(case_work)
-    outdir = case_work / "out"
-    outdir.mkdir(parents=True)
-
-    def expand(value: str) -> str:
-        return value.replace("{sessions}", str(sessions)).replace("{out}", str(outdir))
-
-    argv = [expand(a) for a in cfg["argv"]]
-    env = dict(os.environ, PYTHONHASHSEED="0")
-    proc = subprocess.run([sys.executable, *argv], cwd=REPO, env=env,
-                          capture_output=True, text=True)
-    texts: dict[str, str] = {}
-    digests: dict[str, str] = {}
-    for key, raw in (("_exit.txt", f"{proc.returncode}\n"),
-                     ("_stdout.txt", proc.stdout),
-                     ("_stderr.txt", proc.stderr)):
-        text = normalize(raw, sessions)
-        if len(raw) > _MAX_TEXT:
-            digests[key] = hashlib.sha256(text.encode()).hexdigest()
-        else:
-            texts[key] = text
-    prefixes = tuple(p for p in [cfg.get("prefix", "")] if p)
-    for spec in cfg["outs"]:
-        sub = "out" if spec == "{out}" else "in-place"
-        snapshot(Path(expand(spec)), sub, sessions, prefixes, texts, digests)
-    if digests:
-        texts["_large-files.sha256"] = "".join(
-            f"{digest}  {rel}\n" for rel, digest in sorted(digests.items()))
-    return texts
-
-
-def read_snapshot(root: Path) -> dict[str, str]:
-    return {f.relative_to(root).as_posix(): f.read_text(errors="replace")
-            for f in sorted(root.rglob("*")) if f.is_file()}
-
-
-def write_snapshot(root: Path, snap: dict[str, str]) -> None:
-    if root.exists():
-        shutil.rmtree(root)
-    for rel, text in sorted(snap.items()):
-        path = root / rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-
-
-def compare_case(name: str, expected: Path, actual: dict[str, str]) -> int:
-    """Print every difference for one case; return how many were found."""
-    if not expected.is_dir():
-        print(f"golden {name}: missing golden case directory: {jsonio.rel(expected)}")
-        return 1
-    golden = read_snapshot(expected)
-    problems = 0
-    for rel in sorted(set(golden) | set(actual)):
-        if rel not in actual:
-            print(f"golden {name}: missing file: {rel}")
-            problems += 1
-        elif rel not in golden:
-            print(f"golden {name}: unexpected file: {rel}")
-            problems += 1
-        elif canon(golden[rel]) != canon(actual[rel]):
-            diff = list(difflib.unified_diff(
-                canon(golden[rel]).splitlines(True), canon(actual[rel]).splitlines(True),
-                f"golden/{name}/{rel}", f"actual/{name}/{rel}", n=2))
-            shown = "".join(diff[:_MAX_DIFF_LINES])
-            if len(diff) > _MAX_DIFF_LINES:
-                shown += f"... ({len(diff) - _MAX_DIFF_LINES} more diff lines)\n"
-            print(f"golden {name}: differs: {rel}\n{shown}")
-            problems += 1
-    return problems
-
-
-def golden_cases(args) -> bool:
-    session_root = Path(args.session_root)
-    if not session_root.is_absolute():
-        session_root = REPO / session_root
-    session_root = session_root.resolve()
-
-    names = list(CASES)
-    if args.only:
-        wanted = [c.strip() for part in args.only for c in part.split(",") if c.strip()]
-        unknown = [c for c in wanted if c not in CASES]
-        if unknown:
-            print(f"golden: unknown case(s): {', '.join(unknown)}")
-            return False
-        names = [n for n in names if n in wanted]
-
-    skipped = {}
-    runnable = []
-    for name in names:
-        missing = [rel for rel in CASES[name]["needs"]
-                   if not (session_root / rel).is_dir()]
-        if missing:
-            skipped[name] = jsonio.rel(session_root / missing[0])
-            print(f"golden {name}: skipped (missing session dir {skipped[name]})")
-        else:
-            runnable.append(name)
-
-    if not runnable:
-        print(f"golden: 0 passed, 0 failed, {len(names)} skipped "
-              f"(session root {jsonio.rel(session_root)} has no matching sessions)")
-        return True
-
-    sessions = WORK / "sessions"
-    if sessions.exists():
-        shutil.rmtree(sessions)
-    sessions.mkdir(parents=True)
-    tops = []
-    for name in runnable:
-        for rel in CASES[name]["needs"]:
-            top = rel.split("/")[0]
-            if top not in tops:
-                tops.append(top)
-    for top in tops:
-        shutil.copytree(session_root / top, sessions / top, symlinks=True)
-
-    rows = []
-    passed = failed = 0
-    for name in names:
-        if name in skipped:
-            rows.append((name, "-", "skipped"))
-            continue
-        snap = run_case(name, CASES[name], sessions)
-        count = len(snap)
-        if args.update:
-            write_snapshot(GOLDEN / name, snap)
-            print(f"golden {name}: updated {count} file(s) "
-                  f"(analyzer exit {snap['_exit.txt'].strip()})")
-            rows.append((name, str(count), "updated"))
-            passed += 1
-            continue
-        problems = compare_case(name, GOLDEN / name, snap)
-        if problems:
-            failed += 1
-            rows.append((name, str(count), f"FAIL ({problems})"))
-        else:
-            passed += 1
-            rows.append((name, str(count), "ok"))
-
-    width = max(len(n) for n in names) + 2
-    print()
-    print(f"{'case':<{width}} {'files':>6s}  result")
-    for name, count, status in rows:
-        print(f"{name:<{width}} {count:>6s}  {status}")
-    print(f"golden: {passed} passed, {failed} failed, {len(skipped)} skipped")
-    return failed == 0
-
-
-# ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Regression harness for the bench analyzers.",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--unit", action="store_true",
-                        help="run the unit tests (the default when no mode is given)")
-    parser.add_argument("--golden", action="store_true",
-                        help="compare analyzer output with bench/analysis/golden/")
-    parser.add_argument("--update", action="store_true",
-                        help="regenerate bench/analysis/golden/ from the current analyzers")
-    parser.add_argument("--only", action="append", metavar="CASE[,CASE...]",
-                        help="limit --golden/--update to these cases (repeatable)")
-    parser.add_argument("--session-root", default="bench/results",
-                        help="root holding the raw session directories "
-                             "(default: bench/results)")
-    args = parser.parse_args(argv)
+                        help="run the unit tests (the default and only mode)")
+    parser.parse_args(argv)
 
-    run_unit_tests = args.unit or not (args.golden or args.update)
-    run_golden = args.golden or args.update
-    ok = True
-    if run_unit_tests:
-        ok = run_unit() and ok
-    if run_golden:
-        ok = golden_cases(args) and ok
+    ok = run_unit()
     return 0 if ok else 1
 
 

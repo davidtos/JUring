@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pre-registered 3-way write table for the 2026-11-23 state-controlled rerun.
+"""Pre-registered 3-way write table for a state-controlled write rerun.
 
 Protocol: docs/write-state-3way-protocol.md (frozen before the first run).
 Reads <session>/pass*/cell-meta.tsv, <session>/pass*/series/*.tsv and
@@ -7,9 +7,7 @@ Reads <session>/pass*/cell-meta.tsv, <session>/pass*/series/*.tsv and
 decides which passes are single-state; this script only adds the third and
 fourth arms and the table formatting. It never edits the frozen analyzer.
 
-Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
-(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
-g1 and pass1 forms.
+Passes are pass1..pass8 and the CLI flag is --passes.
 
 Usage:
     python3 bench/write/analyze_write_3way.py --session DIR --passes pass1,pass2 --out DIR
@@ -56,7 +54,7 @@ def fnum(x):
 
 
 def load_meta(d):
-    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
+    """cell-meta.tsv rows keyed by canonical cell slug."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
@@ -65,23 +63,12 @@ def load_meta(d):
     return rows
 
 
-def first_existing(paths):
-    for path in paths:
-        if os.path.exists(path):
-            return path
-    return paths[0]
-
-
 def series_path(d, cell, engine, variant, bs, qd, rep=1):
-    return first_existing([
-        os.path.join(d, "series", aw.stem(name, engine, variant, bs, qd, rep) + ".tsv")
-        for name in cells.aliases(cell)])
+    return os.path.join(d, "series", aw.stem(cell, engine, variant, bs, qd, rep) + ".tsv")
 
 
 def cell_json_path(d, cell, engine, variant, bs, qd, rep=1):
-    return first_existing([
-        os.path.join(d, "cells", aw.stem(name, engine, variant, bs, qd, rep) + ".json")
-        for name in cells.aliases(cell)])
+    return os.path.join(d, "cells", aw.stem(cell, engine, variant, bs, qd, rep) + ".json")
 
 
 def run_errors(path, engine):
@@ -102,9 +89,8 @@ def run_errors(path, engine):
 def collect(session, passes):
     per = {}
     info = {}
-    for token in passes:
-        name = cells.pass_name(token)
-        d = cells.pass_dir(session, token)
+    for name in passes:
+        d = os.path.join(session, name)
         meta = load_meta(d)
         frozen = aw.gen_verdict(d)
         info[name] = {"frozen_pass": bool(frozen["pass"]), "spread": {},
@@ -298,8 +284,8 @@ def write_report(outdir, session, passes, per, info):
         fh.write("\n".join(lines) + "\n")
 
     payload = {
-        "session": session, "generations": passes, "frozen_valid": frozen_valid,
-        "valid_3way": valid, "min_3way_gens": MIN_3WAY_PASSES,
+        "session": session, "passes": passes, "frozen_valid": frozen_valid,
+        "valid_3way": valid, "min_3way_passes": MIN_3WAY_PASSES,
         "runs": {f"{p}|{c}|{e}|{v}": per[(p, c, e, v)]
                  for p in passes for c in CELLS for e, v, _ in ARMS},
         "summary": {f"{c}|{e}|{v}": d for (c, e, v), d in summary.items()},
@@ -310,8 +296,8 @@ def write_report(outdir, session, passes, per, info):
 
     with open(os.path.join(outdir, "write-3way-runs.csv"), "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
-        w.writerow(["generation", "cell", "engine", "variant", "iops", "mibs", "p99_us",
-                    "steady", "errors", "status", "valid_3way_generation"])
+        w.writerow(["pass", "cell", "engine", "variant", "iops", "mibs", "p99_us",
+                    "steady", "errors", "status", "valid_3way_pass"])
         for p in passes:
             for cell in CELLS:
                 for engine, variant, _l in ARMS:
@@ -323,16 +309,27 @@ def write_report(outdir, session, passes, per, info):
     return md_path, valid, frozen_valid
 
 
+def parse_passes(text):
+    """Comma/space-separated passN values; gN forms are rejected."""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    if not tokens:
+        raise argparse.ArgumentTypeError("at least one pass is required")
+    for token in tokens:
+        if cells.pass_number(token) is None or cells.pass_name(token) != token:
+            raise argparse.ArgumentTypeError(
+                "pass must be pass1..pass8 (got %r)" % (token,))
+    return tokens
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--passes", "--gens", dest="passes", required=True,
-                    help="comma-separated passes (accepts passN and legacy gN); "
-                         "legacy alias: --gens")
+    ap.add_argument("--passes", required=True, type=parse_passes,
+                    help="comma/space-separated passes, pass1..pass8")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    passes = [cells.pass_name(p) for p in args.passes.replace(",", " ").split() if p]
-    per, info = collect(args.session, args.passes.replace(",", " ").split())
+    passes = args.passes
+    per, info = collect(args.session, passes)
     md_path, valid, frozen_valid = write_report(args.out, args.session, passes, per, info)
     print(f"wrote {md_path}")
     print(f"frozen-gate valid: {len(frozen_valid)}/{len(passes)} "
@@ -340,7 +337,7 @@ def main():
     print(f"3-way valid: {len(valid)}/{len(passes)} "
           f"({', '.join(cells.pass_label(p) for p in valid) or 'none'})")
     for cell in CELLS:
-        print(f"== {cell} ==")
+        print(f"== {cells.label(cell)} ==")
         for engine, variant, label in ARMS:
             vals = [per[(g, cell, engine, variant)]["iops"] for g in valid
                     if per[(g, cell, engine, variant)]["iops"]]

@@ -53,7 +53,7 @@ while (( $# )); do
         --duration) DURATION=$2; shift 2 ;;
         --results) RESULTS=$2; shift 2 ;;
         --dry-run) DRY=1; shift ;;
-        -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

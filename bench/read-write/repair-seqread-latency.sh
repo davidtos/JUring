@@ -12,9 +12,9 @@
 # Affected cells: exactly the JUring cells with io_buffer_mode=arena-unregistered,
 # i.e. seqread-1m-qd8 (1MiB QD8) and seqread-1m-qd32 (1MiB QD32). IOPS/bytes/errors were unaffected.
 #
-# This script archives the invalid JSON/logs under the historical directory
-# bench/results/_invalid/m1-2026-11-13/latency-slot-collision/ (outside the
-# session dir so the analyzer does not recurse into them).
+# This script archives the invalid JSON/logs under the directory named by
+# ARCH_DIR (default bench/results/_invalid/read-write/latency-slot-collision,
+# outside the session dir so the analyzer does not recurse into them).
 # and re-runs the same 10 cells (same protocol: 10 s warmup + 30 s, R=5, seed,
 # CPU 2) with the fixed harness, appending fresh rows to cell-meta.tsv.
 set -euo pipefail
@@ -23,7 +23,7 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$HERE/lib.sh"
 cd "$MATRIX_REPO_ROOT"
 
-ARCH=$MATRIX_REPO_ROOT/bench/results/_invalid/m1-2026-11-13/latency-slot-collision
+ARCH=${ARCH_DIR:-$MATRIX_REPO_ROOT/bench/results/_invalid/read-write/latency-slot-collision}
 mkdir -p "$ARCH"
 echo "harness sha256: $(sha256sum bench/juring/JUringFileBench.java | cut -d' ' -f1)"
 echo "harness classes: $(sha256sum bench/juring/out/bench/juring/JUringFileBench.class | cut -d' ' -f1)"

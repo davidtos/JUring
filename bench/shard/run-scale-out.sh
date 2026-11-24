@@ -49,7 +49,7 @@ REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
 source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
-SESSION=${SESSION:-m3-$(date +%Y-%m-%d)}
+SESSION=${SESSION:-scale-out}
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 JURING_RUN=${JURING_RUN:-$REPO_ROOT/bench/juring/run-juring.sh}
 FIO_BIN=${FIO_BIN:-fio}
@@ -817,7 +817,7 @@ print_plan() {
     echo "================ MULTI-SHARD SCALING CAMPAIGN PLAN (--dry-run) ================"
     echo "session dir : $RESULTS"
     echo "cells dir   : $CELLS_DIR"
-    echo "aggregate   : $AGG_DIR/m3.json, $AGG_DIR/m3.md"
+    echo "aggregate   : $AGG_DIR/scale-out.json, $AGG_DIR/scale-out.md"
     echo "cells       : $(for n in $N_LIST; do printf 'shards-%s ' "$n"; done)(N = shard count) x engines {$ENGINES} (R=$REPS)"
     echo "protocol    : warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s/invocation seed=$SEED"
     echo "read file   : $READ_FILE ($(dataset_size) B, read-only DS-S; only read cells)"
@@ -1007,7 +1007,7 @@ echo "[scale-out] cell-meta: $META"
 if [[ -f $ANALYZER ]]; then
     echo "[scale-out] analyzing: $ANALYZER --session $SESSION"
     if python3 "$ANALYZER" --session "$SESSION" >"$AGG_DIR/analyze.log" 2>&1; then
-        echo "[scale-out] aggregate: $AGG_DIR/m3.json, $AGG_DIR/m3.md"
+        echo "[scale-out] aggregate: $AGG_DIR/scale-out.json, $AGG_DIR/scale-out.md"
     else
         echo "warn: analyzer failed; see $AGG_DIR/analyze.log" >&2
         FAILS=$((FAILS + 1))

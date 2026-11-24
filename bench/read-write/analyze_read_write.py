@@ -4,17 +4,15 @@
 Usage:
     python3 bench/read-write/analyze_read_write.py --dir bench/results/<read-session> [--out-prefix PATH]
 
-The session directory comes from the release archive.  ``--dir`` defaults to
-the historical canonical read session (see ``DEFAULT_DIR`` below) and new
-sessions are written to ``bench/results/read-write`` by default (see
-bench/read-write/lib.sh).
+``--dir`` defaults to ``bench/results/read-write`` and new sessions are
+written there by default (see bench/read-write/lib.sh).
 
 Reads a session directory written by bench/read-write/lib.sh: ``cells/*.json`` (JUring /
 seastar harness JSON or fio JSON), optional ``perf/*.txt``, ``iotester/*.yaml``,
 ``cell-meta.tsv``, ``perf-cells.tsv``, ``manifest*.txt`` and -- for write
 sessions -- ``state/runs.tsv`` and ``series/*.tsv``.  Emits markdown tables, CSV
 tables and a JSON aggregate under ``--out-prefix`` (default
-``<dir>/aggregate/m1``, and only for the canonical read session: every other
+``<dir>/aggregate/read-write`` for the default read/write session; every other
 directory is raw evidence and is never written to without an explicit prefix).
 
 Statistics: per-cell n/mean/SD/95% CI and paired-by-rep ratios (Student t; the
@@ -23,8 +21,8 @@ half (rule 1 against both registration-matched fio comparators, the 1 s device
 I/O series) is campaign policy; shared maths and formatting live in
 bench/analysis/.
 
-Frozen contracts: the read and write gates in docs/benchmark-methodology.md
-(2026-11-15).  Stdlib only.
+Contracts: the read and write gates in docs/benchmark-methodology.md.
+Stdlib only.
 """
 
 from __future__ import annotations
@@ -46,28 +44,23 @@ from analysis import cli, jsonio, md, stats  # noqa: E402
 VERSION = "1.0"
 
 
-def norm_case(value):
-    """Canonical cell slug from a legacy W# id or a canonical one.
-
-    Historical cell-meta.tsv / filenames carry W#; new runs write the workload
-    names.  Both map to the same internal key so nothing downstream branches on
-    the spelling.
-    """
+def cell_id(value):
+    """Machine cell name; every session writes the canonical workload slug."""
     if not value:
         return value
-    return cellmap.slug(str(value).strip())
+    return str(value).strip()
 
 
-# Historical canonical read session from the release archive (its name is kept
-# out of --help/usage): the one directory the analyzer may write its aggregate/
-# tree in place.  The aggregate artifact names (aggregate/m1*) are archive
-# contracts and stay.
-DEFAULT_DIR = jsonio.REPO_ROOT / "bench/results/m1-2026-11-13"
+# Default read/write session directory: the one directory the analyzer may write
+# its aggregate/ tree in place.  Other directories are raw evidence and are
+# written only with an explicit --out-prefix.
+DEFAULT_DIR = jsonio.REPO_ROOT / "bench/results/read-write"
+WRITE_MATRIX_DIR = jsonio.REPO_ROOT / "bench/results/write-matrix"
 
 # --- policy constants (docs/benchmark-methodology.md) ----------------------
-# Fast-state p99 discriminator for 4 KiB randread, per QD (Lead calibration
-# 2026-11-13: p99 scales ~1.7x from QD64 to QD128, so a fixed 600 us threshold
-# would mark every QD128 fast-throughput rep as "slow").
+# Fast-state p99 discriminator for 4 KiB randread, per QD (calibrated: p99
+# scales ~1.7x from QD64 to QD128, so a fixed 600 us threshold would mark every
+# QD128 fast-throughput rep as "slow").
 FAST_P99_US_QD64 = 600.0
 FAST_P99_US_QD128 = 1200.0
 
@@ -110,7 +103,7 @@ TAIL_FACTOR = 2.0            # rule 3: p99 <= 2x fio
 P99_PARITY = 1.10
 P999_PARITY = 1.15
 
-# --- write-session policy (frozen 2026-11-15; docs/benchmark-methodology.md) -
+# --- write-session policy (docs/benchmark-methodology.md) -------------------
 # Write cells (docs/benchmark-methodology.md): the 4 KiB random-write cells
 # (QD 1-128) and the 1 MiB sequential-write cells (QD 1-32).
 # case -> (workload, bs bytes, qd)
@@ -148,16 +141,16 @@ ENGINE_ORDER = {"juring": 0, "fio-io_uring": 1, "fio-libaio": 2,
 # Existing read-session variants keep their original ranks: the read aggregate
 # (cell/ratio row order) must stay byte-identical. Only variants that never
 # appear in the read session (matchedbatch, batch1) are appended.
-VARIANT_ORDER = {"std": 0, "matched": 1, "uring": 2, "b1": 3, "default": 4,
+VARIANT_ORDER = {"std": 0, "matched": 1, "uring": 2, "default": 4,
                  "libaio": 5, "matchedbatch": 6, "batch1": 7}
 
-# legacy harness filenames -> methodology workload IDs
-LEGACY_HARNESS_WF = {
+# older harness filenames -> methodology workload IDs
+OLD_HARNESS_WF = {
     "rr4k": ("randread", 4096),
     "sq1m": ("seqread", 1048576),
     "nop": ("nop", 4096),
 }
-LEGACY_CASE = {
+WORKLOAD_CELLS = {
     ("randread", 4096, 1): "randread-4k-qd1",
     ("randread", 4096, 16): "randread-4k-qd16",
     ("randread", 4096, 64): "randread-4k-qd64",
@@ -241,7 +234,7 @@ def parse_cell_stem(stem):
             continue
     if bs is None or qd is None or first_bs is None or first_bs < 3:
         return None
-    case, engine, variant = norm_case(tokens[0]), tokens[1], tokens[2]
+    case, engine, variant = cell_id(tokens[0]), tokens[1], tokens[2]
     return {
         "format": "session", "case": case, "engine": engine,
         "variant": variant, "bs": bs, "qd": qd,
@@ -251,33 +244,33 @@ def parse_cell_stem(stem):
     }
 
 
-_LEGACY_HARNESS_RE = re.compile(r"^(?:sr_)?(rr4k|sq1m|nop)_qd(\d+)_rep(\d+)$")
+_OLD_HARNESS_RE = re.compile(r"^(?:sr_)?(rr4k|sq1m|nop)_qd(\d+)_rep(\d+)$")
 
 
-def parse_legacy_harness_stem(stem):
-    m = _LEGACY_HARNESS_RE.match(stem)
+def parse_old_harness_stem(stem):
+    m = _OLD_HARNESS_RE.match(stem)
     if not m:
         return None
     wf, qd, rep = m.group(1), int(m.group(2)), int(m.group(3))
-    workload, bs = LEGACY_HARNESS_WF[wf]
-    case = LEGACY_CASE.get((workload, bs, qd))
+    workload, bs = OLD_HARNESS_WF[wf]
+    case = WORKLOAD_CELLS.get((workload, bs, qd))
     if case is None:
         case = f"L-{wf}-qd{qd}"
     return {
-        "format": "legacy-harness", "case": case, "engine": None,
+        "format": "old-harness", "case": case, "engine": None,
         "variant": None, "bs": bs, "qd": qd, "threads": 1, "rep": rep,
         "workload_hint": workload,
     }
 
 
-_LEGACY_FIO_RE = re.compile(
+_OLD_FIO_RE = re.compile(
     r"^(?P<kind>[a-e])-(?P<wl>randread|seqread|read|write|randwrite)-"
     r"(?P<bs>\d+[kKmMgG])-(?P<io>uring|libaio)-qd(?P<qd>\d+)"
     r"(?:-(?P<extra>batch\d+|nj\d+))?(?P<rerun>-rerun)?_rep(?P<rep>\d+)$")
 
 
-def parse_legacy_fio_stem(stem):
-    m = _LEGACY_FIO_RE.match(stem)
+def parse_old_fio_stem(stem):
+    m = _OLD_FIO_RE.match(stem)
     if not m:
         return None
     workload = normalize_rw(m.group("wl"))
@@ -285,7 +278,7 @@ def parse_legacy_fio_stem(stem):
     qd = int(m.group("qd"))
     extra = m.group("extra")
     threads = 1
-    variant = "libaio" if m.group("io") == "libaio" else "b1"
+    variant = "libaio" if m.group("io") == "libaio" else "batch1"
     if extra:
         if extra.startswith("batch"):
             variant = extra
@@ -295,21 +288,21 @@ def parse_legacy_fio_stem(stem):
     if m.group("rerun"):
         variant = variant + "-rerun"
     engine = "fio-libaio" if m.group("io") == "libaio" else "fio-io_uring"
-    case = legacy_case_for(workload, bs, qd, threads)
+    case = cell_for_workload(workload, bs, qd, threads)
     return {
-        "format": "legacy-fio", "case": case, "engine": engine,
+        "format": "old-fio", "case": case, "engine": engine,
         "variant": variant, "bs": bs, "qd": qd, "threads": threads,
         "rep": int(m.group("rep")), "workload_hint": workload,
     }
 
 
-def legacy_case_for(workload, bs, qd, threads):
-    case = LEGACY_CASE.get((workload, bs, qd))
+def cell_for_workload(workload, bs, qd, threads):
+    case = WORKLOAD_CELLS.get((workload, bs, qd))
     if case is None:
         case = f"L-{workload}-{bs}-qd{qd}"
     if threads and threads > 1:
         case = case + f"-mj{threads}"
-    return norm_case(case)
+    return cell_id(case)
 
 
 def strip_perf_suffixes(stem):
@@ -324,7 +317,7 @@ _CASE_RANK = {cell.slug: i for i, cell in enumerate(cellmap.CELLS)}
 
 def cell_sort_key(cell):
     """Canonical order first (the methodology table order), then unknown cells."""
-    case = norm_case(cell["case"])
+    case = cell_id(cell["case"])
     if case in _CASE_RANK:
         return (0, _CASE_RANK[case], "", case)
     return (1, 0, case, case)
@@ -356,7 +349,7 @@ def make_rep(**kw):
         "source_kind": None, "run_index": 0,
     }
     if "case" in kw:
-        kw["case"] = norm_case(kw["case"])
+        kw["case"] = cell_id(kw["case"])
     rep.update(kw)
     return rep
 
@@ -389,9 +382,9 @@ def parse_harness_json(path, key, data, warnings):
     case = (key or {}).get("case")
     base_rep = (key or {}).get("rep", 1)
     if not case:
-        # try the label (e.g. legacy diagnostics "diag_rr4k_qd64_10s")
+        # try the label (e.g. older diagnostics "diag_rr4k_qd64_10s")
         label = str(data.get("label") or path.stem)
-        hk = parse_legacy_harness_stem(label)
+        hk = parse_old_harness_stem(label)
         if hk:
             case = hk["case"]
             bs = bs or hk["bs"]
@@ -399,7 +392,7 @@ def parse_harness_json(path, key, data, warnings):
             base_rep = hk["rep"] if key is None else base_rep
         else:
             warnings.append(f"{jsonio.rel(path)}: not a matrix cell (no cell id, no "
-                            f"legacy rr4k/sq1m/nop label); skipped")
+                            f"old rr4k/sq1m/nop label); skipped")
             return []
     buffer_mode = cfg.get("io_buffer_mode")
     ring_flags = cfg.get("ring_flags")
@@ -589,7 +582,7 @@ def parse_fio_json(path, key, data, warnings):
     else:
         engine = "fio-io_uring"
         variant = "unknown"
-        case = legacy_case_for(workload, bs or 0, qd or 1, numjobs)
+        case = cell_for_workload(workload, bs or 0, qd or 1, numjobs)
         rep_label = "r1"
         rep_index = 1
         warnings.append(f"{jsonio.rel(path)}: no cell id match; case named {case}")
@@ -690,7 +683,7 @@ def load_perf_windows(session_dir, warnings):
         with open(path, newline="", encoding="utf-8", errors="replace") as fh:
             for row in csv.DictReader(fh, delimiter="\t"):
                 try:
-                    key = (norm_case(row.get("case")),
+                    key = (cell_id(row.get("case")),
                            (row.get("engine") or "").strip(),
                            (row.get("variant") or "").strip(),
                            jsonio.as_int((row.get("qd") or "").strip()),
@@ -731,7 +724,7 @@ def load_perf_cells_tsv(session_dir, warnings):
         variant = (row.get("variant") or "").strip()
         rows_out.append({
             "path": path,
-            "case": norm_case(row.get("case")),
+            "case": cell_id(row.get("case")),
             "engine": engine, "variant": variant, "qd": qd, "rep": rep,
             "attach_s": num("attach_s"), "window": num("window_s"),
             "ops": num("ops_window"), "iops": num("iops"),
@@ -942,8 +935,8 @@ def load_session_manifests(session_dir, warnings):
 def cell_meta_p99_units(session_dir, manifest, warnings):
     """Return (units, flag_source) for the `cell-meta.tsv` p99_us column.
 
-    Session-11 declares `cell_meta_p99_units=us`; the legacy 2026-11-13 write block
-    wrote fio clat in nanoseconds (documented units defect).
+    The manifest flag `cell_meta_p99_units=us` marks the current harness; an
+    older write session wrote fio clat in nanoseconds (documented units defect).
     """
     raw = manifest_value(manifest, "cell_meta_p99_units")
     if raw:
@@ -951,7 +944,7 @@ def cell_meta_p99_units(session_dir, manifest, warnings):
         source = "manifest cell_meta_p99_units"
         return units, source
     if (session_dir / "cell-meta.tsv").is_file():
-        return None, "absent (legacy 2026-11-13 behaviour)"
+        return None, "absent (older sessions without the unit flag)"
     return None, "no cell-meta.tsv"
 
 
@@ -1107,7 +1100,7 @@ def discover(session_dir, warnings):
                 continue
             stem = path.name[: -len(path.suffix)]
             if "jobs" in data and isinstance(data.get("jobs"), list):
-                key = parse_cell_stem(stem) or parse_legacy_fio_stem(stem)
+                key = parse_cell_stem(stem) or parse_old_fio_stem(stem)
                 rows = parse_fio_json(path, key, data, warnings)
                 if rows:
                     reps.extend(rows)
@@ -1116,7 +1109,7 @@ def discover(session_dir, warnings):
                     parsed["skipped"] += 1
             elif data.get("engine") in ("juring", "seastar") and (
                     "runs" in data or "aggregate" in data or "results" in data):
-                key = parse_cell_stem(stem) or parse_legacy_harness_stem(stem)
+                key = parse_cell_stem(stem) or parse_old_harness_stem(stem)
                 n_warn = len(warnings)
                 rows = parse_harness_json(path, key, data, warnings)
                 if rows:
@@ -1753,16 +1746,18 @@ def evaluate_cpu_gate(cells, perf_records, warnings, perf_tsv_rows=None):
         if fd_mean and j_d["mean"]:
             bracket_bits.append(f"fio default bracket {md.num(fd_mean, 0)} cyc/op "
                                 f"(JUring/fio-default {md.ratio(j_d['mean'] / fd_mean)})")
-        w1 = [r for r in perf_tsv_rows if r.get("case") == "randread-4k-qd1" and
-              r.get("engine") == "juring" and r.get("qd") == 1 and
-              r.get("cycles_per_op") is not None]
-        w1s = [r for r in perf_tsv_rows if r.get("case") == "randread-4k-qd1" and
-               r.get("engine") == "seastar" and r.get("qd") == 1 and
-               r.get("cycles_per_op") is not None]
+        qd1_juring = [r for r in perf_tsv_rows
+                      if r.get("case") == "randread-4k-qd1" and
+                      r.get("engine") == "juring" and r.get("qd") == 1 and
+                      r.get("cycles_per_op") is not None]
+        qd1_seastar = [r for r in perf_tsv_rows
+                       if r.get("case") == "randread-4k-qd1" and
+                       r.get("engine") == "seastar" and r.get("qd") == 1 and
+                       r.get("cycles_per_op") is not None]
         qd1_bits = ""
-        if w1 and w1s:
-            qd1_bits = (f" QD1 context: JUring {md.num(_mean_cycles(w1), 0)} vs "
-                        f"seastar {md.num(_mean_cycles(w1s), 0)} cyc/op (seastar "
+        if qd1_juring and qd1_seastar:
+            qd1_bits = (f" QD1 context: JUring {md.num(_mean_cycles(qd1_juring), 0)} vs "
+                        f"seastar {md.num(_mean_cycles(qd1_seastar), 0)} cyc/op (seastar "
                         f"busy-polls the reactor; QD1 CPU is reported as a "
                         f"caveat, the gate is at QD64).")
         note = (f"non-inferiority: JUring cycles/op must be <= "
@@ -1935,7 +1930,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
 
     cell-meta.tsv has no phase column, so perf-phase rows key-collide with the read
     matrix and are excluded as ambiguous rather than reported as errors;
-    `meta_p99_units='us'` skips the legacy fio ns->us normalisation.
+    `meta_p99_units='us'` skips the older fio ns->us normalisation.
     """
     path = session_dir / "cell-meta.tsv"
     if not path.is_file():
@@ -1949,7 +1944,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
     for row in all_rows:
         if (row.get("status") or "").strip() not in ("", "ok"):
             continue
-        key = (norm_case(row.get("case")), (row.get("engine") or "").strip(),
+        key = (cell_id(row.get("case")), (row.get("engine") or "").strip(),
                (row.get("variant") or "").strip(), (row.get("bs") or "").strip(),
                (row.get("qd") or "").strip(), (row.get("rep") or "").strip())
         by_key.setdefault(key, []).append(row)
@@ -1963,7 +1958,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
                parse_size(rep["bs"]), rep["qd"], rep_no)] = rep
     perf_keys = set()
     for row in (perf_tsv_rows or []):
-        perf_keys.add((norm_case(row.get("case")), row.get("engine"),
+        perf_keys.add((cell_id(row.get("case")), row.get("engine"),
                        row.get("qd"), row.get("rep")))
     checked = 0
     max_iops = 0.0
@@ -1975,7 +1970,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
     byte_rows = []
     unit_normalized_p99 = []
     confirmed_us_p99 = 0
-    legacy_ns_p99 = 0
+    pre_unit_flag_p99 = 0
     for key, rows in by_key.items():
         case, engine, variant, bs_txt, qd_txt, rep_txt = key
         bs = parse_size(bs_txt)
@@ -2033,12 +2028,11 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
                                   f"json {rec['iops']:.1f} vs meta {iops_meta:.1f}")
         p99_meta = jsonio.as_float(row.get("p99_us"))
         if p99_meta and rec.get("p99"):
-            # Session-11 write harness: the manifest declares
-            # cell_meta_p99_units=us, so the cell-meta column is already
-            # microseconds for EVERY engine -- no conversion. Legacy 2026-11-13
-            # write block: fio rows carry fio clat in NANOSECONDS (e.g. 2211840
-            # where the truth is 2211.84 us); normalise ns->us for the
-            # CROSS-CHECK only. Cited values always come from the raw JSON (the
+            # The current harness declares cell_meta_p99_units=us, so the
+            # cell-meta column is already microseconds for EVERY engine -- no
+            # conversion.  Older write sessions without the flag carry fio clat
+            # in NANOSECONDS (e.g. 2211840 where the truth is 2211.84 us);
+            # normalise ns->us for the CROSS-CHECK only. Cited values always come from the raw JSON (the
             # analyzer never cites the cell-meta p99 column).
             unit_normalized = None
             if meta_p99_units == "us":
@@ -2046,7 +2040,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
             elif (engine.startswith("fio") and p99_meta > 100.0 * rec["p99"]
                     and p99_meta > 100000.0):
                 unit_normalized = p99_meta / 1000.0
-                legacy_ns_p99 += 1
+                pre_unit_flag_p99 += 1
             meta_for_check = unit_normalized if unit_normalized else p99_meta
             diff = abs(rec["p99"] - meta_for_check) / meta_for_check
             max_p99 = max(max_p99, diff)
@@ -2068,7 +2062,7 @@ def cross_check_meta(session_dir, reps, perf_tsv_rows=None, meta_p99_units=None)
         "unit_normalized_p99": unit_normalized_p99,
         "meta_p99_units": meta_p99_units,
         "confirmed_us_p99": confirmed_us_p99,
-        "legacy_ns_p99": legacy_ns_p99,
+        "pre_unit_flag_p99": pre_unit_flag_p99,
         "byte_rows": byte_rows,
         "n_byte_warn": sum(1 for b in byte_rows if b["verdict"] != "PASS"),
     }
@@ -2140,7 +2134,7 @@ def load_iotester_check(session_dir, warnings):
     for row in all_rows:
         if (row.get("status") or "").strip() not in ("", "ok"):
             continue
-        key = (norm_case(row.get("case")),
+        key = (cell_id(row.get("case")),
                (row.get("engine") or "").strip(),
                (row.get("variant") or "").strip(),
                jsonio.as_int((row.get("qd") or "").strip()),
@@ -2414,7 +2408,7 @@ def load_runs_tsv(session_dir, warnings):
     for row in raw_rows:
         # bench/write/run-write-cells.sh names the case column `cell` in
         # state/runs.tsv and `case` in cell-meta.tsv; accept both.
-        case = norm_case(row.get("case") or row.get("cell"))
+        case = cell_id(row.get("case") or row.get("cell"))
         engine = (row.get("engine") or "").strip()
         variant = (row.get("variant") or "").strip()
         qd = jsonio.as_int((row.get("qd") or "").strip())
@@ -2462,7 +2456,7 @@ def load_cell_meta_rows(session_dir, warnings):
     for row in raw_rows:
         if (row.get("status") or "").strip() not in ("", "ok"):
             continue
-        case = norm_case(row.get("case"))
+        case = cell_id(row.get("case"))
         engine = (row.get("engine") or "").strip()
         variant = (row.get("variant") or "").strip()
         qd = jsonio.as_int((row.get("qd") or "").strip())
@@ -3584,18 +3578,18 @@ def _render_write_summary(session_dir, write_analysis):
                 f"`cell_meta_p99_units=us`); no ns->us normalisation was "
                 f"applied to the cell-meta cross-check "
                 f"({units.get('confirmed_us', 0)} row(s) verified as us).")
-        elif units.get("legacy_ns", 0):
+        elif units.get("pre_unit_flag", 0):
             provenance.append(
                 f"- cell-meta p99 units: **nanoseconds for fio rows** "
-                f"(legacy 2026-11-13 write block, no `cell_meta_p99_units` "
-                f"flag); {units['legacy_ns']} value(s) normalised ns->us for "
-                f"the cross-check only. Cited latencies come from the raw "
+                f"(older session without a `cell_meta_p99_units` flag); "
+                f"{units['pre_unit_flag']} value(s) normalised ns->us for the "
+                f"cross-check only. Cited latencies come from the raw "
                 f"JSON; the write cell-meta fio p99 is never cited.")
         else:
             provenance.append(
                 f"- cell-meta p99 units: not declared "
                 f"({units.get('source')}); no ns->us normalisation was needed "
-                f"({units.get('legacy_ns', 0)} ns-like fio value(s)).")
+                f"({units.get('pre_unit_flag', 0)} ns-like fio value(s)).")
     if series.get("runs_path"):
         provenance.append(f"- device/state ledger: `{jsonio.rel(series['runs_path'])}` "
                           f"(engine bytes, device sector delta, thermal, "
@@ -3796,14 +3790,14 @@ def main(argv=None):
         description="Aggregate and gate one read/write measurement session (stdlib only).")
     parser.add_argument("--dir", default=None,
                         help="session directory with raw per-cell artifacts "
-                             "(default: the canonical read session from the "
-                             "release archive)")
+                             "(default: bench/results/read-write)")
     parser.add_argument("--out-prefix", default=None,
                         help="write aggregate artifacts as <prefix>.summary.md, "
                              "<prefix>.cells.csv, ... (default: "
-                             "<dir>/aggregate/m1 when --dir is the canonical "
-                             "read session from the release archive; never "
-                             "writes into legacy dirs)")
+                             "<dir>/aggregate/read-write for the default "
+                             "read/write session, <dir>/aggregate/write-matrix "
+                             "for the default write-matrix session; every other "
+                             "directory needs an explicit --out-prefix)")
     args = parser.parse_args(argv)
 
     session_dir = Path(args.dir if args.dir is not None
@@ -4015,7 +4009,7 @@ def main(argv=None):
     if meta_p99_units is not None and meta_p99_units != "us":
         warnings.append(
             f"cell-meta.tsv p99 units flag has unexpected value "
-            f"'{meta_p99_units}' (expected 'us'); the legacy fio ns->us "
+            f"'{meta_p99_units}' (expected 'us'); the older fio ns->us "
             f"normalisation is used for the cross-check")
     meta_check = cross_check_meta(session_dir, reps, perf_tsv_rows,
                                   meta_p99_units=meta_p99_units)
@@ -4062,7 +4056,7 @@ def main(argv=None):
     if meta_check and meta_check.get("unit_normalized_p99"):
         warnings.append(
             f"cell-meta.tsv: {len(meta_check['unit_normalized_p99'])} fio p99 "
-            f"value(s) are in nanoseconds (legacy 2026-11-13 write block; no "
+            f"value(s) are in nanoseconds (older session without a "
             f"cell_meta_p99_units manifest flag) and were normalised ns->us for "
             f"the cross-check only; cited latency values come from the raw JSON")
     if meta_check and meta_check.get("meta_p99_units") == "us":
@@ -4094,7 +4088,7 @@ def main(argv=None):
         units_info = {
             "units": meta_p99_units, "source": meta_units_source,
             "confirmed_us": (meta_check or {}).get("confirmed_us_p99", 0),
-            "legacy_ns": (meta_check or {}).get("legacy_ns_p99", 0),
+            "pre_unit_flag": (meta_check or {}).get("pre_unit_flag_p99", 0),
         }
         write_analysis = {
             "cells": [c for c in cells if workload_is_write(c["workload"])],
@@ -4118,17 +4112,18 @@ def main(argv=None):
         analyzer_version=analyzer_version)
 
     # ---- write policy ------------------------------------------------------
-    # Only the canonical read session may write its aggregate/ tree by default.
-    # Every other session dir (including the historical write block) is RAW
-    # EVIDENCE: aggregate artifacts are written only when --out-prefix is given
-    # explicitly.
+    # Only the two default session dirs may write their aggregate/ tree by
+    # default.  Every other session dir is RAW EVIDENCE: aggregate artifacts are
+    # written only when --out-prefix is given explicitly.
     prefix = None
     if args.out_prefix:
         prefix = Path(args.out_prefix).expanduser()
     else:
         resolved = session_dir.resolve()
         if resolved == DEFAULT_DIR.resolve():
-            prefix = session_dir / "aggregate" / "m1"
+            prefix = session_dir / "aggregate" / "read-write"
+        elif resolved == WRITE_MATRIX_DIR.resolve():
+            prefix = session_dir / "aggregate" / "write-matrix"
     written = {}
     write_payload = None
     if write_analysis is not None:
@@ -4148,7 +4143,7 @@ def main(argv=None):
                             else None),
         }
     payload = {
-        "schema": "m1-aggregate-1.0",
+        "schema": "read-write-aggregate-1.0",
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "analyzer": f"bench/read-write/analyze_read_write.py v{analyzer_version}",
         "dir": str(session_dir),
@@ -4296,8 +4291,8 @@ def main(argv=None):
     else:
         print(summary_md)
         print()
-        print("note: aggregate artifacts NOT written. Only the canonical read "
-              "session from the release archive writes its aggregate/ tree "
+        print("note: aggregate artifacts NOT written. Only the default "
+              "read/write or write-matrix session writes its aggregate/ tree "
               "automatically; every other session dir is raw evidence and "
               "requires an explicit --out-prefix. Pass --out-prefix <path> to "
               "emit them.")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Steady-state write comparison for the second-drive run (2026-11-23).
+"""Steady-state write comparison for the second-drive run.
 
-The frozen state-controlled gate could not assemble four homogeneous generations
+The frozen state-controlled gate could not assemble four homogeneous passes
 on the near-empty second NVMe because `fio` intermittently reports a cache-assisted
 window (~320k IOPS) while the device's sustained mode is ~195-200k. This script
 does not re-run that gate; it separates the two observed device modes with a rule
@@ -13,12 +13,9 @@ fixed in the script and reports the steady-state comparison as **descriptive onl
                  clean; the single-state test removes the one 257k cliff window.
   cache run   := everything else; listed separately for disclosure.
 
-Ratios are paired per generation+cell where both sides are steady, with 90%/95%
+Ratios are paired per pass+cell where both sides are steady, with 90%/95%
 CIs. The output states explicitly that this is not a frozen-gate verdict.
 
-Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
-(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
-g1 and pass1 forms.
 
 Usage:
     python3 bench/write/analyze_write_steady.py --session DIR --passes pass1,pass2 --out DIR
@@ -43,7 +40,7 @@ CELLS = ("randwrite-4k-qd64", "randwrite-4k-qd128")
 CELL_QD = {cell: str(cells.lookup(cell).qd) for cell in CELLS}
 BS = 4096
 STEADY_MAX_IOPS = 250_000.0
-ANCHOR_PASS = "pass4"   # the one fully homogeneous pass in the 2026-11-23 session
+ANCHOR_PASS = "pass4"   # the one fully homogeneous pass in the captured session
 ARMS = [
     ("juring", "std", "JUring"),
     ("fio-io_uring", "matched", "fio matched"),
@@ -66,7 +63,7 @@ def fnum(x):
 
 
 def load_meta(d):
-    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
+    """cell-meta.tsv rows keyed by canonical cell slug."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
@@ -75,20 +72,14 @@ def load_meta(d):
 
 
 def series_path(d, cell, engine, variant, qd, rep=1):
-    for name in cells.aliases(cell):
-        path = os.path.join(d, "series",
-                            aw.stem(name, engine, variant, "4k", qd, rep) + ".tsv")
-        if os.path.exists(path):
-            return path
     return os.path.join(d, "series",
                         aw.stem(cell, engine, variant, "4k", qd, rep) + ".tsv")
 
 
 def collect(session, passes):
     per = {}       # (pass, cell, engine, variant) -> dict(mode, iops, p99, reason)
-    for token in passes:
-        name = cells.pass_name(token)
-        d = cells.pass_dir(session, token)
+    for name in passes:
+        d = os.path.join(session, name)
         meta = load_meta(d)
         for cell in CELLS:
             for engine, variant, _label in ARMS:
@@ -243,8 +234,8 @@ def write_report(outdir, session, passes, per):
     lines.append("- One host, one near-empty consumer NVMe; absolute IOPS are device-state "
                  "evidence, not a sustained-endurance specification.")
     lines.append("- The steady/cache split is descriptive. It is disclosed because the frozen "
-                 "gate could not be satisfied, and it is not pooled with the 2026-11-13 session, "
-                 "the first-drive run or the interleaved bracket.")
+                 "gate could not be satisfied, and it is not pooled with the first read/write "
+                 "session, the first-drive run or the interleaved bracket.")
     lines.append("- `fio` interleaves the two modes; its steady windows are fewer, which is why "
                  "the paired fio ratios have smaller n than JUring/Seastar.")
     lines.append("")
@@ -253,7 +244,7 @@ def write_report(outdir, session, passes, per):
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     payload = {
-        "session": session, "gens": passes, "steady_max_iops": STEADY_MAX_IOPS,
+        "session": session, "passes": passes, "steady_max_iops": STEADY_MAX_IOPS,
         "steady": {f"{p}|{c}|{e}|{v}": r for p in passes for c in CELLS
                    for e, v, _l in ARMS for r in [per.get((p, c, e, v))] if r},
         "summary": {f"{c}|{e}|{v}": d for (c, e, v), d in summary.items()},
@@ -264,17 +255,27 @@ def write_report(outdir, session, passes, per):
     return md_path, summary, ratios
 
 
+def parse_passes(text):
+    """Comma/space-separated passN values; gN forms are rejected."""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    if not tokens:
+        raise argparse.ArgumentTypeError("at least one pass is required")
+    for token in tokens:
+        if cells.pass_number(token) is None or cells.pass_name(token) != token:
+            raise argparse.ArgumentTypeError(
+                "pass must be pass1..pass8 (got %r)" % (token,))
+    return tokens
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--passes", "--gens", dest="passes", required=True,
-                    help="comma-separated passes (accepts passN and legacy gN); "
-                         "legacy alias: --gens")
+    ap.add_argument("--passes", required=True, type=parse_passes,
+                    help="comma/space-separated passes, pass1..pass8")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    tokens = args.passes.replace(",", " ").split()
-    passes = [cells.pass_name(p) for p in tokens]
-    per = collect(args.session, tokens)
+    passes = args.passes
+    per = collect(args.session, passes)
     md_path, summary, ratios = write_report(args.out, args.session, passes, per)
     print(f"wrote {md_path}")
     for cell in CELLS:

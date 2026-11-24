@@ -13,7 +13,7 @@
 #
 # Usage (on the host, root):
 #   sudo bash bench/host-setup/run-unattended.sh
-#   sudo bash bench/host-setup/run-unattended.sh --root bench/results/unattended-2026-11-16
+#   sudo bash bench/host-setup/run-unattended.sh --root bench/results/unattended
 #   sudo bash bench/host-setup/run-unattended.sh --dry-run
 #
 # Exit status: 0 = the chain completed (any scientific verdict), non-zero = infra issue.
@@ -23,7 +23,7 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd -- "$HERE/../.." && pwd)
 cd "$REPO"
 
-ROOT=${UNATTENDED_ROOT:-$REPO/bench/results/unattended-2026-11-16}
+ROOT=${UNATTENDED_ROOT:-$REPO/bench/results/unattended}
 DRY=0
 WINDOW_HOURS=${WINDOW_HOURS:-6.0}
 HP_MOUNT=/mnt/hugepages-juring
@@ -34,7 +34,7 @@ while (( $# )); do
         --root) ROOT=$2; shift 2 ;;
         --dry-run) DRY=1; shift ;;
         --window-hours) WINDOW_HOURS=$2; shift 2 ;;
-        -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

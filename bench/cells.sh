@@ -3,20 +3,19 @@
 #
 # Sourced by the benchmark runners; not meant to be executed directly.
 #
-# The mapping lives in exactly one place, bench/analysis/cells.py.  Sourcing
-# this file loads it into bash associative arrays (one python3 call, no
-# duplicated literal table) and defines:
+# The table lives in exactly one place, bench/analysis/cells.py.  Sourcing this
+# file loads it into bash associative arrays (one python3 call, no duplicated
+# literal table) and defines:
 #
-#   cell_slug <id>        canonical slug from a legacy W# id or a slug
-#   cell_label <id>       human label ("4 KiB random write, 64 in flight")
+#   cell_slug <slug>      canonical slug (identity; validates a known workload)
+#   cell_label <slug>     human label ("4 KiB random write, 64 in flight")
 #   cell_for <kind> <workload> <bs> [qd] [batch]
 #                         canonical slug from a runner's own parameters
 #   cell_for_shards <n>   "shards-<n>" (the multi-shard scaling cells)
-#   pass_name <id>        "passN" from gN / passN / w2-gN
-#   pass_label <id>       "pass N"
+#   pass_name <n>         "passN"
+#   pass_label <n>        "pass N"
 #
-# Legacy W#/g# values stay accepted at every CLI boundary; new runs write the
-# canonical names.  See bench/README.md ("Identifiers").
+# See bench/README.md ("Identifiers").
 _CELLS_SH_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 _BENCH_CELLS_PY="$_CELLS_SH_DIR/analysis/cells.py"
 if ! _bench_cells_decls=$(python3 "$_BENCH_CELLS_PY" --shell); then
@@ -58,10 +57,8 @@ cell_for_shards() { # cell_for_shards <n>
 
 pass_name() {
     local value=${1:-}
-    if [[ $value =~ ^(.*[-_])?[Gg]([0-9]+)$ ]]; then
-        printf 'pass%s' "${BASH_REMATCH[2]}"
-    elif [[ $value =~ ^(.*[-_])?([Pp]ass)([0-9]+)$ ]]; then
-        printf 'pass%s' "${BASH_REMATCH[3]}"
+    if [[ $value =~ ^[Pp][Aa][Ss][Ss]([0-9]+)$ ]]; then
+        printf 'pass%s' "${BASH_REMATCH[1]}"
     else
         printf '%s' "$value"
     fi

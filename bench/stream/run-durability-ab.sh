@@ -32,7 +32,7 @@
 #
 # Session layout (gitignored): bench/results/<session>/ with
 #   cells/<cell>__<engine>__<variant>__r<rep>.json   raw per-process JSON (schema 1.0 +
-#                                                    schema_extensions ["b6-durability-1"])
+#                                                    schema_extensions ["durability-1"])
 #   logs/<same>.log                                  stdout+stderr of the process
 #   cell-meta.tsv                                    one row per invocation (20 columns;
 #                                                    sync data lives in the JSON)
@@ -63,7 +63,7 @@ source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
-SESSION=b6-durability-$(date +%F)
+SESSION=durability-ab
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
 SEASTAR_BIN=${SEASTAR_BIN:-$REPO_ROOT/bench/seastar/seastar_stream_bench}
 JURING_RUN=${JURING_RUN:-$REPO_ROOT/bench/juring/run-juring-stream.sh}
@@ -270,8 +270,8 @@ except Exception:
 problems = []
 if d.get("status") != "ok":
     problems.append("status=%s error=%s" % (d.get("status"), d.get("error")))
-if "b6-durability-1" not in (d.get("schema_extensions") or []):
-    problems.append("missing schema_extensions b6-durability-1")
+if "durability-1" not in (d.get("schema_extensions") or []):
+    problems.append("missing schema_extensions durability-1")
 if d.get("schema_version") != "1.0":
     problems.append("schema_version=%r" % (d.get("schema_version"),))
 cfg = d.get("config") or {}
@@ -326,7 +326,7 @@ try:
     d = json.load(open(sys.argv[1], "r", encoding="utf-8"))
 except Exception:
     print("fail"); raise SystemExit(0)
-print("ok" if d.get("status") == "ok" and "b6-durability-1" in (d.get("schema_extensions") or []) else "fail")
+print("ok" if d.get("status") == "ok" and "durability-1" in (d.get("schema_extensions") or []) else "fail")
 PY
 }
 

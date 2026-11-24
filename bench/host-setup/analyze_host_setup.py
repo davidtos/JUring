@@ -6,7 +6,6 @@ Usage:
 
 Reads <dir>/cell-meta.tsv (written by bench/host-setup/run-host-setup.sh) and emits
 <dir>/analysis/host-setup-summary.md + <dir>/analysis/host-setup.ratios.csv.
-The historical session directories keep the names recorded in the release archive.
 
 Block A: paired seastar hugetlbfs / THP ratios per cell (R=3 under the frozen
 protocol). Block B: paired juring/fio-matched and seastar/fio-matched ratios

@@ -18,17 +18,16 @@
 #   - preconditioning is session-once (the preconditioning burst allows per-block),
 #     not per-cell,
 #   - rests are between rep groups (--rest-scope reps), not after every run.
-# Both deviations are disclosed in the session's notes.md (the historical write
-# block is bench/results/m1-2026-11-13-write).
+# Both deviations are disclosed in the session's notes.md.
 #
 # Artifacts: $SESSION/{cells,logs,series,state}/ plus the write-block.log
-# (SESSION defaults to bench/results/m1-2026-11-13-write, the historical block).
+# (SESSION defaults to bench/results/write-matrix).
 set -euo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
 cd "$REPO_ROOT"
 
-SESSION=${SESSION_DIR:-$REPO_ROOT/bench/results/m1-2026-11-13-write}
+SESSION=${SESSION_DIR:-$REPO_ROOT/bench/results/write-matrix}
 LOG=$SESSION/logs/write-block.log
 WR_FILE=$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin
 SYSROOT=$REPO_ROOT/.sysroot/root/usr

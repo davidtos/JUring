@@ -13,10 +13,8 @@ Figures written to --out-dir (default docs/figures):
                             the local start time of each back-to-back pass)
   write-mode-probe.svg      fio batch-size sweep: the fast/slow flip is not batching
 
-Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
-(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
-g1 and pass1 forms. Figure labels use the human cell names from
-`bench/analysis/cells.py`; no W#/g# codes appear in the SVGs.
+Passes are pass1..pass8 and the CLI flag is --passes. Figure labels use the
+human cell names from `bench/analysis/cells.py`.
 
 Usage:
     python3 bench/write/plot_write_modes.py \
@@ -83,7 +81,7 @@ svg = _svg.document
 
 
 def load_meta(d):
-    """cell-meta.tsv rows keyed by canonical cell slug (legacy W# accepted)."""
+    """cell-meta.tsv rows keyed by canonical cell slug."""
     rows = {}
     with open(os.path.join(d, "cell-meta.tsv"), encoding="utf-8") as fh:
         for r in csv.DictReader(fh, delimiter="\t"):
@@ -91,12 +89,15 @@ def load_meta(d):
     return rows
 
 
+def series_path(d, cell, engine, variant, bs, qd, rep=1):
+    return os.path.join(d, "series", aw.stem(cell, engine, variant, bs, qd, rep) + ".tsv")
+
+
 def collect(session, passes):
     """(pass, cell, engine) -> list of measured runs; steady flag per run."""
     per = {}
-    for token in passes:
-        name = cellmap.pass_name(token)
-        d = cellmap.pass_dir(session, token)
+    for name in passes:
+        d = os.path.join(session, name)
         meta = load_meta(d)
         for cell in CELLS:
             for engine, variant, _label, _color, _style in ARMS:
@@ -106,8 +107,8 @@ def collect(session, passes):
                 iops = float(r["iops"]) if r["status"] == "ok" else None
                 steady = False
                 if iops is not None and iops > 0:
-                    c = aw.classify(aw.read_series(
-                        aw.series_path(d, cell, engine, variant, "4k", CELL_QD[cell])))
+                    c = aw.classify(aw.read_series(series_path(
+                        d, cell, engine, variant, "4k", CELL_QD[cell])))
                     steady = bool(c["steady"]) and iops < STEADY_MAX_IOPS
                 per.setdefault((name, cell, engine), []).append(
                     {"iops": iops, "steady": steady, "p99": float(r["p99_us"] or 0)})
@@ -117,9 +118,8 @@ def collect(session, passes):
 def cell_start_times(session, passes):
     """(pass, cell) -> datetime of that cell's first measured run, campaign local time."""
     raw = {}
-    for token in passes:
-        name = cellmap.pass_name(token)
-        meta = load_meta(cellmap.pass_dir(session, token))
+    for name in passes:
+        meta = load_meta(os.path.join(session, name))
         for r in meta.values():
             ts = r["ts_utc"]
             if not ts:
@@ -342,26 +342,36 @@ def figure_probe(rounds, batches):
     return svg(W, H, body)
 
 
+def parse_passes(text):
+    """Comma/space-separated passN values; gN forms are rejected."""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    if not tokens:
+        raise argparse.ArgumentTypeError("at least one pass is required")
+    for token in tokens:
+        if cellmap.pass_number(token) is None or cellmap.pass_name(token) != token:
+            raise argparse.ArgumentTypeError(
+                "pass must be pass1..pass8 (got %r)" % (token,))
+    return tokens
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--passes", "--gens", dest="passes", required=True,
-                    help="comma-separated passes (accepts passN and legacy gN); "
-                         "legacy alias: --gens")
+    ap.add_argument("--passes", required=True, type=parse_passes,
+                    help="comma/space-separated passes, pass1..pass8")
     ap.add_argument("--probe-dir", default="")
     ap.add_argument("--out-dir", default="docs/figures")
     ap.add_argument("--batches", default="1,8,16,32,64,128")
     args = ap.parse_args()
-    tokens = args.passes.replace(",", " ").split()
-    passes = [cellmap.pass_name(p) for p in tokens]
+    passes = args.passes
     os.makedirs(args.out_dir, exist_ok=True)
-    per = collect(args.session, tokens)
+    per = collect(args.session, passes)
     batches = [int(b) for b in args.batches.split(",")]
 
     figs = {
         "write-steady-parity.svg": figure_parity(args.session, passes, per),
         "write-operating-modes.svg": figure_operating_modes(
-            passes, per, cell_start_times(args.session, tokens)),
+            passes, per, cell_start_times(args.session, passes)),
     }
     if args.probe_dir and all(os.path.exists(os.path.join(
             args.probe_dir, f"{n}_batch{b}.json")) for n in ("r1", "r2") for b in batches):

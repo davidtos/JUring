@@ -11,8 +11,7 @@
 #   now_utc / loadavg / governor / devstat
 #
 # Cell identity: <case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>
-#   case    canonical cell slug from bench/analysis/cells.py (legacy W# aliases are
-#           still accepted in a historical cell-meta.tsv)
+#   case    canonical cell slug from bench/analysis/cells.py
 #   engine  juring | seastar | fio-io_uring | fio-libaio | seastar-io_tester
 #   variant std | matched | matchedbatch | default | batch8 | batch16 | batch32 | sqpoll | perf
 #

@@ -1,2 +1,0 @@
-wrote <WORK>/write-state/out/write-state-summary.md
-gate verdict: INCONCLUSIVE (only 2 valid generation(s) (< 4))

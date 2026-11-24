@@ -8,8 +8,7 @@ The results I trust are in [`BENCHMARK.md`](../../BENCHMARK.md#multi-ring-scale-
 
 The four scaling cells are `shards-1`, `shards-2`, `shards-4` and `shards-8` (1/2/4/8 shards); the
 mapping lives in [`bench/analysis/cells.py`](../analysis/cells.py), loaded by
-[`bench/cells.sh`](../cells.sh). Historical sessions named the cell `N<n>`; new runs write the
-canonical slug, and the analyzer accepts both.
+[`bench/cells.sh`](../cells.sh). Runs, manifests and tables use the canonical slug.
 
 ## What it measures
 
@@ -24,7 +23,7 @@ The engines:
 
 Only reads run: `--readonly` for fio and read-only `O_DIRECT` descriptors for JUring. Five repetitions, fresh process or JVM per invocation, engines interleaved with the order alternating per repetition block, 300 s rest between invocations. Every repetition is kept and reported.
 
-The session I ran in `bench/results/m3-2026-11-15/` had 60 invocations, all `status=ok`. At eight shards JUring measured `473,126` IOPS against `459,125` for `fio numjobs=8` and `466,460` for Seastar `--smp 8`. The per-shard `min/mean` was `0.963` with a 95% lower bound of `0.947`. Six of the 60 repetitions were in a slow drive state and are disclosed, not dropped.
+The session I ran had 60 invocations, all `status=ok`. At eight shards JUring measured `473,126` IOPS against `459,125` for `fio numjobs=8` and `466,460` for Seastar `--smp 8`. The per-shard `min/mean` was `0.963` with a 95% lower bound of `0.947`. Six of the 60 repetitions were in a slow drive state and are disclosed, not dropped.
 
 | Shards | JUring IOPS [95% CI] | `fio numjobs=N` | Seastar `--smp N` | JUring / fio mean (95% lower bound) | Seastar / JUring mean (95% lower bound) |
 |---|---|---|---|---|---|
@@ -37,8 +36,8 @@ The session I ran in `bench/results/m3-2026-11-15/` had 60 invocations, all `sta
 
 - `run-scale-out.sh` is the scaling driver. It runs the JUring shard runtime, `fio` and Seastar at 1, 2, 4 and 8 shards, with five repetitions and a 300 s rest per invocation. It is resumable in chunks: `--max-blocks K` runs at most K `(N, repetition)` blocks, and `--resume` keeps complete configurations and runs only the missing invocations. The 300 s rest is carried across chunk boundaries by reading the last invocation's end time from `cell-meta.tsv`. The driver never invokes Maven: the JUring harness is compiled `javac`-only (`JURING_SKIP_MVN=1 ... --help`) against `target/classes`, then runs with `JURING_SKIP_COMPILE=1`.
 - `run-metrics-overhead.sh` is the metrics A/B. The baseline arm is commit `6cc1a75`, built once in a `git archive` scratch tree with offline Maven and its own `javac`; the workspace is not edited. The metrics arm is the current tree with metrics on: `RingMetrics` plus `LatencyHistogram`, `latencySampleEvery = 1`, 1 Hz `ring_series`. The three configurations are one shard, eight shards, and threaded mode with one worker. Five repetitions each, 30 s rests, interleaved arms with the order alternating per repetition.
-- `analyze_scale_out.py` builds the scaling tables from the raw JSON: one-sided 95% t intervals, paired ratios against `fio` and Seastar, per-shard `min/mean`, p99 ratios, and the per-ring queue-depth and runtime-completion p99 tables. It writes `aggregate/m3.{md,json}`.
-- `analyze_metrics_overhead.py` reads the same raw JSON and writes `aggregate/overhead.{json,md}`: paired per-repetition ratio metrics-on / metrics-off, mean, standard deviation and one-sided 95% t interval, with state-flagged repetitions disclosed.
+- `analyze_scale_out.py` builds the scaling tables from the raw JSON: one-sided 95% t intervals, paired ratios against `fio` and Seastar, per-shard `min/mean`, p99 ratios, and the per-ring queue-depth and runtime-completion p99 tables. It writes `aggregate/scale-out.{md,json}`.
+- `analyze_metrics_overhead.py` reads the same raw JSON and writes `aggregate/metrics-overhead.{json,md}`: paired per-repetition ratio metrics-on / metrics-off, mean, standard deviation and one-sided 95% t interval, with state-flagged repetitions disclosed.
 
 ## Run the scaling session
 
@@ -47,15 +46,15 @@ The session I ran in `bench/results/m3-2026-11-15/` had 60 invocations, all `sta
 bench/shard/run-scale-out.sh --dry-run
 
 # pilot: 2 s harness check, not session data
-bench/shard/run-scale-out.sh --session m3-pilot-2026-11-15 --force \
+bench/shard/run-scale-out.sh --session scale-out-pilot --force \
   --engines juring-group,juring-manual,fio,seastar --n-list 1,2,4,8 \
   --reps 1 --seconds 2 --warmup 2 --rest 30
 
 # full session in chunks: repeat the --resume line until it finishes
-ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session m3-2026-11-15 --max-blocks 3
-ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session m3-2026-11-15 --resume --max-blocks 3
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session scale-out --max-blocks 3
+ALLOW_RESIDUAL_LOAD=1 bench/shard/run-scale-out.sh --session scale-out --resume --max-blocks 3
 
-python3 bench/shard/analyze_scale_out.py --session m3-2026-11-15
+python3 bench/shard/analyze_scale_out.py --session scale-out
 ```
 
 Overrides: `--session`, `--n-list`, `--engines`, `--reps`, `--seconds`, `--warmup`, `--rest`, `--max-blocks`, `--force`, `--resume`, `--dry-run`. Environment: `READ_FILE`, `JURING_RUN`, `FIO_BIN`, `SEASTAR_BIN`, `JVM_OPTS` (default `-Xms8g -Xmx8g -XX:+AlwaysPreTouch`), `FIO_GROUP_REPORTING` (default 1), `ALLOW_RESIDUAL_LOAD=1`.
@@ -65,7 +64,7 @@ Overrides: `--session`, `--n-list`, `--engines`, `--reps`, `--seconds`, `--warmu
 ## Run the metrics A/B
 
 ```bash
-# build the baseline arm once: git archive 6cc1a75 into scratch/b5-bench/baseline,
+# build the baseline arm once: git archive 6cc1a75 into scratch/metrics-overhead/baseline,
 # offline maven compile, then its own javac
 bench/shard/run-metrics-overhead.sh --prep-baseline
 
@@ -74,9 +73,9 @@ bench/shard/run-metrics-overhead.sh --dry-run
 
 # real session, ~40 min on an otherwise idle machine
 FROZEN_HEAD=<sha> FROZEN_SRC_SHA1=<sha> FROZEN_TEST_SHA1=<sha> \
-  bench/shard/run-metrics-overhead.sh --session b5-overhead-2026-11-14
+  bench/shard/run-metrics-overhead.sh --session metrics-overhead
 
-python3 bench/shard/analyze_metrics_overhead.py --session b5-overhead-2026-11-14
+python3 bench/shard/analyze_metrics_overhead.py --session metrics-overhead
 ```
 
 The three variables are the code identity the session must run against; `--allow-unfrozen` skips the check for a dry run or a prep. Overrides for this driver: `--session`, `--reps`, `--seconds`, `--warmup`, `--rest`, `--prep-only`, `--prep-baseline`, `--resume`, `--force`, `--dry-run`. The analyzer reports state-flagged repetitions side by side under the flat external p99 rule and under a rule scaled by the number of workers, and the primary mean is the same under both.
@@ -128,11 +127,11 @@ bench/results/<session>/
   logs/<id>.log, logs/<id>.env          process output; pre/post uptime, loadavg, top
   cell-meta.tsv                         one row per invocation, all repetitions kept
   manifest.txt                          host, kernel, JDK, CPU, NVMe, protocol, commands
-  aggregate/m3.{json,md}                scaling session analysis
-  aggregate/overhead.{json,md}          metrics A/B analysis
+  aggregate/scale-out.{json,md}         scaling session analysis
+  aggregate/metrics-overhead.{json,md}  metrics A/B analysis
 ```
 
-Session directories are gitignored. The overhead session also archived its first analysis as `aggregate/overhead-first-pass.{md,json}`.
+Session directories are gitignored. The metrics-overhead session also archived its first analysis as `aggregate/metrics-overhead-first-pass.{md,json}`.
 
 ## Caveats
 

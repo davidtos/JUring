@@ -2,7 +2,7 @@
 """Observability overhead (metrics on vs off) A/B analyzer.  Protocol frozen before the session.
 
 Reads a ``bench/shard/run-metrics-overhead.sh`` session (cell-meta.tsv plus the paired
-``<cell>__b4|b5__r<rep>.json`` cell JSONs) and writes ``aggregate/overhead.{json,md}``.
+``<cell>__baseline|metrics_on__r<rep>.json`` cell JSONs) and writes ``aggregate/metrics-overhead.{json,md}``.
 The frozen metric is the paired per-rep throughput ratio metrics-on/baseline: mean >= 0.99 in
 every cell and no undisclosed rep below 0.95.  State-gated reps are disclosed,
 never trimmed.
@@ -10,7 +10,7 @@ never trimmed.
 Exit: 0 = PASS, 1 = FAIL, 2 = INCONCLUSIVE, 3 = NO DATA.
 
 Usage:
-    python3 bench/shard/analyze_metrics_overhead.py --session b5-overhead-2026-11-14
+    python3 bench/shard/analyze_metrics_overhead.py --session metrics-overhead
     python3 bench/shard/analyze_metrics_overhead.py --results-dir <dir> [--out-dir <dir>]
 """
 import argparse
@@ -26,7 +26,7 @@ from analysis import cli, jsonio, md, stats  # noqa: E402
 
 DEFAULT_RESULTS_ROOT = jsonio.REPO_ROOT / "bench" / "results"
 
-CELL_RE = re.compile(r"^(.+?)__(b4|b5)__r(\d+)\.json$")
+CELL_RE = re.compile(r"^(.+?)__(baseline|metrics_on)__r(\d+)\.json$")
 CELL_ORDER = ["shard1", "shard8", "threads1"]
 FAST_P99_US = 600.0          # 4K randread QD64 fast-state threshold (single ring)
 # Cell-adjusted fast-state threshold (Lead-approved, analysis-only): the methodology's
@@ -104,7 +104,7 @@ def extract_invocation(arm, cell, rep, path, meta):
     })
     worker_entries = (run.get("shards") or []) + (run.get("threads") or [])
     rec["ring_metrics_present"] = any(isinstance(w.get("ring_metrics"), dict) for w in worker_entries)
-    if arm == "b5" and rec["ring_metrics_present"]:
+    if arm == "metrics_on" and rec["ring_metrics_present"]:
         # shards[] and threads[] hold the same workers in shard mode: count one of them.
         keys = "shards" if run.get("shards") else "threads"
         entry_key = "shard" if keys == "shards" else "thread"
@@ -138,9 +138,9 @@ def extract_invocation(arm, cell, rep, path, meta):
         reason = "iops<=0"
     elif rec["errors"] != 0:
         reason = "errors=%d" % rec["errors"]
-    elif arm == "b4" and schema != "1.0":
+    elif arm == "baseline" and schema != "1.0":
         reason = "baseline arm JSON schema %s != 1.0 (wrong build?)" % schema
-    elif arm == "b5" and (schema != "1.1" or not rec["metrics_enabled"]):
+    elif arm == "metrics_on" and (schema != "1.1" or not rec["metrics_enabled"]):
         reason = "metrics-on arm schema=%s metrics=%s (expected 1.1/on)" % (
             schema, rec["metrics_enabled"])
     if reason is None:
@@ -195,24 +195,24 @@ def classify_states(records):
     return groups
 
 
-def pair_gate(b4, b5, adjusted):
+def pair_gate(baseline, metrics_on, adjusted):
     """Return (gated, reasons) for one paired rep under a given p99 gate labelling."""
-    threshold_b4 = (p99_threshold_cell_adjusted(b4) if adjusted
-                    else p99_threshold_literal(b4))
-    threshold_b5 = (p99_threshold_cell_adjusted(b5) if adjusted
-                    else p99_threshold_literal(b5))
+    threshold_baseline = (p99_threshold_cell_adjusted(baseline) if adjusted
+                         else p99_threshold_literal(baseline))
+    threshold_metrics_on = (p99_threshold_cell_adjusted(metrics_on) if adjusted
+                           else p99_threshold_literal(metrics_on))
     reasons = []
-    if b4["iops_anomaly"]:
+    if baseline["iops_anomaly"]:
         reasons.append("baseline arm IOPS anomaly (< 0.92 x max of its cell/arm)")
-    if b5["iops_anomaly"]:
+    if metrics_on["iops_anomaly"]:
         reasons.append("metrics-on arm IOPS anomaly (< 0.92 x max of its cell/arm)")
-    if (b4["p99_us"] or 0.0) >= threshold_b4:
-        reasons.append("baseline arm slow-state p99 >= %.0f us" % threshold_b4)
-    if (b5["p99_us"] or 0.0) >= threshold_b5:
-        reasons.append("metrics-on arm slow-state p99 >= %.0f us" % threshold_b5)
-    if _cells.gate_violation(b4["gate_start"]) or _cells.gate_violation(b4["gate_end"]):
+    if (baseline["p99_us"] or 0.0) >= threshold_baseline:
+        reasons.append("baseline arm slow-state p99 >= %.0f us" % threshold_baseline)
+    if (metrics_on["p99_us"] or 0.0) >= threshold_metrics_on:
+        reasons.append("metrics-on arm slow-state p99 >= %.0f us" % threshold_metrics_on)
+    if _cells.gate_violation(baseline["gate_start"]) or _cells.gate_violation(baseline["gate_end"]):
         reasons.append("baseline arm background-load gate")
-    if _cells.gate_violation(b5["gate_start"]) or _cells.gate_violation(b5["gate_end"]):
+    if _cells.gate_violation(metrics_on["gate_start"]) or _cells.gate_violation(metrics_on["gate_end"]):
         reasons.append("metrics-on arm background-load gate")
     return bool(reasons), reasons
 
@@ -235,28 +235,28 @@ def analyze(records):
         pairs = []
         skipped = []
         for rep in reps:
-            b4 = by_key.get((cell, "b4", rep))
-            b5 = by_key.get((cell, "b5", rep))
-            if b4 is None or b5 is None:
+            baseline = by_key.get((cell, "baseline", rep))
+            metrics_on = by_key.get((cell, "metrics_on", rep))
+            if baseline is None or metrics_on is None:
                 skipped.append({"rep": rep, "reason": "missing arm invocation"})
                 continue
-            if not b4["valid"] or not b5["valid"]:
+            if not baseline["valid"] or not metrics_on["valid"]:
                 skipped.append({
                     "rep": rep,
                     "reason": "invalid invocation (baseline: %s; metrics-on: %s)"
-                              % (b4["error"] or "n/a", b5["error"] or "n/a"),
+                              % (baseline["error"] or "n/a", metrics_on["error"] or "n/a"),
                 })
                 continue
-            ratio = b5["iops"] / b4["iops"] if b4["iops"] > 0 else None
+            ratio = metrics_on["iops"] / baseline["iops"] if baseline["iops"] > 0 else None
             if ratio is None:
                 skipped.append({"rep": rep, "reason": "non-positive baseline IOPS"})
                 continue
-            gated_literal, reasons_literal = pair_gate(b4, b5, adjusted=False)
-            gated_adjusted, reasons_adjusted = pair_gate(b4, b5, adjusted=True)
+            gated_literal, reasons_literal = pair_gate(baseline, metrics_on, adjusted=False)
+            gated_adjusted, reasons_adjusted = pair_gate(baseline, metrics_on, adjusted=True)
             below = ratio < REP_RATIO_FLOOR
             pairs.append({
                 "rep": rep,
-                "b4": b4, "b5": b5,
+                "baseline": baseline, "metrics_on": metrics_on,
                 "ratio": ratio,
                 "state_gated": gated_adjusted,           # approved (primary) labelling
                 "state_reasons": reasons_adjusted,
@@ -273,7 +273,7 @@ def analyze(records):
                 "n_pairs": 0, "reduced_reps": True, "ratios": [], "pairs": pairs,
                 "skipped": skipped, "mean_ratio": None, "sd": None, "se": None,
                 "ci_lower_one_sided_95": None, "min_ratio": None, "max_ratio": None,
-                "b4_mean_iops": None, "b5_mean_iops": None,
+                "baseline_mean_iops": None, "metrics_on_mean_iops": None,
                 "overhead_pct": None, "mean_pass": None, "rep_floor_violations": [],
                 "rep_floor_violations_literal": [],
                 "state_gated_reps": [], "state_gated_reps_literal": [],
@@ -296,8 +296,8 @@ def analyze(records):
         csd = stats.sd(clean) if clean else None
         cse = csd / math.sqrt(len(clean)) if clean and len(clean) > 1 else 0.0
         cci = (cmean - t_crit_one_sided_95(len(clean) - 1) * cse) if clean else None
-        b4_iops = [p["b4"]["iops"] for p in pairs]
-        b5_iops = [p["b5"]["iops"] for p in pairs]
+        baseline_iops = [p["baseline"]["iops"] for p in pairs]
+        metrics_on_iops = [p["metrics_on"]["iops"] for p in pairs]
         below = [p for p in pairs if p["undisclosed_below_floor"]]
         gated = [p for p in pairs if p["state_gated"]]
         below_literal = [p for p in pairs if p["undisclosed_below_floor_literal"]]
@@ -307,8 +307,8 @@ def analyze(records):
         mean_pass = m >= MEAN_RATIO_BAR
         verdict = "PASS" if (mean_pass and not below) else "FAIL"
         verdict_literal = "PASS" if (mean_pass and not below_literal) else "FAIL"
-        workers = max([int(p["b4"].get("workers") or 1) for p in pairs]
-                      + [int(p["b5"].get("workers") or 1) for p in pairs] + [1])
+        workers = max([int(p["baseline"].get("workers") or 1) for p in pairs]
+                      + [int(p["metrics_on"].get("workers") or 1) for p in pairs] + [1])
         cell_results[cell] = {
             "n_pairs": n,
             "reduced_reps": n < 5,
@@ -323,8 +323,8 @@ def analyze(records):
             "ci_lower_one_sided_95": _cells.r3(ci_lower),
             "min_ratio": _cells.r3(min(ratios)),
             "max_ratio": _cells.r3(max(ratios)),
-            "b4_mean_iops": _cells.r3(stats.mean(b4_iops)),
-            "b5_mean_iops": _cells.r3(stats.mean(b5_iops)),
+            "baseline_mean_iops": _cells.r3(stats.mean(baseline_iops)),
+            "metrics_on_mean_iops": _cells.r3(stats.mean(metrics_on_iops)),
             "overhead_pct": _cells.r3((1.0 - m) * 100.0),
             "mean_pass": bool(mean_pass),
             "rep_floor_violations": [p["rep"] for p in below],
@@ -383,7 +383,7 @@ def analyze(records):
             "literal": "methodology literal flat %.0f us" % FAST_P99_US,
             "iops_anomaly": "rep < %.2f x max IOPS of its own (cell, arm) for both"
                             % IOPS_ANOMALY_FACTOR,
-            "f14": "same for both",
+            "background_load_gate": "same for both",
         },
     }
 
@@ -398,7 +398,7 @@ def per_ring_evidence(records):
     cells = sorted({r["cell"] for r in records})
     for cell in cells:
         reps = [r for r in records
-                if r["cell"] == cell and r["arm"] == "b5" and r["valid"]
+                if r["cell"] == cell and r["arm"] == "metrics_on" and r["valid"]
                 and r.get("ring_workers")]
         if not reps:
             continue
@@ -447,7 +447,7 @@ def r3_list(values):
     return [round(float(v), 3) for v in values]
 
 
-def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
+def render_markdown(session, results_dir, analysis, records, baseline_commit, frozen):
     add = []
     cells = analysis["cells"]
     add.append("# Observability overhead A/B — analysis (`%s`)" % session)
@@ -460,7 +460,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                "`withLatencySampleEvery(1)`). PASS = mean paired ratio >= %.2f in every "
                "cell and no individual rep below %.2f unless state-gated and disclosed. "
                "Every rep is reported; nothing is trimmed."
-               % (b4_commit, MEAN_RATIO_BAR, REP_RATIO_FLOOR))
+               % (baseline_commit, MEAN_RATIO_BAR, REP_RATIO_FLOOR))
     add.append("")
     add.append("- results: `%s`" % results_dir)
     add.append("- cells: `shard1` (shard N=1), `shard8` (shard N=8), `threads1` "
@@ -498,7 +498,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
         add.append("| %s | %d | %d%s | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
                    % (cell, c.get("workers", 1), c["n_pairs"],
                       " (reduced)" if c["reduced_reps"] else "",
-                      md.fixed(c["b4_mean_iops"], 0), md.fixed(c["b5_mean_iops"], 0),
+                      md.fixed(c["baseline_mean_iops"], 0), md.fixed(c["metrics_on_mean_iops"], 0),
                       md.fixed(c["mean_ratio"], 4), md.fixed(c["sd"], 4),
                       md.fixed(c["ci_lower_one_sided_95"], 4), md.fixed(c["min_ratio"], 4),
                       md.fixed(c["overhead_pct"], 2),
@@ -520,8 +520,8 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     for cell in analysis["cell_order"]:
         c = cells[cell]
         for pair in c["pairs"]:
-            b4, b5 = pair["b4"], pair["b5"]
-            if b4["iops_anomaly"] or b5["iops_anomaly"]:
+            baseline, metrics_on = pair["baseline"], pair["metrics_on"]
+            if baseline["iops_anomaly"] or metrics_on["iops_anomaly"]:
                 state = "slow(IOPS anomaly)"
             elif pair["state_gated_literal"]:
                 state = "slow(p99 literal)"
@@ -530,9 +530,9 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
             else:
                 state = "fast"
             add.append("| %s | %d | %s | %s | %s | %s | %s | %s | %s | %s | %s |"
-                       % (cell, pair["rep"], md.fixed(b4["iops"], 0), md.fixed(b5["iops"], 0),
-                          md.fixed(pair["ratio"], 4), md.fixed(b4["p99_us"], 1),
-                          md.fixed(b5["p99_us"], 1), state,
+                       % (cell, pair["rep"], md.fixed(baseline["iops"], 0), md.fixed(metrics_on["iops"], 0),
+                          md.fixed(pair["ratio"], 4), md.fixed(baseline["p99_us"], 1),
+                          md.fixed(metrics_on["p99_us"], 1), state,
                           "YES" if pair["state_gated"] else "no",
                           "YES" if pair["state_gated_literal"] else "no",
                           "; ".join(pair["state_reasons"]) or "clean"))
@@ -598,10 +598,10 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                "ring_metrics | dispatch samples (mean) |")
     add.append("|---|---|---|---|---|")
     for cell in analysis["cell_order"]:
-        b5_reps = [r for r in records if r["cell"] == cell and r["arm"] == "b5"]
-        valid = [r for r in b5_reps if r["valid"]]
+        metrics_on_reps = [r for r in records if r["cell"] == cell and r["arm"] == "metrics_on"]
+        valid = [r for r in metrics_on_reps if r["valid"]]
         add.append("| %s | %d/%d | %s | %s | %s |"
-                   % (cell, sum(1 for r in valid if r["metrics_enabled"]), len(b5_reps),
+                   % (cell, sum(1 for r in valid if r["metrics_enabled"]), len(metrics_on_reps),
                       md.fixed(stats.mean([r["series_points"] for r in valid]), 1),
                       "%d/%d" % (sum(1 for r in valid if r["ring_metrics_present"]),
                                  len(valid)),
@@ -619,7 +619,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("- Baseline arm identity: commit `%s`, built by `git archive` into a "
                "scratch tree + `mvn -o -q -DskipTests compile` + its own `javac` build "
                "(workspace never edited for the baseline). Schema 1.0, no metrics."
-               % b4_commit)
+               % baseline_commit)
     add.append("- Metrics-on arm identity: frozen workspace tree (see manifest.txt for the "
                "expected/live hashes), schema 1.1, metrics on.")
     add.append("- Arms are interleaved with the order alternating each rep (rep odd: "
@@ -640,7 +640,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
     add.append("## 4. Per-ring queue depth / p99 evidence (metrics-on arm, schema 1.1; "
                "multi-shard scaling report data source)")
     add.append("")
-    per_ring = analysis.get("b5_per_ring") or {}
+    per_ring = analysis.get("per_ring") or {}
     if not per_ring:
         add.append("No per-ring metrics data available in this session.")
     else:
@@ -684,7 +684,7 @@ def render_markdown(session, results_dir, analysis, records, b4_commit, frozen):
                "PASS = mean ratio >= %.2f in every cell AND no non-state-gated ratio < "
                "%.2f. `INCONCLUSIVE` means missing pairs/cells, not a pass. Raw data: "
                "`cells/`, `cell-meta.tsv`, `manifest.txt`; raw aggregates: "
-               "`aggregate/overhead.json`."
+               "`aggregate/metrics-overhead.json`."
                % (MEAN_RATIO_BAR, REP_RATIO_FLOOR))
     add.append("")
     return "\n".join(add)
@@ -718,7 +718,7 @@ def main(argv):
     records = load_session(results_dir)
     classify_states(records)
     analysis = analyze(records)
-    analysis["b5_per_ring"] = per_ring_evidence(records)
+    analysis["per_ring"] = per_ring_evidence(records)
     analysis["session"] = session
     analysis["results_dir"] = results_dir
     analysis["protocol"] = {
@@ -733,13 +733,13 @@ def main(argv):
         "state_gate": "fast p99 < %.0f us + IOPS anomaly rep < %.2f x max (cell,arm) "
                       "+ background-load gate" % (FAST_P99_US, IOPS_ANOMALY_FACTOR),
         "baseline_commit": args.baseline_commit,
-        "b5_metrics": "on: ring_metrics + 1 Hz ring_series + withLatencySampleEvery(1) (dispatch_latency_us = runtime completion latency registration->dispatch)",
-        "m3_signed_off": False,
+        "metrics_enabled": "on: ring_metrics + 1 Hz ring_series + withLatencySampleEvery(1) (dispatch_latency_us = runtime completion latency registration->dispatch)",
+        "campaign_signed_off": False,
     }
 
     cli.ensure_dir(out_dir)
-    json_path = os.path.join(out_dir, "overhead.json")
-    md_path = os.path.join(out_dir, "overhead.md")
+    json_path = os.path.join(out_dir, "metrics-overhead.json")
+    md_path = os.path.join(out_dir, "metrics-overhead.md")
     payload = {
         "session": session,
         "results_dir": results_dir,
@@ -762,8 +762,8 @@ def main(argv):
                 "ci_lower_one_sided_95": c["ci_lower_one_sided_95"],
                 "min_ratio": c["min_ratio"],
                 "max_ratio": c["max_ratio"],
-                "b4_mean_iops": c["b4_mean_iops"],
-                "b5_mean_iops": c["b5_mean_iops"],
+                "baseline_mean_iops": c["baseline_mean_iops"],
+                "metrics_on_mean_iops": c["metrics_on_mean_iops"],
                 "overhead_pct": c["overhead_pct"],
                 "mean_pass": c["mean_pass"],
                 "rep_floor_violations": c["rep_floor_violations"],
@@ -781,11 +781,11 @@ def main(argv):
                 "pairs": [
                     {
                         "rep": p["rep"],
-                        "b4_iops": _cells.r3(p["b4"]["iops"]),
-                        "b5_iops": _cells.r3(p["b5"]["iops"]),
+                        "baseline_iops": _cells.r3(p["baseline"]["iops"]),
+                        "metrics_on_iops": _cells.r3(p["metrics_on"]["iops"]),
                         "ratio": _cells.r3(p["ratio"]),
-                        "b4_p99_us": _cells.r3(p["b4"]["p99_us"]),
-                        "b5_p99_us": _cells.r3(p["b5"]["p99_us"]),
+                        "baseline_p99_us": _cells.r3(p["baseline"]["p99_us"]),
+                        "metrics_on_p99_us": _cells.r3(p["metrics_on"]["p99_us"]),
                         "state_gated": p["state_gated"],
                         "state_reasons": p["state_reasons"],
                         "state_gated_literal": p["state_gated_literal"],
@@ -800,7 +800,7 @@ def main(argv):
             }
             for cell, c in analysis["cells"].items()
         },
-        "b5_per_ring": analysis.get("b5_per_ring") or {},
+        "per_ring": analysis.get("per_ring") or {},
         "invalid_invocations": [
             {"cell": r["cell"], "arm": r["arm"], "rep": r["rep"],
              "status": r["status"], "error": r["error"]}
@@ -833,7 +833,7 @@ def main(argv):
     if analysis["skipped_pairs"]:
         print("  skipped pairs (missing/invalid): %d" % analysis["skipped_pairs"])
     for cell in analysis["cell_order"]:
-        rows = analysis.get("b5_per_ring", {}).get(cell) or []
+        rows = analysis.get("per_ring", {}).get(cell) or []
         if rows:
             print("  metrics-on per-ring %-9s rings=%d mean_in_flight=%.2f max_in_flight=%s "
                   "runtime_completion_p99_us=%s"

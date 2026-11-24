@@ -8,9 +8,8 @@ The results are in [`BENCHMARK.md`](../../BENCHMARK.md); the protocol and statis
 
 Cells are named by what they do (`stream-write-128k`, `stream-read-1m`, `durability-write-128k`,
 `groupcommit-4k-batch32`, ...); the mapping and its single source of truth are
-[`bench/analysis/cells.py`](../analysis/cells.py) and [`bench/cells.sh`](../cells.sh). The old
-`W21-128k`/`W22-1M`/`W24-128k`/`W25-4k-b1` codes remain accepted as `--cells` aliases and in
-historical result files, but new runs, manifests and tables use the canonical names.
+[`bench/analysis/cells.py`](../analysis/cells.py) and [`bench/cells.sh`](../cells.sh). Runs,
+manifests and tables use these canonical names.
 
 ## The stream comparison
 
@@ -23,7 +22,7 @@ The primary rows:
 
 There is a disclosed exploratory JUring buffered row (`--buffered`, no `O_DIRECT`) that never counts toward the result.
 
-The defaults are 10 s warmup and 30 s measured, three repetitions, one fresh process per repetition, `taskset -c 2`, engines interleaved with the order alternating, and 60 s rest between repetitions. The final session used 10 s warmup and 60 s measured, five repetitions and 300 s rests, and `analyze_stream.py --session m2-final` rebuilds it from the raw JSON.
+The defaults are 10 s warmup and 30 s measured, three repetitions, one fresh process per repetition, `taskset -c 2`, engines interleaved with the order alternating, and 60 s rest between repetitions. The final session used 10 s warmup and 60 s measured, five repetitions and 300 s rests, and `analyze_stream.py --session <stream-session>` rebuilds it from the raw JSON.
 
 | Workload | Buffer | Prefetch / write-behind | JUring MiB/s ± 95% CI | Seastar `fstream` ± 95% CI | Paired ratio |
 |---|---|---|---|---|---|
@@ -48,20 +47,19 @@ bench/stream/run-stream-matrix.sh --dry-run --reps 1 --seconds 3 --warmup 1 --re
 
 # full preliminary session, roughly 35-40 minutes
 bench/stream/run-stream-matrix.sh
-# -> bench/results/b2-2026-11-13/{cells,logs,aggregate}/, cell-meta.tsv, manifest.txt
+# -> bench/results/stream-matrix/{cells,logs,aggregate}/, cell-meta.tsv, manifest.txt
 
 # re-runs never overwrite a populated session; start a new one
-bench/stream/run-stream-matrix.sh --session b2-2026-11-13-r2
+bench/stream/run-stream-matrix.sh --session stream-matrix-r2
 
 # aggregate (the driver also runs this at the end)
-python3 bench/stream/analyze_stream.py --session b2-2026-11-13
+python3 bench/stream/analyze_stream.py --session stream-matrix
 ```
 
 Overrides: `--reps N`, `--seconds S`, `--warmup S`, `--rest S`, `--cells "stream-write-128k,..."`, `--session NAME`, `--force`, `--dry-run`.
 
-`--cells` takes the canonical case names (`stream-write-128k`, `stream-read-1m`, ...); the
-`W21-128k`-style values are still accepted as aliases for old invocations. New runs, manifests and
-raw result paths use the canonical names. Environment: `CPU` (default 2), `READ_FILE`, `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`.
+`--cells` takes the canonical case names (`stream-write-128k`, `stream-read-1m`, ...).
+Environment: `CPU` (default 2), `READ_FILE`, `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`.
 
 The driver refuses to start unless both datasets exist with the right permissions and size (at least 10 GiB and a multiple of 1 MiB), the write filesystem has at least 2 GiB free, `kernel.io_uring_disabled=0`, the governor is `performance`, the pinned CPU is online, 1-min loadavg is below 1.0 (unless `ALLOW_RESIDUAL_LOAD=1`), no foreign process is above 20% CPU, and the JUring runner, Seastar binary and analyzer exist. `--dry-run` reports the same checks without exiting on failure or creating files.
 
@@ -118,20 +116,20 @@ bench/stream/run-durability-ab.sh --dry-run
 # short validation with tiny windows
 ALLOW_RESIDUAL_LOAD=1 bench/stream/run-durability-ab.sh \
     --reps 1 --warmup 1 --seconds 2 --rest 5 --tier2-reps 1 --tier2-rest 5 \
-    --size 64m --session b6-durability-smoke
+    --size 64m --session durability-ab-smoke
 
 # full session on a quiet machine (three repetitions, 5 s warmup, 15 s measured, 300 s rests)
 bench/stream/run-durability-ab.sh
 
-python3 bench/stream/analyze_durability.py --session b6-durability-<date>
+python3 bench/stream/analyze_durability.py --session durability-ab
 
 # resume an interrupted session
 bench/stream/run-durability-ab.sh --resume
 ```
 
-The session lives in `bench/results/b6-durability-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--tier2-reps`, `--tier2-rest`, `--size`, `--skip-tier2`, `--skip-fsync`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU` (2), `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`. The driver refuses to overwrite a populated session, preflights the dataset, space, io_uring, governor, CPU, loadavg and foreign CPU, and records everything in `manifest.txt`, including the pinned Seastar `--aio-fsync 1`.
+The session lives in `bench/results/durability-ab/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--tier2-reps`, `--tier2-rest`, `--size`, `--skip-tier2`, `--skip-fsync`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU` (2), `WRITE_FILE`, `SEASTAR_BIN`, `JURING_RUN`, `ALLOW_RESIDUAL_LOAD=1`. The driver refuses to overwrite a populated session, preflights the dataset, space, io_uring, governor, CPU, loadavg and foreign CPU, and records everything in `manifest.txt`, including the pinned Seastar `--aio-fsync 1`.
 
-`analyze_durability.py` requires the `b6-durability-1` extension in the session JSON and exits 3 on a mixed or old session. It writes `aggregate/durability.{json,md}` with per-arm MiB/s mean, sd, 95% CI and CV, `syncs_issued`/s, `MiB/sync = bytes_synced/syncs_completed`, `sync_wait_share`, sync latency p50 and p99, and the per-repetition state class. It also reports the within-repetition paired durability-cost ratio per engine (durable MiB/s over writeback MiB/s), with a 95% CI over repetitions plus the state-matched subset.
+`analyze_durability.py` requires the `durability-1` extension in the session JSON and exits 3 on a mixed or old session. It writes `aggregate/durability.{json,md}` with per-arm MiB/s mean, sd, 95% CI and CV, `syncs_issued`/s, `MiB/sync = bytes_synced/syncs_completed`, `sync_wait_share`, sync latency p50 and p99, and the per-repetition state class. It also reports the within-repetition paired durability-cost ratio per engine (durable MiB/s over writeback MiB/s), with a 95% CI over repetitions plus the state-matched subset.
 
 The state-class rule is fixed in the analyzer: a repetition is `fast` iff MiB/s is at least 550 and write p50 is at most 250 µs, `slow` iff MiB/s is below 300 or p50 is above 600 µs, and `mixed` otherwise; the `0.92` same-arm rule also marks a repetition slow. Classes are computed within the arm, because a durable arm is slower by design. A pair is ranked only if both sides have at least two repetitions in the same class. An arm with CV above 10% gets no ranking, and the two writeback controls must agree within 10% or only the raw table is reported.
 
@@ -158,21 +156,21 @@ bench/stream/run-group-commit-bench.sh --dry-run
 # short validation with tiny windows and a scratch file
 ALLOW_RESIDUAL_LOAD=1 bench/stream/run-group-commit-bench.sh \
     --reps 1 --warmup 1 --seconds 2 --rest 0 --rep-pause 0 --batches "1 8 32 128" \
-    --file scratch/b6-bench/smoke/groupcommit-driver.bin --file-size 16m --session b6-group-commit-smoke
+    --file scratch/group-commit/smoke/groupcommit-driver.bin --file-size 16m --session group-commit-smoke
 
 # full session on a quiet machine
 bench/stream/run-group-commit-bench.sh
 
-python3 bench/stream/analyze_group_commit.py --session b6-group-commit-<date>
+python3 bench/stream/analyze_group_commit.py --session group-commit
 
 # resume an interrupted session
 bench/stream/run-group-commit-bench.sh --resume
 ```
 
-The session lives in `bench/results/b6-group-commit-<date>/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--rest-between`, `--rep-pause`, `--batches`, `--file`, `--file-size`, `--skip-compile`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU`, `GC_FILE`, `GC_FILE_SIZE` (legacy `W25_FILE`/`W25_FILE_SIZE` still accepted), `JURING_CLASSES` (default `target/classes`), `JURING_OUT` (default `bench/juring/out`), `ALLOW_RESIDUAL_LOAD=1`. The driver compiles the runner with `javac` against the existing classes; it never runs Maven. It preflights the API presence, file space, io_uring, governor, CPU, loadavg and foreign CPU.
+The session lives in `bench/results/group-commit/` with `cells/`, `logs/`, `aggregate/`, `manifest.txt` and `cell-meta.tsv`. Overrides: `--reps`, `--warmup`, `--seconds`, `--rest`, `--rest-between`, `--rep-pause`, `--batches`, `--file`, `--file-size`, `--skip-compile`, `--no-analyze`, `--resume`, `--session`, `--force`, `--dry-run`. Environment: `CPU`, `GC_FILE`, `GC_FILE_SIZE`, `JURING_CLASSES` (default `target/classes`), `JURING_OUT` (default `bench/juring/out`), `ALLOW_RESIDUAL_LOAD=1`. The driver compiles the runner with `javac` against the existing classes; it never runs Maven. It preflights the API presence, file space, io_uring, governor, CPU, loadavg and foreign CPU.
 
-`analyze_group_commit.py` requires `b6-durability-1` and writes `aggregate/group-commit.{json,md}`: per batch size MiB/s (mean, sd, 95% CI, CV), writes/s, groups/s, group-latency p50 and p99, sync latency p50 and p99, syncs/s, `MiB/sync`, `sync_wait_share`, `fsyncs_per_group`, wrap-arounds, identity rows and the per-repetition table. It exits 3 and lists the offending files if any identity, restart check or schema check fails. `sync_latency_us` is the `commit()` duration and an upper bound on the sync-only cost, because it includes waiting for the batch writes.
+`analyze_group_commit.py` requires `durability-1` and writes `aggregate/group-commit.{json,md}`: per batch size MiB/s (mean, sd, 95% CI, CV), writes/s, groups/s, group-latency p50 and p99, sync latency p50 and p99, syncs/s, `MiB/sync`, `sync_wait_share`, `fsyncs_per_group`, wrap-arounds, identity rows and the per-repetition table. It exits 3 and lists the offending files if any identity, restart check or schema check fails. `sync_latency_us` is the `commit()` duration and an upper bound on the sync-only cost, because it includes waiting for the batch writes.
 
 I measured batch 1 at `5.9 MiB/s` and batch 128 at `720.7 MiB/s`, and `fsyncs_per_group` stayed at exactly `1.000000` all the way. Every configuration passed the fresh-process restart check. [`BENCHMARK.md`](../../BENCHMARK.md#group-commit) has the table.
 
-Smoke sessions and their raw JSON and logs live under `scratch/b6-bench/smoke/`, never in `bench/results/`, which is reserved for real sessions. The two heavy drivers refuse to start if the preflight checks fail.
+Smoke sessions and their raw JSON and logs live under `scratch/group-commit/smoke/`, never in `bench/results/`, which is reserved for real sessions. The two heavy drivers refuse to start if the preflight checks fail.

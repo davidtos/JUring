@@ -74,7 +74,7 @@
  *   (file::flush() -> fdatasync only; SeaStarRef/src/core/file.cc:217-227).
  *
  * The JSON keeps `schema_version "1.0"` and adds
- * `"schema_extensions": ["b6-durability-1"]`, config.{durability,sync_every_bytes,
+ * `"schema_extensions": ["durability-1"]`, config.{durability,sync_every_bytes,
  * durable,dsync,aio_fsync,sync_counting} and per-run {passes,durability_mode,
  * sync_every_bytes,durability_points,syncs_issued,syncs_completed,syncs_failed,
  * bytes_synced,sync_wait_us{...},sync_wait_share}; existing fields are unchanged.
@@ -686,7 +686,7 @@ static std::string render_json(const config& cfg, const manifest& m,
     o << ",\"engine_detail\":\"" << ENGINE_DETAIL << "\"";
     // Additive durability marker: schema_version stays "1.0";
     // consumers must ignore unknown keys.
-    o << ",\"schema_extensions\":[\"b6-durability-1\"]";
+    o << ",\"schema_extensions\":[\"durability-1\"]";
     o << ",\"status\":\"" << json_escape(status) << "\"";
     o << ",\"error\":" << (error.empty() ? "null" : ("\"" + json_escape(error) + "\""));
     o << ",\"label\":\"" << json_escape(cfg.label.empty() ? cfg.workload : cfg.label) << "\"";

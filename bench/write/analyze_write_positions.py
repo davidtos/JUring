@@ -2,21 +2,19 @@
 """Position-controlled write comparison for the second-drive run.
 
 The frozen state-controlled gate assumes the three JUring/fio arms inside a
-homogeneous generation fall within max/min <= 1.25. On the near-empty second
+homogeneous pass fall within max/min <= 1.25. On the near-empty second
 drive the engines separate by more than that, and the spread follows the engine
 rather than the execution slot. This script implements the contingency fixed in
 docs/write-state-3way-protocol.md ("Run 2 analysis contingency"):
 
   * frozen gate result is primary and must be INCONCLUSIVE only because of the
     homogeneity bound (the caller passes it in / it is re-read here);
-  * per-engine means, CIs and CV across generations;
+  * per-engine means, CIs and CV across passes;
   * position-stratified values (first/middle/last slot);
-  * paired per-generation ratios with 90%/95% CIs;
+  * paired per-pass ratios with 90%/95% CIs;
   * the ranking is only emitted if every pre-registered check passes.
 
-Identifier note (2026-11-24): a *pass* is what the protocol calls a "generation"
-(g1..g8); `--passes` is the CLI flag and `--gens` a legacy alias accepting both
-g1 and pass1 forms.
+Passes are pass1..pass8 and the CLI flag is --passes.
 
 Usage:
     python3 bench/write/analyze_write_positions.py --session DIR --passes pass1,pass2 --out DIR
@@ -75,9 +73,8 @@ def collect(session, passes):
     slot = {}         # (pass, cell, engine, variant) -> 1-based run slot
     frozen = {}       # pass -> bool
     gate_spread = {}  # (pass, cell) -> max/min of the three frozen arms
-    for token in passes:
-        name = cells.pass_name(token)
-        d = cells.pass_dir(session, token)
+    for name in passes:
+        d = os.path.join(session, name)
         rows = load_rows(d)
         frozen[name] = bool(aw.gen_verdict(d)["pass"])
         order = {}
@@ -285,7 +282,7 @@ def write_report(outdir, session, passes, per, slot, frozen, gate_spread):
     with open(md_path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     payload = {
-        "session": session, "gens": passes, "frozen_valid": n_frozen_valid,
+        "session": session, "passes": passes, "frozen_valid": n_frozen_valid,
         "checks": checks, "rankable": rankable,
         "cells": {c: {"engines": {f"{e}|{v}": cd for (e, v), cd in
                                   ((k, cell_data[c][k]) for k in
@@ -298,17 +295,27 @@ def write_report(outdir, session, passes, per, slot, frozen, gate_spread):
     return md_path, rankable, cell_data, checks, n_frozen_valid
 
 
+def parse_passes(text):
+    """Comma/space-separated passN values; gN forms are rejected."""
+    tokens = [t for t in text.replace(",", " ").split() if t]
+    if not tokens:
+        raise argparse.ArgumentTypeError("at least one pass is required")
+    for token in tokens:
+        if cells.pass_number(token) is None or cells.pass_name(token) != token:
+            raise argparse.ArgumentTypeError(
+                "pass must be pass1..pass8 (got %r)" % (token,))
+    return tokens
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--session", required=True)
-    ap.add_argument("--passes", "--gens", dest="passes", required=True,
-                    help="comma-separated passes (accepts passN and legacy gN); "
-                         "legacy alias: --gens")
+    ap.add_argument("--passes", required=True, type=parse_passes,
+                    help="comma/space-separated passes, pass1..pass8")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    tokens = args.passes.replace(",", " ").split()
-    passes = [cells.pass_name(p) for p in tokens]
-    per, slot, frozen, gate_spread = collect(args.session, tokens)
+    passes = args.passes
+    per, slot, frozen, gate_spread = collect(args.session, passes)
     md_path, rankable, cell_data, checks, nvalid = write_report(
         args.out, args.session, passes, per, slot, frozen, gate_spread)
     print(f"wrote {md_path}")

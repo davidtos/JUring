@@ -7,8 +7,8 @@ and writes:
   read-latency.svg     p50 / p99 latency per engine and queue depth
   read-ratios.svg      paired JUring/fio and JUring/Seastar ratios with 90% CI
 
-The session directory comes from the release archive; the same protocol (5
-reps, 10 s warmup + 30 s measured, engine order rotated) is documented in
+The session is one captured read/write matrix run; the same protocol (5 reps,
+10 s warmup + 30 s measured, engine order rotated) is documented in
 BENCHMARK.md.
 
 Usage:
@@ -83,14 +83,10 @@ def latency_from_json(path):
 
 
 def cell_json(session, case, engine, variant, bs, qd, rep):
-    """JSON for one cell, accepting a legacy W# filename from an unmigrated session."""
-    for name in cellmap.aliases(case):
-        path = os.path.join(
-            session, "cells",
-            f"{name}__{engine}__{variant}__bs{bs}__qd{qd}__t1__r{rep}.json")
-        if os.path.exists(path):
-            return path
-    return None
+    """JSON for one cell (canonical slug filename)."""
+    return os.path.join(
+        session, "cells",
+        f"{case}__{engine}__{variant}__bs{bs}__qd{qd}__t1__r{rep}.json")
 
 
 def collect(session):

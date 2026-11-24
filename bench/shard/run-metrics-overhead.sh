@@ -4,11 +4,11 @@
 # (protocol frozen before the session; primary bar: "< 1 % throughput cost").
 #
 # Arms (same host/JDK/flags/dataset/protocol, fresh JVM+process per invocation;
-# the b4/b5 arm tokens name the cell files and the `arm` column):
-#   b4 = baseline: commit 6cc1a75, built in a scratch worktree via `git archive` +
+# the baseline/metrics_on arm tokens name the cell files and the `arm` column):
+#   baseline: commit 6cc1a75, built in a scratch worktree via `git archive` +
 #        offline maven (`mvn -o -q -DskipTests compile`) and its own javac bench build.
 #        The workspace is NEVER edited for the baseline arm.
-#   b5 = metrics-on: the current (frozen) workspace tree with per-ring metrics ON:
+#   metrics_on: the current (frozen) workspace tree with per-ring metrics ON:
 #        ring_metrics, 1 Hz ring_series during the measured phase, and the shard
 #        runtime's library dispatch-latency sampling (withLatencySampleEvery(1)).
 #
@@ -41,12 +41,12 @@
 # frozen target/classes (no `mvn`) and then runs every cell with
 # JURING_SKIP_COMPILE=1 / a direct java launcher.
 #
-# Results (gitignored): bench/results/b5-overhead-<date>/ with
+# Results (gitignored): bench/results/metrics-overhead/ with
 #   cells/<cell>__<arm>__r<rep>.json     raw per-process JSON (+ .gc.log)
 #   logs/<id>.log, logs/<id>.env         process output; loadavg/ps snapshots
 #   cell-meta.tsv                         one row per invocation (all reps, never trimmed)
 #   manifest.txt                          arms/build identity, host/device, protocol, gate
-#   aggregate/overhead.{json,md}          written by bench/shard/analyze_metrics_overhead.py
+#   aggregate/metrics-overhead.{json,md}  written by bench/shard/analyze_metrics_overhead.py
 #
 # Usage:
 #   # 0) build the baseline scratch tree (Maven, offline) + the metrics-on harness; before the session
@@ -56,7 +56,7 @@
 #   # 2) the official session (~40 min, run alone on the machine)
 #   FROZEN_SRC_SHA1=<sha> FROZEN_TEST_SHA1=<sha> FROZEN_HEAD=<sha> bench/shard/run-metrics-overhead.sh
 #   # resume an interrupted session (same directory; keeps complete invocations)
-#   bench/shard/run-metrics-overhead.sh --resume --session b5-overhead-2026-11-14
+#   bench/shard/run-metrics-overhead.sh --resume --session metrics-overhead
 #
 # Options: --session NAME, --reps N, --seconds S, --warmup S, --rest S,
 #          --dry-run, --force, --resume, --prep-only, --prep-baseline,
@@ -74,7 +74,7 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd -- "$HERE/../.." && pwd)
 cd "$REPO_ROOT"
 
-SESSION=${SESSION:-b5-overhead-$(date +%Y-%m-%d)}
+SESSION=${SESSION:-metrics-overhead}
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 JURING_RUN=${JURING_RUN:-$REPO_ROOT/bench/juring/run-juring.sh}
 JAVA_BIN=${JAVA_BIN:-java}
@@ -82,7 +82,7 @@ JAVAC_BIN=${JAVAC_BIN:-javac}
 JAVAC_RELEASE=${JAVAC_RELEASE:-25}
 JVM_OPTS=${JVM_OPTS:--Xms8g -Xmx8g -XX:+AlwaysPreTouch}
 BASELINE_COMMIT=${BASELINE_COMMIT:-6cc1a75}
-BASELINE_DIR=${BASELINE_DIR:-$REPO_ROOT/scratch/b5-bench/baseline}
+BASELINE_DIR=${BASELINE_DIR:-$REPO_ROOT/scratch/metrics-overhead/baseline}
 ANALYZER=$HERE/analyze_metrics_overhead.py
 
 FROZEN_HEAD=${FROZEN_HEAD:-}
@@ -215,8 +215,8 @@ cell_runtime() {
 
 arm_label() {
     case $1 in
-        b4) echo "baseline arm b4 (commit $BASELINE_COMMIT, no metrics)" ;;
-        b5) echo "metrics-on arm b5 (frozen tree, metrics on)" ;;
+        baseline) echo "baseline arm (commit $BASELINE_COMMIT, no metrics)" ;;
+        metrics_on) echo "metrics-on arm (frozen tree, metrics on)" ;;
     esac
 }
 
@@ -224,9 +224,9 @@ arm_label() {
 arm_order() {
     local rep=$1
     if (( rep % 2 == 1 )); then
-        echo "b4 b5"
+        echo "baseline metrics_on"
     else
-        echo "b5 b4"
+        echo "metrics_on baseline"
     fi
 }
 
@@ -327,7 +327,7 @@ run_argv() {
     LOG="$LOGS_DIR/$ID.log"
     jvm="$JVM_OPTS -Xlog:gc:file=$LOGS_DIR/$ID.gc.log"
     ARGV=()
-    if [[ $arm == b4 ]]; then
+    if [[ $arm == baseline ]]; then
         ARGV=(env JURING_GIT_COMMIT="$BASELINE_COMMIT" JURING_GIT_DIRTY=false \
             JURING_GIT_VERSION="$BASELINE_COMMIT" \
             "$JAVA_BIN" --enable-native-access=ALL-UNNAMED)
@@ -349,7 +349,7 @@ run_argv() {
     fi
     ARGV+=(--seconds "$DURATION" --warmup-sec "$WARMUP" --runs 1 --seed "$SEED"
         --label "$ID" --readonly --json "$JSON")
-    if [[ $arm == b5 ]]; then
+    if [[ $arm == metrics_on ]]; then
         ARGV+=(--metrics on --metrics-interval 1.0)
     fi
 }
@@ -358,7 +358,7 @@ run_argv() {
 run_row() {
     local cell=$1 arm=$2 rep=$3
     local n runtime cpus id json log start end wall la0 la1 t0 t1 rc status gate0 gate1 p99_state
-    local jstatus schema metrics_on series_points ops iops p50 p99 bytes errors jruntime jshards jthreads cmd_str
+    local jstatus schema metrics_state series_points ops iops p50 p99 bytes errors jruntime jshards jthreads cmd_str
     run_argv "$cell" "$arm" "$rep"
     n=$(cell_n "$cell")
     runtime=$(cell_runtime "$cell")
@@ -393,10 +393,10 @@ run_row() {
     if (( rc != 0 )); then status=fail; fi
     if [[ ! -s $json ]]; then
         status=fail
-        jstatus=missing schema='?' metrics_on='?' series_points=0 ops=-1 iops=-1 p50=-1 p99=-1
+        jstatus=missing schema='?' metrics_state='?' series_points=0 ops=-1 iops=-1 p50=-1 p99=-1
         bytes=-1 errors=-1 jruntime='?' jshards='?' jthreads='?'
     else
-        IFS=$'\t' read -r jstatus schema metrics_on series_points ops iops p50 p99 bytes errors \
+        IFS=$'\t' read -r jstatus schema metrics_state series_points ops iops p50 p99 bytes errors \
             jruntime jshards jthreads < <(json_summary "$arm" "$cell" "$json")
         if [[ $jstatus != ok ]]; then status=fail; fi
         # Identity checks: the right arm must have really run the right topology.
@@ -412,14 +412,14 @@ run_row() {
             fi
         fi
         # Arm identity: baseline must be schema 1.0 with metrics off; metrics-on must be 1.1 metrics on.
-        if [[ $arm == b4 ]]; then
+        if [[ $arm == baseline ]]; then
             if [[ $schema != "1.0" ]]; then
                 echo "warn: cell $id expected baseline schema 1.0, JSON says $schema" >&2
                 status=fail
             fi
         else
-            if [[ $schema != "1.1" || $metrics_on != "on" ]]; then
-                echo "warn: cell $id expected metrics-on schema 1.1 metrics on, JSON says schema=$schema metrics=$metrics_on" >&2
+            if [[ $schema != "1.1" || $metrics_state != "on" ]]; then
+                echo "warn: cell $id expected metrics-on schema 1.1 metrics on, JSON says schema=$schema metrics=$metrics_state" >&2
                 status=fail
             fi
         fi
@@ -488,7 +488,7 @@ build_baseline() {
     echo "[metrics-overhead] baseline arm identity: $(baseline_identity)"
 }
 
-build_b5_harness() {
+build_metrics_harness() {
     echo "[metrics-overhead] javac-only metrics-on harness build against the Lead's target/classes (no Maven)"
     JURING_SKIP_MVN=1 bash "$JURING_RUN" --help >/dev/null 2>"$LOGS_DIR/compile-metrics.log" || {
         echo "error: metrics-on harness javac compile failed; see $LOGS_DIR/compile-metrics.log" >&2
@@ -646,12 +646,12 @@ write_manifest() {
         echo "runs under taskset (util-linux): $(taskset --version 2>&1)"
         echo
         echo "## Arms"
-        echo "baseline arm (b4) : commit $BASELINE_COMMIT (git archive scratch tree; no metrics; schema 1.0)"
+        echo "baseline arm : commit $BASELINE_COMMIT (git archive scratch tree; no metrics; schema 1.0)"
         echo "         scratch tree: $BASELINE_DIR"
         echo "         identity: $baseline_ident"
         echo "         build: mvn -o -q -DskipTests compile + javac (done by --prep-only BEFORE this session)"
         echo "         source sha256 of archived bench: $(sha256sum "$BASELINE_DIR/bench/juring/JUringFileBench.java" 2>/dev/null | cut -d' ' -f1 || echo '?')"
-        echo "metrics-on arm (b5): frozen workspace tree with metrics ON (schema 1.1)"
+        echo "metrics-on arm: frozen workspace tree with metrics ON (schema 1.1)"
         echo "         live HEAD: $(head_commit)"
         echo "         src/main/java content sha1: $(src_main_sha1)"
         echo "         src/test/java content sha1: $(src_test_sha1)"
@@ -678,10 +678,10 @@ write_manifest() {
         echo "protocol: workload=randread bs=$BS qd=$QD/worker warmup=${WARMUP}s measured=${DURATION}s"
         echo "          reps=$REPS rest=${REST}s between invocations, seed=$SEED"
         echo "          CPUs 1..N via taskset; shard mode also --first-cpu $CPU_FIRST"
-        echo "          arms interleaved, arm order alternates per rep: rep odd=b4,b5; rep even=b5,b4"
+        echo "          arms interleaved, arm order alternates per rep: rep odd=baseline,metrics_on; rep even=metrics_on,baseline"
         echo "          fresh process/JVM per invocation; every rep kept, no trimming"
-        echo "arms: b4=baseline commit $BASELINE_COMMIT (metrics off / schema 1.0);"
-        echo "      b5=frozen tree, metrics on, ring_series 1.0 s, ShardOptions.withLatencySampleEvery(1)"
+        echo "arms: baseline=commit $BASELINE_COMMIT (metrics off / schema 1.0);"
+        echo "      metrics_on=frozen tree, metrics on, ring_series 1.0 s, ShardOptions.withLatencySampleEvery(1)"
         echo "metric: paired per-rep ratio throughput(metrics-on)/throughput(baseline) per cell/rep/position;"
         echo "        primary bar mean ratio >= 0.99 in EVERY cell; no individual rep < 0.95"
         echo "        unless state-gated and disclosed. Report: per-rep ratios, stdev, one-sided"
@@ -692,19 +692,19 @@ write_manifest() {
         echo "jvm: identical flags for both arms: $JVM_OPTS (fresh JVM per invocation)"
         echo
         echo "## Exact per-cell command templates"
-        echo "baseline (b4) shard  : taskset -c <1..N> env JURING_GIT_COMMIT=$BASELINE_COMMIT JURING_GIT_DIRTY=false \\"
+        echo "baseline shard  : taskset -c <1..N> env JURING_GIT_COMMIT=$BASELINE_COMMIT JURING_GIT_DIRTY=false \\"
         echo "             $JAVA_BIN --enable-native-access=ALL-UNNAMED $JVM_OPTS \\"
         echo "             -cp $BASELINE_DIR/target/classes:$BASELINE_DIR/bench/juring/out \\"
         echo "             bench.juring.JUringFileBench --workload randread --file $READ_FILE --size <bytes> \\"
         echo "             --bs $BS --qd $QD --runtime shard --shards N --first-cpu $CPU_FIRST --seconds $DURATION \\"
         echo "             --warmup-sec $WARMUP --runs 1 --seed $SEED --label <id> --readonly --json <cells/id.json>"
-        echo "baseline (b4) threads: same with --runtime threads --threads 1"
-        echo "metrics-on (b5) shard  : taskset -c <1..N> env JURING_SKIP_COMPILE=1 JURING_JAVA_OPTS='$JVM_OPTS -Xlog:gc:file=<log>' \\"
+        echo "baseline threads: same with --runtime threads --threads 1"
+        echo "metrics-on shard  : taskset -c <1..N> env JURING_SKIP_COMPILE=1 JURING_JAVA_OPTS='$JVM_OPTS -Xlog:gc:file=<log>' \\"
         echo "             bash bench/juring/run-juring.sh --workload randread --file $READ_FILE --size <bytes> \\"
         echo "             --bs $BS --qd $QD --runtime=shard --shards N --first-cpu $CPU_FIRST --seconds $DURATION \\"
         echo "             --warmup-sec $WARMUP --runs 1 --seed $SEED --label <id> --readonly --json <cells/id.json> \\"
         echo "             --metrics on --metrics-interval 1.0"
-        echo "metrics-on (b5) threads: same with --runtime=threads --threads 1"
+        echo "metrics-on threads: same with --runtime=threads --threads 1"
         echo
         echo "started: $(now_utc)"
     } >"$MANIFEST"
@@ -751,9 +751,9 @@ iops = float(r.get("iops") or 0.0)
 if iops <= 0 or int(r.get("errors") or 0) != 0:
     raise SystemExit(1)
 schema = str(d.get("schema_version") or "")
-if arm == "b4" and schema != "1.0":
+if arm == "baseline" and schema != "1.0":
     raise SystemExit(1)
-if arm == "b5":
+if arm == "metrics_on":
     m = r.get("metrics") or {}
     if schema != "1.1" or not m.get("enabled"):
         raise SystemExit(1)
@@ -788,8 +788,8 @@ print_plan() {
     echo "=============== OBSERVABILITY OVERHEAD A/B PLAN (--dry-run; nothing executed) ==============="
     echo "session dir : $RESULTS"
     echo "cells dir   : $CELLS_DIR"
-    echo "aggregate   : $AGG_DIR/overhead.json, $AGG_DIR/overhead.md"
-    echo "arms        : b4=$BASELINE_COMMIT (baseline, metrics off)  b5=frozen tree (metrics on)"
+    echo "aggregate   : $AGG_DIR/metrics-overhead.json, $AGG_DIR/metrics-overhead.md"
+    echo "arms        : baseline=$BASELINE_COMMIT (baseline, metrics off)  metrics_on=frozen tree (metrics on)"
     echo "cells       : $CELLS  (shard N=1, shard N=8, threads N=1; 4K randread QD $QD/worker)"
     echo "protocol    : R=$REPS warmup=${WARMUP}s measured=${DURATION}s rest=${REST}s seed=$SEED"
     echo "read file   : $READ_FILE ($(dataset_size) B, read-only)"
@@ -831,7 +831,7 @@ if (( PREP_ONLY == 1 || PREP_BASELINE == 1 )); then
     mkdir -p "$LOGS_DIR" "$AGG_DIR"
     build_baseline || exit 1
     if (( PREP_ONLY == 1 )); then
-        build_b5_harness || exit 1
+        build_metrics_harness || exit 1
         echo "[metrics-overhead] prep done; baseline and metrics-on harness are built (run '--dry-run' next)"
     else
         echo "[metrics-overhead] baseline prep done; the metrics-on harness is built at session start"
@@ -869,7 +869,7 @@ mkdir -p "$CELLS_DIR" "$LOGS_DIR" "$AGG_DIR"
 write_manifest
 init_meta
 
-build_b5_harness || exit 1
+build_metrics_harness || exit 1
 echo "[metrics-overhead] manifest: $MANIFEST"
 echo "[metrics-overhead] started: $(now_utc) loadavg=$(loadavg)"
 
@@ -942,7 +942,7 @@ if [[ -f $ANALYZER ]]; then
     fi
     cat "$AGG_DIR/analyze.log"
     if (( rc_a == 0 )); then
-        echo "[metrics-overhead] aggregate: $AGG_DIR/overhead.json, $AGG_DIR/overhead.md"
+        echo "[metrics-overhead] aggregate: $AGG_DIR/metrics-overhead.json, $AGG_DIR/metrics-overhead.md"
     else
         echo "warn: analyzer verdict is not PASS (exit $rc_a); see $AGG_DIR/analyze.log" >&2
         FAILS=$((FAILS + 1))
@@ -951,7 +951,7 @@ fi
 
 if (( FAILS > 0 )); then
     echo "error: $FAILS invocation(s) failed / were gate-flagged / the overhead bar missed;" >&2
-    echo "       inspect cell-meta.tsv, logs/ and aggregate/overhead.md" >&2
+    echo "       inspect cell-meta.tsv, logs/ and aggregate/metrics-overhead.md" >&2
     exit 1
 fi
 echo "[metrics-overhead] ok"

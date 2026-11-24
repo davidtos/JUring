@@ -12,7 +12,7 @@ Usage:
     python3 bench/stream/analyze_durability.py [--session NAME] [--results DIR] [--out DIR]
 
 Exit codes: 0 = aggregate written; 1 = no cell JSONs found; 2 = usage error;
-            3 = schema/contract violation (missing ``b6-durability-1`` extension or
+            3 = schema/contract violation (missing ``durability-1`` extension or
                 incompatible cell JSON) -- nothing is written in that case.
 """
 
@@ -27,8 +27,8 @@ from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
-REQUIRED_EXTENSION = "b6-durability-1"
-DEFAULT_SESSION = "b6-durability-2026-11-15"
+REQUIRED_EXTENSION = "durability-1"
+DEFAULT_SESSION = "durability-ab"
 CELL_ORDER = ["durability-write-128k"]
 
 # Frozen state-class thresholds (derived from the read/write and stream write-state classes and
@@ -355,7 +355,7 @@ def render_markdown(session, results_dir, aggregate):
     a("")
     bad = aggregate["data_quality"]
     if not bad["excluded"] and not bad["missing"] and not bad["unparsed"]:
-        a("Every cell JSON parsed, carried the `b6-durability-1` extension, had status ok "
+        a("Every cell JSON parsed, carried the `durability-1` extension, had status ok "
           "and zero errors; every expected rep was present.")
     else:
         for e in bad["excluded"]:
@@ -543,7 +543,7 @@ def main(argv):
     aggregate = {
         "schema_version": SCHEMA_VERSION,
         "schema_extensions": [REQUIRED_EXTENSION],
-        "kind": "b6-w24-durability-ab",
+        "kind": "durability-write-128k-ab",
         "session": args.session,
         "source_dir": results_dir,
         "generated_utc": datetime.datetime.now(datetime.timezone.utc)
@@ -554,7 +554,7 @@ def main(argv):
             "fast": "MiB/s >= %.0f and write p50 <= %.0f us" % (FAST_MIBS, FAST_P50_US),
             "slow": "MiB/s < %.0f or write p50 > %.0f us" % (SLOW_MIBS, SLOW_P50_US),
             "mixed": "otherwise",
-            "m1_rule": "also slow if MiB/s < %.2f x same-arm max" % MATRIX_RATIO,
+            "same_arm_rule": "also slow if MiB/s < %.2f x same-arm max" % MATRIX_RATIO,
             "computed_within_arm": True,
         },
         "arms": arms,

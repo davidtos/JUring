@@ -10,11 +10,7 @@ Inputs: <dir>/cell-meta.tsv and <dir>/series/<stem>.tsv.  Outputs, in session
 mode: <out>/write-state-summary.md, <out>/write-state-verdict.json and
 <out>/write-state-ratios.csv; --pass-dir and --survey print to stdout instead.
 The classifier and the 0.95 gate are frozen: see docs/write-state-3way-protocol.md.
-
-Identifier note (2026-11-24): a *pass* is what this protocol's documents call a
-"generation" (g1..g8); directories and CLI values are pass1..pass8 now.
-`--gen-dir` and `--gens` are kept as legacy aliases and accept both g1 and
-pass1 forms, so unmigrated sessions keep working.
+The protocol's passes are pass1..pass8.
 """
 import argparse
 import csv
@@ -32,7 +28,7 @@ CV_MAX = 0.10
 INBAND_MIN = 0.90
 CLIFF_RATIO = 0.70
 
-# Planned generation runs: (cell, engine, variant, bs, qd)
+# Planned pass runs: (cell, engine, variant, bs, qd)
 PLANNED = [
     ("randwrite-4k-qd64", "juring", "std", "4k", "64"),
     ("randwrite-4k-qd64", "fio-io_uring", "matched", "4k", "64"),
@@ -43,7 +39,7 @@ PLANNED = [
 ]
 COMPARATORS = ("matched", "matchedbatch")
 GATE_LB = 0.95
-MIN_VALID_GENS = 4          # pre-registered: <4 valid generations => no gate
+MIN_VALID_PASSES = 4        # pre-registered: <4 valid passes => no gate
 
 
 def stem(cell, engine, variant, bs, qd, rep=1):
@@ -51,14 +47,9 @@ def stem(cell, engine, variant, bs, qd, rep=1):
 
 
 def series_path(d, cell, engine, variant, bs, qd, rep=1):
-    """Series TSV for one cell, accepting the legacy W# filename as a fallback."""
-    candidates = [stem(name, engine, variant, bs, qd, rep) + ".tsv"
-                  for name in cells.aliases(cell)]
-    for name in candidates:
-        path = os.path.join(d, "series", name)
-        if os.path.exists(path):
-            return path
-    return os.path.join(d, "series", candidates[0])
+    """Canonical series TSV path for one cell."""
+    return os.path.join(d, "series",
+                        stem(cells.slug(cell), engine, variant, bs, qd, rep) + ".tsv")
 
 
 def read_series(path):
@@ -114,8 +105,7 @@ def classify(series):
 def read_meta(d):
     """cell-meta.tsv rows keyed by (case, engine, variant, bs, qd, rep).
 
-    ``case`` is normalized to the canonical slug, so a legacy ``W#`` cell-meta
-    and a new canonical one both index the same rows.
+    ``case`` is normalized to the canonical slug.
     """
     meta = {}
     for r in jsonio.load_csv_rows(os.path.join(d, "cell-meta.tsv")):
@@ -158,19 +148,18 @@ def gen_verdict(d):
     return {"pass": all_ok, "rows": rows}
 
 
-def gate_analysis(session, gens):
+def gate_analysis(session, passes):
     """Gate over the requested passes.
 
-    ``gens`` holds the CLI values (``pass1`` or legacy ``g1``/``w2-g1``); each is
-    resolved to an existing directory and reported under its canonical
-    ``passN`` name.
+    ``passes`` holds the CLI values (``pass1``..``pass8``); each is resolved to
+    its session directory and reported under its canonical ``passN`` name.
     """
     data = {}
     valid = []
     resolved = []
-    for token in gens:
+    for token in passes:
         name = cells.pass_name(token)
-        d = cells.pass_dir(session, token)
+        d = cells.pass_dir(session, name)
         resolved.append((name, d))
         v = gen_verdict(d)
         meta = read_meta(d)
@@ -182,8 +171,8 @@ def gate_analysis(session, gens):
             data.setdefault((name, cell, engine, variant), iops)
         if v["pass"]:
             valid.append(name)
-    out = {"valid_generations": valid, "n_valid": len(valid),
-           "generations": {name: gen_verdict(d) for name, d in resolved},
+    out = {"valid_passes": valid, "n_valid": len(valid),
+           "passes": {name: gen_verdict(d) for name, d in resolved},
            "cells": {}}
     for cell in ("randwrite-4k-qd64", "randwrite-4k-qd128"):
         for comp in COMPARATORS:
@@ -198,15 +187,15 @@ def gate_analysis(session, gens):
                 "n": len(ratios), "ratios": ratios, "mean": m, "lo": lo, "hi": hi,
             }
     # gate verdict
-    if len(valid) < MIN_VALID_GENS:
+    if len(valid) < MIN_VALID_PASSES:
         verdict = "INCONCLUSIVE"
-        reason = f"only {len(valid)} valid pass(es) (< {MIN_VALID_GENS})"
+        reason = f"only {len(valid)} valid pass(es) (< {MIN_VALID_PASSES})"
     else:
         lows, ubs = [], []
         for cell in ("randwrite-4k-qd64", "randwrite-4k-qd128"):
             for comp in COMPARATORS:
                 st = out["cells"][cell][comp]
-                if st["n"] < MIN_VALID_GENS or st["lo"] is None:
+                if st["n"] < MIN_VALID_PASSES or st["lo"] is None:
                     lows.append(None)
                     ubs.append(None)
                     continue
@@ -229,7 +218,7 @@ def write_report(outdir, res):
     out_dir = cli.ensure_dir(outdir)
     lines = ["# State-controlled write protocol — gate analysis (frozen)", ""]
     lines.append(f"- valid passes: {res['n_valid']} "
-                 f"({', '.join(cells.pass_label(g) for g in res['valid_generations']) or 'none'})")
+                 f"({', '.join(cells.pass_label(g) for g in res['valid_passes']) or 'none'})")
     lines.append(f"- **verdict: {res['verdict']}** — {res['reason']}")
     lines.append("")
     lines.append("| cell | comparator | n | mean J/fio | 95% CI |")
@@ -243,7 +232,7 @@ def write_report(outdir, res):
     lines.append("")
     lines.append("| pass | cell | engine | variant | iops | steady | reason | cv |")
     lines.append("|---|---|---|---|---|---|---|---|")
-    for g, v in res["generations"].items():
+    for g, v in res["passes"].items():
         for r in v["rows"]:
             cv = f"{r.get('cv', 0):.3f}" if "cv" in r else "-"
             lines.append(f"| {cells.pass_label(g)} | {cells.label(r['cell'])} | "
@@ -256,13 +245,13 @@ def write_report(outdir, res):
     csv_path = os.path.join(out_dir, "write-state-ratios.csv")
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["generation", "cell", "comparator", "ratio"])
-        gens = res["valid_generations"]
+        w.writerow(["pass", "cell", "comparator", "ratio"])
+        passes = res["valid_passes"]
         for cell in ("randwrite-4k-qd64", "randwrite-4k-qd128"):
             for comp in COMPARATORS:
                 ratios = res["cells"][cell][comp]["ratios"]
                 # no strict= on Python 3.9; every ratio comes from a valid pass
-                for g, r in zip(gens, ratios):  # noqa: B905
+                for g, r in zip(passes, ratios):  # noqa: B905
                     w.writerow([g, cell, comp, f"{r:.6f}"])
     return md_path
 
@@ -288,12 +277,11 @@ def survey(d):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pass-dir", "--gen-dir", dest="pass_dir",
-                    help="one pass directory (legacy alias: --gen-dir)")
+    ap.add_argument("--pass-dir", dest="pass_dir",
+                    help="one pass directory")
     ap.add_argument("--session")
-    ap.add_argument("--passes", "--gens", dest="passes",
-                    help="comma-separated passes (accepts passN and legacy gN); "
-                         "legacy alias: --gens")
+    ap.add_argument("--passes", dest="passes",
+                    help="comma-separated passes (pass1..pass8)")
     ap.add_argument("--out")
     ap.add_argument("--survey")
     args = ap.parse_args()
@@ -310,8 +298,8 @@ def main():
         print(f"PILOT_PASS {1 if v['pass'] else 0}")
         return
     if args.session and args.passes:
-        gens = [g for g in args.passes.replace(",", " ").split() if g]
-        res = gate_analysis(args.session, gens)
+        passes = [p for p in args.passes.replace(",", " ").split() if p]
+        res = gate_analysis(args.session, passes)
         if args.out:
             md_path = write_report(args.out, res)
             print(f"wrote {md_path}")

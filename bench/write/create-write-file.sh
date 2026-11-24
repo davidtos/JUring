@@ -50,7 +50,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_DIR=${WRITE_DIR:-$REPO_ROOT/nvme-data}
 WRITE_FILE=${WRITE_FILE:-$WRITE_DIR/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-matrix}
 SIZE_SPEC=10g
 FORCE=0
 DRY_RUN=0
@@ -71,7 +71,7 @@ Options:
                          (default <repo>/nvme-data)
   --size SIZE            file size, integer with k/M/G/T suffix (default 10g = 10 GiB)
   --session-dir DIR      where to append state/write-file.tsv
-                         (default <repo>/bench/results/write-2026-11-13)
+                         (default <repo>/bench/results/write-matrix)
   --force                remove and recreate an existing (even correct) file
   --dry-run              print the exact commands and checks; write nothing
   --allow-any-path       allow a target outside <repo>/nvme-data (safety off)

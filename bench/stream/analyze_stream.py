@@ -27,7 +27,7 @@ from analysis import cells as cellmap  # noqa: E402
 from analysis import cli, jsonio, md, stats  # noqa: E402
 
 SCHEMA_VERSION = "1.0"
-DEFAULT_SESSION = "b2-2026-11-13"
+DEFAULT_SESSION = "stream-matrix"
 PRIMARY_ENGINES = ("juring", "seastar")
 EXPLORATORY = "juring-buffered"
 CELL_ORDER = ["stream-write-128k", "stream-read-128k",

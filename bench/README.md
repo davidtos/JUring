@@ -10,9 +10,8 @@ Cells are named by what they do — `randread-4k-qd64`, `randwrite-4k-qd128`, `s
 `shards-8`, `stream-write-1m`, `groupcommit-4k-batch32` — and a full pass of the state-controlled
 write protocol is a **pass** (`pass1`..`pass8`). One source of truth holds the mapping:
 [`bench/analysis/cells.py`](analysis/cells.py), which every analyzer imports and the bash harness
-loads through [`bench/cells.sh`](cells.sh). The old `W#`/`g#` values remain accepted as CLI aliases
-and in historical result files (`--cells W7`, `--gens g1`), but new runs, manifests, tables and
-figures use the canonical names; the per-harness READMEs note the aliases where a command uses them.
+loads through [`bench/cells.sh`](cells.sh). Runs, manifests, tables and figures use these canonical
+names throughout.
 
 ## What you need
 
@@ -99,8 +98,6 @@ The cases the driver runs:
 
 `run-comparison.sh` defaults to `./bench-results`; set `RESULTS_DIR=bench/results/<name>` to keep a run next to the existing sessions. The per-harness drivers write under `bench/results/<session>/`; `bench/write/` takes the session directory as an argument instead.
 
-Local sessions captured before the 2026-11-24 identifier rename can be migrated in place with `python3 bench/migration/rename-identifiers.py` (idempotent; it renames only the ID-bearing directory/file names, never the bytes inside a JSON/TSV/LOG, and writes `<session>/RENAMES.txt` with the old -> new paths). The analyzers accept both spellings, so migrating is optional for reading old data.
-
 `bench/parse_results.py` reads all three formats and writes a table plus CSV:
 
 ```bash
@@ -118,11 +115,9 @@ The analyzers are thin CLIs: each one owns its campaign's policy — which cells
 ```bash
 python3 bench/analysis/selftest.py            # unit tests (the default)
 python3 bench/analysis/selftest.py --unit     # the same, named explicitly
-python3 bench/analysis/selftest.py --golden   # analyzer output vs bench/analysis/golden/
-python3 bench/analysis/selftest.py --update   # regenerate the goldens from the current code
 ```
 
-`--golden` runs every analyzer against a copy of its session directory, normalizes timestamps and paths, and compares the exit code, stdout, stderr and output tree with `bench/analysis/golden/`. Those goldens were captured once from the pristine analyzers; `bench/analysis/golden/PROVENANCE.md` records the commit. The session data is gitignored, so a fresh clone and CI skip every golden case; CI only runs `--unit`. The Python is linted with `uvx ruff check bench`; the rules live in `ruff.toml` at the repo root.
+`--unit` checks the shared helpers — Student-t tables and intervals, descriptive statistics, paired ratios, gate verdicts, markdown and JSON plumbing, CLI session resolution and the cell/pass identifiers — against hand-computed values and cross-checks. The analyzers themselves rebuild a campaign's tables from a session directory; the session data is gitignored. The Python is linted with `uvx ruff check bench`; the rules live in `ruff.toml` at the repo root.
 
 ## The per-harness docs
 

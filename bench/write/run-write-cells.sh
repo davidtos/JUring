@@ -12,12 +12,11 @@
 #   seqwrite-1m-qd8     seqwrite  1M  QD8    60/60
 #   seqwrite-1m-qd32    seqwrite  1M  QD32   60/60
 #
-# Cell IDs are the canonical workload names from bench/analysis/cells.py; the
-# old W5..W8/W12..W14 aliases are still accepted by --cells and --reps-by-cell.
+# Cell IDs are the canonical workload names from bench/analysis/cells.py.
 # Engines: juring (bench/juring/run-juring.sh, JURING_SKIP_COMPILE=1),
 #          fio (io_uring; variant default / matched registration / batching sweep),
 #          seastar (bench/seastar/seastar_file_bench; write path smoke-validated on
-#          this host 2026-11-23 - status ok, zero errors, in-place write, no
+#          this host - status ok, zero errors, in-place write, no
 #          truncate/fsync - but kept explicit opt-in because the binary is built
 #          for this host and the arm is a bracket, not an equal opponent).
 # Dataset: ONE dedicated 10 GiB non-sparse file on the data NVMe
@@ -57,7 +56,7 @@
 # microseconds for every engine in RESULT / runs.tsv / cell-meta.tsv (fio
 # clat_ns is divided by 1000; manifest line cell_meta_p99_units=us).
 #
-# Outputs (all below <session-dir>, default bench/results/write-2026-11-13):
+# Outputs (all below <session-dir>, default bench/results/write-matrix):
 #   cells/<case>__<engine>__<variant>__bs<bs>__qd<qd>__t1__r<rep>.json
 #   logs/<same stem>.log
 #   series/<same stem>.tsv                  (1 s device I/O series)
@@ -87,7 +86,7 @@ source "$REPO_ROOT/bench/cells.sh"
 
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-2026-11-13}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-matrix}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
 
 CELLS_RAW="randwrite-4k-qd1 randwrite-4k-qd16 randwrite-4k-qd64 randwrite-4k-qd128 seqwrite-1m-qd1 seqwrite-1m-qd8 seqwrite-1m-qd32"
@@ -126,7 +125,7 @@ Usage:
 Selection:
   --cells LIST           comma/space list of cell slugs, e.g.
                          randwrite-4k-qd64,randwrite-4k-qd128 (default: all seven
-                         write cells). Legacy W5/W6/W7/W8/W12/W13/W14 accepted.
+                         write cells). An unknown slug is rejected.
   --engines LIST         subset of juring,fio,seastar (default juring,fio)
   --fio-variants LIST    subset of default,matched,regfile,matchedbatch,batch1,
                          batch8,batch16,batch32,sqpoll,libaio (default default,matched;
@@ -135,15 +134,14 @@ Selection:
                          matchedbatch is added for randwrite-4k-qd64 and
                          randwrite-4k-qd128 as the write-gate comparator)
   --no-batching-sweep    do not add the fio batching sweep on randwrite-4k-qd64
-                         or the extra matchedbatch comparator (legacy alias:
-                         --no-w7-sweep, still accepted)
+                         or the extra matchedbatch comparator
   --allow-seastar-write  enable the seastar write path (smoke-validated, opt-in)
 
 Protocol:
   --reps N               default repetitions per cell (default 3, the variance rule)
   --reps-by-cell LIST    per-cell repetition override, e.g.
-                         randwrite-4k-qd64=5,randwrite-4k-qd128=5 (legacy W7=5 also
-                         accepted); a cell not listed falls back to --reps
+                         randwrite-4k-qd64=5,randwrite-4k-qd128=5; a cell not
+                         listed falls back to --reps
   --resume               run-granular resume into an existing --session-dir:
                          a planned run whose cells/<stem>.json exists and parses
                          with iops>0 is skipped (logged to state/resumed.tsv); a
@@ -173,7 +171,7 @@ Paths / safety:
                          read dataset is still refused. Pair with --device-stat
   --expect-size SIZE     expected file size (default 10g); refuse otherwise
   --session-dir DIR      result root
-                         (default <repo>/bench/results/write-2026-11-13)
+                         (default <repo>/bench/results/write-matrix)
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --cpu N                taskset CPU (default 2)
   --seed N               PRNG seed (default 20261113)
@@ -226,7 +224,6 @@ while [[ $# -gt 0 ]]; do
         --engines)                  [[ $# -ge 2 ]] || die "--engines needs a value"; ENGINES_RAW=$2; shift 2 ;;
         --fio-variants)             [[ $# -ge 2 ]] || die "--fio-variants needs a value"; FIO_VARIANTS_RAW=$2; shift 2 ;;
         --no-batching-sweep)        BATCHING_SWEEP=0; shift ;;
-        --no-w7-sweep)              BATCHING_SWEEP=0; shift ;;  # legacy alias
         --allow-seastar-write)      ALLOW_SEASTAR_WRITE=1; shift ;;
         --reps)                     [[ $# -ge 2 ]] || die "--reps needs a value"; REPS=$2; shift 2 ;;
         --reps-by-cell)             [[ $# -ge 2 ]] || die "--reps-by-cell needs a value"; REPS_BY_CELL_RAW=$2; shift 2 ;;
@@ -314,8 +311,8 @@ cell_meta() {
     esac
 }
 
-# Canonicalize every requested cell: a legacy W# alias is accepted, the plan and
-# every output file use the canonical slug from bench/analysis/cells.py.
+# Validate every requested cell and keep the plan and every output file on the
+# canonical slug from bench/analysis/cells.py.
 CELL_CHOICES="randwrite-4k-qd1 randwrite-4k-qd16 randwrite-4k-qd64 randwrite-4k-qd128 seqwrite-1m-qd1 seqwrite-1m-qd8 seqwrite-1m-qd32"
 CELLS_CANON=""
 for cell in $CELLS; do
@@ -334,8 +331,8 @@ for v in $FIO_VARIANTS; do
     case "$v" in default|matched|regfile|matchedbatch|batch1|batch8|batch16|batch32|sqpoll|libaio) : ;; *) die "unknown --fio-variants entry '$v'" ;; esac
 done
 
-# --reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5 (legacy W7=5 accepted;
-# a cell not listed falls back to --reps)
+# --reps-by-cell randwrite-4k-qd64=5,randwrite-4k-qd128=5
+# (a cell not listed falls back to --reps)
 declare -A CELL_REPS=()
 if [[ -n "$REPS_BY_CELL_RAW" ]]; then
     for item in $(printf '%s' "$REPS_BY_CELL_RAW" | tr ',' ' '); do
@@ -1183,7 +1180,7 @@ fi
     printf 'invocation=%s manifest=%s\n' "$INVOCATION" "$(basename -- "$MANIFEST_FILE")"
     printf 'argv=%s\n' "$(printf '%q ' "${ORIG_ARGV[@]}")"
     printf 'resume=%s seq_base=%s\n' "$RESUME" "$SEQ_BASE"
-    printf 'cpu=%s\n' "$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
+    printf 'cpu=%s\n' "$(grep --max-count=1 'model name' /proc/cpuinfo | cut -d: -f2- | sed 's/^ *//')"
     printf 'logical_cpus=%s\n' "$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)"
     printf 'juring_git_commit=%s\n' "$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
     printf 'juring_git_dirty=%s\n' "$(if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | head -n1)" ]]; then echo true; else echo false; fi)"

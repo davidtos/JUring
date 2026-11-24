@@ -44,7 +44,7 @@
 # Usage:
 #   bench/write/run-write-campaign.sh --dry-run \
 #       --session-dir scratch/write-campaign-dryrun
-#   bench/write/run-write-campaign.sh --session-dir bench/results/write-campaign-<date>
+#   bench/write/run-write-campaign.sh --session-dir bench/results/write-matrix
 #   bench/write/run-write-campaign.sh --resume --session-dir <same dir>
 #
 # Exit status: 0 all blocks ok, 1 a block failed / mismatch / aborted,
@@ -58,7 +58,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd)
 
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
 DEVICE_STAT=${DEVICE_STAT:-/sys/block/nvme1n1/stat}
-SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-campaign-$(date -u +%Y%m%d)}
+SESSION_DIR=${SESSION_DIR:-$REPO_ROOT/bench/results/write-matrix}
 CPU=2
 SEED=20261113
 LOADAVG_MAX=1.6
@@ -92,7 +92,7 @@ The wrapper also enforces + records a 300 s idle rest between blocks
 
 Options:
   --session-dir DIR      result root shared by all three blocks
-                         (default <repo>/bench/results/write-campaign-<utc-date>)
+                         (default <repo>/bench/results/write-matrix)
   --write-file PATH      dedicated write dataset
   --device-stat PATH     sysfs stat file (default /sys/block/nvme1n1/stat)
   --cpu N                taskset CPU for every engine (default 2)
@@ -189,7 +189,7 @@ parse_block_plan() { # $1 = block number; fills PLAN_* from the block's --dry-ru
     local block=$1
     local out line
     out=$("${BLOCK_CMD[@]}" --dry-run 2>&1) || die "block $block --dry-run failed"
-    line=$(printf '%s\n' "$out" | grep -m1 '^SESSION_PLAN ' || true)
+    line=$(printf '%s\n' "$out" | grep --max-count=1 '^SESSION_PLAN ' || true)
     [[ -n "$line" ]] || die "block $block --dry-run emitted no SESSION_PLAN line"
     PLAN_LINE=$line
     PLAN_OUT=$out

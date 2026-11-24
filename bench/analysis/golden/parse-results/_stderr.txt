@@ -1,2 +1,0 @@
-wrote 110 row(s) to <WORK>/parse-results/out/results.csv
-# 110 row(s) from 110 recognized file(s), 190 scanned

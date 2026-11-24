@@ -11,8 +11,8 @@
 #   stream-write-1m    stream_write  1 MiB buffer    qd 8  same writable dataset
 #   stream-read-1m     stream_read   1 MiB buffer    qd 8  same read dataset
 #
-# Cell IDs are the canonical names from bench/analysis/cells.py; the old
-# W21-128k/W22-128k/W21-1M/W22-1M aliases are still accepted by --cells.
+# Cell IDs are the canonical names from bench/analysis/cells.py; --cells only
+# accepts those canonical names.
 #
 # Primary engines:
 #   juring   bench/juring/run-juring-stream.sh --buffered off (O_DIRECT), registered file,
@@ -56,7 +56,7 @@ source "$REPO_ROOT/bench/cells.sh"
 cd "$REPO_ROOT"
 
 CPU=${CPU:-2}
-SESSION=b2-2026-11-13
+SESSION=stream-matrix
 READ_FILE=${READ_FILE:-/mnt/TestData/read_files/single_file_bench.bin}
 WRITE_FILE=${WRITE_FILE:-$REPO_ROOT/nvme-data/write_files/single_file_bench_w.bin}
 SEASTAR_BIN=${SEASTAR_BIN:-$REPO_ROOT/bench/seastar/seastar_stream_bench}
@@ -131,8 +131,8 @@ for v in "$WARMUP" "$DURATION" "$REST"; do
         exit 2
     fi
 done
-# Canonicalize requested cells: legacy W21-128k/W22-1M aliases accepted, every
-# output file and manifest uses the canonical slug.
+# Validate requested cells: only canonical slugs are accepted; every output
+# file and manifest uses the canonical slug.
 CELLS_CANON=""
 for c in $CELLS; do
     canonical=$(cell_slug "$c")
@@ -563,7 +563,7 @@ fi
 if [[ -d $CELLS_DIR ]] && compgen -G "$CELLS_DIR/*.json" >/dev/null; then
     if (( FORCE != 1 )); then
         echo "error: session '$SESSION' already contains cell JSONs under $CELLS_DIR" >&2
-        echo "       start a new session with --session NAME (e.g. --session b2-2026-11-13-r2)," >&2
+        echo "       start a new session with --session NAME (e.g. --session stream-matrix-r2)," >&2
         echo "       or pass --force to append to the existing session." >&2
         exit 1
     fi
