@@ -61,4 +61,6 @@ jobs:
       - name: Deploy to Maven Central staging
         env:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
         run: mvn -B -ntp -Prelease deploy -DskipTests
