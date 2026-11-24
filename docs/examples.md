@@ -18,14 +18,14 @@ filesystem.
 
 ## The four examples
 
-| id | example | what it shows | Seastar pattern |
+| example | test | what it shows | Seastar pattern |
 |---|---|---|---|
-| E1 | [DirectFileExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/DirectFileExampleTest.java) | Registered file plus fixed-buffer pool, one batched submit | `open_file_dma` + `dma_read` / `dma_write` |
-| E2 | [StreamCopyExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/StreamCopyExampleTest.java) | Read-ahead/write-behind copy with bounded memory | `fstream` copy |
-| E3 | [ManyFilesExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/ManyFilesExampleTest.java) | Many files on one ring, one batched submit | many `file` objects on one reactor |
-| E4 | [VirtualThreadsExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/VirtualThreadsExampleTest.java) | Eight virtual threads blocked on one facade | the opposite: blocking calls, not futures |
+| Direct file I/O | [DirectFileExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/DirectFileExampleTest.java) | Registered file plus fixed-buffer pool, one batched submit | `open_file_dma` + `dma_read` / `dma_write` |
+| Stream copy | [StreamCopyExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/StreamCopyExampleTest.java) | Read-ahead/write-behind copy with bounded memory | `fstream` copy |
+| Many files on one ring | [ManyFilesExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/ManyFilesExampleTest.java) | Many files on one ring, one batched submit | many `file` objects on one reactor |
+| Virtual threads | [VirtualThreadsExampleTest](../src/test/java/com/davidvlijmincx/lio/examples/VirtualThreadsExampleTest.java) | Eight virtual threads blocked on one facade | the opposite: blocking calls, not futures |
 
-### E1 — Direct file I/O
+### Direct file I/O
 
 `DirectFileExampleTest` opens a file with `O_DIRECT`, registers the descriptor in the ring's
 fixed-file table and a pool of 4 KiB fixed buffers, then prepares 8 aligned writes into the
@@ -37,7 +37,7 @@ back gives byte-identical data.
 This is the closest thing JUring has to Seastar's DMA path: one descriptor, one registered
 buffer set, explicit offsets, no page-cache copy.
 
-### E2 — Stream copy
+### Stream copy
 
 `StreamCopyExampleTest` copies a 128 KiB pattern file through `JuringInputStream` (16 KiB
 buffers, read-ahead depth 2) and `JuringOutputStream` (16 KiB buffers, write-behind depth
@@ -52,7 +52,7 @@ handle that issued it, so a reader and a writer can be active on the same ring a
 Seastar's single reactor. Only raw, un-reaped `JUring.prepare*` work still makes the blocking
 helpers throw `IllegalStateException`.
 
-### E3 — Many files on one ring
+### Many files on one ring
 
 `ManyFilesExampleTest` opens 8 independent `O_DIRECT` files on one `JUring`, registers each
 as a fixed-file slot, and issues 16 writes (two offsets per file) in one batched submission,
@@ -64,7 +64,7 @@ each handle's `registeredSlot()` — the lowest-overhead submission form, which 
 example uses it. The same handles could also run through their blocking helpers on the
 shared ring. Seastar has the same pattern: many file objects multiplexed by one reactor.
 
-### E4 — Virtual threads
+### Virtual threads
 
 `VirtualThreadsExampleTest` starts 8 virtual threads behind a barrier. Each writes a 32-byte
 record at its own offset and reads it back through one shared `JUringBlocking` with a single
@@ -94,8 +94,9 @@ The mapping is at the I/O-operation level, not the application model:
   for virtual threads. The framework built on top is a separate project.
 - **Explicit ownership and buffers.** The `JUring` ring is single-issuer/single-owner, and
   several `JuringFile`-based handles can share it. Streams manage option-bounded buffers,
-  but on the raw fixed-buffer path you check indices out and back in yourself (E1).
+  but on the raw fixed-buffer path you check indices out and back in yourself (see
+  [Direct file I/O](#direct-file-io)).
 - **Blocking is first-class.** `JUringBlocking` turns completions into parked virtual
-  threads with dedicated pollers (E4), the opposite of Seastar's never-block-a-reactor rule,
-  which is why E4 is its own example.
+  threads with dedicated pollers (see [Virtual threads](#virtual-threads)), the opposite of
+  Seastar's never-block-a-reactor rule, which is why virtual threads are their own example.
 

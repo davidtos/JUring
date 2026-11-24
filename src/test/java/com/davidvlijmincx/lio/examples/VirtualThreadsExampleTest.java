@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Example E4 — {@link JUringBlocking} shared by eight virtual threads.
+ * Virtual threads blocked on one shared {@link JUringBlocking}.
  *
  * <p><b>seastar mapping:</b> the seastar futures + reactor model, from the caller's point
  * of view. seastar user code is single-threaded per shard: async work returns a

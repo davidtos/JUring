@@ -123,11 +123,11 @@ fio is the neutral reference. The configurations I use are:
 This is the only fio form I run against `/mnt/TestData`, because the mount is read-only:
 
 ```bash
-taskset -c 1 fio --name=fio-uring-qd64-b1 --filename=/mnt/TestData/read_files/single_file_bench.bin \
+taskset -c 1 fio --name=fio-uring-qd64-batch1 --filename=/mnt/TestData/read_files/single_file_bench.bin \
   --readonly --direct=1 --rw=randread --bs=4k --iodepth=64 --numjobs=1 --ioengine=io_uring \
   --iodepth_batch_submit=1 --ramp_time=10 --runtime=30 --time_based=1 --group_reporting=1 \
   --percentile_list=50:99:99.9:100 --clocksource=clock_gettime \
-  --output-format=json --output=bench/results/<read-session>/fio-uring-b1-qd64-r1.json
+  --output-format=json --output=bench/results/<read-session>/fio-uring-batch1-qd64-rep1.json
 ```
 
 Writes use the same command with `--rw=randwrite --filename=.../write_files/...` and without

@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Example E2 — stream copy with read-ahead and write-behind.
+ * Stream copy with read-ahead and write-behind.
  *
  * <p><b>seastar mapping:</b> {@code seastar::fstream}. seastar's {@code file_input_stream}
  * keeps {@code readAhead + 1} read requests in flight (growing adaptively), and

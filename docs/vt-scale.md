@@ -253,7 +253,8 @@ records in `PARKED`/`SUBMITTED`); it does not count callers waiting for admissio
 - [`JUringBlocking`](../src/main/java/com/davidvlijmincx/lio/api/JUringBlocking.java) and
   [`BlockingOptions`](../src/main/java/com/davidvlijmincx/lio/api/BlockingOptions.java)
   Javadoc for the per-member contract.
-- [`docs/examples.md`](examples.md) E4 for the eight-virtual-thread example.
+- the virtual-thread example in [`docs/examples.md`](examples.md) for the
+  eight-virtual-thread workload.
 - [`BENCHMARK.md`](../BENCHMARK.md#virtual-threads) for the historical JMH virtual-thread data
   (unchanged by the 0.1.0 capacity work) and the caveat that it is not a 0.1.0 ranking.
 - [CHANGELOG.md](../CHANGELOG.md) for the 0.1.0 entries and

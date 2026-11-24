@@ -22,8 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Example E1 — direct file I/O with a registered file, fixed buffers and one batched
- * submit/reap.
+ * Direct file I/O with a registered file, fixed buffers and one batched submit/reap.
  *
  * <p><b>seastar mapping:</b> {@code open_file_dma} + {@code file::dma_read} /
  * {@code file::dma_write}. seastar opens a file with {@code O_DIRECT} support, keeps the

@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Example E3 — one ring driving many open files in a single batched submission.
+ * Many files on one ring, driven in a single batched submission.
  *
  * <p><b>seastar mapping:</b> the seastar many-open-{@code file} pattern. An application
  * keeps many small files (segments, partition logs, spool files) open at once and issues
