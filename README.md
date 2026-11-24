@@ -66,6 +66,8 @@ cd JUring
 mvn install
 ```
 
+A machine without io_uring can still build the library with `mvn -DskipTests package`.
+
 Once the release is published, the dependency will be:
 
 ```xml
@@ -80,8 +82,9 @@ You need Linux on x86-64 or aarch64, JDK 25 or newer, and native access enabled
 (`--enable-native-access=JUring` on the module path, `ALL-UNNAMED` on the classpath).
 If you deploy in a container, call `JUring.isSupported()` before creating a ring:
 Docker's default seccomp profile, AppArmor, and `kernel.io_uring_disabled` can all
-block io_uring. [docs/platforms.md](docs/platforms.md) has the details and the
-`java.nio` fallback. The test suite needs io_uring enabled and the native-access flag;
+block io_uring. [docs/platforms.md](docs/platforms.md) has the details, including how to
+fall back to `java.nio` (the library does not implement a fallback). The test suite needs
+io_uring enabled and the native-access flag;
 CI and the platform doc show the setup.
 
 The API is pre-1.0 but covered by the compatibility policy in
@@ -157,6 +160,8 @@ public class VirtualThreadReads {
 }
 ```
 
+Both snippets read a file named `data.bin` with `O_DIRECT`: create one of at least 4 MiB
+on a filesystem that supports direct I/O, for example `fallocate -l 4M data.bin`.
 Runnable, self-checking versions of these patterns live in
 [docs/examples.md](docs/examples.md) and run as part of the test suite.
 
@@ -362,6 +367,7 @@ included.
 - [docs/vt-scale.md](docs/vt-scale.md) — sizing `JUringBlocking` for a large virtual-thread fan-out.
 - [docs/api-stability.md](docs/api-stability.md) — what the pre-1.0 API promises.
 - [docs/qos-decision.md](docs/qos-decision.md) — why QoS is out of scope.
+- [docs/faq.md](docs/faq.md) — short answers about kernels, containers, the API, virtual threads, and the benchmarks.
 - [CHANGELOG.md](CHANGELOG.md), [UPGRADING.md](docs/UPGRADING.md), [CONTRIBUTING.md](CONTRIBUTING.md),
   and [DATA-AVAILABILITY.md](DATA-AVAILABILITY.md).
 
@@ -377,6 +383,9 @@ JUring is Linux-only and file-I/O-only. No network I/O, no Windows, no macOS,
 `java.nio` is the fallback there. 0.1.0 is the first release, and it isn't on Maven
 Central yet; see
 [docs/api-stability.md](docs/api-stability.md) for what that means.
+
+Questions? The [FAQ](docs/faq.md) covers the common ones: kernels, containers,
+single-request latency, Maven Central, and virtual threads.
 
 ## About me
 

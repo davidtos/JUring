@@ -1,0 +1,45 @@
+name: Feature request
+description: Propose a change or addition to JUring.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        JUring is a library, not a framework. Read
+        [docs/api-stability.md](https://github.com/davidtos/JUring/blob/master/docs/api-stability.md),
+        [docs/qos-decision.md](https://github.com/davidtos/JUring/blob/master/docs/qos-decision.md),
+        and [CONTRIBUTING.md](https://github.com/davidtos/JUring/blob/master/CONTRIBUTING.md)
+        before proposing a change that alters the public API or adds a runtime layer.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can't you do today? Describe the workload and the constraint, not only the API you want.
+      placeholder: "I have a workload that ... and the current API forces me to ..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-change
+    attributes:
+      label: Proposed change
+      description: What should JUring do instead? Include the API shape if you have one in mind.
+    validations:
+      required: true
+  - type: checkboxes
+    id: scope-check
+    attributes:
+      label: Scope check
+      description: JUring stays a Linux file-I/O library; futures/coroutines runtimes, networking, QoS schedulers and an application framework are out of scope.
+      options:
+        - label: I have read docs/api-stability.md, docs/qos-decision.md and CONTRIBUTING.md, and this request fits the library scope.
+          required: true
+        - label: I can help implement or test this change.
+          required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, other libraries, or the OS-level control that could solve this instead. Optional.
+    validations:
+      required: false

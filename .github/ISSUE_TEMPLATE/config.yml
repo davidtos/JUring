@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Read the FAQ first
+    url: https://github.com/davidtos/JUring/blob/master/docs/faq.md
+    about: Short answers about kernels, containers, Maven Central, virtual threads and single-request latency.
+  - name: Supported platforms and environments
+    url: https://github.com/davidtos/JUring/blob/master/docs/platforms.md
+    about: Kernel feature gates, architectures, containers, O_DIRECT and native access. Most environment problems are answered here.
+  - name: Report a security vulnerability
+    url: https://github.com/davidtos/JUring/security/policy
+    about: Use GitHub private vulnerability reporting. Please do not open a public issue for a security problem.
