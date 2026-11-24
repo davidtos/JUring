@@ -442,7 +442,7 @@ Paired steady-state ratios: JUring/Seastar `0.9936 [90% 0.9806, 1.0066]` (W7) an
 `0.9665 [0.9597, 0.9734]` (W8, `n=2`). Every interval with `n >= 2` sits inside the ±5% parity
 band. The sustained-state result is parity at about `192k–199k` IOPS, not an engine ranking.
 
-### Why the fast windows are not an engine advantage
+### Why the fast windows are the drive's mode
 
 The first version of this analysis called the `fio` batching-matched QD 128 number (`323,499 ± 860`
 IOPS across five passes) a configuration advantage and briefly concluded that `fio` was well
@@ -457,8 +457,8 @@ ahead. That was wrong. I re-ran the **same** `fio` command on the now-steady dri
 Throughput flips between ~220k and ~320k regardless of batch size. Two more controls agree:
 `--fixedbufs=0` (register files only) measured `219,078` / `301,343` IOPS, and
 `--iodepth_batch_complete=128` measured `240,812` / `221,246` IOPS. The mode is the drive's
-write-cache/GC state, not `fio`'s submission pattern, and every engine samples both modes:
-JUring reached `468k`, Seastar `369k`, `fio` `324k` in fast windows. The probe is
+write-cache/GC state, not `fio`'s submission pattern, and every engine samples both modes;
+the per-run table above lists all 40 windows. The probe is
 `bench/write/probe-write-modes.sh`.
 
 ![fio batch-size sweep on the steady drive: throughput flips between two clusters independent of --iodepth_batch_submit](docs/figures/write-mode-probe.svg)

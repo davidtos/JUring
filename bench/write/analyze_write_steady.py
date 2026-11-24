@@ -215,7 +215,7 @@ def write_report(outdir, session, gens, per):
     lines.append(f"{cache_count} run(s) were fast-mode or non-steady. A controlled probe "
                  "(`bench/write/probe-write-modes.sh`) shows the fast/slow flip is independent of "
                  "`fio` batch size (1 to 128), so these windows are the drive's write-cache/GC mode, "
-                 "not an engine advantage.")
+                 "not a configuration advantage.")
     lines.append("")
 
     lines.append("## Caveats")

@@ -256,5 +256,5 @@ the gate; they are kept as evidence of why the ranking only uses steady-state ge
   over five generations) was **retracted**: a controlled probe with the same `fio` command and
   `--iodepth_batch_submit` from 1 to 128 flipped between ~220k and ~320k independently of batch
   size, fixed buffers and batch-complete, so the fast windows are the drive's write-cache/GC mode,
-  not an engine or configuration advantage. The frozen gate remains INCONCLUSIVE (0/5); the
+  not a configuration advantage. The frozen gate remains INCONCLUSIVE (0/5); the
   steady-state table is a descriptive result, not a gate verdict.

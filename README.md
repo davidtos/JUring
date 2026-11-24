@@ -162,39 +162,40 @@ Runnable, self-checking versions of these patterns live in
 
 ## Performance
 
-I don't trust a benchmark number without its setup, so here it is. The two 4 KiB
-random-read rows are from a 2026-11-23 rerun on the protocol the project has used
-since 0.1.0: fresh process per repetition, five repetitions, 10 s warmup and 30 s
-measured, engines interleaved with their order rotated per repetition, on an aged
-10 GiB file opened with `O_DIRECT`. The write block below is from a second, near-empty NVMe of the same model, on the
-state-controlled protocol described in
+I don't trust a benchmark number without its setup, so here it is. The two deep-queue
+4 KiB random-read rows are from a 2026-11-23 rerun on the protocol the project has
+used since 0.1.0: fresh process per repetition, five repetitions, 10 s warmup and
+30 s measured, engines interleaved with their order rotated per repetition, on an
+aged 10 GiB file opened with `O_DIRECT`. The write block below is from a second,
+near-empty NVMe of the same model, on the state-controlled protocol described in
 [BENCHMARK.md](BENCHMARK.md#second-drive-steady-state-run-2026-11-23): a 400 GiB
-steady-state burn-in, then 60 s warmup + 60 s measured continuous passes.
-The stream, shard and group-commit rows are the 0.1.0 measurements and were not
-re-run. The host is an AMD Ryzen 9 3950X with a 1 TB PCIe 4.0 NVMe, Fedora 44,
-kernel 7.0.12, OpenJDK 26.
+steady-state burn-in, then 60 s warmup + 60 s measured continuous passes. The
+1 MiB sequential, stream, shard and group-commit rows are the 0.1.0 measurements
+and were not re-run. The host is an AMD Ryzen 9 3950X with a 1 TB PCIe 4.0 NVMe,
+Fedora 44, kernel 7.0.12, OpenJDK 26.
 
 The comparison points are `fio` (its io_uring engine, configured with the same
 registered files and fixed buffers) and Seastar, a mature C++ storage framework. Its
 io_uring reactor is the closest C++ comparison I could build.
 
-| Workload | JUring | fio (io_uring) | Seastar | Result |
+| Workload | JUring | fio matched (io_uring) | Seastar | Result |
 |---|---|---|---|---|
 | 4 KiB random read, 64 in flight | 318k IOPS | 302k IOPS | 316k IOPS | 5.4% ahead of fio (90% CI 1.9–8.9%), level with Seastar |
 | 4 KiB random read, 128 in flight | 412k IOPS | 342k IOPS | 391k IOPS | 20.6% ahead of fio (90% CI 15.9–25.2%), 5.4% ahead of Seastar (3.5–7.3%) |
 | 1 MiB sequential read, 32 in flight | 4,720 MiB/s | 4,647 MiB/s | 4,632 MiB/s | all within 2%; the drive is the limit |
 | 128 KiB stream read | 2,285 MiB/s | — | 2,328 MiB/s | within 2% of Seastar's stream API |
-| 8 rings, 4 KiB random read | 473k IOPS | 459k IOPS | 466k IOPS | about 1.5× the single ring, within ~3% of both |
+| 8 rings, 4 KiB random read | 473k IOPS | 459k IOPS | 466k IOPS | 1.48× its own one-shard baseline (321k), within ~3% of both |
 | Durable 4 KiB writes, batches of 128 | 721 MiB/s | — | — | one `fdatasync` per batch, verified |
 
-The first two rows are the interesting ones, and the honest reading is narrower than
-it was. At 64 requests in flight, JUring is about 5% ahead of `fio` and level with
-Seastar: the 90% CI of the JUring/fio ratio is `[1.019, 1.089]` and JUring/Seastar
-is `[0.980, 1.031]`. At 128 it pulls further ahead: about 21% over `fio`
-(`[1.159, 1.252]`) and about 5% over Seastar (`[1.035, 1.073]`). The gap isn't
-magic. `fio` can't set JUring's ring flags or fuse submissions, so this is a
-capability comparison, not an equal-config race; Seastar's io_uring reactor has no
-taskrun flags and no registration, so it is a bracket as well.
+The first two rows are the interesting ones, and the honest reading is narrower
+than the raw IOPS gap suggests. At 64 requests in flight, JUring is about 5% ahead
+of `fio` and level with Seastar: the 90% CI of the JUring/fio ratio is
+`[1.019, 1.089]` and JUring/Seastar is `[0.980, 1.031]`. At 128 it pulls further
+ahead: about 21% over `fio` (`[1.159, 1.252]`) and about 5% over Seastar
+(`[1.035, 1.073]`). The gap isn't magic. `fio` can't set JUring's ring flags or
+fuse submissions, so this is a capability comparison, not an equal-config race;
+Seastar's io_uring reactor has no taskrun flags and no registration, so it is a
+bracket as well.
 
 ![4 KiB random read throughput: JUring vs fio vs Seastar at QD 64 and QD 128](docs/figures/read-throughput.svg)
 
@@ -215,11 +216,12 @@ Queue depth 1 is the honest check. One request is one round trip for everyone, a
 all three engines land around 11k IOPS. Async I/O buys queue depth. It does not make
 a single request faster.
 
-Tail latency at 64 in flight: p99 is 513 µs for JUring, 490 µs for `fio`, and 483 µs
-for Seastar; at 128 in flight they are 919, 714 and 814 µs. JUring has the lowest
-median at both depths, but its QD 128 p99 is about 29% above `fio`'s, and that is
-reported rather than smoothed away. The dedicated latency-probe run behind the older
-p999 number was not re-run.
+Tail latency from the same rerun, at 64 in flight: p99 is 513 µs for JUring, 490 µs
+for `fio`, and 483 µs for Seastar; at 128 in flight they are 919, 714 and 814 µs.
+JUring has the lowest median at both depths, but its QD 128 p99 is about 29% above
+`fio`'s, and that is reported rather than smoothed away. The dedicated 120 s
+tail-latency run behind the p999 numbers was not repeated, so its p99 values in
+BENCHMARK.md differ from these.
 
 ![4 KiB random read latency: p50 and p99 for JUring, fio and Seastar](docs/figures/read-latency.svg)
 
@@ -232,13 +234,15 @@ The short version: in the drive's sustained state all three engines perform the 
 within a few percent; it is the hardware's write-mode switching that makes a finer
 ranking difficult. I ran the comparison on a second, near-empty NVMe of the same
 model (`nvme2n1`, 6% used) on 2026-11-23, because the main drive's 81% fill made its
-write state unusable. After a 400 GiB steady-state burn-in, five state-controlled passes ran
-(60 s warmup + 60 s measured per arm, engines interleaved and order rotated).
+write state unusable. After a 400 GiB steady-state burn-in, five state-controlled passes
+ran: one pass is the four arms across both queue depths run back-to-back (60 s warmup +
+60 s measured each), with the engine order rotated between passes.
 
-The drive has two write modes, and they belong to the drive, not to the engines. In
-its sustained mode all three land within about 3%:
+The drive has two write modes — sustained storage and a cache-assisted SLC-burst mode —
+and they belong to the drive, not to the engines. In its sustained mode all three land
+within about 3%:
 
-| 4 KiB random write | JUring | fio (io_uring) | Seastar |
+| 4 KiB random write | JUring | fio matched (io_uring) | Seastar |
 |---|---|---|---|
 | QD 64, sustained | 193.8k ± 3.9k IOPS (n=3) | 198.2k IOPS (n=1) | 195.1k ± 1.0k IOPS (n=3) |
 | QD 128, sustained | 192.3k ± 1.3k IOPS (n=3) | 198.6k ± 2.4k IOPS (n=2) | 195.0k ± 0.4k IOPS (n=3) |
@@ -248,22 +252,22 @@ its sustained mode all three land within about 3%:
 *Sustained-state means with 95% confidence intervals on the near-empty second NVMe.
 The shaded band is the drive's sustained ceiling; all three engines sit inside it.*
 
-In its cache-assisted mode the same runs reach up to 468k (JUring), 369k (Seastar)
-and 324k (fio). Which mode a 60 s window lands in depends on the drive's GC cycle: a
-controlled probe on this drive, running the same `fio` command with
-`--iodepth_batch_submit` from 1 to 128 twice, flipped between ~220k and ~320k with no
-dependence on batch size or fixed buffers. So the ~320k windows are not a `fio`
-configuration advantage and the ~468k windows are not a JUring win — all three
-engines show both modes.
+The drive also has a cache-assisted mode: it intermittently absorbs writes into its
+SLC cache, lifting any engine above the sustained ceiling. That mode is the drive's,
+not the engine's. A controlled probe on this drive — the same `fio` command,
+`--iodepth_batch_submit` from 1 to 128, run twice — flipped between ~220k and ~320k
+with no dependence on batch size or fixed buffers, so the fast windows cannot be read
+as a configuration result. They are excluded from the sustained comparison and not
+used for ranking; every run is listed in BENCHMARK.md.
 
 ![Write throughput by measurement start time against the drive's sustained and cache-assisted bands](docs/figures/write-operating-modes.svg)
 
 *Columns are the five consecutive passes, labelled by start time (CET); each point is one
 60 s measured window (QD 64 left, QD 128 right). Every engine moves between the same two
-bands; no engine owns a mode, which is why the fast windows are not an engine ranking.*
+bands; both bands are the drive's, so the fast windows are not used for ranking.*
 
-The frozen homogeneity gate (four valid passes required) therefore
-returns no verdict (0 of 5). **No write ranking is claimed**; the defensible statement
+The frozen homogeneity gate (four valid passes required) therefore returns no verdict:
+0 of the 5 passes passed it. **No write ranking is claimed**; the defensible statement
 is that all three engines reach the same ~192–199k IOPS sustained ceiling on this
 drive, and that the higher windows are cache-assisted on all three. Full per-run data,
 the probe and the mode analysis are in
@@ -300,14 +304,14 @@ race. Second, this is one host and one consumer NVMe. Absolute IOPS depend on dr
 state, so treat the numbers as evidence, not a specification.
 
 The write path is still not ranked, and the second-drive run shows why. The main
-drive was 81% full and could not hold a pass. On the near-empty same-model
-drive, all three engines settle at ~192–199k IOPS, and all three also show
-cache-assisted windows (up to 468k JUring, 369k Seastar, 324k `fio`). A controlled
-probe ran the same `fio` command with `--iodepth_batch_submit` from 1 to 128 and
-flipped between ~220k and ~320k independently of batch size, so those fast windows
-are the drive's write-cache/GC mode, not a `fio` configuration advantage and not a
-JUring win. The frozen homogeneity gate returns no verdict (0 of 5) for the same
-reason. Every run, including the cache-assisted windows, is listed.
+drive was 81% full and could not keep its write state stable for a whole pass. On
+the near-empty same-model drive, all three engines settle at ~192–199k IOPS, and
+all three also show cache-assisted windows. A controlled probe ran the same `fio`
+command with `--iodepth_batch_submit` from 1 to 128 and flipped between ~220k and
+~320k independently of batch size, so those fast windows are the drive's
+write-cache/GC mode, not a `fio` configuration advantage. The frozen
+homogeneity gate returns no verdict (0 of the 5 passes) for the same reason. Every
+run, including the cache-assisted windows, is listed.
 
 Full tables, raw methodology, and reproduction commands are in
 [BENCHMARK.md](BENCHMARK.md) and [docs/benchmark-methodology.md](docs/benchmark-methodology.md).
