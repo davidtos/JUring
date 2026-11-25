@@ -1,6 +1,11 @@
 # JUring
 
-**Asynchronous file I/O for Java, directly on Linux `io_uring`.**
+**Asynchronous file I/O for Java, directly on Linux io_uring.**
+
+JUring is a Java library for asynchronous file I/O on Linux, built directly on
+`io_uring`. It gives you a raw ring, a file API, bounded-memory streams, group commit
+and a blocking facade for virtual threads, with no JNI, no C glue, no `liburing`, and
+no runtime dependencies beyond the JDK.
 
 [![CI](https://github.com/davidtos/JUring/actions/workflows/ci.yml/badge.svg)](https://github.com/davidtos/JUring/actions/workflows/ci.yml)
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.davidtos/juring.svg)](https://central.sonatype.com/artifact/io.github.davidtos/juring)
@@ -8,16 +13,11 @@
 ![Linux](https://img.shields.io/badge/platform-Linux-important)
 ![Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)
 
-JUring is a Java library for asynchronous file I/O on Linux, built directly on
-`io_uring`. It gives you a raw ring, a file API, bounded-memory streams, group commit
-and a blocking facade for virtual threads, with no JNI, no C glue, no `liburing`, and
-no runtime dependencies beyond the JDK.
-
 Java's main file API, `FileChannel`, is blocking. A read on a local file keeps the
 thread inside the kernel until the disk answers, so keeping fast storage busy costs
 you threads. `AsynchronousFileChannel` moves that blocking work to a thread pool, and
-virtual threads still pin their carrier in a file syscall. `io_uring` fixes the
-kernel side: user space and the kernel share submission and completion queues, so one
+virtual threads still pin their carrier in a file syscall. `io_uring` has the
+kernel and user space share the submission and completion queues, so one
 thread can keep many operations in flight and reap them in batches.
 
 I built JUring to get that interface into Java without the usual native layer. The
@@ -26,21 +26,10 @@ accesses. On one consumer NVMe, a single ring reached **412,000 4 KiB random rea
 second** with 128 requests in flight: about 21% ahead of `fio` and 5% ahead of Seastar,
 with about a quarter fewer CPU cycles per request at 64 in flight.
 
-**Status:** 0.1.0. Pre-1.0, so the API can still change. Linux only; JDK 25+; the fast
-path targets kernel 6.1+.
+**Status:** Linux only; JDK 25+; the fast path targets kernel 6.1+.
 
 **Use it if** you have file I/O on local NVMe that can keep more than one request in
 flight, or many virtual threads doing file I/O and you want to avoid pinning carriers.
-**Don't use it if** you need a drop-in `FileChannel` replacement, Windows or macOS, or
-1.0 API stability.
-
-## Why I built it
-
-I wanted to know whether `io_uring` could be driven from Java without JNI, a C shim, or
-`liburing`. The FFM API made that possible: mapped rings, `VarHandle` accesses, and a
-downcall for `io_uring_enter`. The first version was a raw ring; the rest of the
-library grew from what a real file API needs, like registered files and buffers,
-bounded streams, and a blocking facade that doesn't pin virtual threads.
 
 ## What's in it
 
@@ -160,15 +149,6 @@ public class VirtualThreadReads {
 Both snippets read a file named `data.bin` with `O_DIRECT`. Create one of at least 4 MB
 on a filesystem that supports direct I/O, for example `fallocate -l 4M data.bin`.
 
-## Correctness
-
-The correctness story matters more than the throughput story. The suite has 489 tests
-across 67 test classes: conformance against `java.nio`, lifecycle and use-after-close,
-cancellation, timeouts, registered-buffer lifetimes, bounded stream memory, zero
-allocation, and per-handle completion routing. A jcstress profile models the wake
-path's store/load orderings; CI runs the suite on JDK 25 and 26 and checks Javadoc with
-doclint. The details, including what the tests do not prove, are in [TESTING.md](TESTING.md).
-
 ## Performance
 
 These are single-host numbers: AMD Ryzen 9 3950X, 1 TB PCIe 4.0 NVMe, Fedora 44,
@@ -211,7 +191,7 @@ its median is lower. The dedicated tail run and the p999 numbers are in
 
 On the test drive, all three engines converge at ~192–199k IOPS in the sustained
 state. The faster windows are the drive's SLC cache, not an engine difference, so I
-don't rank writes. The 400 GiB burn-in, the cache-mode probe and the per-run table are
+don't rank writes. They were to unreliable on this drive. The 400 GiB burn-in, the cache-mode probe and the per-run table are
 in [BENCHMARK.md](BENCHMARK.md#second-drive-steady-state-run-2026-11-23).
 
 ### Virtual threads
@@ -225,26 +205,6 @@ throughput `FileChannel` needed roughly 250 carriers for. The JMH caveats are in
 
 The harness and analyzers are under [`bench/`](bench/README.md); the raw per-repetition
 JSON is produced there, and every harness table is rebuilt from it.
-
-## How it works
-
-- **The ring is shared memory with the kernel.** `io_uring_setup` reports offsets
-  into a mapping. JUring maps it with `mmap` and touches submission and completion
-  entries through `VarHandle` accesses. The kernel reads and writes the same cache
-  lines, so publishing the submission tail and consuming the completion head need
-  the right fences.
-- **One syscall per batch.** Requests are prepared into the submission queue, then a
-  single `io_uring_enter` submits the batch and reaps completions. The fast path uses
-  `SINGLE_ISSUER | COOP_TASKRUN | DEFER_TASKRUN`, which keeps the kernel from waking
-  task work on every completion.
-- **Registered files and fixed buffers.** Descriptors and buffers are pinned in the
-  kernel once and referenced by index per operation, removing per-request lookups.
-- **No allocation on the raw-ring hot path.** Ring entries, completion records, and
-  buffer indexes are pre-allocated and reused after setup; passing explicit
-  `SqeOptions` allocates its varargs array at the call site. `JUringBlocking`
-  pre-allocates one call record per concurrent call.
-- **Virtual threads park, carriers stay free.** `JUringBlocking` parks callers while
-  their request is in flight and never creates extra platform threads.
 
 ## Limitations
 
